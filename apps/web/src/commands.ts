@@ -22,7 +22,7 @@ async function changeRasterSelection(documentId: string, label: string, change: 
 export function ensureCommandsRegistered(): void {
   if (initialized) return;
   initialized = true;
-  const registerNew = (kind: EnvironmentKind, label: string) => kernel.commands.register({ id: `file.new.${kind}`, label, category: "File (Файл)", execute: () => kind === "raster" || kind === "vector" ? useShellStore.getState().requestNewDocument(kind) : useShellStore.getState().openDocument(kind) });
+  const registerNew = (kind: EnvironmentKind, label: string) => kernel.commands.register({ id: `file.new.${kind}`, label, category: "File (Файл)", ...(kind === "raster" ? { shortcut: "Mod+N" } : {}), execute: () => kind === "raster" || kind === "vector" ? useShellStore.getState().requestNewDocument(kind) : useShellStore.getState().openDocument(kind) });
   registerNew("raster", "New Raster Document (Новый растровый документ)");
   registerNew("vector", "New Vector Document (Новый векторный документ)");
   registerNew("audio", "New Audio Document (Новый аудиодокумент)");
@@ -43,6 +43,7 @@ export function ensureCommandsRegistered(): void {
   kernel.commands.register({ id: "view.theme", label: "Cycle Theme (Сменить тему)", category: "View (Просмотр)", execute: () => useShellStore.getState().cycleTheme() });
   kernel.commands.register({ id: "app.settings", label: "Settings (Настройки)", category: "Edit (Правка)", execute: () => useShellStore.getState().setSettingsOpen(true) });
   kernel.commands.register({ id: "view.commandPalette", label: "Command Palette (Палитра команд)", category: "View (Просмотр)", shortcut: "Mod+K", execute: () => useShellStore.getState().setPaletteOpen(true) });
+  for (const command of kernel.commands.list()) if (command.shortcut) kernel.keymap.bind(command.id, command.shortcut);
 }
 
 export function activeCommandContext(): CommandContext {

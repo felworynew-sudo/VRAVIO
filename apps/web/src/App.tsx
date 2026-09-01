@@ -140,7 +140,12 @@ export function App() {
       const key = physicalShortcutKey(event);
       const target = event.target as HTMLElement | null;
       const editing = target?.tagName === "INPUT" || target?.tagName === "SELECT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
-      if (modifier && key === "k") { event.preventDefault(); void kernel.commands.execute("view.commandPalette", activeCommandContext()); }
+      const mappedCommand = kernel.keymap.resolve(event);
+      if ((!editing || mappedCommand === "view.commandPalette") && mappedCommand) {
+        event.preventDefault();
+        void kernel.commands.execute(mappedCommand, activeCommandContext());
+        return;
+      }
       if (!editing && modifier && !event.shiftKey && key === "n") { event.preventDefault(); store.requestNewDocument("raster"); }
       if (!editing && modifier && event.shiftKey && key === "n") { event.preventDefault(); void kernel.commands.execute("layer.new", activeCommandContext()); }
       if (!editing && modifier && key === "o") { event.preventDefault(); openImageRef.current?.click(); }

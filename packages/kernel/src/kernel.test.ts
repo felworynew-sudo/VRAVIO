@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AssetStore, CommandRegistry, DocumentStore, HistoryManager, WorkerPool, type WorkerTaskClient } from "./index";
+import { AssetStore, CommandRegistry, DocumentStore, HistoryManager, KeymapManager, WorkerPool, type WorkerTaskClient } from "./index";
 
 describe("DocumentStore", () => {
   it("increments revisions without storing document state in a UI store", () => {
@@ -85,5 +85,23 @@ describe("WorkerPool", () => {
     await expect(first).resolves.toBe(1);
     expect(runs).toBe(1);
     pool.dispose();
+  });
+});
+
+describe("KeymapManager", () => {
+  it("uses physical key codes independently of the active keyboard layout", () => {
+    const keymap = new KeymapManager();
+    keymap.bind("tool.brush", "B");
+    keymap.bind("edit.transform", "Mod+T");
+    expect(keymap.resolve({ code: "KeyB", key: "и", ctrlKey: false, metaKey: false, altKey: false, shiftKey: false })).toBe("tool.brush");
+    expect(keymap.resolve({ code: "KeyT", key: "е", ctrlKey: true, metaKey: false, altKey: false, shiftKey: false })).toBe("edit.transform");
+  });
+
+  it("normalizes shifted plus and reports shortcut conflicts", () => {
+    const keymap = new KeymapManager();
+    keymap.bind("view.zoomIn", "Mod++");
+    keymap.bind("view.otherZoom", "Ctrl+Plus");
+    expect(keymap.resolve({ code: "Equal", key: "+", ctrlKey: true, metaKey: false, altKey: false, shiftKey: true })).toBe("view.otherZoom");
+    expect(keymap.conflicts("Mod++").map((binding) => binding.commandId)).toEqual(["view.zoomIn", "view.otherZoom"]);
   });
 });
