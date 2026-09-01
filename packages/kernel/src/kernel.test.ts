@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AssetStore, CommandRegistry, DocumentStore, HistoryManager, KeymapManager, MemoryStorageAdapter, WorkerPool, type AssetId, type WorkerTaskClient } from "./index";
+import { AssetStore, CommandRegistry, DocumentStore, GPUContext, HistoryManager, KeymapManager, MemoryStorageAdapter, WorkerPool, type AssetId, type WorkerTaskClient } from "./index";
 
 describe("DocumentStore", () => {
   it("increments revisions without storing document state in a UI store", () => {
@@ -141,5 +141,28 @@ describe("KeymapManager", () => {
     keymap.bind("view.otherZoom", "Ctrl+Plus");
     expect(keymap.resolve({ code: "Equal", key: "+", ctrlKey: true, metaKey: false, altKey: false, shiftKey: true })).toBe("view.otherZoom");
     expect(keymap.conflicts("Mod++").map((binding) => binding.commandId)).toEqual(["view.zoomIn", "view.otherZoom"]);
+  });
+});
+
+describe("GPUContext", () => {
+  it("selects the strongest available backend and degrades deterministically", async () => {
+    const context = new GPUContext([
+      { backend: "webgpu", available: () => false },
+      { backend: "webgl2", available: () => true },
+      { backend: "wasm-simd", available: () => true },
+      { backend: "wasm", available: () => true },
+    ]);
+    const changes = vi.fn();
+    context.subscribe(changes);
+    await expect(context.initialize()).resolves.toBe("webgl2");
+    expect(context.available).toEqual(["webgl2", "wasm-simd", "wasm", "cpu"]);
+    expect(context.degrade("context-lost")).toBe("wasm-simd");
+    expect(changes).toHaveBeenLastCalledWith({ previous: "webgl2", current: "wasm-simd", reason: "context-lost" });
+  });
+
+  it("falls back to CPU when capability probes fail", async () => {
+    const context = new GPUContext([{ backend: "webgpu", available: () => { throw new Error("driver"); } }]);
+    await expect(context.initialize()).resolves.toBe("cpu");
+    expect(context.degrade("already-lowest")).toBe("cpu");
   });
 });

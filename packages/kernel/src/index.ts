@@ -2,6 +2,7 @@ export * from "./asset-store";
 export * from "./command-registry";
 export * from "./document-store";
 export * from "./event-bus";
+export * from "./gpu-context";
 export * from "./history-manager";
 export * from "./keymap-manager";
 export * from "./storage-adapter";

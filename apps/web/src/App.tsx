@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createAdjustmentLayer, createRasterLayer, isRasterDocumentState, layerContentBounds, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
 import { useShellStore, type Language } from "./store";
-import type { EnvironmentKind } from "@vravio/kernel";
+import type { EnvironmentKind, RenderBackend } from "@vravio/kernel";
 import { DockLayout } from "./DockLayout";
 import { environmentMeta } from "./environment";
 import { rasterToolGroups, toolById, toolsFor, type ToolDefinition, type ToolOption } from "./tools";
@@ -35,6 +35,7 @@ export function App() {
   const [liquifyOpen, setLiquifyOpen] = useState(false);
   const [cameraRawImport, setCameraRawImport] = useState<{ buffer: ArrayBuffer; name: string } | null>(null);
   const [cameraRawReopen, setCameraRawReopen] = useState<{ buffer: ArrayBuffer; name: string } | null>(null);
+  const [renderBackend, setRenderBackend] = useState<RenderBackend | null>(kernel.gpu.active);
   const active = documents.find((document) => document.id === store.activeDocumentId) ?? null;
   const activeToolId = active ? store.activeToolByDocument[active.id] : undefined;
   const activeTool = toolById(activeToolId);
@@ -146,6 +147,15 @@ export function App() {
     const refresh = () => setDiagnostics(readDiagnostics());
     refresh(); window.addEventListener("vravio-diagnostics-change", refresh);
     return () => window.removeEventListener("vravio-diagnostics-change", refresh);
+  }, []);
+
+  useEffect(() => {
+    const subscription = kernel.gpu.subscribe((event) => {
+      setRenderBackend(event.current);
+      diagnostic("info", "render.backend", `${event.previous ?? "none"} → ${event.current}`, { reason: event.reason });
+    });
+    void kernel.gpuReady.then(setRenderBackend).catch((error) => diagnostic("error", "render.backend", error instanceof Error ? error.message : String(error)));
+    return () => subscription.dispose();
   }, []);
 
   useEffect(() => {
@@ -269,7 +279,7 @@ export function App() {
       </aside>}
       {active ? <DockLayout /> : <WelcomeScreen language={store.language} requestNewDocument={store.requestNewDocument} />}
     </main>
-    <footer className="status-bar"><span>{localized(active ? environmentMeta[active.kind].label : "Ready (Готово)", store.language)}</span><span>{active ? `${Math.round((store.viewports[active.id]?.zoom ?? 1) * 100)}% · ` : ""}sRGB · 0 B</span></footer>
+    <footer className="status-bar"><span>{localized(active ? environmentMeta[active.kind].label : "Ready (Готово)", store.language)}</span><span>{active ? `${Math.round((store.viewports[active.id]?.zoom ?? 1) * 100)}% · ` : ""}sRGB · {renderBackend ?? "detecting"}</span></footer>
 
     {store.paletteOpen && <div className="dialog-backdrop" onMouseDown={() => store.setPaletteOpen(false)}>
       <section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette (Палитра команд)" onMouseDown={(event) => event.stopPropagation()}>
