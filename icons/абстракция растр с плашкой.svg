@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 943.39 943.39">
+  <defs>
+    <style>
+      .cls-1 {
+        mix-blend-mode: darken;
+        opacity: .79;
+      }
+
+      .cls-2 {
+        fill: #a100ff;
+      }
+
+      .cls-3 {
+        isolation: isolate;
+      }
+    </style>
+  </defs>
+  <g class="cls-3">
+    <g id="_Слой_1" data-name="Слой 1">
+      <g>
+        <rect class="cls-2" y="0" width="943.39" height="943.39" rx="193.82" ry="193.82"/>
+        <rect class="cls-1" y="0" width="943.39" height="943.39" rx="193.82" ry="193.82"/>
+        <rect class="cls-2" x="205.85" y="160.82" width="219.42" height="197.76"/>
+        <rect class="cls-2" x="517.48" y="160.82" width="219.42" height="197.76"/>
+        <rect class="cls-2" x="98.42" y="503.56" width="230.55" height="219.42" transform="translate(-425.41 728.7) rotate(-81.03)"/>
+        <rect class="cls-2" x="469.53" y="592.3" width="219.42" height="269.67"/>
+      </g>
+    </g>
+  </g>
+</svg>
