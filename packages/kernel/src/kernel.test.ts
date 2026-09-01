@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AssetStore, CommandRegistry, DocumentStore, HistoryManager } from "./index";
+import { AssetStore, CommandRegistry, DocumentStore, HistoryManager, WorkerPool, type WorkerTaskClient } from "./index";
 
 describe("DocumentStore", () => {
   it("increments revisions without storing document state in a UI store", () => {
@@ -46,5 +46,44 @@ describe("AssetStore", () => {
     const second = await store.put(new Uint8Array([1, 2, 3]), "image/png");
     expect(second.id).toBe(first.id);
     expect(store.size).toBe(1);
+  });
+});
+
+describe("WorkerPool", () => {
+  it("limits concurrency and drains queued work", async () => {
+    let active = 0, maximumActive = 0;
+    const client: WorkerTaskClient<number, number> = {
+      async run(value) {
+        active += 1;
+        maximumActive = Math.max(maximumActive, active);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        active -= 1;
+        return value * 2;
+      },
+      dispose() {},
+    };
+    const pool = new WorkerPool(() => client, 2);
+    await expect(Promise.all([pool.run(1), pool.run(2), pool.run(3), pool.run(4)])).resolves.toEqual([2, 4, 6, 8]);
+    expect(maximumActive).toBe(2);
+    expect(pool.activeCount).toBe(0);
+    pool.dispose();
+  });
+
+  it("cancels queued work without starting it", async () => {
+    let release!: () => void, runs = 0;
+    const wait = new Promise<void>((resolve) => { release = resolve; });
+    const pool = new WorkerPool<number, number>(() => ({
+      async run(value) { runs += 1; await wait; return value; },
+      dispose() {},
+    }), 1);
+    const first = pool.run(1);
+    const controller = new AbortController();
+    const second = pool.run(2, { signal: controller.signal });
+    controller.abort();
+    await expect(second).rejects.toMatchObject({ name: "AbortError" });
+    release();
+    await expect(first).resolves.toBe(1);
+    expect(runs).toBe(1);
+    pool.dispose();
   });
 });

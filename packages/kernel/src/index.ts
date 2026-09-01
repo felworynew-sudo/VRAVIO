@@ -4,3 +4,4 @@ export * from "./document-store";
 export * from "./event-bus";
 export * from "./history-manager";
 export * from "./types";
+export * from "./worker-pool";
