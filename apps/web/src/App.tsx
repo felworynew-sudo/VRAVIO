@@ -34,10 +34,11 @@ export function App() {
   const [filterGalleryOpen, setFilterGalleryOpen] = useState(false);
   const [liquifyOpen, setLiquifyOpen] = useState(false);
   const [cameraRawImport, setCameraRawImport] = useState<{ buffer: ArrayBuffer; name: string } | null>(null);
-  const [cameraRawReopen, setCameraRawReopen] = useState(false);
+  const [cameraRawReopen, setCameraRawReopen] = useState<{ buffer: ArrayBuffer; name: string } | null>(null);
   const active = documents.find((document) => document.id === store.activeDocumentId) ?? null;
   const activeToolId = active ? store.activeToolByDocument[active.id] : undefined;
   const activeTool = toolById(activeToolId);
+  const activeRawOrigin = active?.origin?.kind === "asset" && kernel.assets.get(active.origin.assetId)?.mime === "image/x-raw" ? active.origin : null;
   const commands = useMemo(() => kernel.commands.search(query), [query]);
   const themeStyle = { "--focus": store.preferences.focusColor, "--raster": store.preferences.rasterColor, "--vector": store.preferences.vectorColor, "--audio": store.preferences.audioColor, "--video": store.preferences.videoColor, "--canvas-surround": store.preferences.canvasSurround, "--guide": store.preferences.guideColor } as CSSProperties;
 
@@ -63,6 +64,19 @@ export function App() {
   const exportPng = async () => { if (!active || !isRasterDocumentState(active.state)) return; const surface = window.document.createElement("canvas"); surface.width = active.state.width; surface.height = active.state.height; surface.getContext("2d")?.putImageData(new ImageData(compositeRasterDocument(active.state) as Uint8ClampedArray<ArrayBuffer>, active.state.width, active.state.height), 0, 0); const blob = await new Promise<Blob | null>((resolve) => surface.toBlob(resolve, "image/png")); if (blob) download(blob, active.name.replace(/\.[^.]+$/, "") + ".png"); };
   const saveProject = () => { if (!active) return; const replacer = (_key: string, value: unknown) => value instanceof Uint8ClampedArray ? { __type: "Uint8ClampedArray", data: Array.from(value) } : value; download(new Blob([JSON.stringify(active.state, replacer)], { type: "application/json" }), active.name.replace(/\.[^.]+$/, "") + ".vravio.json"); };
   const applyFilter = (pixels: Uint8ClampedArray, label: string) => { if (!active || !isRasterDocumentState(active.state)) return; const id=active.id,layerId=active.state.activeLayerId,before=active.state.layers.find((item)=>item.id===layerId)?.pixels.slice();if(!before)return;const assign=(value:Uint8ClampedArray)=>{kernel.documents.update<RasterDocumentState>(id,(state)=>{const layer=state.layers.find((item)=>item.id===layerId);if(layer)layer.pixels=value.slice();});};const history=kernel.historyByDocument.get(id);if(history)void history.execute({label:`Filter: ${label}`,redo:()=>assign(pixels),undo:()=>assign(before)}); };
+  const openCameraRawReprocess = async () => {
+    if (!active) return;
+    const source = active.origin?.kind === "asset" ? active.origin : null;
+    if (!source || kernel.assets.get(source.assetId)?.mime !== "image/x-raw") return;
+    try {
+      await kernel.assetsReady;
+      const bytes = await kernel.assets.read(source.assetId, source.rev ?? undefined);
+      if (!bytes) throw new Error("RAW source is missing from AssetStore");
+      setCameraRawReopen({ buffer: bytes.slice().buffer, name: source.name });
+    } catch (error) {
+      diagnostic("error", "camera-raw.asset-read", error instanceof Error ? error.message : String(error), { documentId: active.id });
+    }
+  };
 
   const selectedLayerIds = active ? store.selectedLayerIdsByDocument[active.id] ?? [] : [];
   const activeTextLayer = (() => { if (!active || !isRasterDocumentState(active.state)) return null; const state = active.state; return state.layers.find((layer) => layer.id === state.activeLayerId && layer.kind === "text" && layer.text) ?? null; })();
@@ -224,7 +238,7 @@ export function App() {
           ["Create Work Path (Создать рабочий контур)", "", () => {}, true],
         ]}/>
         <Menu label="Select (Выделение)" language={store.language} open={openMenu === "select"} onToggle={() => setOpenMenu(openMenu === "select" ? null : "select")} items={[["All (Всё)", "Ctrl+A", () => void kernel.commands.execute("select.all", activeCommandContext())], ["Deselect (Снять выделение)", "Ctrl+D", () => void kernel.commands.execute("select.none", activeCommandContext())], ["Inverse (Инверсия)", "Ctrl+Shift+I", () => void kernel.commands.execute("select.invert", activeCommandContext())]]}/>
-        <Menu label="Filter (Фильтр)" language={store.language} open={openMenu === "filter"} onToggle={() => setOpenMenu(openMenu === "filter" ? null : "filter")} items={[["Filter Gallery… (Галерея фильтров…)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Camera Raw Filter… (Фильтр Camera Raw…)", "", () => setCameraRawReopen(true), !active || !kernel.rawSourceByDocument.has(active.id)], ["Liquify… (Пластика…)", "Ctrl+Shift+X", () => setLiquifyOpen(true), !active || !isRasterDocumentState(active.state)], ["Blur Gallery (Галерея размытия)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Sharpen (Усиление резкости)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Noise (Шум)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Stylize (Стилизация)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"]]}/>
+        <Menu label="Filter (Фильтр)" language={store.language} open={openMenu === "filter"} onToggle={() => setOpenMenu(openMenu === "filter" ? null : "filter")} items={[["Filter Gallery… (Галерея фильтров…)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Camera Raw Filter… (Фильтр Camera Raw…)", "", () => void openCameraRawReprocess(), !activeRawOrigin], ["Liquify… (Пластика…)", "Ctrl+Shift+X", () => setLiquifyOpen(true), !active || !isRasterDocumentState(active.state)], ["Blur Gallery (Галерея размытия)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Sharpen (Усиление резкости)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Noise (Шум)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Stylize (Стилизация)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"]]}/>
         <Menu label="Plugins (Плагины)" language={store.language} open={openMenu === "plugins"} onToggle={() => setOpenMenu(openMenu === "plugins" ? null : "plugins")} items={[
           ["Manage Plugins… (Управление плагинами…)", "", () => {}, true],
         ]}/>
@@ -268,8 +282,29 @@ export function App() {
     {diagnosticsOpen && <div className="dialog-backdrop" onMouseDown={() => setDiagnosticsOpen(false)}><section className="diagnostics-dialog" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><header><strong>Diagnostics log (Журнал диагностики)</strong><button onClick={() => setDiagnosticsOpen(false)}>×</button></header><div className="diagnostics-list">{diagnostics.length ? [...diagnostics].reverse().map((entry, index) => <article data-level={entry.level} key={`${entry.time}-${index}`}><time>{new Date(entry.time).toLocaleTimeString()}</time><b>{entry.area}</b><span>{entry.message}</span>{entry.detail && <pre>{entry.detail}</pre>}</article>) : <p>No events recorded (Событий пока нет).</p>}</div><footer><button onClick={() => { clearDiagnostics(); setDiagnostics([]); }}>Clear (Очистить)</button><button onClick={() => { const blob = new Blob([JSON.stringify(diagnostics, null, 2)], { type: "application/json" }); download(blob, `vravio-diagnostics-${Date.now()}.json`); }}>Export JSON (Экспорт JSON)</button></footer></section></div>}
     {filterGalleryOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<FilterGalleryDialog layer={layer} onApply={applyFilter} onClose={()=>setFilterGalleryOpen(false)}/>:null;})()}
     {liquifyOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<LiquifyDialog layer={layer} language={store.language} onApply={applyFilter} onClose={()=>setLiquifyOpen(false)}/>:null;})()}
-    {cameraRawImport && <CameraRawDialog buffer={cameraRawImport.buffer} filename={cameraRawImport.name} language={store.language} mode="open" onCancel={() => setCameraRawImport(null)} onConfirm={(decoded) => { const id = openDecodedRaster(cameraRawImport.name, decoded); kernel.rawSourceByDocument.set(id, { buffer: cameraRawImport.buffer, name: cameraRawImport.name }); setCameraRawImport(null); }}/>}
-    {cameraRawReopen && active && kernel.rawSourceByDocument.has(active.id) && (() => { const src = kernel.rawSourceByDocument.get(active.id)!; return <CameraRawDialog buffer={src.buffer} filename={src.name} language={store.language} mode="reprocess" onCancel={() => setCameraRawReopen(false)} onConfirm={(decoded) => { applyFilter(decoded.pixels, "Camera Raw"); setCameraRawReopen(false); }}/>; })()}
+    {cameraRawImport && <CameraRawDialog
+      buffer={cameraRawImport.buffer}
+      filename={cameraRawImport.name}
+      language={store.language}
+      mode="open"
+      onCancel={() => setCameraRawImport(null)}
+      onConfirm={async (decoded) => {
+        const id = openDecodedRaster(cameraRawImport.name, decoded);
+        await kernel.assetsReady;
+        const assetId = await kernel.assets.importAsset(new Uint8Array(cameraRawImport.buffer), { kind: "image", mime: "image/x-raw", name: cameraRawImport.name });
+        kernel.documents.addAssetRef(id, assetId);
+        kernel.documents.setOrigin(id, { kind: "asset", assetId, rev: 0, name: cameraRawImport.name });
+        setCameraRawImport(null);
+      }}
+    />}
+    {cameraRawReopen && <CameraRawDialog
+      buffer={cameraRawReopen.buffer}
+      filename={cameraRawReopen.name}
+      language={store.language}
+      mode="reprocess"
+      onCancel={() => setCameraRawReopen(null)}
+      onConfirm={(decoded) => { applyFilter(decoded.pixels, "Camera Raw"); setCameraRawReopen(null); }}
+    />}
     {store.newDocumentKind && <NewDocumentDialog key={store.newDocumentKind} />}
   </div>;
 }

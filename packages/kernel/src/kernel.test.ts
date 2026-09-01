@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AssetStore, CommandRegistry, DocumentStore, HistoryManager, KeymapManager, WorkerPool, type WorkerTaskClient } from "./index";
+import { AssetStore, CommandRegistry, DocumentStore, HistoryManager, KeymapManager, MemoryStorageAdapter, WorkerPool, type AssetId, type WorkerTaskClient } from "./index";
 
 describe("DocumentStore", () => {
   it("increments revisions without storing document state in a UI store", () => {
@@ -12,6 +12,17 @@ describe("DocumentStore", () => {
     expect(document.dirty).toBe(true);
     expect(listener).toHaveBeenCalled();
     subscription.dispose();
+  });
+
+  it("tracks asset references, origin and provenance metadata as document revisions", () => {
+    const assetId = "asset:test" as AssetId;
+    const store = new DocumentStore();
+    const document = store.create("raster", "Linked", {}, { assetRefs: [assetId], origin: { kind: "asset", assetId, rev: 0, name: "source.raw" } });
+    expect(document.assetRefs.has(assetId)).toBe(true);
+    expect(document.origin).toMatchObject({ kind: "asset", assetId, rev: 0 });
+    expect(store.removeAssetRef(document.id, assetId)).toBe(true);
+    expect(document.revision).toBe(1);
+    expect(document.dirty).toBe(true);
   });
 });
 
@@ -46,6 +57,33 @@ describe("AssetStore", () => {
     const second = await store.put(new Uint8Array([1, 2, 3]), "image/png");
     expect(second.id).toBe(first.id);
     expect(store.size).toBe(1);
+  });
+
+  it("persists revision metadata and rolls the head back without deleting data", async () => {
+    const adapter = new MemoryStorageAdapter();
+    const store = new AssetStore(adapter);
+    const id = await store.importAsset(new Uint8Array([10, 20]), { kind: "image", mime: "image/png", name: "source.png" });
+    const revised = vi.fn();
+    store.subscribe("revised", revised);
+    expect(await store.commitRevision(id, new Uint8Array([30, 40]), "raster-env", "Paint stroke")).toBe(1);
+    expect([...await store.read(id) ?? []]).toEqual([30, 40]);
+    await store.rollback(id, 0);
+    expect([...await store.read(id) ?? []]).toEqual([10, 20]);
+    expect(revised).toHaveBeenLastCalledWith({ assetId: id, rev: 0, producedBy: "undo" });
+
+    const restored = new AssetStore(adapter);
+    await restored.initialize();
+    expect(restored.get(id)?.revisions).toHaveLength(2);
+    expect(restored.get(id)?.head).toBe(0);
+  });
+
+  it("protects referenced assets from deletion", async () => {
+    const store = new AssetStore();
+    const id = await store.importAsset(new Uint8Array([1]), { kind: "binary", name: "sample.bin" });
+    expect(await store.delete(id)).toBe(false);
+    expect(await store.release(id)).toBe(0);
+    expect(await store.delete(id)).toBe(true);
+    expect(store.has(id)).toBe(false);
   });
 });
 

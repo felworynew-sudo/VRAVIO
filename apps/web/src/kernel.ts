@@ -1,10 +1,13 @@
-import { CommandRegistry, DocumentStore, HistoryManager, KeymapManager } from "@vravio/kernel";
+import { AssetStore, CommandRegistry, DocumentStore, HistoryManager, KeymapManager, MemoryStorageAdapter, OpfsStorageAdapter } from "@vravio/kernel";
+
+const assetStorage = OpfsStorageAdapter.isSupported() ? new OpfsStorageAdapter("vravio-assets") : new MemoryStorageAdapter();
+const assets = new AssetStore(assetStorage);
 
 export const kernel = {
   documents: new DocumentStore(),
   commands: new CommandRegistry(),
   keymap: new KeymapManager(),
+  assets,
+  assetsReady: assets.initialize(),
   historyByDocument: new Map<string, HistoryManager>(),
-  /** Original RAW file bytes kept in memory (not part of the persisted schema) so Filter > Camera Raw can re-develop a document that was opened from a RAW file. */
-  rawSourceByDocument: new Map<string, { buffer: ArrayBuffer; name: string }>(),
 };

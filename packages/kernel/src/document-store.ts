@@ -1,5 +1,12 @@
 import { EventBus } from "./event-bus";
-import type { Disposable, EnvironmentKind, VravioDocument } from "./types";
+import type { AssetId } from "./asset-store";
+import type { Disposable, DocumentOrigin, EnvironmentKind, Provenance, VravioDocument } from "./types";
+
+export interface CreateDocumentOptions {
+  readonly origin?: DocumentOrigin | null;
+  readonly assetRefs?: Iterable<AssetId>;
+  readonly provenance?: Provenance | null;
+}
 
 interface DocumentEvents {
   changed: { id: string; revision: number };
@@ -12,10 +19,10 @@ export class DocumentStore {
   readonly #events = new EventBus<DocumentEvents>();
   #version = 0;
 
-  create<TState>(kind: EnvironmentKind, name: string, state: TState): VravioDocument<TState> {
+  create<TState>(kind: EnvironmentKind, name: string, state: TState, options: CreateDocumentOptions = {}): VravioDocument<TState> {
     const now = Date.now();
     const document: VravioDocument<TState> = {
-      id: crypto.randomUUID(), kind, name, state, revision: 0, dirty: false, createdAt: now, updatedAt: now,
+      id: crypto.randomUUID(), kind, name, origin: options.origin ?? null, state, assetRefs: new Set(options.assetRefs), provenance: options.provenance ?? null, revision: 0, dirty: false, createdAt: now, updatedAt: now,
     };
     this.#documents.set(document.id, document);
     this.#version += 1;
@@ -52,6 +59,37 @@ export class DocumentStore {
     this.#events.emit("changed", { id, revision: document.revision });
   }
 
+  setOrigin(id: string, origin: DocumentOrigin | null): void {
+    const document = this.get(id);
+    if (!document) throw new Error(`Unknown document: ${id}`);
+    document.origin = origin;
+    this.#touch(document);
+  }
+
+  setProvenance(id: string, provenance: Provenance | null): void {
+    const document = this.get(id);
+    if (!document) throw new Error(`Unknown document: ${id}`);
+    document.provenance = provenance;
+    this.#touch(document);
+  }
+
+  addAssetRef(id: string, assetId: AssetId): boolean {
+    const document = this.get(id);
+    if (!document) throw new Error(`Unknown document: ${id}`);
+    if (document.assetRefs.has(assetId)) return false;
+    document.assetRefs.add(assetId);
+    this.#touch(document);
+    return true;
+  }
+
+  removeAssetRef(id: string, assetId: AssetId): boolean {
+    const document = this.get(id);
+    if (!document) throw new Error(`Unknown document: ${id}`);
+    const removed = document.assetRefs.delete(assetId);
+    if (removed) this.#touch(document);
+    return removed;
+  }
+
   close(id: string): boolean {
     const closed = this.#documents.delete(id);
     if (closed) {
@@ -68,5 +106,13 @@ export class DocumentStore {
 
   getVersion(): number {
     return this.#version;
+  }
+
+  #touch(document: VravioDocument): void {
+    document.revision += 1;
+    document.dirty = true;
+    document.updatedAt = Date.now();
+    this.#version += 1;
+    this.#events.emit("changed", { id: document.id, revision: document.revision });
   }
 }

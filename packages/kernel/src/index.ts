@@ -4,5 +4,6 @@ export * from "./document-store";
 export * from "./event-bus";
 export * from "./history-manager";
 export * from "./keymap-manager";
+export * from "./storage-adapter";
 export * from "./types";
 export * from "./worker-pool";
