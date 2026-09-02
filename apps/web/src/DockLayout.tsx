@@ -5,7 +5,7 @@ import { environmentMeta } from "./environment";
 import { useShellStore } from "./store";
 import { useDocuments } from "./useDocuments";
 import { RasterWorkspace } from "./RasterWorkspace";
-import { createAdjustmentLayer, createRasterLayer, isRasterDocumentState, type RasterAdjustment, type RasterBlendMode, type RasterDocumentState, type RasterLayer } from "@vravio/env-raster";
+import { appendLayer, appendRasterGroup, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, isRasterDocumentState, rasterLayerDescendantIds, rasterLayerRows, type RasterAdjustment, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerMask } from "@vravio/env-raster";
 import { kernel } from "./kernel";
 import { EnvironmentIcon } from "./EnvironmentIcon";
 import { localized, text } from "./i18n";
@@ -73,7 +73,23 @@ function LayerThumbnail({ layer }: { layer: RasterLayer }) {
     }
     context.putImageData(thumbnail, left, top);
   }, [layer.pixels, layer.width, layer.height]);
+  if (layer.kind === "group") return <span className="layer-thumb layer-group-thumb"><img src="/ГРУППА.svg" alt=""/></span>;
   return <span className="layer-thumb">{layer.kind === "text" && <b>T</b>}{layer.kind === "adjustment" && <b>◐</b>}<canvas ref={ref} width="36" height="28" /></span>;
+}
+
+function LayerMaskThumbnail({ mask, width, height }: { mask: RasterLayerMask; width: number; height: number }) {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas = ref.current, context = canvas?.getContext("2d"); if (!canvas || !context) return;
+    const image = context.createImageData(canvas.width, canvas.height);
+    for (let y = 0; y < canvas.height; y += 1) for (let x = 0; x < canvas.width; x += 1) {
+      const sourceX = Math.min(width - 1, Math.floor(x * width / canvas.width)), sourceY = Math.min(height - 1, Math.floor(y * height / canvas.height));
+      const value = mask.pixels[sourceY * width + sourceX] ?? 255, offset = (y * canvas.width + x) * 4;
+      image.data[offset] = value; image.data[offset + 1] = value; image.data[offset + 2] = value; image.data[offset + 3] = 255;
+    }
+    context.putImageData(image, 0, 0);
+  }, [mask.pixels, width, height]);
+  return <span className="layer-mask-thumb" title="Layer Mask (Маска слоя)"><canvas ref={ref} width="28" height="28"/>{mask.linked && <i>⛓</i>}</span>;
 }
 
 const layerEffectDefaults: RasterLayer["effects"] = {
@@ -178,10 +194,11 @@ function LayersPanel() {
   const timed = active?.kind === "audio" || active?.kind === "video";
   if (active && isRasterDocumentState(active.state)) {
     const state = active.state;
-    const addLayer = () => { let createdId = ""; kernel.documents.update<RasterDocumentState>(active.id, (current) => { const layer = createRasterLayer(current.width, current.height, `Layer ${current.layers.length + 1} (Слой ${current.layers.length + 1})`); current.layers.push(layer); current.activeLayerId = layer.id; createdId = layer.id; }); setSelectedLayers(active.id, [createdId]); };
+    const addLayer = () => { let createdId = ""; kernel.documents.update<RasterDocumentState>(active.id, (current) => { const selected = current.layers.find((item) => item.id === current.activeLayerId); const parentId = selected?.kind === "group" ? selected.id : (selected?.parentId ?? null); const layer = createRasterLayer(current.width, current.height, `Layer ${current.layers.length + 1} (Слой ${current.layers.length + 1})`); appendLayer(current, layer, parentId); current.activeLayerId = layer.id; createdId = layer.id; }); setSelectedLayers(active.id, [createdId]); };
+    const addGroup = () => { let createdId = ""; kernel.documents.update<RasterDocumentState>(active.id, (current) => { const number = current.layers.filter((item) => item.kind === "group").length + 1; const group = appendRasterGroup(current, `Group ${number} (Группа ${number})`); current.activeLayerId = group.id; createdId = group.id; }); setSelectedLayers(active.id, [createdId]); };
     const adjustmentLabels: Array<[RasterAdjustment["kind"], string]> = [["brightnessContrast", "Brightness/Contrast (Яркость/Контраст)"], ["levels", "Levels (Уровни)"], ["curves", "Curves (Кривые)"], ["hueSaturation", "Hue/Saturation (Тон/Насыщенность)"], ["colorBalance", "Color Balance (Цветовой баланс)"], ["invert", "Invert (Инверсия)"], ["posterize", "Posterize (Постеризация)"], ["threshold", "Threshold (Порог)"]];
-    const addAdjustment = (kind: RasterAdjustment["kind"], name: string) => { kernel.documents.update<RasterDocumentState>(active.id, (current) => { const layer = createAdjustmentLayer(current.width, current.height, kind, name); current.layers.push(layer); current.activeLayerId = layer.id; }); setShowAdjustments(false); };
-    const deleteLayer = () => { let survivorId = ""; kernel.documents.update<RasterDocumentState>(active.id, (current) => { const index = current.layers.findIndex((item) => item.id === current.activeLayerId); if (index < 0) return; current.layers.splice(index, 1); if (!current.layers.length) current.layers.push(createRasterLayer(current.width, current.height, "Layer 1 (Слой 1)")); current.activeLayerId = current.layers[Math.min(index, current.layers.length - 1)]!.id; survivorId = current.activeLayerId; }); if (survivorId) setSelectedLayers(active.id, [survivorId]); };
+    const addAdjustment = (kind: RasterAdjustment["kind"], name: string) => { kernel.documents.update<RasterDocumentState>(active.id, (current) => { const selected = current.layers.find((item) => item.id === current.activeLayerId); const layer = createAdjustmentLayer(current.width, current.height, kind, name); appendLayer(current, layer, selected?.kind === "group" ? selected.id : (selected?.parentId ?? null)); current.activeLayerId = layer.id; }); setShowAdjustments(false); };
+    const deleteLayer = () => { let survivorId = ""; kernel.documents.update<RasterDocumentState>(active.id, (current) => { const index = current.layers.findIndex((item) => item.id === current.activeLayerId); if (index < 0) return; const target = current.layers[index]!; const removed = new Set([target.id, ...rasterLayerDescendantIds(current.layers, target.id)]); current.layers = current.layers.filter((item) => !removed.has(item.id)); if (!current.layers.some((item) => item.kind !== "group")) appendLayer(current, createRasterLayer(current.width, current.height, "Layer 1 (Слой 1)")); const next = current.layers[Math.min(index, current.layers.length - 1)] ?? current.layers[0]; if (!next) return; current.activeLayerId = next.id; survivorId = next.id; }); if (survivorId) setSelectedLayers(active.id, [survivorId]); };
     const selectLayer = (id: string) => kernel.documents.update<RasterDocumentState>(active.id, (current) => { current.activeLayerId = id; });
     const clickLayer = (id: string, event: React.MouseEvent) => {
       selectLayer(id);
@@ -195,6 +212,8 @@ function LayersPanel() {
       setSelectedLayers(active.id, [id]);
     };
     const toggleVisible = (id: string) => kernel.documents.update<RasterDocumentState>(active.id, (current) => { const layer = current.layers.find((item) => item.id === id); if (layer) layer.visible = !layer.visible; });
+    const toggleExpanded = (id: string) => kernel.documents.update<RasterDocumentState>(active.id, (current) => { const layer = current.layers.find((item) => item.id === id); if (layer?.kind === "group") layer.expanded = layer.expanded === false; });
+    const addMask = () => kernel.documents.update<RasterDocumentState>(active.id, (current) => { const layer = current.layers.find((item) => item.id === current.activeLayerId); if (layer && layer.kind !== "group" && !layer.mask) layer.mask = createRasterLayerMask(current.width, current.height); });
     const activeLayer = state.layers.find((layer) => layer.id === state.activeLayerId) ?? state.layers[0];
     if (!activeLayer) return <div className="dock-panel-body"><div className="empty-row">{text(language, "No layers", "Нет слоёв")}</div></div>;
     const updateActive = (patch: Partial<RasterLayer>) => kernel.documents.update<RasterDocumentState>(active.id, (current) => { const layer = current.layers.find((item) => item.id === current.activeLayerId); if (layer) Object.assign(layer, patch); });
@@ -202,8 +221,8 @@ function LayersPanel() {
     const styleLayer = state.layers.find((layer) => layer.id === styleLayerId);
     return <div className="dock-panel-body layers-panel">
       <div className="layer-controls"><select value={activeLayer.blendMode} onChange={(event) => updateActive({ blendMode: event.target.value as RasterBlendMode })}>{blendModes.map((mode) => <option key={mode} value={mode}>{mode}</option>)}</select><div className="layer-controls-row"><label><span>{text(language, "Opacity", "Непрозр.")}</span><input type="number" min="0" max="100" value={Math.round(activeLayer.opacity * 100)} onChange={(event) => updateActive({ opacity: Math.max(0, Math.min(1, event.target.valueAsNumber / 100)) })}/><i>%</i></label><label><span>{text(language, "Fill", "Заливка")}</span><input type="number" min="0" max="100" value={Math.round((activeLayer.fillOpacity ?? 1) * 100)} onChange={(event) => updateActive({ fillOpacity: Math.max(0, Math.min(1, event.target.valueAsNumber / 100)) })}/><i>%</i></label></div></div>
-      <div className="layer-list">{[...state.layers].reverse().map((layer) => <div className={[layer.id === state.activeLayerId ? "active" : "", selectedLayerIds.includes(layer.id) ? "selected" : "", "layer-row"].filter(Boolean).join(" ")} key={layer.id}><button onClick={() => toggleVisible(layer.id)} aria-label={text(language, "Toggle visibility", "Переключить видимость")}><img src={layer.visible ? "/ГЛАЗ ОТКРЫТ.svg" : "/ГЛАЗ ЗАКРЫТ.svg"} alt=""/></button><button onClick={(event) => clickLayer(layer.id, event)} onDoubleClick={() => { selectLayer(layer.id); setStyleLayerId(layer.id); }}><LayerThumbnail layer={layer}/><span className="layer-row-text"><b>{localized(layer.name, language)}</b><small>{layer.blendMode} · {Math.round(layer.opacity * 100)}%</small></span></button></div>)}</div>
-      <div className="layer-actions adjustment-actions">{showAdjustments && <div className="adjustment-menu">{adjustmentLabels.map(([kind, name]) => <button key={kind} onClick={() => addAdjustment(kind, name)}>{name}</button>)}</div>}<button onClick={() => setShowAdjustments((value) => !value)} title={text(language, "New adjustment layer", "Новый корректирующий слой")}><img src="/КОРРЕКТИРУЮЩИЙ СЛОЙ.svg" alt=""/></button><button onClick={addLayer} title={text(language, "New layer", "Новый слой")}><img src="/НОВЫЙ СЛОЙ.svg" alt=""/></button><button onClick={deleteLayer} title={text(language, "Delete layer", "Удалить слой")}><img src="/КОРЗИНА.svg" alt=""/></button></div>
+      <div className="layer-list">{rasterLayerRows(state.layers).map(({ layer, depth }) => <div className={[layer.id === state.activeLayerId ? "active" : "", selectedLayerIds.includes(layer.id) ? "selected" : "", layer.kind === "group" ? "group" : "", "layer-row"].filter(Boolean).join(" ")} style={{ "--layer-depth": depth } as CSSProperties} key={layer.id}><button onClick={() => toggleVisible(layer.id)} aria-label={text(language, "Toggle visibility", "Переключить видимость")}><img src={layer.visible ? "/ГЛАЗ ОТКРЫТ.svg" : "/ГЛАЗ ЗАКРЫТ.svg"} alt=""/></button><button onClick={(event) => clickLayer(layer.id, event)} onDoubleClick={() => { selectLayer(layer.id); if (layer.kind !== "group") setStyleLayerId(layer.id); }}><span className="layer-hierarchy-space"/>{layer.kind === "group" && <span className="layer-disclosure" onClick={(event) => { event.stopPropagation(); toggleExpanded(layer.id); }}>{layer.expanded === false ? "▸" : "▾"}</span>}<LayerThumbnail layer={layer}/>{layer.mask && <LayerMaskThumbnail mask={layer.mask} width={state.width} height={state.height}/>}<span className="layer-row-text"><b>{localized(layer.name, language)}</b><small>{layer.kind === "group" ? (layer.groupMode === "isolated" ? "isolated" : "pass through") : `${layer.blendMode} · ${Math.round(layer.opacity * 100)}%`}</small></span></button></div>)}</div>
+      <div className="layer-actions adjustment-actions">{showAdjustments && <div className="adjustment-menu">{adjustmentLabels.map(([kind, name]) => <button key={kind} onClick={() => addAdjustment(kind, name)}>{name}</button>)}</div>}<button onClick={() => setShowAdjustments((value) => !value)} title={text(language, "New adjustment layer", "Новый корректирующий слой")}><img src="/КОРРЕКТИРУЮЩИЙ СЛОЙ.svg" alt=""/></button><button onClick={addMask} disabled={activeLayer.kind === "group" || Boolean(activeLayer.mask)} title={text(language, "Add layer mask", "Добавить маску слоя")}><img src="/МАСКА СЛОЯ.svg" alt=""/></button><button onClick={addGroup} title={text(language, "New group", "Новая группа")}><img src="/ГРУППА.svg" alt=""/></button><button onClick={addLayer} title={text(language, "New layer", "Новый слой")}><img src="/НОВЫЙ СЛОЙ.svg" alt=""/></button><button onClick={deleteLayer} title={text(language, "Delete layer", "Удалить слой")}><img src="/КОРЗИНА.svg" alt=""/></button></div>
       {styleLayer && <LayerStyleDialog layer={styleLayer} onClose={() => setStyleLayerId(null)} onApply={(patch) => kernel.documents.update<RasterDocumentState>(active.id, (current) => { const target = current.layers.find((layer) => layer.id === styleLayer.id); if (target) Object.assign(target, patch); })}/>} 
     </div>;
   }

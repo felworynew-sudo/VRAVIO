@@ -1,6 +1,7 @@
 import type { RasterDocumentState, RgbaColor } from "./types";
 import { renderLayerEffects } from "./effects";
 import { applyAdjustment } from "./adjustments";
+import { effectiveLayerOpacity, flattenRasterLayers, isLayerEffectivelyVisible } from "./layer-tree";
 
 const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
 
@@ -60,15 +61,28 @@ function blendRgb(mode: string, source: [number, number, number], destination: [
 
 export function compositeRasterDocument(state: RasterDocumentState): Uint8ClampedArray {
   const output = new Uint8ClampedArray(state.width * state.height * 4);
-  for (const layer of state.layers) {
-    if (!layer.visible || layer.opacity <= 0) continue;
+  for (const layer of flattenRasterLayers(state.layers)) {
+    const effectiveOpacity = effectiveLayerOpacity(layer, state.layers);
+    if (layer.kind === "group" || !isLayerEffectivelyVisible(layer, state.layers) || effectiveOpacity <= 0) continue;
     if (layer.kind === "adjustment" && layer.adjustment) {
-      applyAdjustment(output, layer.adjustment, layer.opacity);
+      const before = layer.mask?.enabled ? output.slice() : null;
+      applyAdjustment(output, layer.adjustment, effectiveOpacity);
+      if (before && layer.mask) for (let index = 0; index < output.length; index += 4) {
+        const maskIndex = index / 4;
+        const sample = layer.mask.inverted ? 255 - layer.mask.pixels[maskIndex]! : layer.mask.pixels[maskIndex]!;
+        const amount = sample / 255 * layer.mask.density;
+        output[index] = Math.round(before[index]! + (output[index]! - before[index]!) * amount);
+        output[index + 1] = Math.round(before[index + 1]! + (output[index + 1]! - before[index + 1]!) * amount);
+        output[index + 2] = Math.round(before[index + 2]! + (output[index + 2]! - before[index + 2]!) * amount);
+        output[index + 3] = Math.round(before[index + 3]! + (output[index + 3]! - before[index + 3]!) * amount);
+      }
       continue;
     }
     const renderedLayer = renderLayerEffects(layer, state.width, state.height);
     for (let index = 0; index < output.length; index += 4) {
-      const sourceAlpha = (renderedLayer[index + 3]! / 255) * layer.opacity * (layer.fillOpacity ?? 1);
+      const maskIndex = index / 4;
+      const maskAlpha = layer.mask?.enabled ? ((layer.mask.inverted ? 255 - layer.mask.pixels[maskIndex]! : layer.mask.pixels[maskIndex]!) / 255) * layer.mask.density : 1;
+      const sourceAlpha = (renderedLayer[index + 3]! / 255) * effectiveOpacity * (layer.fillOpacity ?? 1) * maskAlpha;
       if (sourceAlpha <= 0) continue;
       const destinationAlpha = output[index + 3]! / 255;
       const alpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha);

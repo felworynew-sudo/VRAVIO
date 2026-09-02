@@ -1,9 +1,21 @@
 import { parseHexColor } from "./color";
-import type { RasterAdjustment, RasterDocumentOptions, RasterDocumentState, RasterLayer } from "./types";
+import type { RasterAdjustment, RasterDocumentOptions, RasterDocumentState, RasterLayer, RasterLayerMask } from "./types";
+
+export const makeLayerOrderKey = (index: number): string => Math.max(0, Math.floor(index)).toString(36).padStart(8, "0");
 
 export function createRasterLayer(width: number, height: number, name = "Layer (Слой)"): RasterLayer {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) throw new RangeError("Raster layer dimensions must be positive integers");
-  return { id: crypto.randomUUID(), name, width, height, pixels: new Uint8ClampedArray(width * height * 4), visible: true, opacity: 1, fillOpacity: 1, blendMode: "normal", locked: false, kind: "pixel", effects: {} };
+  return { id: crypto.randomUUID(), name, width, height, pixels: new Uint8ClampedArray(width * height * 4), visible: true, opacity: 1, fillOpacity: 1, blendMode: "normal", locked: false, kind: "pixel", effects: {}, parentId: null, orderKey: makeLayerOrderKey(0), clipping: false };
+}
+
+export function createRasterGroup(width: number, height: number, name = "Group (Группа)"): RasterLayer {
+  return { ...createRasterLayer(width, height, name), kind: "group", expanded: true, groupMode: "passThrough" };
+}
+
+export function createRasterLayerMask(width: number, height: number, reveal = true): RasterLayerMask {
+  const pixels = new Uint8ClampedArray(width * height);
+  if (reveal) pixels.fill(255);
+  return { pixels, assetId: null, enabled: true, inverted: false, linked: true, density: 1, feather: 0 };
 }
 
 export function defaultAdjustment(kind: RasterAdjustment["kind"]): RasterAdjustment {
@@ -18,7 +30,7 @@ export function defaultAdjustment(kind: RasterAdjustment["kind"]): RasterAdjustm
 }
 
 export function createAdjustmentLayer(width: number, height: number, kind: RasterAdjustment["kind"], name: string = kind): RasterLayer {
-  return { ...createRasterLayer(width, height, name), kind: "adjustment", adjustment: defaultAdjustment(kind) };
+  return { ...createRasterLayer(width, height, name), kind: "adjustment", adjustment: defaultAdjustment(kind), mask: createRasterLayerMask(width, height) };
 }
 
 export function createRasterDocument(width = 1280, height = 720, options: RasterDocumentOptions = {}): RasterDocumentState {
@@ -28,7 +40,7 @@ export function createRasterDocument(width = 1280, height = 720, options: Raster
     for (let index = 0; index < layer.pixels.length; index += 4) { layer.pixels[index] = color.r; layer.pixels[index + 1] = color.g; layer.pixels[index + 2] = color.b; layer.pixels[index + 3] = color.a; }
   }
   return {
-    kind: "raster", schemaVersion: 1, width, height, colorSpace: "srgb",
+    kind: "raster", schemaVersion: 2, width, height, colorSpace: "srgb",
     resolution: options.resolution ?? 72, resolutionUnit: options.resolutionUnit ?? "ppi", bitDepth: 8,
     pixelAspectRatio: options.pixelAspectRatio ?? 1, backgroundColor: options.backgroundColor ?? null,
     layers: [layer], activeLayerId: layer.id, selection: null, guides: [],
@@ -38,7 +50,24 @@ export function createRasterDocument(width = 1280, height = 720, options: Raster
 export function isRasterDocumentState(value: unknown): value is RasterDocumentState {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<RasterDocumentState>;
-  return candidate.kind === "raster" && candidate.schemaVersion === 1 && Number.isInteger(candidate.width) && Number.isInteger(candidate.height) && Array.isArray(candidate.layers);
+  if (candidate.kind !== "raster" || (candidate.schemaVersion !== 1 && candidate.schemaVersion !== 2) || !Number.isInteger(candidate.width) || !Number.isInteger(candidate.height) || !Array.isArray(candidate.layers)) return false;
+  migrateRasterDocumentState(candidate as RasterDocumentState);
+  return true;
+}
+
+/** In-place and idempotent so restored v1 sessions remain editable without a stop-the-world conversion. */
+export function migrateRasterDocumentState(state: RasterDocumentState): RasterDocumentState {
+  state.layers.forEach((layer, index) => {
+    if (typeof layer.parentId === "undefined") layer.parentId = null;
+    if (!layer.orderKey) layer.orderKey = makeLayerOrderKey(index);
+    if (typeof layer.clipping === "undefined") layer.clipping = false;
+    if (layer.kind === "group") {
+      layer.expanded ??= true;
+      layer.groupMode ??= "passThrough";
+    }
+  });
+  state.schemaVersion = 2;
+  return state;
 }
 
 export function activeRasterLayer(state: RasterDocumentState): RasterLayer {

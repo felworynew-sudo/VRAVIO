@@ -2,6 +2,7 @@ export * from "./color";
 export * from "./adjustments";
 export * from "./clone";
 export * from "./document";
+export * from "./layer-tree";
 export * from "./fill";
 export * from "./filters";
 export * from "./paint";

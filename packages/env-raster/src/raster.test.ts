@@ -18,7 +18,7 @@ describe("adjustments", () => {
     expect(Array.from(pixels)).toEqual([128, 128, 128, 128, 10, 20, 30, 0]);
   });
 });
-import { applyRasterFilter, blurDab, combineSelections, compositeRasterDocument, createContiguousColorSelection, createEllipseSelection, createPolygonSelection, createRasterDocument, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill, invertPixelSelection, parseHexColor, patchFromSelection, renderLayerEffects, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectAllPixels, selectOpaquePixels, selectionOutlinePath, smudgeStrokeSegment, translateLayerPixels, translateSelection } from "./index";
+import { appendLayer, appendRasterGroup, applyRasterFilter, blurDab, combineSelections, compositeRasterDocument, createAdjustmentLayer, createContiguousColorSelection, createEllipseSelection, createPolygonSelection, createRasterDocument, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill, invertPixelSelection, isRasterDocumentState, parseHexColor, patchFromSelection, rasterLayerDescendantIds, rasterLayerRows, renderLayerEffects, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectAllPixels, selectOpaquePixels, selectionOutlinePath, smudgeStrokeSegment, translateLayerPixels, translateSelection } from "./index";
 
 describe("raster document", () => {
   it("creates a transparent active layer with exact dimensions", () => {
@@ -32,6 +32,25 @@ describe("raster document", () => {
     expect(document.resolution).toBe(300);
     expect(document.pixelAspectRatio).toBe(1.5);
     expect([...document.layers[0]!.pixels.slice(0, 4)]).toEqual([17, 34, 51, 255]);
+  });
+
+  it("migrates restored v1 layers into the normalized tree", () => {
+    const document = createRasterDocument(2, 2);
+    const legacy = { ...document, schemaVersion: 1, layers: document.layers.map(({ parentId: _parentId, orderKey: _orderKey, clipping: _clipping, ...layer }) => layer) };
+    expect(isRasterDocumentState(legacy)).toBe(true);
+    expect(legacy.schemaVersion).toBe(2);
+    expect((legacy.layers[0] as typeof document.layers[number]).parentId).toBeNull();
+    expect((legacy.layers[0] as typeof document.layers[number]).orderKey).toBe("00000000");
+  });
+
+  it("builds collapsible group rows and reports descendants", () => {
+    const document = createRasterDocument(2, 2);
+    const group = appendRasterGroup(document);
+    const child = appendLayer(document, createRasterLayer(2, 2, "Child"), group.id);
+    expect(rasterLayerRows(document.layers).find((row) => row.layer.id === child.id)?.depth).toBe(1);
+    group.expanded = false;
+    expect(rasterLayerRows(document.layers).some((row) => row.layer.id === child.id)).toBe(false);
+    expect(rasterLayerDescendantIds(document.layers, group.id)).toEqual([child.id]);
   });
 });
 
@@ -84,6 +103,27 @@ describe("layer rendering", () => {
     const rendered = renderLayerEffects(layer, 3, 1);
     expect(rendered[7]).toBe(255);
     expect(layer.pixels[7]).toBe(0);
+  });
+
+  it("applies layer masks and ancestor visibility during compositing", () => {
+    const document = createRasterDocument(2, 1);
+    document.layers[0]!.visible = false;
+    const group = appendRasterGroup(document);
+    group.opacity = .5;
+    const child = createRasterLayer(2, 1); child.pixels.set([255, 0, 0, 255, 255, 0, 0, 255]);
+    child.mask = { pixels: new Uint8ClampedArray([255, 0]), assetId: null, enabled: true, inverted: false, linked: true, density: 1, feather: 0 };
+    appendLayer(document, child, group.id);
+    expect([...compositeRasterDocument(document)]).toEqual([255, 0, 0, 128, 0, 0, 0, 0]);
+    group.visible = false;
+    expect([...compositeRasterDocument(document)]).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
+  });
+
+  it("creates a white mask for adjustment layers and masks their correction", () => {
+    const document = createRasterDocument(2, 1, { backgroundColor: "#102030" });
+    const adjustment = createAdjustmentLayer(2, 1, "invert");
+    adjustment.mask!.pixels[1] = 0;
+    appendLayer(document, adjustment);
+    expect([...compositeRasterDocument(document)]).toEqual([239, 223, 207, 255, 16, 32, 48, 255]);
   });
 });
 

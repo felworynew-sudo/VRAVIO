@@ -63,11 +63,11 @@ function withActiveLayerPixels(state: RasterDocumentState, pixels: Uint8ClampedA
 }
 
 function cloneRasterState(state: RasterDocumentState): RasterDocumentState {
-  return { ...state, layers: state.layers.map((layer) => ({ ...layer, pixels: layer.pixels.slice(), ...(layer.adjustment ? { adjustment: structuredClone(layer.adjustment) } : {}) })), selection: state.selection ? { mask: state.selection.mask.slice(), bounds: { ...state.selection.bounds } } : null, guides: (state.guides ?? []).map((guide) => ({ ...guide })) };
+  return { ...state, layers: state.layers.map((layer) => ({ ...layer, pixels: layer.pixels.slice(), ...(layer.adjustment ? { adjustment: structuredClone(layer.adjustment) } : {}), ...(layer.mask ? { mask: { ...layer.mask, pixels: layer.mask.pixels.slice() } } : {}) })), selection: state.selection ? { mask: state.selection.mask.slice(), bounds: { ...state.selection.bounds } } : null, guides: (state.guides ?? []).map((guide) => ({ ...guide })) };
 }
 
 function rasterStateByteLength(state: RasterDocumentState): number {
-  return state.layers.reduce((sum, layer) => sum + layer.pixels.byteLength, state.selection?.mask.byteLength ?? 0);
+  return state.layers.reduce((sum, layer) => sum + layer.pixels.byteLength + (layer.mask?.pixels.byteLength ?? 0), state.selection?.mask.byteLength ?? 0);
 }
 
 function alphaBounds(pixels: Uint8ClampedArray, width: number, height: number): RasterRect | null {

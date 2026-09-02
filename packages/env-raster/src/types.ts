@@ -1,5 +1,5 @@
 export type RasterBlendMode = "normal" | "dissolve" | "darken" | "multiply" | "colorBurn" | "linearBurn" | "darkerColor" | "lighten" | "screen" | "colorDodge" | "linearDodge" | "lighterColor" | "overlay" | "softLight" | "hardLight" | "vividLight" | "linearLight" | "pinLight" | "hardMix" | "difference" | "exclusion" | "subtract" | "divide" | "hue" | "saturation" | "color" | "luminosity";
-export type RasterLayerKind = "pixel" | "text" | "adjustment" | "fill";
+export type RasterLayerKind = "pixel" | "text" | "adjustment" | "fill" | "group" | "smart" | "shape" | "3d";
 
 export type RasterAdjustment =
   | { kind: "levels"; blackInput: number; gamma: number; whiteInput: number; blackOutput: number; whiteOutput: number }
@@ -21,6 +21,23 @@ export interface RasterLayerEffects {
   gradientOverlay?: { enabled: boolean; from: string; to: string; opacity: number; angle: number };
 }
 
+export interface RasterLayerMask {
+  /** Working grayscale mask. Asset-backed persistence can replace this buffer without changing the compositor contract. */
+  pixels: Uint8ClampedArray;
+  assetId: string | null;
+  enabled: boolean;
+  inverted: boolean;
+  linked: boolean;
+  density: number;
+  feather: number;
+}
+
+export interface RasterSmartSource {
+  assetId: string;
+  pinnedRev: string | null;
+  sourceKind: "raster" | "vector" | "document";
+}
+
 export interface RasterLayer {
   id: string;
   name: string;
@@ -36,6 +53,15 @@ export interface RasterLayer {
   adjustment?: RasterAdjustment;
   text?: RasterTextData;
   effects: RasterLayerEffects;
+  /** Normalized tree link. null means document root. */
+  parentId: string | null;
+  /** Lexicographically sortable stable sibling position. */
+  orderKey: string;
+  expanded?: boolean;
+  groupMode?: "passThrough" | "isolated";
+  clipping?: boolean;
+  mask?: RasterLayerMask;
+  smartSource?: RasterSmartSource;
 }
 
 export interface RasterRect { x: number; y: number; width: number; height: number }
@@ -50,7 +76,7 @@ export interface PixelSelection {
 
 export interface RasterDocumentState {
   kind: "raster";
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   width: number;
   height: number;
   colorSpace: "srgb";
