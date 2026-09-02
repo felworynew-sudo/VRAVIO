@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   activeRasterLayer, appendLayer, clampRegionToDocument, copyHealedRegion, layerAccepts, layerLockReason, layerOpaqueBounds, paintMask, marqueeCorners, marqueeRect, pickLayerAt, combineSelections, compositeRasterDocument, compositeRasterRegion, createContiguousColorSelection, drawShape, DirtyRegion, RasterTileCache, type ShapeKind, createEllipseSelection, createPolygonSelection, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
-  changedRenderRegion, confineToSelection, isRasterDocumentState, layerRenderSignatures, liftSelection, parseHexColor, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectionOutlinePath, stampFloating, toHexColor,
+  changedRenderRegion, confineToSelection, layerDocumentPixels, setLayerPixels, isRasterDocumentState, layerRenderSignatures, liftSelection, parseHexColor, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectionOutlinePath, stampFloating, toHexColor,
   translateLayerPixels, translateSelection, type FloatingPixels, type LayerRenderSignature, type PixelSelection, type Point, type RasterDocumentState, type RasterGuide, type RasterLayer, type RasterRect, type RasterTextData, type SelectionCombineMode,
   cloneDab, cloneStrokeSegment,
   blurDab, blurStrokeSegment, smudgeStrokeSegment,
@@ -347,6 +347,16 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const preferences = useShellStore((shell) => shell.preferences);
   if (!isRasterDocumentState(document.state)) return <div className="workspace-error">Invalid raster document state</div>;
   const state = document.state;
+  /**
+   * A layer's pixels laid out across the canvas.
+   *
+   * Layers are stored at the size of what they hold; the tools work in canvas
+   * coordinates because a stroke can go anywhere. This is the bridge, and it is
+   * cached per buffer, so a layer read repeatedly without being edited is laid
+   * out once.
+   */
+  const canvasPixels = (item: RasterLayer) => layerDocumentPixels(item, state.width, state.height);
+
   const editingMaskLayer = editingMaskLayerId ? state.layers.find((layer) => layer.id === editingMaskLayerId && layer.mask) ?? null : null;
 
   /**
@@ -359,7 +369,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
    */
   const activeLayerForMask = state.layers.find((layer) => layer.id === state.activeLayerId);
   const brushMask = useMemo(
-    () => paintMask(state.selection, activeLayerForMask?.pixels ?? new Uint8ClampedArray(0), state.width, state.height, activeLayerForMask?.lockTransparent === true),
+    () => paintMask(state.selection, activeLayerForMask ? canvasPixels(activeLayerForMask) : new Uint8ClampedArray(0), state.width, state.height, activeLayerForMask?.lockTransparent === true),
     [state.selection, activeLayerForMask?.pixels, activeLayerForMask?.lockTransparent, state.width, state.height],
   );
   const paintColor = editingMaskLayer ? (maskForegroundIsWhite ? "#ffffff" : "#000000") : foregroundColor;
@@ -410,7 +420,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     if (!sourceLayer) return;
     const bounds = textTransform.initialBounds;
     overlay.width = Math.max(1, Math.round(bounds.width)); overlay.height = Math.max(1, Math.round(bounds.height));
-    putPixels(overlay, cropPixels(sourceLayer.pixels, state.width, bounds), overlay.width, overlay.height);
+    putPixels(overlay, cropPixels(canvasPixels(sourceLayer), state.width, bounds), overlay.width, overlay.height);
     const canvas = canvasRef.current;
     if (canvas) putPixels(canvas, compositeRasterDocument({ ...state, layers: state.layers.map((item) => item.id === transformPreview.layerId ? { ...item, visible: false } : item) }), state.width, state.height);
   }, [state, transformPreview?.layerId, transformPreview?.text?.initialBounds, transformPreview?.text?.original]);
@@ -591,7 +601,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    renderWorking(gesture.current?.working ?? activeRasterLayer(state).pixels);
+    renderWorking(gesture.current?.working ?? canvasPixels(activeRasterLayer(state)));
     const imageData = ctx.getImageData(0, 0, state.width, state.height);
     const px = imageData.data;
     for (let y = 0; y < maskH; y++) {
@@ -657,7 +667,15 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     if (!history) throw new Error(`History missing for ${document.id}`);
     const assign = (pixels: Uint8Array | Uint8ClampedArray): void => {
       const buffer = pixels instanceof Uint8ClampedArray ? pixels : fromBytes(pixels);
-      kernel.documents.update<RasterDocumentState>(document.id, (current) => { const layer = current.layers.find((item) => item.id === layerId); if (!layer) return; if (target === "mask" && layer.mask) layer.mask.pixels = rgbaToMask(buffer); else layer.pixels = buffer.slice(); });
+      kernel.documents.update<RasterDocumentState>(document.id, (current) => {
+        const layer = current.layers.find((item) => item.id === layerId);
+        if (!layer) return;
+        if (target === "mask" && layer.mask) { layer.mask.pixels = rgbaToMask(buffer); return; }
+        // Stored at the size of what was painted, not the size of the canvas.
+        // The tool worked at canvas size because a stroke can go anywhere; what
+        // is kept afterwards is the part that has something in it.
+        setLayerPixels(layer, buffer, current.width, current.height);
+      });
     };
 
     // A selection confines every tool, without exception. Each tool honours it
@@ -774,12 +792,12 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       // recomposites the whole document, which on a layered file is most of the
       // pause between letting go and seeing the result.
       const sourceLayer = pending.before.layers.find((item) => item.id === pending.layerId);
-      const wasThere = sourceLayer ? alphaBounds(sourceLayer.pixels, state.width, state.height) : null;
+      const wasThere = sourceLayer ? alphaBounds(canvasPixels(sourceLayer), state.width, state.height) : null;
       const isThere = alphaBounds(pending.pixels, state.width, state.height);
       if (wasThere) documentDirty.current.add(wasThere);
       if (isThere) documentDirty.current.add(isThere);
       if (!wasThere && !isThere) documentDirty.current.addEverything();
-      layer.pixels = pending.pixels.slice();
+      setLayerPixels(layer, pending.pixels, state.width, state.height);
     }
     after.selection = pending.selection ? { mask: pending.selection.mask.slice(), bounds: { ...pending.selection.bounds } } : null;
     if (nextActiveLayerId) after.activeLayerId = nextActiveLayerId;
@@ -791,11 +809,11 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       if (pendingTransformRef.current) return;
       const sourceLayer = activeRasterLayer(state), liveText = sourceLayer.kind === "text" && sourceLayer.text && !state.selection;
       const before = liveText ? state : cloneRasterState(state), layer = liveText ? sourceLayer : activeRasterLayer(before);
-      const selection = before.selection ? restrictSelectionToAlpha(before.selection, layer.pixels, state.width, state.height) : null;
+      const selection = before.selection ? restrictSelectionToAlpha(before.selection, canvasPixels(layer), state.width, state.height) : null;
       if (before.selection && !selection) { diagnostic("info", "transform", "Transform ignored: selection contains no opaque pixels", { documentId: document.id, layerId: layer.id }); return; }
-      if (!selection && !alphaBounds(layer.pixels, state.width, state.height)) { diagnostic("info", "transform", "Transform ignored: layer is empty", { documentId: document.id, layerId: layer.id }); return; }
-      const bounds = layer.text?.visualBounds?.width ? layer.text.visualBounds : alphaBounds(layer.pixels, state.width, state.height)!;
-      const pending: PendingPixelTransform = { before, layerId: layer.id, dx: 0, dy: 0, pixels: liveText ? layer.pixels : layer.pixels.slice(), selection, rotation: 0, ...(liveText ? { text: { original: structuredClone(layer.text!), initialBounds: { ...bounds }, targetBounds: { ...bounds } } } : {}) };
+      if (!selection && !alphaBounds(canvasPixels(layer), state.width, state.height)) { diagnostic("info", "transform", "Transform ignored: layer is empty", { documentId: document.id, layerId: layer.id }); return; }
+      const bounds = layer.text?.visualBounds?.width ? layer.text.visualBounds : alphaBounds(canvasPixels(layer), state.width, state.height)!;
+      const pending: PendingPixelTransform = { before, layerId: layer.id, dx: 0, dy: 0, pixels: canvasPixels(layer).slice(), selection, rotation: 0, ...(liveText ? { text: { original: structuredClone(layer.text!), initialBounds: { ...bounds }, targetBounds: { ...bounds } } } : {}) };
       pendingTransformRef.current = pending; setTransformPreview(pending); announceTransform(pending);
     };
     const commit = () => finishPendingTransform(true), cancel = () => finishPendingTransform(false);
@@ -853,7 +871,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     layer.text = textData;
     // Rasterising type paints the whole document surface and then scans it for
     // the glyph bounds; on a large canvas that is long enough to look stuck.
-    layer.pixels = withBusy("Rasterising type (Растеризация текста)", () => renderTextLayerPixels(textData, state.width, state.height));
+    setLayerPixels(layer, withBusy("Rasterising type (Растеризация текста)", () => renderTextLayerPixels(textData, state.width, state.height)), state.width, state.height);
     layer.kind = "text";
     layer.name = textDraft.value.slice(0, 28) || layer.name;
     const after = cloneRasterState(state); const index = after.layers.findIndex((item) => item.id === layer.id); if (index >= 0) after.layers[index] = layer; else after.layers.push(layer); after.activeLayerId = layer.id;
@@ -953,8 +971,8 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       }
       if (!sourcePointRef.current) return;
       canvas.setPointerCapture(event.pointerId);
-      const before = layer.pixels.slice();
-      const working = layer.pixels.slice();
+      const before = canvasPixels(layer).slice();
+      const working = canvasPixels(layer).slice();
       const options = toolOptions[activeToolId] ?? {};
       const opacity = Number(options.opacity ?? 100) / 100;
       const previous = lastBrushPointRef.current, shiftFrom = event.shiftKey && previous?.toolId === activeToolId && previous.layerId === layer.id ? previous.point : null;
@@ -976,7 +994,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       // holds it — which is the whole point when the blemish is on a layer above.
       const healSource = (toolOptions[activeToolId]?.sampleAllLayers === true) ? compositeRasterDocument(state) : null;
       canvas.setPointerCapture(event.pointerId);
-      const before = layer.pixels.slice();
+      const before = canvasPixels(layer).slice();
       const options = toolOptions[activeToolId] ?? {};
       const size = Number(options.size ?? 24);
       const radius = Math.ceil(size / 2) + 8;
@@ -1021,7 +1039,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       }
       canvas.setPointerCapture(event.pointerId);
       setPatchOffset({ x: 0, y: 0 });
-      gesture.current = { before: layer.pixels.slice(), working: layer.pixels.slice(), curveStart: point, pending: point, pointerId: event.pointerId, frame: null, target: "pixels", layerId: layer.id };
+      gesture.current = { before: canvasPixels(layer).slice(), working: canvasPixels(layer).slice(), curveStart: point, pending: point, pointerId: event.pointerId, frame: null, target: "pixels", layerId: layer.id };
       return;
     }
     const paintingTool = activeToolId === "raster.brush" || activeToolId === "raster.pencil" || activeToolId === "raster.highlighter" || activeToolId === "raster.eraser" || activeToolId === "raster.blur" || activeToolId === "raster.smudge" || activeToolId === "raster.dodge" || activeToolId === "raster.burn";
@@ -1075,21 +1093,21 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     }
     if (activeToolId === "raster.magicWand") {
       const options = toolOptions[activeToolId] ?? {};
-      const source = options.allLayers === false ? layer.pixels : compositeRasterDocument(state);
+      const source = options.allLayers === false ? canvasPixels(layer) : compositeRasterDocument(state);
       const incoming = restrictSelectionToAlpha(createContiguousColorSelection(source, state.width, state.height, point.x, point.y, Number(options.tolerance ?? 32)), source, state.width, state.height);
       const mode = (event.shiftKey && event.altKey ? "intersect" : event.shiftKey ? "add" : event.altKey ? "subtract" : "replace") as SelectionCombineMode;
       void commitSelection(state.selection, incoming ? combineSelections(state.selection, incoming, state.width, state.height, mode) : mode === "replace" ? null : state.selection);
       return;
     }
     if (activeToolId === "raster.crop" || activeToolId === "raster.move") {
-      const effectiveSelection = activeToolId === "raster.move" && state.selection ? restrictSelectionToAlpha(state.selection, layer.pixels, state.width, state.height) : null;
+      const effectiveSelection = activeToolId === "raster.move" && state.selection ? restrictSelectionToAlpha(state.selection, canvasPixels(layer), state.width, state.height) : null;
       if (activeToolId === "raster.move" && state.selection && !effectiveSelection) { diagnostic("info", "move", "Move ignored: selection contains no opaque pixels", { documentId: document.id, layerId: layer.id }); return; }
-      if (activeToolId === "raster.move" && !state.selection && !(layer.kind === "text" && layer.text?.visualBounds?.width ? layer.text.visualBounds : alphaBounds(layer.pixels, state.width, state.height))) { diagnostic("info", "move", "Move ignored: layer is empty", { documentId: document.id, layerId: layer.id }); return; }
+      if (activeToolId === "raster.move" && !state.selection && !(layer.kind === "text" && layer.text?.visualBounds?.width ? layer.text.visualBounds : alphaBounds(canvasPixels(layer), state.width, state.height))) { diagnostic("info", "move", "Move ignored: layer is empty", { documentId: document.id, layerId: layer.id }); return; }
       canvas.setPointerCapture(event.pointerId);
       let pending = activeToolId === "raster.move" ? pendingTransformRef.current : null, createdTextTransform = false;
       if (activeToolId === "raster.move" && !pending && layer.kind === "text" && layer.text && !effectiveSelection) {
-        const bounds = layer.text.visualBounds?.width ? layer.text.visualBounds : alphaBounds(layer.pixels, state.width, state.height)!;
-        pending = { before: state, layerId: layer.id, dx: 0, dy: 0, pixels: layer.pixels, selection: null, rotation: 0, text: { original: structuredClone(layer.text), initialBounds: { ...bounds }, targetBounds: { ...bounds } } };
+        const bounds = layer.text.visualBounds?.width ? layer.text.visualBounds : alphaBounds(canvasPixels(layer), state.width, state.height)!;
+        pending = { before: state, layerId: layer.id, dx: 0, dy: 0, pixels: canvasPixels(layer), selection: null, rotation: 0, text: { original: structuredClone(layer.text), initialBounds: { ...bounds }, targetBounds: { ...bounds } } };
         pendingTransformRef.current = pending; setTransformPreview(pending); announceTransform(pending);
         createdTextTransform = true;
       }
@@ -1099,14 +1117,14 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       // cut out of leaves a second hole, and with a feathered edge a second
       // ring, once per drag, none of which was ever committed.
       const origin = pending && !pending.text ? pending.before.layers.find((item) => item.id === pending.layerId) : null;
-      const originSelection = origin ? restrictSelectionToAlpha(pending!.before.selection ?? null, origin.pixels, state.width, state.height) : null;
+      const originSelection = origin ? restrictSelectionToAlpha(pending!.before.selection ?? null, canvasPixels(origin), state.width, state.height) : null;
       // The content is lifted off the layer once and then placed, never cut
       // again. Cutting per frame is what left a fraction of a soft edge behind
       // at every position the pointer passed through.
       const float = activeToolId === "raster.move" && !pending?.text
-        ? pending?.float ?? liftSelection(origin ? origin.pixels : layer.pixels, state.width, state.height, origin ? originSelection : effectiveSelection)
+        ? pending?.float ?? liftSelection(origin ? canvasPixels(origin) : canvasPixels(layer), state.width, state.height, origin ? originSelection : effectiveSelection)
         : undefined;
-      documentGesture.current = { kind: activeToolId === "raster.crop" ? "crop" : "move", from: point, current: point, pointerId: event.pointerId, before: pending?.before ?? cloneRasterState(gestureState), startDx: pending?.dx ?? 0, startDy: pending?.dy ?? 0, basePixels: origin ? origin.pixels.slice() : pending ? (pending.text ? pending.pixels : pending.pixels.slice()) : layer.pixels.slice(), baseSelection: origin ? (originSelection ? { mask: originSelection.mask.slice(), bounds: { ...originSelection.bounds } } : null) : pending?.selection ? { mask: pending.selection.mask.slice(), bounds: { ...pending.selection.bounds } } : effectiveSelection ? { mask: effectiveSelection.mask.slice(), bounds: { ...effectiveSelection.bounds } } : null, rotation: pending?.rotation ?? 0, ...(pending?.text ? { text: pending.text } : {}), ...(createdTextTransform ? { createdTextTransform: true } : {}), ...(origin ? { fromOrigin: true } : {}), ...(float ? { float } : {}) };
+      documentGesture.current = { kind: activeToolId === "raster.crop" ? "crop" : "move", from: point, current: point, pointerId: event.pointerId, before: pending?.before ?? cloneRasterState(gestureState), startDx: pending?.dx ?? 0, startDy: pending?.dy ?? 0, basePixels: origin ? canvasPixels(origin).slice() : pending ? (pending.text ? pending.pixels : pending.pixels.slice()) : canvasPixels(layer).slice(), baseSelection: origin ? (originSelection ? { mask: originSelection.mask.slice(), bounds: { ...originSelection.bounds } } : null) : pending?.selection ? { mask: pending.selection.mask.slice(), bounds: { ...pending.selection.bounds } } : effectiveSelection ? { mask: effectiveSelection.mask.slice(), bounds: { ...effectiveSelection.bounds } } : null, rotation: pending?.rotation ?? 0, ...(pending?.text ? { text: pending.text } : {}), ...(createdTextTransform ? { createdTextTransform: true } : {}), ...(origin ? { fromOrigin: true } : {}), ...(float ? { float } : {}) };
       setSelectionDraft(activeToolId === "raster.crop" ? { x: point.x, y: point.y, width: 0, height: 0 } : null);
       return;
     }
@@ -1118,7 +1136,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       const options = toolOptions[activeToolId] ?? {};
       eyedropperRef.current = {
         pointerId: event.pointerId,
-        source: options.allLayers === false ? layer.pixels : compositeRasterDocument(state),
+        source: options.allLayers === false ? canvasPixels(layer) : compositeRasterDocument(state),
         sample: options.sample === "point" || options.sample === undefined ? 1 : Number(options.sample),
         loupe: options.loupe !== false,
       };
@@ -1126,7 +1144,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       return;
     }
     if (activeToolId === "raster.fill") {
-      const before = maskTarget?.mask ? maskToRgba(maskTarget.mask.pixels) : layer.pixels.slice(), after = before.slice(), options = toolOptions[activeToolId] ?? {};
+      const before = maskTarget?.mask ? maskToRgba(maskTarget.mask.pixels) : canvasPixels(layer).slice(), after = before.slice(), options = toolOptions[activeToolId] ?? {};
       const changed = floodFill(after, state.width, state.height, point.x, point.y, parseHexColor(paintColor), Number(options.tolerance ?? 32), brushMask);
       if (changed) void commitPixels(before, after, maskTarget ? "Fill Layer Mask (Заливка маски слоя)" : "Paint Bucket (Заливка)", maskTarget ? "mask" : "pixels", paintTargetId);
       return;
@@ -1134,7 +1152,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     if (activeToolId !== "raster.brush" && activeToolId !== "raster.eraser" && activeToolId !== "raster.pencil" && activeToolId !== "raster.highlighter" && activeToolId !== "raster.blur" && activeToolId !== "raster.smudge" && activeToolId !== "raster.dodge" && activeToolId !== "raster.burn") return;
     canvas.setPointerCapture(event.pointerId);
     if (maskTarget && (activeToolId === "raster.blur" || activeToolId === "raster.smudge" || activeToolId === "raster.dodge" || activeToolId === "raster.burn")) return;
-    const before = maskTarget?.mask ? maskToRgba(maskTarget.mask.pixels) : layer.pixels.slice(), working = before.slice();
+    const before = maskTarget?.mask ? maskToRgba(maskTarget.mask.pixels) : canvasPixels(layer).slice(), working = before.slice();
     const options = toolOptions[activeToolId] ?? {};
     const opacity = Number(options.opacity ?? 100) / 100 * Number(options.flow ?? 100) / 100;
     const previous = lastBrushPointRef.current, shiftFrom = event.shiftKey && previous?.toolId === activeToolId && previous.layerId === brushTargetKey ? previous.point : null;
@@ -1325,6 +1343,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         fill: mode === "stroke" ? null : parseHexColor(String(options.color ?? foregroundColor)),
         stroke: mode === "fill" ? null : parseHexColor(String(options.strokeColor ?? "#ffffff")),
       }, state.selection?.mask);
+      setLayerPixels(shapeLayer, shapeLayer.pixels, state.width, state.height);
       appendLayer(after, shapeLayer);
       after.activeLayerId = shapeLayer.id;
       const strokePad = Number(options.strokeWidth ?? 4) + 2;
@@ -1609,6 +1628,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     const layer = state.layers.find((item) => item.id === state.activeLayerId);
     if (!context || !layer) return;
     context.clearRect(0, 0, size, size);
+    const sampled = canvasPixels(layer);
     // Read straight out of the layer buffer: the sample is what the tool will
     // actually copy, not what the composite happens to show over it.
     const image = context.createImageData(size, size);
@@ -1617,8 +1637,8 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       const sourceX = Math.round(source.x - half + x), sourceY = Math.round(source.y - half + y);
       if (sourceX < 0 || sourceY < 0 || sourceX >= state.width || sourceY >= state.height) continue;
       const from = (sourceY * state.width + sourceX) * 4, to = (y * size + x) * 4;
-      image.data[to] = layer.pixels[from]!; image.data[to + 1] = layer.pixels[from + 1]!;
-      image.data[to + 2] = layer.pixels[from + 2]!; image.data[to + 3] = layer.pixels[from + 3]!;
+      image.data[to] = sampled[from]!; image.data[to + 1] = sampled[from + 1]!;
+      image.data[to + 2] = sampled[from + 2]!; image.data[to + 3] = sampled[from + 3]!;
     }
     context.putImageData(image, 0, 0);
 

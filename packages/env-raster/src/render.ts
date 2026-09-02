@@ -246,18 +246,28 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
     // Rows and columns of the region this layer can actually reach. A layer that
     // covers a tenth of a tile was still being walked over the whole of it; the
     // rest of the region is transparent for this layer and contributes nothing.
+    // A layer only covers its own rectangle, so that is all the region worth
+    // walking. Effects paint outside it and adjustments read everything beneath,
+    // so those two keep the whole region and a canvas-sized surface.
+    const effectsOn = hasEnabledEffect(layer);
+    const wholeCanvas = layer.kind === "adjustment" || Boolean(layer.adjustment) || effectsOn;
     let firstRow = 0, lastRow = outHeight - 1, firstColumn = 0, lastColumn = outWidth - 1;
-    if (layer.kind !== "adjustment" && !layer.adjustment && !hasEnabledEffect(layer) && !clippedParents.has(parentKey)) {
-      const bounds = layerOpaqueBounds(layer.pixels, width, state.height);
-      if (!bounds || !overlaps(bounds, area)) continue;
-      firstRow = Math.max(0, Math.floor((bounds.y - area.y) / step));
-      lastRow = Math.min(outHeight - 1, Math.ceil((bounds.y + bounds.height - area.y) / step));
-      firstColumn = Math.max(0, Math.floor((bounds.x - area.x) / step));
-      lastColumn = Math.min(outWidth - 1, Math.ceil((bounds.x + bounds.width - area.x) / step));
+    if (!wholeCanvas) {
+      if (!layer.bounds) throw new Error(`Layer ${layer.id} has no bounds; the document was not migrated`);
+      if (!overlaps(layer.bounds, area)) continue;
+      firstRow = Math.max(0, Math.floor((layer.bounds.y - area.y) / step));
+      lastRow = Math.min(outHeight - 1, Math.ceil((layer.bounds.y + layer.bounds.height - area.y) / step));
+      firstColumn = Math.max(0, Math.floor((layer.bounds.x - area.x) / step));
+      lastColumn = Math.min(outWidth - 1, Math.ceil((layer.bounds.x + layer.bounds.width - area.x) / step));
       if (firstRow > lastRow || firstColumn > lastColumn) continue;
     }
 
-    const renderedLayer = renderLayerEffects(layer, state.width, state.height);
+    // Ordinary layers are read where they live; the two exceptions above are
+    // laid out across the canvas first, since that is the space they work in.
+    const renderedLayer = wholeCanvas ? renderLayerEffects(layer, state.width, state.height) : layer.pixels;
+    const sourceWidth = wholeCanvas ? width : layer.bounds.width;
+    const sourceOriginX = wholeCanvas ? 0 : layer.bounds.x;
+    const sourceOriginY = wholeCanvas ? 0 : layer.bounds.y;
     const clippingBase = layer.clipping ? clippingBaseByParent.get(parentKey) : undefined;
     const ownAlpha = layer.clipping || !clippedParents.has(parentKey) ? null : new Uint8ClampedArray(outWidth * outHeight);
     // Everything constant for the layer is read once. Inside the loop these are
@@ -273,9 +283,13 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
     for (let row = firstRow; row <= lastRow; row += 1) {
       const documentRow = (area.y + row * step) * width + area.x;
       const outputRow = row * outWidth;
+      const documentY = area.y + row * step;
       for (let column = firstColumn; column <= lastColumn; column += 1) {
         const regionIndex = outputRow + column, index = regionIndex * 4;
-        const documentIndex = documentRow + column * step, sourceIndex = documentIndex * 4;
+        const documentIndex = documentRow + column * step;
+        const sourceX = area.x + column * step - sourceOriginX, sourceY = documentY - sourceOriginY;
+        if (sourceX < 0 || sourceY < 0 || sourceX >= sourceWidth || sourceY >= (wholeCanvas ? state.height : layer.bounds.height)) continue;
+        const sourceIndex = (sourceY * sourceWidth + sourceX) * 4;
         const maskAlpha = maskPixels ? ((maskInverted ? 255 - maskPixels[documentIndex]! : maskPixels[documentIndex]!) / 255) * maskDensity : 1;
         const baseAlpha = clippingBase ? clippingBase[regionIndex]! / 255 : clipping ? 0 : 1;
         const rawAlpha = (renderedLayer[sourceIndex + 3]! / 255) * maskAlpha;

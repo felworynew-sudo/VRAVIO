@@ -6,7 +6,10 @@ export const makeLayerOrderKey = (index: number): string => Math.max(0, Math.flo
 
 export function createRasterLayer(width: number, height: number, name = "Layer (Слой)"): RasterLayer {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) throw new RangeError("Raster layer dimensions must be positive integers");
-  return { id: crypto.randomUUID(), name, width, height, pixels: new Uint8ClampedArray(width * height * 4), visible: true, opacity: 1, fillOpacity: 1, blendMode: "normal", locked: false, kind: "pixel", effects: {}, parentId: null, orderKey: makeLayerOrderKey(0), clipping: false };
+  // Created at canvas size: a tool needs somewhere to paint before it knows
+  // where the paint will land. What gets stored is trimmed when the edit is
+  // committed, which is where the size actually matters.
+  return { id: crypto.randomUUID(), name, bounds: { x: 0, y: 0, width, height }, width, height, pixels: new Uint8ClampedArray(width * height * 4), visible: true, opacity: 1, fillOpacity: 1, blendMode: "normal", locked: false, kind: "pixel", effects: {}, parentId: null, orderKey: makeLayerOrderKey(0), clipping: false };
 }
 
 export function createRasterGroup(width: number, height: number, name = "Group (Группа)"): RasterLayer {
@@ -63,6 +66,16 @@ export function migrateRasterDocumentState(state: RasterDocumentState): RasterDo
     if (typeof layer.parentId === "undefined") layer.parentId = null;
     if (!layer.orderKey) layer.orderKey = makeLayerOrderKey(index);
     if (typeof layer.clipping === "undefined") layer.clipping = false;
+    // Documents written before layers had bounds stored a canvas-sized buffer.
+    // Its bounds are the canvas, and it will be trimmed the next time it is
+    // edited rather than rewritten here — a migration that rebuilt every buffer
+    // would cost the whole image on open.
+    if (!layer.bounds) {
+      const width = layer.width || state.width, height = layer.height || state.height;
+      layer.bounds = { x: 0, y: 0, width, height };
+      layer.width = width;
+      layer.height = height;
+    }
     if (layer.kind === "group") {
       layer.expanded ??= true;
       layer.groupMode ??= "passThrough";

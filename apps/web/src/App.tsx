@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { confineToSelection, cropRasterDocument, findSmartCrop, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createAdjustmentLayer, createRasterLayer, isRasterDocumentState, layerContentBounds, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
+import { confineToSelection, cropRasterDocument, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createAdjustmentLayer, createRasterLayer, isRasterDocumentState, layerContentBounds, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
 import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
 import { withBusyPainted } from "./busy";
 import { useShellStore, type Language } from "./store";
@@ -52,7 +52,7 @@ export function App() {
   const openDecodedRaster = (name: string, decoded: DecodedRaw): string => {
     store.openDocument("raster", { name, width: decoded.width, height: decoded.height, resolution: 72, resolutionUnit: "ppi", backgroundColor: null, pixelAspectRatio: 1 });
     const id = useShellStore.getState().activeDocumentId!;
-    kernel.documents.update<RasterDocumentState>(id, (state) => { state.layers[0]!.pixels = decoded.pixels.slice(); });
+    kernel.documents.update<RasterDocumentState>(id, (state) => { setLayerPixels(state.layers[0]!, decoded.pixels, state.width, state.height); });
     return id;
   };
 
@@ -67,7 +67,7 @@ export function App() {
     store.openDocument("raster", { name: file.name, width: source.width, height: source.height, resolution: 72, resolutionUnit: "ppi", backgroundColor: null, pixelAspectRatio: 1 });
     const id = useShellStore.getState().activeDocumentId; if (!id) return;
     const surface = window.document.createElement("canvas"); surface.width = source.width; surface.height = source.height; const context = surface.getContext("2d"); if (!context) return; context.drawImage(source.image, 0, 0, source.width, source.height); source.release();
-    kernel.documents.update<RasterDocumentState>(id, (state) => { state.layers[0]!.pixels = context.getImageData(0, 0, state.width, state.height).data; });
+    kernel.documents.update<RasterDocumentState>(id, (state) => { setLayerPixels(state.layers[0]!, context.getImageData(0, 0, state.width, state.height).data, state.width, state.height); });
   };
   const download = (blob: Blob, name: string) => { void kernel.platform.fs.saveFile({ name, mime: blob.type || "application/octet-stream", data: blob }).catch((error) => diagnostic("error", "file.save", error instanceof Error ? error.message : String(error), error)); };
   const projectFileName = (name: string) => `${name.replace(/\s*\([^()]*\)\s*$/, "").replace(/\.[^.]+$/, "").trim() || "untitled"}.vravio.json`;
@@ -80,12 +80,17 @@ export function App() {
       if (markClean) kernel.documents.markSaved(active.id);
     } catch (error) { diagnostic("error", "file.save", error instanceof Error ? error.message : String(error), error); }
   };
-  const applyFilter = (pixels: Uint8ClampedArray, label: string) => { if (!active || !isRasterDocumentState(active.state)) return; const id=active.id,layerId=active.state.activeLayerId,before=active.state.layers.find((item)=>item.id===layerId)?.pixels.slice();if(!before)return;const assign=(value:Uint8ClampedArray)=>{kernel.documents.update<RasterDocumentState>(id,(state)=>{const layer=state.layers.find((item)=>item.id===layerId);if(layer)layer.pixels=value.slice();});};
+  const applyFilter = (pixels: Uint8ClampedArray, label: string) => { if (!active || !isRasterDocumentState(active.state)) return; const id=active.id,layerId=active.state.activeLayerId,state0=active.state,target=state0.layers.find((item)=>item.id===layerId);if(!target)return;
+    // Filters run over the layer's own buffer, but the selection mask is in
+    // canvas coordinates, so both sides are brought into canvas space before
+    // the rule is applied and trimmed again on the way in.
+    const before=layerDocumentPixels(target,state0.width,state0.height).slice();
+    const filtered=pixels.length===before.length?pixels:layerDocumentPixels({...target,pixels,bounds:target.bounds,width:target.width,height:target.height},state0.width,state0.height);const assign=(value:Uint8ClampedArray)=>{kernel.documents.update<RasterDocumentState>(id,(state)=>{const layer=state.layers.find((item)=>item.id===layerId);if(layer)setLayerPixels(layer,value,state.width,state.height);});};
     // The same rule as every other tool: a filter may not touch pixels outside
     // the selection. Filters run over the whole layer, so the confinement is
     // what makes "apply to the selection" mean anything at all.
     const selection=active.state.selection;
-    const confined=selection?confineToSelection(before,pixels,selection.mask):pixels;
+    const confined=selection?confineToSelection(before,filtered,selection.mask):filtered;
     const history=kernel.historyByDocument.get(id);if(history)void history.execute({label:`Filter: ${label}`,memoryEstimate:before.byteLength+confined.byteLength,redo:()=>assign(confined),undo:()=>assign(before)}); };
   const openCameraRawReprocess = async () => {
     if (!active) return;
@@ -113,15 +118,15 @@ export function App() {
     const state = active.state, ids = (selectedLayerIds.length ? selectedLayerIds : [state.activeLayerId]).filter((id) => state.layers.some((layer) => layer.id === id));
     if (kind === "distribute" ? ids.length < 3 : ids.length < 1) return;
     const targets = state.layers.filter((layer) => ids.includes(layer.id));
-    const bounds = targets.map((layer) => layerContentBounds(layer.pixels, state.width, state.height));
+    const bounds = targets.map((layer) => layerContentBounds(layerDocumentPixels(layer, state.width, state.height), state.width, state.height));
     const offsets = kind === "align"
       ? computeAlignOffsets(bounds, edge, ids.length > 1 ? unionBounds(bounds) : { x: 0, y: 0, width: state.width, height: state.height })
       : computeDistributeOffsets(bounds, edge);
     if (!offsets.some((offset) => offset.dx || offset.dy)) return;
     type LayerSnapshot = { id: string; pixels: Uint8ClampedArray };
-    const id = active.id, before: LayerSnapshot[] = targets.map((layer) => ({ id: layer.id, pixels: layer.pixels.slice() }));
-    const after: LayerSnapshot[] = targets.map((layer, index) => ({ id: layer.id, pixels: translateLayerPixels(layer.pixels, state.width, state.height, offsets[index]!.dx, offsets[index]!.dy) }));
-    const assign = (list: LayerSnapshot[]) => { kernel.documents.update<RasterDocumentState>(id, (current) => { for (const item of list) { const layer = current.layers.find((entry) => entry.id === item.id); if (layer) layer.pixels = item.pixels.slice(); } }); };
+    const id = active.id, before: LayerSnapshot[] = targets.map((layer) => ({ id: layer.id, pixels: layerDocumentPixels(layer, state.width, state.height).slice() }));
+    const after: LayerSnapshot[] = targets.map((layer, index) => ({ id: layer.id, pixels: translateLayerPixels(layerDocumentPixels(layer, state.width, state.height), state.width, state.height, offsets[index]!.dx, offsets[index]!.dy) }));
+    const assign = (list: LayerSnapshot[]) => { kernel.documents.update<RasterDocumentState>(id, (current) => { for (const item of list) { const layer = current.layers.find((entry) => entry.id === item.id); if (layer) setLayerPixels(layer, item.pixels, current.width, current.height); } }); };
     const history = kernel.historyByDocument.get(id);
     if (history) void history.execute({ label: kind === "align" ? `Align: ${edge}` : `Distribute: ${edge}`, memoryEstimate: [...before, ...after].reduce((sum, item) => sum + item.pixels.byteLength, 0), redo: () => assign(after), undo: () => assign(before) });
   };
@@ -149,7 +154,7 @@ export function App() {
       value, x: right ? state.width - margin : margin, y: bottom ? state.height - margin - fontSize * 1.2 : margin,
       fontFamily: "Arial", fontSize, lineHeight: 1.2, letterSpacing: 0, align: right ? "right" : "left", color: "#ffffff",
     };
-    layer.pixels = renderTextLayerPixels(layer.text, state.width, state.height);
+    setLayerPixels(layer, renderTextLayerPixels(layer.text, state.width, state.height), state.width, state.height);
     kernel.documents.update<RasterDocumentState>(active.id, (current) => { current.layers.push(layer); current.activeLayerId = layer.id; });
   };
 
@@ -214,7 +219,7 @@ export function App() {
     const nextText = { ...layer.text, [key]: !layer.text[key] };
     kernel.documents.update<RasterDocumentState>(active.id, (current) => {
       const target = current.layers.find((item) => item.id === layer.id); if (!target?.text) return;
-      target.text = nextText; target.pixels = renderTextLayerPixels(nextText, current.width, current.height);
+      target.text = nextText; setLayerPixels(target, renderTextLayerPixels(nextText, current.width, current.height), current.width, current.height);
     });
   };
 

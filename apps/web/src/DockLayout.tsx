@@ -5,7 +5,7 @@ import { environmentMeta } from "./environment";
 import { useShellStore } from "./store";
 import { useDocuments } from "./useDocuments";
 import { RasterWorkspace } from "./RasterWorkspace";
-import { appendLayer, appendRasterGroup, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, isRasterDocumentState, rasterLayerDescendantIds, rasterLayerRows, dropPositionInRow, dropTargetForRow, placeLayer, toggleLayerLink, type RasterAdjustment, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerMask, builtInLuts, parseCubeLut } from "@vravio/env-raster";
+import { appendLayer, appendRasterGroup, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, isRasterDocumentState, rasterLayerDescendantIds, rasterLayerRows, setLayerPixels, dropPositionInRow, dropTargetForRow, placeLayer, toggleLayerLink, type RasterAdjustment, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerMask, builtInLuts, parseCubeLut } from "@vravio/env-raster";
 import { kernel } from "./kernel";
 import { EnvironmentIcon } from "./EnvironmentIcon";
 import { localized, text } from "./i18n";
@@ -62,7 +62,7 @@ function InspectorPanel({ params }: IDockviewPanelProps<{ kind?: string }>) {
 
 function rasterizeTextLayer(layer: RasterLayer, width: number, height: number): void {
   if (!layer.text) return;
-  layer.pixels = renderTextLayerPixels(layer.text, width, height);
+  setLayerPixels(layer, renderTextLayerPixels(layer.text, width, height), width, height);
 }
 
 /** The glyph that says what kind of layer this is, or nothing for a plain one. */

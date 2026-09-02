@@ -46,8 +46,22 @@ export interface RasterSmartSource {
 export interface RasterLayer {
   id: string;
   name: string;
+  /**
+   * Where this layer's pixels live in the document.
+   *
+   * A layer is sized to what it holds, not to the canvas — the way Photoshop,
+   * GIMP and Patchy all store one. A four-hundred-pixel shape on a 1920x1080
+   * canvas is 640 KB here and eight megabytes if every layer is canvas-sized,
+   * and a working file accumulates dozens of them. Everything downstream pays
+   * that difference again: history, autosave, and every pass that walks a layer.
+   *
+   * `width` and `height` mirror `bounds` and are kept because a great deal of
+   * code reads them; they are the layer's size, never the document's.
+   */
+  bounds: RasterRect;
   width: number;
   height: number;
+  /** Sized to `bounds`, addressed in bounds-local coordinates. */
   pixels: Uint8ClampedArray;
   visible: boolean;
   opacity: number;
