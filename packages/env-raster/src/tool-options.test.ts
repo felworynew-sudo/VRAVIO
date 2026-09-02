@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   blurStrokeSegment, cloneStrokeSegment, createRectangleSelection, dodgeBurnStrokeSegment,
-  drawQuadraticStrokeSegment, drawShape, floodFill, sampleAverage, smudgeStrokeSegment,
+  drawQuadraticStrokeSegment, drawShape, floodFill, sampleAverage, smudgeStrokeSegment, translateLayerPixels,
 } from "./index";
 import type { Point, RgbaColor } from "./types";
 
@@ -113,5 +113,60 @@ describe("selection and sampling options reach their tools", () => {
     const pixels = textured();
 
     expect(sampleAverage(pixels, W, H, 64, 64, 1)).not.toEqual(sampleAverage(pixels, W, H, 64, 64, 11));
+  });
+});
+
+describe("moving a feathered selection", () => {
+  const solid = () => {
+    const pixels = new Uint8ClampedArray(W * H * 4);
+    for (let y = 32; y < 96; y += 1) for (let x = 32; x < 96; x += 1) {
+      const at = (y * W + x) * 4;
+      pixels[at] = 60; pixels[at + 1] = 180; pixels[at + 2] = 240; pixels[at + 3] = 255;
+    }
+    return pixels;
+  };
+  const soft = () => createRectangleSelection(W, H, 40, 40, 88, 88, 10);
+  const partial = (pixels: Uint8ClampedArray) => {
+    let count = 0;
+    for (let index = 3; index < pixels.length; index += 4) {
+      const alpha = pixels[index]!;
+      if (alpha > 0 && alpha < 250) count += 1;
+    }
+    return count;
+  };
+
+  it("leaves the same trace however many drags reached the same place", () => {
+    const selection = soft();
+    const once = translateLayerPixels(solid(), W, H, 30, 20, selection);
+
+    // Three drags that end where one would: recomputing from the original each
+    // time has to give the same picture as arriving in a single move.
+    let running = solid();
+    for (const [dx, dy] of [[10, 6], [20, 13], [30, 20]] as const) {
+      running = translateLayerPixels(solid(), W, H, dx, dy, selection);
+    }
+
+    expect(partial(running)).toBe(partial(once));
+    expect([...running]).toEqual([...once]);
+  });
+
+  it("shows why: chaining from the previous result is a different picture", () => {
+    const selection = soft();
+    const once = translateLayerPixels(solid(), W, H, 30, 20, selection);
+
+    // What the move used to do: each drag cut the selection out of an image it
+    // had already been cut out of, at a mask that had moved on, so content was
+    // left behind at every stop along the way.
+    let chained = translateLayerPixels(solid(), W, H, 10, 6, selection);
+    chained = translateLayerPixels(chained, W, H, 10, 7, selection);
+    chained = translateLayerPixels(chained, W, H, 10, 7, selection);
+
+    expect(digest(chained)).not.toBe(digest(once));
+    // Specifically, there is content where the single move leaves none.
+    let strayed = 0;
+    for (let index = 3; index < once.length; index += 4) {
+      if (once[index] === 0 && chained[index]! > 0) strayed += 1;
+    }
+    expect(strayed).toBeGreaterThan(0);
   });
 });

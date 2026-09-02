@@ -326,6 +326,29 @@ describe("DocumentSnapshotStore", () => {
     expect(restored.a[0]).toBe(1);
   });
 
+  it("skips a document whose binaries have gone missing", async () => {
+    const adapter = new MemoryStorageAdapter();
+    const snapshots = new DocumentSnapshotStore(adapter);
+    const documents = new DocumentStore();
+    documents.create("raster", "Whole", { a: new Uint8ClampedArray([1, 2, 3, 4]) });
+    documents.create("raster", "Broken", { a: new Uint8ClampedArray([5, 6, 7, 8]) });
+    await snapshots.saveSession(documents.list());
+
+    // One scratch binary disappears — a partial write, a cleared origin, a bug.
+    const binaries = (await adapter.list("autosave/")).filter((key) => key.includes("/binaries/"));
+    await adapter.remove(binaries[1]!);
+
+    const reported: string[] = [];
+    const reader = new DocumentSnapshotStore(adapter);
+    reader.onLoadError((key) => reported.push(key));
+    const restored = await reader.loadSession();
+
+    // Refusing to start at all because one scratch file is missing is worse
+    // than restoring the documents that are still readable.
+    expect(restored).toHaveLength(1);
+    expect(reported).toHaveLength(1);
+  });
+
   it("restores a complete document session through AutosaveManager", async () => {
     const adapter = new MemoryStorageAdapter();
     const sourceDocuments = new DocumentStore();

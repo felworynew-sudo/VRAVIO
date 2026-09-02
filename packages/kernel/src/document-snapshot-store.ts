@@ -115,6 +115,9 @@ export class DocumentSnapshotStore {
   /** Keys the pruning pass has confirmed are still on disk. */
   readonly #stored = new Set<string>();
   #nextBinaryId = 0;
+  #onLoadError: (snapshotKey: string, error: unknown) => void = (key, error) => {
+    console.warn(`[autosave] could not restore ${key}:`, error);
+  };
 
   constructor(adapter: BinaryStorageAdapter) { this.#adapter = adapter; }
 
@@ -128,7 +131,25 @@ export class DocumentSnapshotStore {
     if (!bytes) return [];
     const manifest = JSON.parse(decoder.decode(bytes)) as SessionManifest;
     if (manifest.schemaVersion !== 1) throw new Error(`Unsupported session schema: ${String(manifest.schemaVersion)}`);
-    return Promise.all(manifest.documents.map((entry) => this.#loadDocument(entry.snapshotKey)));
+
+    // A document that cannot be read is skipped, not thrown. This is a scratch
+    // copy of work the user still has in front of them; losing one of several
+    // restored documents is a bad morning, and refusing to start at all because
+    // one scratch file is missing is a worse one.
+    const restored: VravioDocument[] = [];
+    for (const entry of manifest.documents) {
+      try {
+        restored.push(await this.#loadDocument(entry.snapshotKey));
+      } catch (error) {
+        this.#onLoadError(entry.snapshotKey, error);
+      }
+    }
+    return restored;
+  }
+
+  /** Where unreadable snapshots are reported. Defaults to the console. */
+  onLoadError(handler: (snapshotKey: string, error: unknown) => void): void {
+    this.#onLoadError = handler;
   }
 
   async clear(): Promise<void> {

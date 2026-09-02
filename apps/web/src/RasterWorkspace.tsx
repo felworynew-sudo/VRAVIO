@@ -259,7 +259,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const gesture = useRef<{ before: Uint8ClampedArray; working: Uint8ClampedArray; curveStart: Point; pending: Point; pointerId: number; frame: number | null; dirty?: RasterRect | null; strokeBounds?: RasterRect | null; target: "pixels" | "mask"; layerId: string; sourceOffsetX?: number; sourceOffsetY?: number; sourcePixels?: Uint8ClampedArray } | null>(null);
   const selectionGesture = useRef<{ kind: "rectangle" | "ellipse" | "lasso"; from: Point; current: Point; points: Point[]; pointerId: number; mode: SelectionCombineMode; spaceAnchor: Point | null } | null>(null);
   const documentGesture = useRef<
-    | { kind: "move" | "crop"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean }
+    | { kind: "move" | "crop"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean; /** basePixels is the transform's original, so offsets are the running total. */ fromOrigin?: boolean }
     | { kind: "scale"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; handleX: -1 | 0 | 1; handleY: -1 | 0 | 1; dx: number; dy: number; text?: PendingTextTransform }
     | { kind: "rotate"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; center: Point; startAngle: number; baseRotation: number; dx: number; dy: number; text?: PendingTextTransform }
     | null
@@ -530,20 +530,23 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         const preview: PendingPixelTransform = { ...current, dx, dy, text: { ...transforming.text, targetBounds: { ...start, x: start.x + deltaX, y: start.y + deltaY } } };
         pendingTransformRef.current = preview; setTransformPreview(preview); announceTransform(preview); return;
       }
-      const working = translateLayerPixels(transforming.basePixels, state.width, state.height, deltaX, deltaY, transforming.baseSelection);
+      // When the base is the original, the offset is the running total; when it
+      // is a fresh gesture on the layer itself, it is this drag's delta.
+      const shiftX = transforming.fromOrigin ? dx : deltaX, shiftY = transforming.fromOrigin ? dy : deltaY;
+      const working = translateLayerPixels(transforming.basePixels, state.width, state.height, shiftX, shiftY, transforming.baseSelection);
       // Only where the content was and where it went can have changed. Redrawing
       // the whole canvas each frame composited the entire document to move a
       // square across it. The previous frame's area is folded in as well, or a
       // fast drag would leave the layer painted where it no longer is.
       const was = layerOpaqueBounds(transforming.basePixels, state.width, state.height);
-      const now = was ? { ...was, x: was.x + deltaX, y: was.y + deltaY } : null;
+      const now = was ? { ...was, x: was.x + shiftX, y: was.y + shiftY } : null;
       const touched = [movePaintedRef.current, was, now].filter((rect): rect is RasterRect => Boolean(rect));
       if (touched.length) {
         const region = boundingRect(touched);
         movePaintedRef.current = region;
         renderWorkingRegion(working, region);
       } else renderWorking(working);
-      const moved = translateSelection(transforming.baseSelection, state.width, state.height, deltaX, deltaY);
+      const moved = translateSelection(transforming.baseSelection, state.width, state.height, shiftX, shiftY);
       const preview = { before: transforming.before, layerId: transforming.before.activeLayerId, dx, dy, pixels: working, selection: moved, rotation: transforming.rotation };
       pendingTransformRef.current = preview;
       setTransformPreview(preview);
@@ -1066,7 +1069,14 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         pendingTransformRef.current = pending; setTransformPreview(pending); announceTransform(pending);
         createdTextTransform = true;
       }
-      documentGesture.current = { kind: activeToolId === "raster.crop" ? "crop" : "move", from: point, current: point, pointerId: event.pointerId, before: pending?.before ?? cloneRasterState(gestureState), startDx: pending?.dx ?? 0, startDy: pending?.dy ?? 0, basePixels: pending ? (pending.text ? pending.pixels : pending.pixels.slice()) : layer.pixels.slice(), baseSelection: pending?.selection ? { mask: pending.selection.mask.slice(), bounds: { ...pending.selection.bounds } } : effectiveSelection ? { mask: effectiveSelection.mask.slice(), bounds: { ...effectiveSelection.bounds } } : null, rotation: pending?.rotation ?? 0, ...(pending?.text ? { text: pending.text } : {}), ...(createdTextTransform ? { createdTextTransform: true } : {}) };
+      // Every drag of a pending move recomputes from the pixels the transform
+      // started with, by the running total offset — never from the previous
+      // drag's result. Cutting the selection out of an image it has already been
+      // cut out of leaves a second hole, and with a feathered edge a second
+      // ring, once per drag, none of which was ever committed.
+      const origin = pending && !pending.text ? pending.before.layers.find((item) => item.id === pending.layerId) : null;
+      const originSelection = origin ? restrictSelectionToAlpha(pending!.before.selection ?? null, origin.pixels, state.width, state.height) : null;
+      documentGesture.current = { kind: activeToolId === "raster.crop" ? "crop" : "move", from: point, current: point, pointerId: event.pointerId, before: pending?.before ?? cloneRasterState(gestureState), startDx: pending?.dx ?? 0, startDy: pending?.dy ?? 0, basePixels: origin ? origin.pixels.slice() : pending ? (pending.text ? pending.pixels : pending.pixels.slice()) : layer.pixels.slice(), baseSelection: origin ? (originSelection ? { mask: originSelection.mask.slice(), bounds: { ...originSelection.bounds } } : null) : pending?.selection ? { mask: pending.selection.mask.slice(), bounds: { ...pending.selection.bounds } } : effectiveSelection ? { mask: effectiveSelection.mask.slice(), bounds: { ...effectiveSelection.bounds } } : null, rotation: pending?.rotation ?? 0, ...(pending?.text ? { text: pending.text } : {}), ...(createdTextTransform ? { createdTextTransform: true } : {}), ...(origin ? { fromOrigin: true } : {}) };
       setSelectionDraft(activeToolId === "raster.crop" ? { x: point.x, y: point.y, width: 0, height: 0 } : null);
       return;
     }
@@ -1152,8 +1162,16 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         selecting.spaceAnchor = null;
         selecting.current = point;
       }
-      if (selecting.kind === "lasso") { selecting.points.push(selecting.current); setLassoDraft([...selecting.points]); }
-      else setSelectionDraft(marqueeRect(selecting.from.x, selecting.from.y, selecting.current.x, selecting.current.y, { square: event.shiftKey, fromCentre: event.altKey }));
+      if (selecting.kind === "lasso") {
+        selecting.points.push(selecting.current);
+        setLassoDraft([...selecting.points]);
+        // The overlay only draws where the draft rectangle has extent, so the
+        // lasso has to report the box its path has covered. Without it the path
+        // was invisible until the mouse came up and the shape was already made.
+        const xs = selecting.points.map((item) => item.x), ys = selecting.points.map((item) => item.y);
+        const left = Math.min(...xs), top = Math.min(...ys);
+        setSelectionDraft({ x: left, y: top, width: Math.max(1, Math.max(...xs) - left), height: Math.max(1, Math.max(...ys) - top) });
+      } else setSelectionDraft(marqueeRect(selecting.from.x, selecting.from.y, selecting.current.x, selecting.current.y, { square: event.shiftKey, fromCentre: event.altKey }));
       return;
     }
     const shaping = shapeGesture.current;
