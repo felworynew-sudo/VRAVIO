@@ -243,9 +243,18 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
     // clips to has to record its coverage even when empty — so none of those are
     // skipped; an ordinary layer with no opaque pixels in range contributes
     // exactly nothing and costs a rectangle test instead of a million reads.
+    // Rows and columns of the region this layer can actually reach. A layer that
+    // covers a tenth of a tile was still being walked over the whole of it; the
+    // rest of the region is transparent for this layer and contributes nothing.
+    let firstRow = 0, lastRow = outHeight - 1, firstColumn = 0, lastColumn = outWidth - 1;
     if (layer.kind !== "adjustment" && !layer.adjustment && !hasEnabledEffect(layer) && !clippedParents.has(parentKey)) {
       const bounds = layerOpaqueBounds(layer.pixels, width, state.height);
       if (!bounds || !overlaps(bounds, area)) continue;
+      firstRow = Math.max(0, Math.floor((bounds.y - area.y) / step));
+      lastRow = Math.min(outHeight - 1, Math.ceil((bounds.y + bounds.height - area.y) / step));
+      firstColumn = Math.max(0, Math.floor((bounds.x - area.x) / step));
+      lastColumn = Math.min(outWidth - 1, Math.ceil((bounds.x + bounds.width - area.x) / step));
+      if (firstRow > lastRow || firstColumn > lastColumn) continue;
     }
 
     const renderedLayer = renderLayerEffects(layer, state.width, state.height);
@@ -261,10 +270,10 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
     const clipping = layer.clipping === true;
     const opaqueNormal = code === NORMAL && layerAlpha >= 1 && !clipping;
 
-    for (let row = 0; row < outHeight; row += 1) {
+    for (let row = firstRow; row <= lastRow; row += 1) {
       const documentRow = (area.y + row * step) * width + area.x;
       const outputRow = row * outWidth;
-      for (let column = 0; column < outWidth; column += 1) {
+      for (let column = firstColumn; column <= lastColumn; column += 1) {
         const regionIndex = outputRow + column, index = regionIndex * 4;
         const documentIndex = documentRow + column * step, sourceIndex = documentIndex * 4;
         const maskAlpha = maskPixels ? ((maskInverted ? 255 - maskPixels[documentIndex]! : maskPixels[documentIndex]!) / 255) * maskDensity : 1;
