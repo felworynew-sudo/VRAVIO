@@ -243,7 +243,7 @@ describe("DocumentSnapshotStore", () => {
     const document = documents.create("raster", "Recovered", { pixels: new Uint8ClampedArray([1, 2, 3, 255]), mask: new Uint8Array([255]), tags: new Set(["draft"]) }, { assetRefs: [assetId] });
     documents.update<typeof document.state>(document.id, (state) => { state.pixels[0] = 9; });
     await snapshots.saveSession(documents.list());
-    expect((await adapter.list("autosave/")).some((key) => key.endsWith("binary-0.bin"))).toBe(true);
+    expect((await adapter.list("autosave/")).some((key) => /\/binaries\/\d+\.bin$/.test(key))).toBe(true);
 
     const [restored] = await snapshots.loadSession();
     const state = restored?.state as typeof document.state;
@@ -252,6 +252,78 @@ describe("DocumentSnapshotStore", () => {
     expect(state.mask).toBeInstanceOf(Uint8Array);
     expect(state.tags).toBeInstanceOf(Set);
     expect(restored?.assetRefs.has(assetId)).toBe(true);
+  });
+
+  it("rewrites only the buffers that changed", async () => {
+    const writes: string[] = [];
+    const inner = new MemoryStorageAdapter();
+    const adapter = {
+      get: (key: string) => inner.get(key),
+      set: (key: string, value: Uint8Array) => { writes.push(key); return inner.set(key, value); },
+      remove: (key: string) => inner.remove(key),
+      list: (prefix?: string) => inner.list(prefix),
+      clear: () => inner.clear(),
+    };
+    const snapshots = new DocumentSnapshotStore(adapter);
+    const documents = new DocumentStore();
+    const document = documents.create("raster", "Big", {
+      a: new Uint8ClampedArray(1024), b: new Uint8ClampedArray(1024), c: new Uint8ClampedArray(1024),
+    });
+
+    await snapshots.saveSession(documents.list());
+    const first = writes.filter((key) => key.includes("/binaries/")).length;
+    writes.length = 0;
+
+    // One layer edited, the way every edit does it: a fresh buffer in place of
+    // the old one. The other two are the same objects they were.
+    documents.update<{ a: Uint8ClampedArray }>(document.id, (state) => { state.a = new Uint8ClampedArray(1024).fill(7); });
+    await snapshots.saveSession(documents.list());
+
+    expect(first).toBe(3);
+    // Rewriting all three was a quarter of a gigabyte per save on a real
+    // document, and it happened after every edit.
+    expect(writes.filter((key) => key.includes("/binaries/")).length).toBe(1);
+  });
+
+  it("does not rewrite a document it has just restored", async () => {
+    const writes: string[] = [];
+    const inner = new MemoryStorageAdapter();
+    const adapter = {
+      get: (key: string) => inner.get(key),
+      set: (key: string, value: Uint8Array) => { writes.push(key); return inner.set(key, value); },
+      remove: (key: string) => inner.remove(key),
+      list: (prefix?: string) => inner.list(prefix),
+      clear: () => inner.clear(),
+    };
+    const snapshots = new DocumentSnapshotStore(adapter);
+    const documents = new DocumentStore();
+    documents.create("raster", "Big", { a: new Uint8ClampedArray(512), b: new Uint8ClampedArray(512) });
+    await snapshots.saveSession(documents.list());
+
+    const restored = await snapshots.loadSession();
+    writes.length = 0;
+    await snapshots.saveSession(restored);
+
+    expect(writes.filter((key) => key.includes("/binaries/"))).toEqual([]);
+  });
+
+  it("keeps a document's binaries at one path instead of one per revision", async () => {
+    const adapter = new MemoryStorageAdapter();
+    const snapshots = new DocumentSnapshotStore(adapter);
+    const documents = new DocumentStore();
+    const document = documents.create("raster", "Big", { a: new Uint8ClampedArray(256) });
+
+    await snapshots.saveSession(documents.list());
+    documents.update<{ a: Uint8ClampedArray }>(document.id, (state) => { state.a = new Uint8ClampedArray(256).fill(1); });
+    await snapshots.saveSession(documents.list());
+
+    // Keying the path by revision meant every save landed in a new directory and
+    // the previous one had to be deleted, so nothing could ever be reused.
+    const binaries = (await adapter.list("autosave/")).filter((key) => key.includes("/binaries/"));
+    expect(binaries).toHaveLength(1);
+    // The replaced buffer's key is collected, and what comes back is the edit.
+    const restored = (await snapshots.loadSession())[0]!.state as { a: Uint8ClampedArray };
+    expect(restored.a[0]).toBe(1);
   });
 
   it("restores a complete document session through AutosaveManager", async () => {

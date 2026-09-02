@@ -7,6 +7,8 @@ interface SnapshotEnvelope {
   readonly schemaVersion: 1;
   readonly document: Omit<VravioDocument, "state" | "assetRefs"> & { assetRefs: string[]; state: unknown };
   readonly binaryCount: number;
+  /** Where each binary lives. Absent in snapshots written before binaries were reused. */
+  readonly binaryKeys?: readonly string[];
 }
 
 type TypedArray = Uint8Array | Uint8ClampedArray | Uint16Array | Int16Array | Uint32Array | Int32Array | Float32Array | Float64Array;
@@ -25,16 +27,24 @@ const typedArrayFactories: Record<string, (buffer: ArrayBuffer) => TypedArray> =
   Float64Array: (buffer) => new Float64Array(buffer),
 };
 
-function serializeDocument(document: VravioDocument): { envelope: SnapshotEnvelope; binaries: Uint8Array[] } {
-  const binaries: Uint8Array[] = [];
+/**
+ * Splits a document into a JSON envelope and the buffers it points at.
+ *
+ * The buffers are handed back as the views the document holds, not as copies.
+ * Copying them here meant a quarter of a gigabyte of memcpy on every autosave
+ * of a thirty-layer file, before a single byte was written; and it destroyed
+ * the identity the caller needs to tell which buffers actually changed.
+ */
+function serializeDocument(document: VravioDocument): { envelope: SnapshotEnvelope; binaries: TypedArray[] } {
+  const binaries: TypedArray[] = [];
   const state = JSON.parse(JSON.stringify(document.state, (_key, value: unknown) => {
     if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
       const view = value as TypedArray;
-      const index = binaries.push(new Uint8Array(view.buffer, view.byteOffset, view.byteLength).slice()) - 1;
+      const index = binaries.push(view) - 1;
       return { __vravio: "typed-array", index, arrayType: view.constructor.name };
     }
     if (value instanceof ArrayBuffer) {
-      const index = binaries.push(new Uint8Array(value).slice()) - 1;
+      const index = binaries.push(new Uint8Array(value)) - 1;
       return { __vravio: "array-buffer", index };
     }
     if (value instanceof Set) return { __vravio: "set", values: [...value] };
@@ -69,9 +79,42 @@ function deserializeDocument(envelope: SnapshotEnvelope, binaries: readonly Uint
   return { ...envelope.document, state, assetRefs: new Set(envelope.document.assetRefs) } as VravioDocument;
 }
 
+const binaryIdOf = (key: string): number => {
+  const match = /\/binaries\/(\d+)\.bin$/.exec(key);
+  return match ? Number(match[1]) : -1;
+};
+
+/** Re-links restored buffers to the keys they were read from, in document order. */
+function rememberRestoredBinaries(document: VravioDocument, keys: readonly string[], into: WeakMap<ArrayBufferView, string>): void {
+  let index = 0;
+  JSON.stringify(document.state, (_key, value: unknown) => {
+    if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
+      const key = keys[index];
+      index += 1;
+      if (key) into.set(value as ArrayBufferView, key);
+      return null;
+    }
+    if (value instanceof Set) return null;
+    return value;
+  });
+}
+
 export class DocumentSnapshotStore {
   readonly #adapter: BinaryStorageAdapter;
   #writeQueue: Promise<void> = Promise.resolve();
+  /**
+   * Where each buffer already on disk was written.
+   *
+   * A layer's pixels are replaced rather than written in place, so the buffer's
+   * own identity says whether it has changed since the last save. Without this
+   * every autosave rewrote every layer of the document — a thirty-layer file
+   * cost a quarter of a gigabyte and half a second of blocked main thread each
+   * time, which is what the freezes during editing actually were.
+   */
+  readonly #binaryKeys = new WeakMap<ArrayBufferView, string>();
+  /** Keys the pruning pass has confirmed are still on disk. */
+  readonly #stored = new Set<string>();
+  #nextBinaryId = 0;
 
   constructor(adapter: BinaryStorageAdapter) { this.#adapter = adapter; }
 
@@ -97,21 +140,35 @@ export class DocumentSnapshotStore {
     const entries: SessionEntry[] = [];
     const keep = new Set<string>([SESSION_KEY]);
     for (const document of documents) {
-      const prefix = `autosave/documents/${document.id}/${document.revision}`;
+      // The revision is deliberately not part of the path. Putting it there gave
+      // every save a fresh prefix, which made rewriting everything and deleting
+      // the previous copy unavoidable however little had changed.
+      const prefix = `autosave/documents/${document.id}`;
       const snapshotKey = `${prefix}/document.json`;
       const { envelope, binaries } = serializeDocument(document);
-      for (let index = 0; index < binaries.length; index += 1) {
-        const key = `${prefix}/binary-${index}.bin`;
-        await this.#adapter.set(key, binaries[index]!);
+      const binaryKeys: string[] = [];
+      for (const view of binaries) {
+        let key = this.#binaryKeys.get(view);
+        if (!key || !this.#stored.has(key)) {
+          key ??= `${prefix}/binaries/${this.#nextBinaryId++}.bin`;
+          await this.#adapter.set(key, new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
+          this.#binaryKeys.set(view, key);
+          this.#stored.add(key);
+        }
+        binaryKeys.push(key);
         keep.add(key);
       }
-      await this.#adapter.set(snapshotKey, encoder.encode(JSON.stringify(envelope)));
+      await this.#adapter.set(snapshotKey, encoder.encode(JSON.stringify({ ...envelope, binaryKeys })));
       keep.add(snapshotKey);
       entries.push({ id: document.id, revision: document.revision, snapshotKey });
     }
     const manifest: SessionManifest = { schemaVersion: 1, savedAt: Date.now(), documents: entries };
     await this.#adapter.set(SESSION_KEY, encoder.encode(JSON.stringify(manifest)));
-    for (const key of await this.#adapter.list("autosave/")) if (!keep.has(key)) await this.#adapter.remove(key);
+    for (const key of await this.#adapter.list("autosave/")) {
+      if (keep.has(key)) continue;
+      await this.#adapter.remove(key);
+      this.#stored.delete(key);
+    }
   }
 
   async #loadDocument(snapshotKey: string): Promise<VravioDocument> {
@@ -121,11 +178,19 @@ export class DocumentSnapshotStore {
     if (envelope.schemaVersion !== 1) throw new Error(`Unsupported document snapshot schema: ${String(envelope.schemaVersion)}`);
     const prefix = snapshotKey.slice(0, snapshotKey.lastIndexOf("/"));
     const binaries = await Promise.all(Array.from({ length: envelope.binaryCount }, async (_unused, index) => {
-      const binary = await this.#adapter.get(`${prefix}/binary-${index}.bin`);
+      // Snapshots written before binaries were reused numbered them by position.
+      const key = envelope.binaryKeys?.[index] ?? `${prefix}/binary-${index}.bin`;
+      const binary = await this.#adapter.get(key);
       if (!binary) throw new Error(`Missing document snapshot binary: ${index}`);
+      this.#stored.add(key);
       return binary;
     }));
-    return deserializeDocument(envelope, binaries);
+    const document = deserializeDocument(envelope, binaries);
+    // Remember where the restored buffers came from, so the first save after a
+    // reload does not rewrite the whole document it just read.
+    if (envelope.binaryKeys) rememberRestoredBinaries(document, envelope.binaryKeys, this.#binaryKeys);
+    this.#nextBinaryId = Math.max(this.#nextBinaryId, ...(envelope.binaryKeys ?? []).map(binaryIdOf), 0) + 1;
+    return document;
   }
 }
 

@@ -1,4 +1,4 @@
-import type { RasterDocumentState, RasterRect, RgbaColor } from "./types";
+import type { RasterDocumentState, RasterLayer, RasterRect, RgbaColor } from "./types";
 import { renderLayerEffects } from "./effects";
 import { applyAdjustment } from "./adjustments";
 import { effectiveLayerOpacity, flattenRasterLayers, isLayerEffectivelyVisible } from "./layer-tree";
@@ -105,6 +105,61 @@ function blendNonSeparable(
   else hslToRgb(destinationHsl[0]!, destinationHsl[1]!, sourceHsl[2]!, out);
 }
 
+/**
+ * The rectangle outside which a layer has no opaque pixels at all.
+ *
+ * Every shape and every piece of type lands on its own full-document layer, so
+ * a working file accumulates dozens of layers that are empty almost everywhere.
+ * The compositor was walking all of them for every tile: twenty-three layers of
+ * two megapixels each, to draw a rectangle covering a twentieth of the canvas.
+ * Knowing where a layer actually has content turns that into the two or three
+ * layers that reach the tile.
+ *
+ * Scanning costs one pass over the buffer, and buffers are replaced rather than
+ * written in place, so the answer is cached against the buffer itself and
+ * survives for as long as the layer is unedited.
+ */
+const opaqueBounds = new WeakMap<Uint8ClampedArray, RasterRect | null>();
+
+function layerOpaqueBounds(pixels: Uint8ClampedArray, width: number, height: number): RasterRect | null {
+  const cached = opaqueBounds.get(pixels);
+  if (cached !== undefined) return cached;
+
+  // Read four bytes at a time: the alpha test is the whole loop, and per-byte
+  // indexing over two million pixels is most of its cost.
+  const words = pixels.byteLength === width * height * 4 && pixels.byteOffset % 4 === 0
+    ? new Uint32Array(pixels.buffer, pixels.byteOffset, width * height)
+    : null;
+  let left = width, top = height, right = 0, bottom = 0;
+  for (let y = 0; y < height; y += 1) {
+    const row = y * width;
+    let rowLeft = -1, rowRight = -1;
+    for (let x = 0; x < width; x += 1) {
+      const opaque = words ? (words[row + x]! & 0xff000000) !== 0 : pixels[(row + x) * 4 + 3] !== 0;
+      if (!opaque) continue;
+      if (rowLeft < 0) rowLeft = x;
+      rowRight = x;
+    }
+    if (rowLeft < 0) continue;
+    if (y < top) top = y;
+    bottom = y + 1;
+    if (rowLeft < left) left = rowLeft;
+    if (rowRight + 1 > right) right = rowRight + 1;
+  }
+  const bounds = right > left && bottom > top ? { x: left, y: top, width: right - left, height: bottom - top } : null;
+  opaqueBounds.set(pixels, bounds);
+  return bounds;
+}
+
+const overlaps = (a: RasterRect, b: RasterRect): boolean =>
+  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+function hasEnabledEffect(layer: RasterLayer): boolean {
+  const effects = layer.effects as Record<string, unknown> | undefined;
+  if (!effects) return false;
+  return Object.values(effects).some((effect) => typeof effect === "object" && effect !== null && (effect as { enabled?: boolean }).enabled === true);
+}
+
 /** Clamps a requested region to the document, snapping to whole pixels. */
 export function clampRegionToDocument(state: RasterDocumentState, region: RasterRect): RasterRect {
   const x = Math.max(0, Math.min(state.width, Math.floor(region.x)));
@@ -166,6 +221,16 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
       }
       continue;
     }
+    // Nothing here reaches this region. An adjustment reads back what is under
+    // it, an effect draws outside the layer's own pixels, and a layer something
+    // clips to has to record its coverage even when empty — so none of those are
+    // skipped; an ordinary layer with no opaque pixels in range contributes
+    // exactly nothing and costs a rectangle test instead of a million reads.
+    if (layer.kind !== "adjustment" && !layer.adjustment && !hasEnabledEffect(layer) && !clippedParents.has(parentKey)) {
+      const bounds = layerOpaqueBounds(layer.pixels, width, state.height);
+      if (!bounds || !overlaps(bounds, area)) continue;
+    }
+
     const renderedLayer = renderLayerEffects(layer, state.width, state.height);
     const clippingBase = layer.clipping ? clippingBaseByParent.get(parentKey) : undefined;
     const ownAlpha = layer.clipping || !clippedParents.has(parentKey) ? null : new Uint8ClampedArray(outWidth * outHeight);

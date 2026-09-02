@@ -147,12 +147,49 @@ function withLayerMaskPixels(state: RasterDocumentState, layerId: string, pixels
   return { ...state, layers: state.layers.map((layer) => layer.id === layerId && layer.mask ? { ...layer, mask: { ...layer.mask, pixels: rgbaToMask(pixels) } } : layer) };
 }
 
+/**
+ * Snapshots the document structure, sharing the pixel buffers with it.
+ *
+ * Every operation that takes a whole-document snapshot took two — the state
+ * before and the state after — and copying the pixels of every layer into each
+ * of them meant eighty megabytes of memcpy before a rectangle appeared, on the
+ * thread that was supposed to be drawing it.
+ *
+ * The copies bought nothing. A layer's buffer, once it is in the document, is
+ * never written in place: every path that edits pixels assigns a freshly
+ * allocated buffer in its place, so a snapshot that holds the old reference
+ * keeps seeing the old pixels for as long as it needs them. What does have to
+ * be copied is the structure around them — the layer array, the layer objects,
+ * the selection bounds — because those are mutated in place, and sharing them
+ * would let an edit reach back into the history.
+ *
+ * If a future edit ever writes through `layer.pixels` instead of replacing it,
+ * this stops being sound and undo starts returning the edited pixels.
+ */
 function cloneRasterState(state: RasterDocumentState): RasterDocumentState {
-  return { ...state, layers: state.layers.map((layer) => ({ ...layer, pixels: layer.pixels.slice(), ...(layer.text ? { text: structuredClone(layer.text) } : {}), ...(layer.adjustment ? { adjustment: structuredClone(layer.adjustment) } : {}), ...(layer.mask ? { mask: { ...layer.mask, pixels: layer.mask.pixels.slice() } } : {}) })), selection: state.selection ? { mask: state.selection.mask.slice(), bounds: { ...state.selection.bounds } } : null, guides: (state.guides ?? []).map((guide) => ({ ...guide })) };
+  return { ...state, layers: state.layers.map((layer) => ({ ...layer, ...(layer.text ? { text: structuredClone(layer.text) } : {}), ...(layer.adjustment ? { adjustment: structuredClone(layer.adjustment) } : {}), ...(layer.mask ? { mask: { ...layer.mask } } : {}) })), selection: state.selection ? { mask: state.selection.mask, bounds: { ...state.selection.bounds } } : null, guides: (state.guides ?? []).map((guide) => ({ ...guide })) };
 }
 
-function rasterStateByteLength(state: RasterDocumentState): number {
-  return state.layers.reduce((sum, layer) => sum + layer.pixels.byteLength + (layer.mask?.pixels.byteLength ?? 0), state.selection?.mask.byteLength ?? 0);
+/**
+ * What a step between these two states actually keeps alive.
+ *
+ * Both snapshots share their buffers with the document, so charging history for
+ * every layer in both of them overstated a single shape by ninety-six megabytes
+ * and had the budget dropping undo depth within a dozen operations. Only the
+ * buffers the two states disagree about are held open by the step.
+ */
+function stateDeltaBytes(before: RasterDocumentState, after: RasterDocumentState): number {
+  const buffers = (state: RasterDocumentState): Set<ArrayBufferView> => {
+    const set = new Set<ArrayBufferView>();
+    for (const layer of state.layers) { set.add(layer.pixels); if (layer.mask) set.add(layer.mask.pixels); }
+    if (state.selection) set.add(state.selection.mask);
+    return set;
+  };
+  const first = buffers(before), second = buffers(after);
+  let bytes = 0;
+  for (const buffer of first) if (!second.has(buffer)) bytes += buffer.byteLength;
+  for (const buffer of second) if (!first.has(buffer)) bytes += buffer.byteLength;
+  return bytes;
 }
 
 function alphaBounds(pixels: Uint8ClampedArray, width: number, height: number): RasterRect | null {
@@ -218,6 +255,8 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const [textFrameDraft, setTextFrameDraft] = useState<RasterRect | null>(null);
   const tiles = useRef(new RasterTileCache({ tileSize: 256 }));
   const documentDirty = useRef(new DirtyRegion());
+  /** What the visible canvas currently holds, so idle renders repaint nothing. */
+  const painted = useRef<{ canvas: HTMLCanvasElement | null; revision: number }>({ canvas: null, revision: -1 });
   const [lassoDraft, setLassoDraft] = useState<Point[]>([]);
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
   const [transformPreview, setTransformPreview] = useState<PendingPixelTransform | null>(null);
@@ -250,11 +289,25 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    // An empty region means the edit did not report what it touched (a filter, a layer
-    // operation, an undo), so the whole document is assumed dirty. Only gestures narrow it.
-    const pending = documentDirty.current.isEmpty ? null : documentDirty.current.consume();
-    if (pending === null) tiles.current.invalidateAll();
-    else for (const rect of pending) tiles.current.invalidate(rect);
+    // This effect runs on every render, and most renders have nothing to do with
+    // the pixels: a history notification, a tool change, a selection. Treating
+    // those as "an edit that did not say what it touched" threw away the whole
+    // tile cache and recomposited the document — six hundred milliseconds on a
+    // fifteen-layer document, several times per operation. The document's
+    // revision is what says whether the pixels can have moved at all.
+    const canvasChanged = painted.current.canvas !== canvas;
+    const revised = document.revision !== painted.current.revision;
+    painted.current = { canvas, revision: document.revision };
+
+    // A canvas React has just mounted holds nothing, whatever the cache thinks.
+    if (canvasChanged) tiles.current.invalidateAll();
+    else if (revised) {
+      // An empty region means the edit did not report what it touched (a filter, a layer
+      // operation, an undo), so the whole document is assumed dirty. Only gestures narrow it.
+      const pending = documentDirty.current.isEmpty ? null : documentDirty.current.consume();
+      if (pending === null) tiles.current.invalidateAll();
+      else for (const rect of pending) tiles.current.invalidate(rect);
+    }
     const { repainted } = tiles.current.update(state, { x: 0, y: 0, width: state.width, height: state.height });
     for (const tile of repainted) putRegionPixels(canvas, tile.pixels, tile.rect);
   }, [document.revision, state]);
@@ -545,7 +598,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     const history = kernel.historyByDocument.get(document.id);
     if (!history) throw new Error(`History missing for ${document.id}`);
     const assign = (snapshot: RasterDocumentState): void => { kernel.documents.update<RasterDocumentState>(document.id, (current) => { Object.assign(current, cloneRasterState(snapshot)); }); };
-    await history.execute({ label, memoryEstimate: rasterStateByteLength(before) + rasterStateByteLength(after), redo: () => assign(after), undo: () => assign(before) });
+    await history.execute({ label, memoryEstimate: stateDeltaBytes(before, after), redo: () => assign(after), undo: () => assign(before) });
   };
 
   const confirmRasterize = () => {
