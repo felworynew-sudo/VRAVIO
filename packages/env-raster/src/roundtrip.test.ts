@@ -5,6 +5,7 @@ import {
 } from "@vravio/kernel";
 import { RasterEnvironment } from "./environment";
 import { createRasterLayer } from "./document";
+import { layerDocumentPixels } from "./layer-bounds";
 import { appendLayer, flattenRasterLayers } from "./layer-tree";
 import { decodeRasterAsset, encodeRasterAsset, isRasterAsset } from "./raster-asset";
 import type { RasterDocumentState } from "./types";
@@ -327,10 +328,12 @@ describe("raster round-trip", () => {
     await environment.whenSettled();
 
     const layer = topLayer(documents.get<RasterDocumentState>(parent.id)!);
-    expect(layer.pixels.length).toBe(W * H * 4);
-    expect(firstPixel(layer.pixels)).toEqual([255, 255, 255, 255]);
+    // Read in canvas space: the layer is stored at the size of what came back,
+    // and what this is about is where that lands on the canvas.
+    const canvas = layerDocumentPixels(layer, W, H);
+    expect(firstPixel(canvas)).toEqual([255, 255, 255, 255]);
     // Beyond the returned area the layer is cleared rather than stretched.
-    expect(layer.pixels[(0 * W + 5) * 4 + 3]).toBe(0);
+    expect(canvas[(0 * W + 5) * 4 + 3]).toBe(0);
   });
 
   it("refuses targets a raster document does not have", async () => {

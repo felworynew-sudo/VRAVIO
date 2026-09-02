@@ -6,6 +6,7 @@ import { appendLayer, flattenRasterLayers } from "./layer-tree";
 import { compositeRasterDocument } from "./render";
 import { RASTER_ASSET_MIME, decodeRasterAsset, encodeRasterAsset, isRasterAsset } from "./raster-asset";
 import type { RasterDocumentOptions, RasterDocumentState, RasterLayer } from "./types";
+import { setLayerPixels } from "./layer-bounds";
 
 export interface RasterEnvironmentOptions {
   readonly documents: DocumentStore;
@@ -63,7 +64,7 @@ export class RasterEnvironment implements Environment<RasterDocumentState> {
     const state = createRasterDocument(image.width, image.height);
     const layer = state.layers[0]!;
     layer.name = options.title ?? record.name;
-    layer.pixels = image.pixels;
+    setLayerPixels(layer, image.pixels, image.width, image.height);
     // The layer keeps pointing at the asset, so editing it here and applying
     // sends a revision back down the same reference the parent is holding.
     layer.pixelAssetId = assetId;
@@ -123,6 +124,15 @@ export class RasterEnvironment implements Environment<RasterDocumentState> {
 
   onAssetRevised(document: VravioDocument<RasterDocumentState>, assetId: AssetId, rev: number, note?: string): void {
     void note;
+
+    // A layer's pixelAssetId serves two purposes: it names the asset a linked
+    // layer follows, and it names where a plain layer keeps its own undo
+    // history. Only the first should react to a revision. A revision this
+    // environment produced by painting is the second, and reading it back would
+    // re-apply the document's own edit to itself — an asset read and a
+    // canvas-sized write on every brush stroke, for nothing.
+    if (this.#assets.get(assetId)?.revisions.find((revision) => revision.rev === rev)?.producedBy === "raster") return;
+
     const affected = flattenRasterLayers(document.state.layers).filter((layer) => layer.pixelAssetId === assetId);
     if (affected.length === 0) return;
 
@@ -138,7 +148,7 @@ export class RasterEnvironment implements Environment<RasterDocumentState> {
             // A pinned layer asked to be left where it is; that is the whole
             // point of pinning, and honouring it is what keeps round-trip safe.
             if (layer.smartSource?.pinnedRev != null) continue;
-            layer.pixels = fitPixels(image.pixels, image.width, image.height, state.width, state.height);
+            setLayerPixels(layer, fitPixels(image.pixels, image.width, image.height, state.width, state.height), state.width, state.height);
           }
         });
       });
@@ -154,7 +164,7 @@ export class RasterEnvironment implements Environment<RasterDocumentState> {
       const layer = flattenRasterLayers(state.layers).find((item) => item.id === target.layerId);
       if (!layer) throw new Error(`Unknown layer: ${target.layerId}`);
       layer.pixelAssetId = newAssetId;
-      layer.pixels = fitPixels(image.pixels, image.width, image.height, state.width, state.height);
+      setLayerPixels(layer, fitPixels(image.pixels, image.width, image.height, state.width, state.height), state.width, state.height);
     });
     this.#documents.addAssetRef(document.id, newAssetId);
   }
@@ -172,7 +182,7 @@ export class RasterEnvironment implements Environment<RasterDocumentState> {
     const image = decodeRasterAsset(bytes);
     const state = document.state;
     const layer = createRasterLayer(state.width, state.height, name ?? this.#assets.mustGet(assetId).name);
-    layer.pixels = fitPixels(image.pixels, image.width, image.height, state.width, state.height);
+    setLayerPixels(layer, fitPixels(image.pixels, image.width, image.height, state.width, state.height), state.width, state.height);
     layer.pixelAssetId = assetId;
     this.#documents.update<RasterDocumentState>(document.id, (current) => { appendLayer(current, layer); });
     this.#documents.addAssetRef(document.id, assetId);
