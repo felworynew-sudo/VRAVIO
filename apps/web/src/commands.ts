@@ -1,7 +1,9 @@
 import type { CommandContext, EnvironmentKind } from "@vravio/kernel";
-import { activeRasterLayer, groupLayers, layerDocumentPixels, layerFromSelection, mergeLayerDown, mergeVisibleLayers, moveLayerInStack, selectAllPixels, stampVisibleLayers, ungroupLayer, createRasterLayer, invertPixelSelection, isRasterDocumentState, restrictSelectionToAlpha, selectOpaquePixels, type PixelSelection, type RasterDocumentState, type RasterLayer } from "@vravio/env-raster";
+import { activeRasterLayer, groupLayers, layerDocumentPixels, layerFromSelection, mergeLayerDown, mergeVisibleLayers, moveLayerInStack, removeLayer, selectAllPixels, stampVisibleLayers, ungroupLayer, createRasterLayer, invertPixelSelection, isRasterDocumentState, restrictSelectionToAlpha, selectOpaquePixels, type PixelSelection, type RasterDocumentState, type RasterLayer } from "@vravio/env-raster";
 import { kernel } from "./kernel";
 import { useShellStore } from "./store";
+import { tools } from "./tools";
+import { applyShortcutOverrides, rememberDefaultShortcut } from "./shortcuts";
 
 let initialized = false;
 
@@ -54,7 +56,7 @@ async function changeRasterSelection(documentId: string, label: string, change: 
  * the document — every path that edits pixels replaces the buffer rather than
  * writing through it — so the cost is the tree, not the image.
  */
-async function changeRasterDocument(documentId: string, label: string, mutate: (state: RasterDocumentState) => boolean): Promise<void> {
+export async function changeRasterDocument(documentId: string, label: string, mutate: (state: RasterDocumentState) => boolean): Promise<void> {
   const document = kernel.documents.get<RasterDocumentState>(documentId);
   const history = kernel.historyByDocument.get(documentId);
   if (!document || !history || !isRasterDocumentState(document.state)) return;
@@ -104,6 +106,7 @@ export function ensureCommandsRegistered(): void {
   // shell (it needs the platform port and the export dialog), so they dispatch instead of
   // saving here. Marking the document clean without writing anything would lose work.
   const dispatch = (type: string): void => { window.dispatchEvent(new Event(type)); };
+  kernel.commands.register({ id: "file.open", label: "Open… (Открыть…)", category: "File (Файл)", shortcut: "Mod+O", execute: () => dispatch("vravio-file-open") });
   kernel.commands.register({ id: "file.save", label: "Save (Сохранить)", category: "File (Файл)", shortcut: "Mod+S", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: () => dispatch("vravio-file-save") });
   kernel.commands.register({ id: "file.saveAs", label: "Save As… (Сохранить как…)", category: "File (Файл)", shortcut: "Mod+Shift+S", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: () => dispatch("vravio-file-save-as") });
   kernel.commands.register({ id: "file.saveCopy", label: "Save a Copy… (Сохранить копию…)", category: "File (Файл)", shortcut: "Mod+Alt+S", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: () => dispatch("vravio-file-save-copy") });
@@ -138,13 +141,14 @@ export function ensureCommandsRegistered(): void {
     isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && kernel.documents.get(activeDocumentId)?.provenance),
     execute: ({ activeDocumentId }) => { if (activeDocumentId) kernel.roundtrip.detach(activeDocumentId); },
   });
-  kernel.commands.register({ id: "layer.new", label: "New Layer (Новый слой)", category: "Layer (Слой)", shortcut: "Mod+Shift+N", isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; kernel.documents.update<RasterDocumentState>(activeDocumentId, (state) => { const layer = createRasterLayer(state.width, state.height, `Layer ${state.layers.length + 1} (Слой ${state.layers.length + 1})`); state.layers.push(layer); state.activeLayerId = layer.id; }); } });
+  kernel.commands.register({ id: "layer.new", label: "New Layer (Новый слой)", category: "Layer (Слой)", shortcut: "Mod+Shift+N", isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void changeRasterDocument(activeDocumentId, "New Layer (Новый слой)", (state) => { const layer = createRasterLayer(state.width, state.height, `Layer ${state.layers.length + 1} (Слой ${state.layers.length + 1})`); state.layers.push(layer); state.activeLayerId = layer.id; return true; }); } });
   // Photoshop's layer shortcuts, in its own order and with its own keys.
   const raster = ({ activeDocumentId }: { activeDocumentId?: string | null }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster";
   const editLayers = (documentId: string, label: string, mutate: (state: RasterDocumentState) => boolean) =>
     changeRasterDocument(documentId, label, mutate);
 
   kernel.commands.register({ id: "layer.duplicate", label: "Duplicate Layer (Создать дубликат слоя)", category: "Layer (Слой)", shortcut: "Mod+J", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; const document = kernel.documents.get<RasterDocumentState>(activeDocumentId); if (!document) return; void editLayers(activeDocumentId, "Layer via Copy (Слой копированием)", (state) => Boolean(layerFromSelection(state, state.activeLayerId, state.selection, false))); } });
+  kernel.commands.register({ id: "layer.delete", label: "Delete Layer (Удалить слой)", category: "Layer (Слой)", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, "Delete Layer (Удалить слой)", (state) => removeLayer(state, state.activeLayerId)); } });
   kernel.commands.register({ id: "layer.viaCut", label: "Layer via Cut (Вырезать на новый слой)", category: "Layer (Слой)", shortcut: "Mod+Shift+J", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && kernel.documents.get<RasterDocumentState>(activeDocumentId)?.state.selection), execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, "Layer via Cut (Слой вырезанием)", (state) => Boolean(layerFromSelection(state, state.activeLayerId, state.selection, true))); } });
   kernel.commands.register({ id: "layer.mergeDown", label: "Merge Down (Объединить с предыдущим)", category: "Layer (Слой)", shortcut: "Mod+E", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, "Merge Down (Объединить с предыдущим)", (state) => Boolean(mergeLayerDown(state, state.activeLayerId))); } });
   kernel.commands.register({ id: "layer.mergeVisible", label: "Merge Visible (Объединить видимые)", category: "Layer (Слой)", shortcut: "Mod+Shift+E", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, "Merge Visible (Объединить видимые)", (state) => Boolean(mergeVisibleLayers(state))); } });
@@ -179,7 +183,55 @@ export function ensureCommandsRegistered(): void {
   kernel.commands.register({ id: "view.theme", label: "Cycle Theme (Сменить тему)", category: "View (Просмотр)", execute: () => useShellStore.getState().cycleTheme() });
   kernel.commands.register({ id: "app.settings", label: "Settings (Настройки)", category: "Edit (Правка)", execute: () => useShellStore.getState().setSettingsOpen(true) });
   kernel.commands.register({ id: "view.commandPalette", label: "Search (Поиск)", category: "Edit (Правка)", shortcut: "Mod+F", execute: () => useShellStore.getState().setPaletteOpen(true) });
-  for (const command of kernel.commands.list()) if (command.shortcut) kernel.keymap.bind(command.id, command.shortcut);
+  kernel.commands.register({ id: "edit.freeTransform", label: "Free Transform (Свободная трансформация)", category: "Edit (Правка)", shortcut: "Mod+T", isEnabled: raster, execute: () => dispatch("vravio-transform-start") });
+  kernel.commands.register({ id: "view.toggleRulers", label: "Rulers (Линейки)", category: "View (Просмотр)", shortcut: "Mod+R", execute: () => useShellStore.getState().updatePreferences({ showRulers: !useShellStore.getState().preferences.showRulers }) });
+  kernel.commands.register({ id: "view.toggleGuides", label: "Guides (Направляющие)", category: "View (Просмотр)", shortcut: "Mod+;", execute: () => useShellStore.getState().updatePreferences({ showGuides: !useShellStore.getState().preferences.showGuides }) });
+  kernel.commands.register({ id: "filter.liquify", label: "Liquify… (Пластика…)", category: "Filter (Фильтр)", shortcut: "Mod+Shift+X", isEnabled: raster, execute: () => dispatch("vravio-liquify-open") });
+  const openAdjustment = (kind: string): void => { window.dispatchEvent(new CustomEvent("vravio-adjustment-open", { detail: { kind } })); };
+  const adjustmentEnabled = ({ activeDocumentId }: { activeDocumentId?: string | null }) => { const document = kernel.documents.get<RasterDocumentState>(activeDocumentId ?? ""); return Boolean(document && isRasterDocumentState(document.state) && document.state.layers.find((layer) => layer.id === document.state.activeLayerId)?.kind === "pixel"); };
+  kernel.commands.register({ id: "image.adjustment.levels", label: "Levels… (Уровни…)", category: "Image (Изображение)", shortcut: "Mod+L", isEnabled: adjustmentEnabled, execute: () => openAdjustment("levels") });
+  kernel.commands.register({ id: "image.adjustment.curves", label: "Curves… (Кривые…)", category: "Image (Изображение)", shortcut: "Mod+M", isEnabled: adjustmentEnabled, execute: () => openAdjustment("curves") });
+  kernel.commands.register({ id: "image.adjustment.hueSaturation", label: "Hue/Saturation… (Цветовой тон/Насыщенность…)", category: "Image (Изображение)", shortcut: "Mod+U", isEnabled: adjustmentEnabled, execute: () => openAdjustment("hueSaturation") });
+  kernel.commands.register({ id: "image.adjustment.colorBalance", label: "Color Balance… (Цветовой баланс…)", category: "Image (Изображение)", shortcut: "Mod+B", isEnabled: adjustmentEnabled, execute: () => openAdjustment("colorBalance") });
+  kernel.commands.register({ id: "image.adjustment.invert", label: "Invert (Инвертировать)", category: "Image (Изображение)", shortcut: "Mod+I", isEnabled: adjustmentEnabled, execute: () => openAdjustment("invert") });
+  registerToolShortcuts();
+  for (const command of kernel.commands.list()) if (command.shortcut) { rememberDefaultShortcut(command.id, command.shortcut); kernel.keymap.bind(command.id, command.shortcut, command.scope); }
+  applyShortcutOverrides();
+}
+
+/**
+ * One command per letter a tool's shortcut sits on, not one per tool.
+ *
+ * Photoshop's own convention: a plain letter always selects the first tool sharing it
+ * (e.g. M is the Marquee), and Shift steps to the next one in the group, wrapping around.
+ * Raster and vector each get their own scope, because both put a tool on some of the same
+ * letters (V is Move in raster, Selection in vector) and only one document kind is active
+ * at a time.
+ */
+function registerToolShortcuts(): void {
+  const groups = new Map<string, typeof tools[number][]>();
+  for (const tool of tools) {
+    const key = `${tool.kind}:${tool.shortcut.toLocaleUpperCase()}`;
+    (groups.get(key) ?? groups.set(key, []).get(key)!).push(tool);
+  }
+  for (const [key, group] of groups) {
+    const [kind, letter] = key.split(":") as [EnvironmentKind, string];
+    kernel.commands.register({
+      id: `tool.${kind}.${letter.toLocaleLowerCase()}`,
+      label: group.map((tool) => tool.label).join(" / "),
+      category: "Tools (Инструменты)",
+      shortcut: letter,
+      scope: kind,
+      isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === kind,
+      execute: ({ activeDocumentId, shiftKey }) => {
+        if (!activeDocumentId) return;
+        const current = useShellStore.getState().activeToolByDocument[activeDocumentId];
+        const currentIndex = group.findIndex((tool) => tool.id === current);
+        const tool = shiftKey && group.length > 1 ? group[(currentIndex + 1 + group.length) % group.length] : group[0];
+        if (tool) useShellStore.getState().setTool(activeDocumentId, tool.id);
+      },
+    });
+  }
 }
 
 export function activeCommandContext(): CommandContext {

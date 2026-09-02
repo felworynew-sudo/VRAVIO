@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { AssetStore, AutosaveManager, CommandRegistry, DocumentSnapshotStore, DocumentStore, GPUContext, HistoryManager, KeymapManager, MemoryStorageAdapter, ModelConsentDeniedError, ModelStore, WorkerPool, type AssetId, type WorkerTaskClient } from "./index";
+import type { KeyboardShortcutEvent } from "./keymap-manager";
 
 describe("DocumentStore", () => {
   it("increments revisions without storing document state in a UI store", () => {
@@ -208,6 +209,40 @@ describe("KeymapManager", () => {
     keymap.bind("view.otherZoom", "Ctrl+Plus");
     expect(keymap.resolve({ code: "Equal", key: "+", ctrlKey: true, metaKey: false, altKey: false, shiftKey: true })).toBe("view.otherZoom");
     expect(keymap.conflicts("Mod++").map((binding) => binding.commandId)).toEqual(["view.zoomIn", "view.otherZoom"]);
+  });
+
+  it("notifies subscribers on bind, rebind and unbind, and stops after dispose", () => {
+    const keymap = new KeymapManager();
+    const changes = vi.fn();
+    const subscription = keymap.subscribe(changes);
+    keymap.bind("tool.brush", "B");
+    keymap.bind("tool.brush", "Shift+B");
+    expect(keymap.unbind("tool.brush")).toBe(true);
+    expect(changes).toHaveBeenCalledTimes(3);
+    subscription.dispose();
+    keymap.bind("tool.eraser", "E");
+    expect(changes).toHaveBeenCalledTimes(3);
+  });
+
+  it("falls back to a bare-letter binding for Shift+letter, but never across Ctrl or Alt", () => {
+    const keymap = new KeymapManager();
+    keymap.bind("tool.marquee", "M", "raster");
+    keymap.bind("edit.redo", "Mod+Shift+Z");
+    expect(keymap.resolve({ code: "KeyM", key: "M", ctrlKey: false, metaKey: false, altKey: false, shiftKey: true }, ["raster"])).toBe("tool.marquee");
+    expect(keymap.resolve({ code: "KeyM", key: "M", ctrlKey: false, metaKey: false, altKey: false, shiftKey: true }, ["global"])).toBeNull();
+    expect(keymap.resolve({ code: "KeyM", key: "M", ctrlKey: false, metaKey: false, altKey: true, shiftKey: true }, ["raster"])).toBeNull();
+    expect(keymap.resolve({ code: "KeyZ", key: "z", ctrlKey: true, metaKey: false, altKey: false, shiftKey: true })).toBe("edit.redo");
+  });
+
+  it("resolves the bare-letter fallback for a DOM-Event-shaped object, not just a plain object", () => {
+    // A real DOM Event's fields are non-enumerable accessors on the prototype, so a naive
+    // `{ ...event }` inside resolve() would silently drop every one of them — a plain-object
+    // literal wouldn't catch that, since its properties are already own and enumerable.
+    const proto = { get code() { return "KeyM"; }, get key() { return "M"; }, get ctrlKey() { return false; }, get metaKey() { return false; }, get altKey() { return false; }, get shiftKey() { return true; } };
+    const event = Object.create(proto) as KeyboardShortcutEvent;
+    const keymap = new KeymapManager();
+    keymap.bind("tool.marquee", "M", "raster");
+    expect(keymap.resolve(event, ["raster"])).toBe("tool.marquee");
   });
 });
 

@@ -57,6 +57,33 @@ export function duplicateLayer(state: RasterDocumentState, layerId: string): Ras
 }
 
 /**
+ * Deletes a layer — and, for a group, everything inside it — as the Delete Layer command does.
+ *
+ * A document is never left without a layer: removing the last one leaves behind a fresh default
+ * layer, matching what Photoshop does when the only layer is deleted.
+ */
+export function removeLayer(state: RasterDocumentState, layerId: string): boolean {
+  const target = find(state, layerId);
+  if (!target) return false;
+
+  const removed = new Set([target.id, ...rasterLayerDescendantIds(state.layers, target.id)]);
+  state.layers = state.layers.filter((layer) => !removed.has(layer.id));
+
+  if (state.layers.length === 0) {
+    const fresh = createRasterLayer(state.width, state.height, "Layer 1 (Слой 1)");
+    state.layers.push(fresh);
+    state.activeLayerId = fresh.id;
+    return true;
+  }
+
+  if (removed.has(state.activeLayerId)) {
+    const siblings = siblingsOf(state, target.parentId ?? null);
+    state.activeLayerId = (siblings[0] ?? state.layers[state.layers.length - 1])!.id;
+  }
+  return true;
+}
+
+/**
  * Merges a layer into the one below it, as Cmd/Ctrl+E does.
  *
  * The result keeps the lower layer's identity, because that is what everything

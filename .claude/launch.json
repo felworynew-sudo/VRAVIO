@@ -4,7 +4,7 @@
     {
       "name": "vravio-web",
       "runtimeExecutable": "D:\\node",
-      "runtimeArgs": ["D:\\VRAVIO\\apps\\web\\node_modules\\vite\\bin\\vite.js", "D:\\VRAVIO\\apps\\web", "--port", "5173", "--strictPort"],
+      "runtimeArgs": ["D:\\VRAVIO-github\\apps\\web\\node_modules\\vite\\bin\\vite.js", "D:\\VRAVIO-github\\apps\\web", "--port", "5173", "--strictPort"],
       "port": 5173
     }
   ]

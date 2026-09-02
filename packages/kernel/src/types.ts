@@ -40,6 +40,14 @@ export interface Disposable {
 
 export interface CommandContext {
   readonly activeDocumentId: string | null;
+  /**
+   * Set when the command ran from a key press with Shift held.
+   *
+   * Only a handful of commands read this — the tool-group cycles that share one letter with a
+   * sibling tool (Photoshop's own convention: plain M always selects the Marquee, Shift+M steps
+   * to the next tool in the group). Everything else ignores it.
+   */
+  readonly shiftKey?: boolean;
 }
 
 export interface Command {
@@ -47,6 +55,13 @@ export interface Command {
   readonly label: string;
   readonly category: string;
   readonly shortcut?: string;
+  /**
+   * The scope its shortcut binds under, forwarded to `KeymapManager.bind`. Left unset for
+   * `"global"`. Tool commands bind under their environment (`"raster"`, `"vector"`, …) instead,
+   * because two environments each have their own tool on the same letter (raster's Move and
+   * vector's Selection both sit on V) and only one document kind is active at a time.
+   */
+  readonly scope?: string;
   isEnabled?(context: CommandContext): boolean;
   execute(context: CommandContext): void | Promise<void>;
 }

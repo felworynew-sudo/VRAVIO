@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { adjustRgb, applyAdjustment, buildCurveLut } from "./adjustments";
+import type { RasterAdjustment } from "./types";
 
 describe("adjustments", () => {
   it("keeps an identity curve exact", () => {
@@ -12,10 +13,37 @@ describe("adjustments", () => {
     expect(adjustRgb(100, 140, 220, { kind: "threshold", threshold: 128 })).toEqual([255, 255, 255]);
   });
 
+  it("keeps the new panel corrections deterministic at their neutral settings", () => {
+    expect(adjustRgb(40, 80, 120, { kind: "exposure", exposure: 1, offset: 0, gamma: 1 })).toEqual([80, 160, 240]);
+    expect(adjustRgb(40, 80, 120, { kind: "vibrance", vibrance: 0, saturation: 0 }).map(Math.round)).toEqual([40, 80, 120]);
+    expect(adjustRgb(40, 80, 120, { kind: "channelMixer", outputChannel: "red", red: [100, 0, 0, 0], green: [0, 100, 0, 0], blue: [0, 0, 100, 0], monochrome: false })).toEqual([40, 80, 120]);
+    expect(adjustRgb(255, 0, 0, { kind: "gradientMap", from: "#000000", to: "#ffffff", dither: false, reverse: false })).toEqual([54, 54, 54]);
+    const neutral = { cyan: 0, magenta: 0, yellow: 0, black: 0 };
+    expect(adjustRgb(40, 80, 120, { kind: "selectiveColor", range: "reds", values: { reds: neutral, yellows: neutral, greens: neutral, cyans: neutral, blues: neutral, magentas: neutral, whites: neutral, neutrals: neutral, blacks: neutral }, method: "relative" })).toEqual([40, 80, 120]);
+    expect(adjustRgb(40, 80, 120, { kind: "shadowsHighlights", shadows: 0, highlights: 0, colorCorrection: 0, midtoneContrast: 0, blackClip: 0, whiteClip: 0 })).toEqual([40, 80, 120]);
+  });
+
   it("preserves alpha and interpolates adjustment opacity", () => {
     const pixels = new Uint8ClampedArray([20, 40, 60, 128, 10, 20, 30, 0]);
     applyAdjustment(pixels, { kind: "invert" }, .5);
     expect(Array.from(pixels)).toEqual([128, 128, 128, 128, 10, 20, 30, 0]);
+  });
+
+  it("applies levels and curves through the same values whether batched via a lookup table or computed per pixel", () => {
+    // applyAdjustment builds a 256-entry LUT once for these kinds instead of recomputing the
+    // formula per pixel; this pins that fast path to the same output as calling adjustRgb
+    // pixel by pixel, so the two can never quietly drift apart.
+    const source = [0, 12, 64, 128, 200, 255];
+    const levels: RasterAdjustment = { kind: "levels", blackInput: 16, gamma: 1.4, whiteInput: 235, blackOutput: 0, whiteOutput: 255 };
+    const curves: RasterAdjustment = { kind: "curves", points: [{ x: 0, y: 20 }, { x: 128, y: 100 }, { x: 255, y: 255 }] };
+    for (const adjustment of [levels, curves]) {
+      const pixels = new Uint8ClampedArray(source.flatMap((value) => [value, value, value, 255]));
+      applyAdjustment(pixels, adjustment, 1);
+      for (let index = 0; index < source.length; index += 1) {
+        const [expected] = adjustRgb(source[index]!, source[index]!, source[index]!, adjustment);
+        expect(pixels[index * 4]).toBe(expected);
+      }
+    }
   });
 });
 import { appendLayer, appendRasterGroup, applyRasterFilter, blurDab, combineSelections, DirtyRegion, RasterTileCache, TileCompositor, extractTile, findSmartCrop, planTiles, saliencyMap, builtInLuts, formatCubeLut, generateLut, identityLut, parseCubeLut, sampleColorLookup, expandRectForFilter, filterPassCount, filterSpecById, filterSpecs, hasGpuFilter, clampRegionToDocument, compositeRasterDocument, compositeRasterRegion, compositeRasterThumbnail, createAdjustmentLayer, createContiguousColorSelection, createEllipseSelection, createPolygonSelection, createRasterDocument, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawShape, drawQuadraticStrokeSegment, floodFill, invertPixelSelection, isRasterDocumentState, parseHexColor, patchFromSelection, rasterLayerDescendantIds, rasterLayerRows, renderLayerEffects, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectAllPixels, selectOpaquePixels, selectionOutlinePath, smudgeStrokeSegment, translateLayerPixels, translateSelection } from "./index";

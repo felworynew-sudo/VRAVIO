@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { confineToSelection, cropRasterDocument, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createAdjustmentLayer, createRasterLayer, isRasterDocumentState, layerContentBounds, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
+import { confineToSelection, cropRasterDocument, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
 import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
 import { withBusyPainted } from "./busy";
 import { useShellStore, type Language } from "./store";
@@ -23,6 +23,13 @@ import { ExportDialog } from "./ExportDialog";
 import { decodeImportedImage } from "./imageImport";
 import { PerformanceOverlay } from "./PerformanceOverlay";
 import { renderTextLayerPixels } from "./textRender";
+import { AdjustmentDialog } from "./raster-adjustments/AdjustmentDialog";
+import { rasterAdjustmentById, rasterAdjustments } from "./raster-adjustments/registry";
+import type { RasterAdjustmentDefinition } from "./raster-adjustments/types";
+import { adjustedPixels } from "./raster-adjustments/apply";
+import { rasterCorePanels } from "./raster-core-panels/registry";
+import { PANEL_CHANGED_EVENT, readVisiblePanelIds, requestPanelVisibility } from "./raster-core-panels/runtime";
+import { luminanceHistogram } from "./raster-adjustments/histogram";
 import "./styles.css";
 
 export function App() {
@@ -42,6 +49,8 @@ export function App() {
   const [cameraRawReopen, setCameraRawReopen] = useState<{ buffer: ArrayBuffer; name: string } | null>(null);
   const [renderBackend, setRenderBackend] = useState<RenderBackend | null>(kernel.gpu.active);
   const [exportOpen, setExportOpen] = useState(false);
+  const [adjustmentDialog, setAdjustmentDialog] = useState<{ documentId: string; layerId: string; definitionId: RasterAdjustment["kind"]; initialValue: RasterAdjustment } | null>(null);
+  const [, setPanelRevision] = useState(0);
   const active = documents.find((document) => document.id === store.activeDocumentId) ?? null;
   const activeToolId = active ? store.activeToolByDocument[active.id] : undefined;
   const activeTool = toolById(activeToolId);
@@ -107,6 +116,7 @@ export function App() {
   };
 
   const selectedLayerIds = active ? store.selectedLayerIdsByDocument[active.id] ?? [] : [];
+  const activeRasterState = active && isRasterDocumentState(active.state) ? active.state : null;
   const editingMaskLayerId = active ? store.editingMaskLayerIdByDocument[active.id] ?? null : null;
   const maskForegroundIsWhite = active ? store.maskForegroundIsWhiteByDocument[active.id] ?? false : false;
   const effectiveForegroundColor = editingMaskLayerId ? (maskForegroundIsWhite ? "#ffffff" : "#000000") : store.foregroundColor;
@@ -131,9 +141,34 @@ export function App() {
     if (history) void history.execute({ label: kind === "align" ? `Align: ${edge}` : `Distribute: ${edge}`, memoryEstimate: [...before, ...after].reduce((sum, item) => sum + item.pixels.byteLength, 0), redo: () => assign(after), undo: () => assign(before) });
   };
 
-  const addImageAdjustment = (kind: RasterAdjustment["kind"], name: string) => {
+  const openImageAdjustment = (definition: RasterAdjustmentDefinition) => {
     if (!active || !isRasterDocumentState(active.state)) return;
-    kernel.documents.update<RasterDocumentState>(active.id, (current) => { const layer = createAdjustmentLayer(current.width, current.height, kind, name); current.layers.push(layer); current.activeLayerId = layer.id; });
+    const state = active.state;
+    const layer = state.layers.find((item) => item.id === state.activeLayerId);
+    if (!layer || layer.kind !== "pixel") { diagnostic("warn", "adjustment.open", "Direct adjustments require an editable pixel layer", { layerId: layer?.id, kind: layer?.kind }); return; }
+    setAdjustmentDialog({ documentId: active.id, layerId: layer.id, definitionId: definition.id, initialValue: defaultAdjustment(definition.id) });
+  };
+
+  const previewImageAdjustment = (value: RasterAdjustment | null) => {
+    if (!adjustmentDialog) return;
+    const document = kernel.documents.get<RasterDocumentState>(adjustmentDialog.documentId); if (!document || !isRasterDocumentState(document.state)) return;
+    if (!value) { window.dispatchEvent(new CustomEvent("vravio-raster-preview", { detail: { documentId: document.id, pixels: null } })); return; }
+    const target = document.state.layers.find((layer) => layer.id === adjustmentDialog.layerId); if (!target) return;
+    const before = layerDocumentPixels(target, document.state.width, document.state.height), confined = adjustedPixels(before, value, document.state.selection);
+    const layers = document.state.layers.map((layer) => layer.id === target.id ? { ...layer, pixels: layer.pixels.slice(), effects: structuredClone(layer.effects) } : layer);
+    const previewState = { ...document.state, layers }; const previewLayer = layers.find((layer) => layer.id === target.id)!; setLayerPixels(previewLayer, confined, previewState.width, previewState.height);
+    window.dispatchEvent(new CustomEvent("vravio-raster-preview", { detail: { documentId: document.id, pixels: compositeRasterDocument(previewState) } }));
+  };
+
+  const applyImageAdjustment = (value: RasterAdjustment) => {
+    if (!adjustmentDialog) return;
+    const document = kernel.documents.get<RasterDocumentState>(adjustmentDialog.documentId); if (!document || !isRasterDocumentState(document.state)) return;
+    const target = document.state.layers.find((layer) => layer.id === adjustmentDialog.layerId); if (!target || target.kind !== "pixel") return;
+    const before = layerDocumentPixels(target, document.state.width, document.state.height).slice(), confined = adjustedPixels(before, value, document.state.selection);
+    const assign = (pixels: Uint8ClampedArray) => { kernel.documents.update<RasterDocumentState>(document.id, (state) => { const layer = state.layers.find((item) => item.id === target.id); if (layer) setLayerPixels(layer, pixels, state.width, state.height); }); };
+    const definition = rasterAdjustmentById.get(value.kind), history = kernel.historyByDocument.get(document.id);
+    if (history) void history.execute({ label: `Adjustment: ${definition?.name.en ?? value.kind}`, memoryEstimate: before.byteLength + confined.byteLength, redo: () => assign(confined), undo: () => assign(before) }); else assign(confined);
+    previewImageAdjustment(null); setAdjustmentDialog(null);
   };
   /**
    * Adds a watermark as an ordinary editable text layer pinned to a corner, so the text,
@@ -190,28 +225,6 @@ export function App() {
     store.setViewport(documentId, { mode: "fit", panX: 0, panY: 0 });
   };
 
-  const duplicateActiveLayer = () => {
-    if (!active || !isRasterDocumentState(active.state)) return;
-    const state = active.state, source = state.layers.find((layer) => layer.id === state.activeLayerId);
-    if (!source) return;
-    kernel.documents.update<RasterDocumentState>(active.id, (current) => {
-      const index = current.layers.findIndex((layer) => layer.id === source.id);
-      const bilingual = source.name.match(/^(.*?)\s*\(([^()]*)\)\s*$/);
-      const duplicateName = bilingual ? `${bilingual[1]} copy (${bilingual[2]} копия)` : `${source.name} copy`;
-      const copy = { ...source, id: crypto.randomUUID(), pixels: source.pixels.slice(), effects: structuredClone(source.effects), name: duplicateName };
-      current.layers.splice(index + 1, 0, copy);
-      current.activeLayerId = copy.id;
-    });
-  };
-  const deleteActiveLayer = () => {
-    if (!active || !isRasterDocumentState(active.state)) return;
-    kernel.documents.update<RasterDocumentState>(active.id, (current) => {
-      const index = current.layers.findIndex((layer) => layer.id === current.activeLayerId); if (index < 0) return;
-      current.layers.splice(index, 1);
-      if (!current.layers.length) current.layers.push(createRasterLayer(current.width, current.height, "Layer 1 (Слой 1)"));
-      current.activeLayerId = current.layers[Math.min(index, current.layers.length - 1)]!.id;
-    });
-  };
   const toggleActiveTextStyle = (key: "bold" | "italic" | "underline") => {
     if (!active || !isRasterDocumentState(active.state)) return;
     const state = active.state, layer = state.layers.find((item) => item.id === state.activeLayerId);
@@ -235,21 +248,32 @@ export function App() {
     return () => window.removeEventListener("vravio-diagnostics-change", refresh);
   }, []);
 
+  useEffect(() => { const refresh = () => setPanelRevision((value) => value + 1); window.addEventListener(PANEL_CHANGED_EVENT, refresh); return () => window.removeEventListener(PANEL_CHANGED_EVENT, refresh); }, []);
+
   useEffect(() => {
     const save = () => void saveProject();
     const saveCopy = () => void saveProject(false);
     const openExport = () => setExportOpen(true);
+    const openFile = () => openImageRef.current?.click();
+    const openLiquify = () => { if (active && isRasterDocumentState(active.state)) setLiquifyOpen(true); };
+    const openAdjustment = (event: Event) => { const definition = rasterAdjustmentById.get((event as CustomEvent<{ kind: RasterAdjustment["kind"] }>).detail.kind); if (definition) openImageAdjustment(definition); };
     // Save As and Save both go through the platform picker, so they share a handler until
     // the web build can remember a file handle to write back to silently.
     window.addEventListener("vravio-file-save", save);
     window.addEventListener("vravio-file-save-as", save);
     window.addEventListener("vravio-file-save-copy", saveCopy);
     window.addEventListener("vravio-file-export", openExport);
+    window.addEventListener("vravio-file-open", openFile);
+    window.addEventListener("vravio-liquify-open", openLiquify);
+    window.addEventListener("vravio-adjustment-open", openAdjustment);
     return () => {
       window.removeEventListener("vravio-file-save", save);
       window.removeEventListener("vravio-file-save-as", save);
       window.removeEventListener("vravio-file-save-copy", saveCopy);
       window.removeEventListener("vravio-file-export", openExport);
+      window.removeEventListener("vravio-file-open", openFile);
+      window.removeEventListener("vravio-liquify-open", openLiquify);
+      window.removeEventListener("vravio-adjustment-open", openAdjustment);
     };
   });
 
@@ -268,35 +292,14 @@ export function App() {
       const key = physicalShortcutKey(event);
       const target = event.target as HTMLElement | null;
       const editing = target?.tagName === "INPUT" || target?.tagName === "SELECT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
-      const mappedCommand = kernel.keymap.resolve(event);
+      const mappedCommand = kernel.keymap.resolve(event, active ? ["global", active.kind] : ["global"]);
       if ((!editing || mappedCommand === "view.commandPalette") && mappedCommand) {
         event.preventDefault();
-        void kernel.commands.execute(mappedCommand, activeCommandContext());
+        void kernel.commands.execute(mappedCommand, { ...activeCommandContext(), shiftKey: event.shiftKey });
         return;
       }
-      if (!editing && modifier && !event.shiftKey && key === "n") { event.preventDefault(); store.requestNewDocument("raster"); }
-      if (!editing && modifier && event.shiftKey && key === "n") { event.preventDefault(); void kernel.commands.execute("layer.new", activeCommandContext()); }
-      if (!editing && modifier && key === "o") { event.preventDefault(); openImageRef.current?.click(); }
-      if (!editing && modifier && key === "z") { event.preventDefault(); void kernel.commands.execute(event.shiftKey ? "edit.redo" : "edit.undo", activeCommandContext()); }
-      if (!editing && modifier && key === "s") { event.preventDefault(); void kernel.commands.execute(event.altKey ? "file.saveCopy" : event.shiftKey ? "file.saveAs" : "file.save", activeCommandContext()); }
-      if (!editing && modifier && event.shiftKey && key === "e") { event.preventDefault(); void kernel.commands.execute("file.export", activeCommandContext()); }
-      if (!editing && modifier && key === "w") { event.preventDefault(); void kernel.commands.execute("file.close", activeCommandContext()); }
-      if (!editing && modifier && key === "t") { event.preventDefault(); window.dispatchEvent(new Event("vravio-transform-start")); }
-      if (!editing && modifier && key === "r") { event.preventDefault(); store.updatePreferences({ showRulers: !store.preferences.showRulers }); }
-      if (!editing && modifier && key === ";") { event.preventDefault(); store.updatePreferences({ showGuides: !store.preferences.showGuides }); }
-      if (!editing && modifier && key === "a") { event.preventDefault(); void kernel.commands.execute(event.shiftKey ? "select.none" : "select.all", activeCommandContext()); }
-      if (!editing && modifier && event.shiftKey && key === "i") { event.preventDefault(); void kernel.commands.execute("select.invert", activeCommandContext()); }
-      if (!editing && modifier && !event.shiftKey && key === "d") { event.preventDefault(); void kernel.commands.execute("select.none", activeCommandContext()); }
-      if (!editing && modifier && key === "0") { event.preventDefault(); void kernel.commands.execute("view.fit", activeCommandContext()); }
-      if (!editing && modifier && key === "1") { event.preventDefault(); void kernel.commands.execute("view.actual", activeCommandContext()); }
       if (!editing && modifier && (key === "+" || key === "=")) { event.preventDefault(); void kernel.commands.execute("view.zoomIn", activeCommandContext()); }
       if (!editing && modifier && key === "-") { event.preventDefault(); void kernel.commands.execute("view.zoomOut", activeCommandContext()); }
-      if (!editing && modifier && event.shiftKey && key === "x") { event.preventDefault(); if (active && isRasterDocumentState(active.state)) setLiquifyOpen(true); }
-      if (!editing && modifier && !event.shiftKey && key === "j") { event.preventDefault(); duplicateActiveLayer(); }
-      if (!editing && modifier && !event.shiftKey && key === "m") { event.preventDefault(); addImageAdjustment("curves", "Curves (Кривые)"); }
-      if (!editing && modifier && !event.shiftKey && key === "u") { event.preventDefault(); addImageAdjustment("hueSaturation", "Hue/Saturation (Тон/Насыщенность)"); }
-      if (!editing && modifier && !event.shiftKey && key === "b") { event.preventDefault(); addImageAdjustment("colorBalance", "Color Balance (Цветовой баланс)"); }
-      if (!editing && modifier && !event.shiftKey && key === "i") { event.preventDefault(); addImageAdjustment("invert", "Invert (Инверсия)"); }
       if (event.key === "Escape") { store.setPaletteOpen(false); store.setSettingsOpen(false); store.cancelNewDocument(); }
       if (!modifier && !editing && active) {
         if (key === "d") { event.preventDefault(); if (editingMaskLayerId) store.setMaskForegroundWhite(active.id, false); else store.resetColors(); return; }
@@ -306,10 +309,6 @@ export function App() {
           if (sizeOption?.type === "number") { event.preventDefault(); const current = Number(store.toolOptions[activeTool.id]?.size ?? sizeOption.defaultValue); store.setToolOption(activeTool.id, "size", Math.max(sizeOption.min, Math.min(sizeOption.max, current + (key === "]" ? Math.max(1, Math.round(current * .1)) : -Math.max(1, Math.round(current * .1)))))); return; }
         }
         if (/^[0-9]$/.test(key) && activeTool?.options.some((option) => option.id === "opacity")) { event.preventDefault(); store.setToolOption(activeTool.id, event.shiftKey ? "flow" : "opacity", key === "0" ? 100 : Number(key) * 10); return; }
-        const matching = toolsFor(active.kind).filter((item) => item.shortcut.toLocaleLowerCase() === key);
-        const currentIndex = matching.findIndex((item) => item.id === activeToolId);
-        const tool = event.shiftKey && matching.length > 1 ? matching[(currentIndex + 1 + matching.length) % matching.length] : matching[0];
-        if (tool) { event.preventDefault(); store.setTool(active.id, tool.id); }
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -333,14 +332,7 @@ export function App() {
         ]}/>
         <Menu label="Edit (Правка)" language={store.language} open={openMenu === "edit"} onToggle={() => setOpenMenu(openMenu === "edit" ? null : "edit")} items={[["Undo (Отменить)", "Ctrl+Z", () => void kernel.commands.execute("edit.undo", activeCommandContext())], ["Redo (Повторить)", "Ctrl+Shift+Z", () => void kernel.commands.execute("edit.redo", activeCommandContext())], ["Free Transform (Свободная трансформация)", "Ctrl+T", () => window.dispatchEvent(new Event("vravio-transform-start"))]]}/>
         <Menu label="Image (Изображение)" language={store.language} open={openMenu === "image"} onToggle={() => setOpenMenu(openMenu === "image" ? null : "image")} items={[
-          ["Brightness/Contrast… (Яркость/Контраст…)", "", () => addImageAdjustment("brightnessContrast", "Brightness/Contrast (Яркость/Контраст)"), !active || !isRasterDocumentState(active.state)],
-          ["Levels… (Уровни…)", "Ctrl+Shift+L", () => addImageAdjustment("levels", "Levels (Уровни)"), !active || !isRasterDocumentState(active.state)],
-          ["Curves… (Кривые…)", "Ctrl+M", () => addImageAdjustment("curves", "Curves (Кривые)"), !active || !isRasterDocumentState(active.state)],
-          ["Hue/Saturation… (Тон/Насыщенность…)", "Ctrl+U", () => addImageAdjustment("hueSaturation", "Hue/Saturation (Тон/Насыщенность)"), !active || !isRasterDocumentState(active.state)],
-          ["Color Balance… (Цветовой баланс…)", "Ctrl+B", () => addImageAdjustment("colorBalance", "Color Balance (Цветовой баланс)"), !active || !isRasterDocumentState(active.state)],
-          ["Invert (Инверсия)", "Ctrl+I", () => addImageAdjustment("invert", "Invert (Инверсия)"), !active || !isRasterDocumentState(active.state)],
-          ["Posterize… (Постеризация…)", "", () => addImageAdjustment("posterize", "Posterize (Постеризация)"), !active || !isRasterDocumentState(active.state)],
-          ["Threshold… (Порог…)", "", () => addImageAdjustment("threshold", "Threshold (Порог)"), !active || !isRasterDocumentState(active.state)],
+          { label: "Adjustments (Коррекция)", items: rasterAdjustments.map((definition) => [`${definition.name.en}… (${definition.name.ru}…)`, definition.shortcut ?? "", () => openImageAdjustment(definition), !activeRasterState || activeRasterState.layers.find((layer) => layer.id === activeRasterState.activeLayerId)?.kind !== "pixel"] as MainMenuItem) },
           ["Smart Crop 1:1 (Умное кадрирование 1:1)", "", () => { void smartCrop(1, "1:1"); }, !active || !isRasterDocumentState(active.state)],
           ["Smart Crop 16:9 (Умное кадрирование 16:9)", "", () => { void smartCrop(16 / 9, "16:9"); }, !active || !isRasterDocumentState(active.state)],
           ["Smart Crop 4:5 (Умное кадрирование 4:5)", "", () => { void smartCrop(4 / 5, "4:5"); }, !active || !isRasterDocumentState(active.state)],
@@ -348,9 +340,8 @@ export function App() {
           ["Canvas Size… (Размер холста…)", "Ctrl+Alt+C", () => {}, true],
         ]}/>
         <Menu label="Layer (Слой)" language={store.language} open={openMenu === "layer"} onToggle={() => setOpenMenu(openMenu === "layer" ? null : "layer")} items={[
-          ["New Layer (Новый слой)", "Ctrl+Shift+N", () => void kernel.commands.execute("layer.new", activeCommandContext())],
-          ["Duplicate Layer (Дублировать слой)", "Ctrl+J", duplicateActiveLayer, !active || !isRasterDocumentState(active.state)],
-          ["Delete Layer (Удалить слой)", "", deleteActiveLayer, !active || !isRasterDocumentState(active.state)],
+          ["Duplicate Layer (Дублировать слой)", "Ctrl+J", () => void kernel.commands.execute("layer.duplicate", activeCommandContext()), !active || !isRasterDocumentState(active.state)],
+          ["Delete Layer (Удалить слой)", "", () => void kernel.commands.execute("layer.delete", activeCommandContext()), !active || !isRasterDocumentState(active.state)],
           ["Add Watermark (Добавить водяной знак)", "", () => addWatermark("bottomRight"), !active || !isRasterDocumentState(active.state)],
           ["Layer Style… (Стиль слоя…)", "", () => window.dispatchEvent(new Event("vravio-layer-style-open")), !active || active.kind !== "raster"],
           ["Merge Down (Объединить с нижним)", "Ctrl+E", () => {}, true],
@@ -364,13 +355,11 @@ export function App() {
           ["Convert to Shape (Преобразовать в фигуру)", "", () => {}, true],
           ["Create Work Path (Создать рабочий контур)", "", () => {}, true],
         ]}/>
-        <Menu label="Select (Выделение)" language={store.language} open={openMenu === "select"} onToggle={() => setOpenMenu(openMenu === "select" ? null : "select")} items={[["All (Всё)", "Ctrl+A", () => void kernel.commands.execute("select.all", activeCommandContext())], ["Deselect (Снять выделение)", "Ctrl+D", () => void kernel.commands.execute("select.none", activeCommandContext())], ["Inverse (Инверсия)", "Ctrl+Shift+I", () => void kernel.commands.execute("select.invert", activeCommandContext())]]}/>
         <Menu label="Filter (Фильтр)" language={store.language} open={openMenu === "filter"} onToggle={() => setOpenMenu(openMenu === "filter" ? null : "filter")} items={[["Filter Gallery… (Галерея фильтров…)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Camera Raw Filter… (Фильтр Camera Raw…)", "", () => void openCameraRawReprocess(), !activeRawOrigin], ["Liquify… (Пластика…)", "Ctrl+Shift+X", () => setLiquifyOpen(true), !active || !isRasterDocumentState(active.state)], ["Blur Gallery (Галерея размытия)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Sharpen (Усиление резкости)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Noise (Шум)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Stylize (Стилизация)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"]]}/>
         <Menu label="Plugins (Плагины)" language={store.language} open={openMenu === "plugins"} onToggle={() => setOpenMenu(openMenu === "plugins" ? null : "plugins")} items={[
           ["Manage Plugins… (Управление плагинами…)", "", () => {}, true],
         ]}/>
-        <Menu label="View (Просмотр)" language={store.language} open={openMenu === "view"} onToggle={() => setOpenMenu(openMenu === "view" ? null : "view")} items={[["Fit on Screen (Подогнать по экрану)", "Ctrl+0", () => void kernel.commands.execute("view.fit", activeCommandContext())], ["Actual Pixels (Пиксель в пиксель)", "Ctrl+1", () => void kernel.commands.execute("view.actual", activeCommandContext())], ["Zoom In (Приблизить)", "Ctrl++", () => void kernel.commands.execute("view.zoomIn", activeCommandContext())], ["Zoom Out (Отдалить)", "Ctrl+-", () => void kernel.commands.execute("view.zoomOut", activeCommandContext())], [`${store.preferences.showRulers ? "✓ " : ""}Rulers (Линейки)`, "Ctrl+R", () => store.updatePreferences({ showRulers: !store.preferences.showRulers })], [`${store.preferences.showGuides ? "✓ " : ""}Guides (Направляющие)`, "Ctrl+;", () => store.updatePreferences({ showGuides: !store.preferences.showGuides })], ["Clear Guides (Удалить направляющие)", "", () => window.dispatchEvent(new Event("vravio-guides-clear")), !active || active.kind !== "raster"]]}/>
-        <Menu label="Window (Окно)" language={store.language} open={openMenu === "window"} onToggle={() => setOpenMenu(openMenu === "window" ? null : "window")} items={[["Settings (Настройки)", "", () => store.setSettingsOpen(true)], ["Command Palette (Палитра команд)", "Ctrl+K", () => store.setPaletteOpen(true)]]}/>
+        <Menu label="Window (Окно)" language={store.language} open={openMenu === "window"} onToggle={() => setOpenMenu(openMenu === "window" ? null : "window")} items={[...rasterCorePanels.map((panel) => { const visible = readVisiblePanelIds().has(panel.id); return [`${visible ? "✓ " : ""}${panel.title.en} (${panel.title.ru})`, "", () => requestPanelVisibility(panel.id, !visible)] as MainMenuItem; }), ["Settings (Настройки)", "", () => store.setSettingsOpen(true)], ["Command Palette (Палитра команд)", "Ctrl+K", () => store.setPaletteOpen(true)]]}/>
         <Menu label="Help (Справка)" language={store.language} open={openMenu === "help"} onToggle={() => setOpenMenu(openMenu === "help" ? null : "help")} items={[["Diagnostics log (Журнал диагностики)", "", () => setDiagnosticsOpen(true)], ["About VRAVIO (О VRAVIO)", "", () => window.alert("VRAVIO — local-first creative suite")]]}/>
       </nav>
       <input ref={openImageRef} hidden type="file" accept={`image/png,image/jpeg,image/webp,image/gif,image/avif,image/svg+xml,.svg,${rawFileExtensions.map((extension) => `.${extension}`).join(",")}`} onChange={(event) => { const file = event.target.files?.[0]; if (file) void importImage(file); event.currentTarget.value = ""; }}/>
@@ -440,6 +429,7 @@ export function App() {
       onConfirm={(decoded) => { applyFilter(decoded.pixels, "Camera Raw"); setCameraRawReopen(null); }}
     />}
     {exportOpen && active && isRasterDocumentState(active.state) && <ExportDialog state={active.state} documentName={active.name} language={store.language} onCancel={() => setExportOpen(false)} onExport={async (blob, fileName) => { download(blob, fileName); setExportOpen(false); }}/>}
+    {adjustmentDialog && (() => { const document = kernel.documents.get<RasterDocumentState>(adjustmentDialog.documentId), definition = rasterAdjustmentById.get(adjustmentDialog.definitionId), layer = document?.state.layers.find((item) => item.id === adjustmentDialog.layerId); if (!document || !definition || !layer) return null; return <AdjustmentDialog definition={definition} initialValue={adjustmentDialog.initialValue} language={store.language} histogram={luminanceHistogram(layerDocumentPixels(layer, document.state.width, document.state.height))} onPreview={previewImageAdjustment} onCancel={() => { previewImageAdjustment(null); setAdjustmentDialog(null); }} onApply={applyImageAdjustment}/>; })()}
     {store.newDocumentKind && <NewDocumentDialog key={store.newDocumentKind} />}
   </div>;
 }
@@ -456,8 +446,10 @@ export function physicalShortcutKey(event: KeyboardEvent): string {
 }
 
 type MainMenuItem = readonly [label: string, shortcut: string, action: () => void, disabled?: boolean];
-function Menu({ label, language, open, onToggle, items }: { label: string; language: Language; open: boolean; onToggle(): void; items: readonly MainMenuItem[] }) {
-  return <div className="main-menu"><button className={open ? "active" : ""} onClick={onToggle}>{localized(label, language)}</button>{open && <div className="main-menu-dropdown">{items.map(([itemLabel, shortcut, action, disabled]) => <button key={itemLabel} disabled={disabled} onClick={() => { action(); onToggle(); }}><span>{localized(itemLabel, language)}</span><kbd>{shortcut}</kbd></button>)}</div>}</div>;
+type MainMenuGroup = { label: string; items: readonly MainMenuItem[] };
+const isMainMenuItem = (item: MainMenuItem | MainMenuGroup): item is MainMenuItem => Array.isArray(item);
+function Menu({ label, language, open, onToggle, items }: { label: string; language: Language; open: boolean; onToggle(): void; items: readonly (MainMenuItem | MainMenuGroup)[] }) {
+  return <div className="main-menu"><button className={open ? "active" : ""} onClick={onToggle}>{localized(label, language)}</button>{open && <div className="main-menu-dropdown">{items.map((item) => isMainMenuItem(item) ? <button key={item[0]} disabled={item[3]} onClick={() => { item[2](); onToggle(); }}><span>{localized(item[0], language)}</span><kbd>{item[1]}</kbd></button> : <div className="main-menu-submenu" key={item.label}><button><span>{localized(item.label, language)}</span><kbd>›</kbd></button><div>{item.items.map(([itemLabel, shortcut, action, disabled]) => <button key={itemLabel} disabled={disabled} onClick={() => { action(); onToggle(); }}><span>{localized(itemLabel, language)}</span><kbd>{shortcut}</kbd></button>)}</div></div>)}</div>}</div>;
 }
 
 function ToolGlyph({ tool }: { tool: ToolDefinition }) {

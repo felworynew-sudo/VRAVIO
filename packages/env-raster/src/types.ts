@@ -2,6 +2,8 @@ import type { ColorLookupTable } from "./lut";
 
 export type RasterBlendMode = "normal" | "dissolve" | "darken" | "multiply" | "colorBurn" | "linearBurn" | "darkerColor" | "lighten" | "screen" | "colorDodge" | "linearDodge" | "lighterColor" | "overlay" | "softLight" | "hardLight" | "vividLight" | "linearLight" | "pinLight" | "hardMix" | "difference" | "exclusion" | "subtract" | "divide" | "hue" | "saturation" | "color" | "luminosity";
 export type RasterLayerKind = "pixel" | "text" | "adjustment" | "fill" | "group" | "smart" | "shape" | "3d";
+export type SelectiveColorRange = "reds" | "yellows" | "greens" | "cyans" | "blues" | "magentas" | "whites" | "neutrals" | "blacks";
+export interface SelectiveColorValues { cyan: number; magenta: number; yellow: number; black: number }
 
 export type RasterAdjustment =
   | { kind: "levels"; blackInput: number; gamma: number; whiteInput: number; blackOutput: number; whiteOutput: number }
@@ -9,6 +11,14 @@ export type RasterAdjustment =
   | { kind: "hueSaturation"; hue: number; saturation: number; lightness: number }
   | { kind: "colorBalance"; cyanRed: number; magentaGreen: number; yellowBlue: number }
   | { kind: "brightnessContrast"; brightness: number; contrast: number }
+  | { kind: "exposure"; exposure: number; offset: number; gamma: number }
+  | { kind: "vibrance"; vibrance: number; saturation: number }
+  | { kind: "blackWhite"; reds: number; yellows: number; greens: number; cyans: number; blues: number; magentas: number; tint: boolean; tintColor: string }
+  | { kind: "photoFilter"; color: string; density: number; preserveLuminosity: boolean }
+  | { kind: "channelMixer"; outputChannel: "red" | "green" | "blue"; red: [number, number, number, number]; green: [number, number, number, number]; blue: [number, number, number, number]; monochrome: boolean }
+  | { kind: "gradientMap"; from: string; to: string; dither: boolean; reverse: boolean }
+  | { kind: "selectiveColor"; range: SelectiveColorRange; values: Record<SelectiveColorRange, SelectiveColorValues>; method: "relative" | "absolute" }
+  | { kind: "shadowsHighlights"; shadows: number; highlights: number; colorCorrection: number; midtoneContrast: number; blackClip: number; whiteClip: number }
   | { kind: "invert" }
   | { kind: "posterize"; levels: number }
   | { kind: "threshold"; threshold: number }

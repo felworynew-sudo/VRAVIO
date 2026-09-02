@@ -28,6 +28,14 @@ export function defaultAdjustment(kind: RasterAdjustment["kind"]): RasterAdjustm
   if (kind === "hueSaturation") return { kind, hue: 0, saturation: 0, lightness: 0 };
   if (kind === "colorBalance") return { kind, cyanRed: 0, magentaGreen: 0, yellowBlue: 0 };
   if (kind === "brightnessContrast") return { kind, brightness: 0, contrast: 0 };
+  if (kind === "exposure") return { kind, exposure: 0, offset: 0, gamma: 1 };
+  if (kind === "vibrance") return { kind, vibrance: 0, saturation: 0 };
+  if (kind === "blackWhite") return { kind, reds: 40, yellows: 60, greens: 40, cyans: 60, blues: 20, magentas: 80, tint: false, tintColor: "#b18a65" };
+  if (kind === "photoFilter") return { kind, color: "#f29900", density: 25, preserveLuminosity: true };
+  if (kind === "channelMixer") return { kind, outputChannel: "red", red: [100, 0, 0, 0], green: [0, 100, 0, 0], blue: [0, 0, 100, 0], monochrome: false };
+  if (kind === "gradientMap") return { kind, from: "#000000", to: "#ffffff", dither: false, reverse: false };
+  if (kind === "selectiveColor") { const neutral = () => ({ cyan: 0, magenta: 0, yellow: 0, black: 0 }); return { kind, range: "reds", values: { reds: neutral(), yellows: neutral(), greens: neutral(), cyans: neutral(), blues: neutral(), magentas: neutral(), whites: neutral(), neutrals: neutral(), blacks: neutral() }, method: "relative" }; }
+  if (kind === "shadowsHighlights") return { kind, shadows: 35, highlights: 0, colorCorrection: 20, midtoneContrast: 0, blackClip: .01, whiteClip: .01 };
   if (kind === "posterize") return { kind, levels: 4 };
   if (kind === "threshold") return { kind, threshold: 128 };
   if (kind === "colorLookup") return { kind, lut: builtInLuts[0]!, amount: 1 };

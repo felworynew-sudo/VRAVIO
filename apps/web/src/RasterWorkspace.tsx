@@ -435,6 +435,20 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     for (const tile of repainted) putRegionPixels(canvas, tile.pixels, tile.rect, tile.step);
   }, [document.revision, state, viewport.zoom]);
 
+  // Destructive adjustment dialogs render a transient composite here. The
+  // document, layer pixels and history remain untouched until the dialog's OK
+  // button commits one command; cancelling simply redraws the canonical state.
+  useEffect(() => {
+    const preview = (raw: Event) => {
+      const event = raw as CustomEvent<{ documentId: string; pixels: Uint8ClampedArray | null }>;
+      if (event.detail.documentId !== document.id) return;
+      const canvas = canvasRef.current; if (!canvas) return;
+      putPixels(canvas, event.detail.pixels ?? compositeRasterDocument(state), state.width, state.height);
+    };
+    window.addEventListener("vravio-raster-preview", preview);
+    return () => window.removeEventListener("vravio-raster-preview", preview);
+  }, [document.id, state]);
+
   // Text transforms never touch the document-sized raster during a drag. The base
   // canvas is painted once without the active text layer and a cropped overlay is
   // handed to the compositor/GPU for translation, scaling and rotation.

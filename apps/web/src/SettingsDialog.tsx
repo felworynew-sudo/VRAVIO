@@ -1,6 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { shortcutFromEvent } from "@vravio/kernel";
 import { text } from "./i18n";
 import { useShellStore, type Language, type RendererPreference, type Theme } from "./store";
+import { kernel } from "./kernel";
+import { isShortcutOverridden, rebindCommandShortcut, resetCommandShortcut } from "./shortcuts";
 
 type SettingsPage = "interface" | "performance" | "convenience" | "guides" | "shortcuts";
 
@@ -61,10 +64,7 @@ export function SettingsDialog() {
             <ToggleRow title={text(language, "Smart guides", "Быстрые направляющие")} checked={store.preferences.smartGuides} onChange={(smartGuides) => store.updatePreferences({ smartGuides })} />
             <SettingRow title={text(language, "Guide color", "Цвет направляющих")}><input type="color" value={store.preferences.guideColor} onChange={(event) => store.updatePreferences({ guideColor: event.target.value })} /></SettingRow>
           </>}
-          {page === "shortcuts" && <>
-            <SettingsHeading title={text(language, "Keyboard shortcuts", "Горячие клавиши")} description={text(language, "The keymap registry will make every binding editable without hard-coding tools.", "Реестр клавиш позволит изменять каждое сочетание без жёсткой привязки к инструментам.")} />
-            <div className="shortcut-list">{[["Command palette", "Ctrl K"], ["Undo / Redo", "Ctrl Z / Ctrl Shift Z"], ["Save", "Ctrl S"], ["Close document", "Ctrl W"], ["Select all / Deselect", "Ctrl A / Ctrl Shift A"], ["Invert selection", "Ctrl Shift I"]].map(([label, key]) => <div key={label}><span>{label}</span><kbd>{key}</kbd></div>)}</div>
-          </>}
+          {page === "shortcuts" && <ShortcutsPage language={language} />}
         </div>
       </div>
       <footer>{text(language, "Settings are saved in this browser.", "Настройки сохраняются в этом браузере.")}</footer>
@@ -77,3 +77,64 @@ function SettingRow({ title, description, children }: { title: string; descripti
 function ToggleRow({ title, checked, onChange }: { title: string; checked: boolean; onChange(value: boolean): void }) { return <SettingRow title={title}><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /></SettingRow>; }
 function ColorSetting({ label, value, onChange }: { label: string; value: string; onChange(value: string): void }) { return <label><span>{label}</span><input type="color" value={value} onChange={(event) => onChange(event.target.value)} /></label>; }
 function NumberInput({ value, min, max, suffix, onChange }: { value: number; min: number; max: number; suffix?: string; onChange(value: number): void }) { return <span className="number-setting"><input type="number" value={value} min={min} max={max} onChange={(event) => onChange(Math.max(min, Math.min(max, event.target.valueAsNumber)))} />{suffix}</span>; }
+
+/**
+ * Every registered command, searchable and rebindable, grouped by category in
+ * registration order. `kernel.commands.search` already matches on label/category/id, so
+ * the search box here is exactly that. `kernel.keymap.subscribe` keeps the list live
+ * across rebinds from elsewhere (a menu click, `resetCommandShortcut`, another tab of
+ * this same dialog).
+ */
+function ShortcutsPage({ language }: { language: Language }) {
+  const [query, setQuery] = useState("");
+  const [capturingId, setCapturingId] = useState<string | null>(null);
+  const [, bump] = useState(0);
+
+  useEffect(() => {
+    const subscription = kernel.keymap.subscribe(() => bump((value) => value + 1));
+    return () => subscription.dispose();
+  }, []);
+
+  useEffect(() => {
+    if (!capturingId) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.key === "Escape") { setCapturingId(null); return; }
+      if (["Control", "Meta", "Alt", "Shift"].includes(event.key)) return;
+      rebindCommandShortcut(capturingId, shortcutFromEvent(event));
+      setCapturingId(null);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [capturingId]);
+
+  const commands = kernel.commands.search(query);
+  const categories: string[] = [];
+  for (const command of commands) if (!categories.includes(command.category)) categories.push(command.category);
+
+  return <>
+    <SettingsHeading title={text(language, "Keyboard shortcuts", "Горячие клавиши")} description={text(language, "Every command, searchable and rebindable. Click a shortcut to change it, Escape to cancel.", "Каждая команда, с поиском и переназначением. Нажмите на сочетание, чтобы изменить его, Escape — отмена.")} />
+    <input className="shortcuts-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={text(language, "Search commands…", "Поиск команд…")} />
+    <div className="shortcut-groups">
+      {categories.map((category) => <div className="shortcut-group" key={category}>
+        <h4>{category}</h4>
+        {commands.filter((command) => command.category === category).map((command) => {
+          const binding = kernel.keymap.get(command.id);
+          const overridden = isShortcutOverridden(command.id);
+          const conflicts = binding ? kernel.keymap.conflicts(binding.shortcut, binding.scope).filter((entry) => entry.commandId !== command.id) : [];
+          return <div className="shortcut-row" key={command.id}>
+            <span>{command.label}</span>
+            <div className="shortcut-row-controls">
+              <button className={`shortcut-key${capturingId === command.id ? " capturing" : ""}`} onClick={() => setCapturingId(command.id)}>
+                {capturingId === command.id ? text(language, "Press keys…", "Нажмите клавиши…") : binding ? <kbd>{binding.shortcut}</kbd> : <em>{text(language, "Unassigned", "Не назначено")}</em>}
+              </button>
+              {overridden && <button className="shortcut-reset" title={text(language, "Reset to default", "Сбросить по умолчанию")} onClick={() => resetCommandShortcut(command.id)}>↺</button>}
+            </div>
+            {conflicts.length > 0 && <small className="shortcut-conflict">{text(language, "Also used by", "Также используется в")}: {conflicts.map((entry) => kernel.commands.get(entry.commandId)?.label ?? entry.commandId).join(", ")}</small>}
+          </div>;
+        })}
+      </div>)}
+    </div>
+  </>;
+}
