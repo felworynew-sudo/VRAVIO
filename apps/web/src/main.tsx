@@ -13,7 +13,13 @@ root.textContent = "Restoring session… (Восстановление сесс�
 try {
   const restored = await kernel.sessionReady;
   useShellStore.getState().adoptRestoredDocuments(restored.map((document) => document.id));
-  if (restored.length) diagnostic("info", "autosave.restore", `Restored ${restored.length} document(s)`);
+  await kernel.assetsReady;
+  // A restored child carries its link to its parent as provenance, but the
+  // session around it was never saved. Without this it looks like an ordinary
+  // document: applying fails, and it follows revisions of the asset it exists
+  // to edit.
+  const links = kernel.roundtrip.adoptRestored();
+  if (restored.length) diagnostic("info", "autosave.restore", `Restored ${restored.length} document(s)${links.length ? `, ${links.length} linked` : ""}`);
 } catch (error) {
   diagnostic("error", "autosave.restore", error instanceof Error ? error.message : String(error), error);
 }

@@ -64,6 +64,7 @@ describe("raster round-trip", () => {
   let assets: AssetStore;
   let environment: RasterEnvironment;
   let roundtrip: RoundTripManager;
+  let registry: EnvironmentRegistry;
   let histories: Map<string, HistoryManager>;
 
   beforeEach(async () => {
@@ -71,10 +72,10 @@ describe("raster round-trip", () => {
     assets = new AssetStore(new MemoryStorageAdapter());
     await assets.initialize();
     environment = new RasterEnvironment({ documents, assets });
-    const environments = new EnvironmentRegistry();
-    environments.register(environment);
+    registry = new EnvironmentRegistry();
+    registry.register(environment);
     histories = new Map();
-    roundtrip = new RoundTripManager({ documents, assets, environments, historyFor: (id) => histories.get(id) });
+    roundtrip = new RoundTripManager({ documents, assets, environments: registry, historyFor: (id) => histories.get(id) });
   });
 
   /** A parent with two layers, the top one red. */
@@ -179,6 +180,97 @@ describe("raster round-trip", () => {
     await histories.get(parent.id)!.redo();
     await environment.whenSettled();
     expect(firstPixel(topLayer(documents.get<RasterDocumentState>(parent.id)!).pixels)).toEqual([0, 0, 255, 255]);
+  });
+
+  it("leaves the open child alone when the parent undoes", async () => {
+    const parent = await parentDocument();
+    const session = await roundtrip.open({ parentDocId: parent.id, target: { kind: "raster-layer", layerId: topLayer(parent).id }, targetEnv: "raster" });
+    documents.update<RasterDocumentState>(session.childDocId, (state) => { state.layers[0]!.pixels = solid(0, 0, 255); });
+    await roundtrip.apply(session.childDocId);
+    await environment.whenSettled();
+
+    await histories.get(parent.id)!.undo();
+    await environment.whenSettled();
+
+    // An undo in the composition says something about the composition. It is
+    // not an instruction to throw away the work still open in another tab, and
+    // the user did not press undo there.
+    expect(firstPixel(topLayer(documents.get<RasterDocumentState>(parent.id)!).pixels)).toEqual([255, 0, 0, 255]);
+    expect(firstPixel(documents.get<RasterDocumentState>(session.childDocId)!.state.layers[0]!.pixels)).toEqual([0, 0, 255, 255]);
+  });
+
+  it("says when the parent no longer shows what the child sent", async () => {
+    const parent = await parentDocument();
+    const session = await roundtrip.open({ parentDocId: parent.id, target: { kind: "raster-layer", layerId: topLayer(parent).id }, targetEnv: "raster" });
+
+    // Nothing sent yet: there is nothing to be out of step with.
+    expect(roundtrip.isOutOfSync(session.childDocId)).toBe(false);
+
+    documents.update<RasterDocumentState>(session.childDocId, (state) => { state.layers[0]!.pixels = solid(0, 0, 255); });
+    await roundtrip.apply(session.childDocId);
+    await environment.whenSettled();
+    expect(roundtrip.isOutOfSync(session.childDocId)).toBe(false);
+
+    await histories.get(parent.id)!.undo();
+    await environment.whenSettled();
+    // The two tabs now disagree, and this is what the shell has to say so.
+    expect(roundtrip.isOutOfSync(session.childDocId)).toBe(true);
+
+    await histories.get(parent.id)!.redo();
+    await environment.whenSettled();
+    expect(roundtrip.isOutOfSync(session.childDocId)).toBe(false);
+  });
+
+  it("sends the child's work up again after the parent undid it", async () => {
+    const parent = await parentDocument();
+    const session = await roundtrip.open({ parentDocId: parent.id, target: { kind: "raster-layer", layerId: topLayer(parent).id }, targetEnv: "raster" });
+    documents.update<RasterDocumentState>(session.childDocId, (state) => { state.layers[0]!.pixels = solid(0, 0, 255); });
+    await roundtrip.apply(session.childDocId);
+    await histories.get(parent.id)!.undo();
+    await environment.whenSettled();
+
+    // Applying again is how the user resolves the disagreement, so it has to
+    // work from the state the child still holds.
+    await roundtrip.apply(session.childDocId);
+    await environment.whenSettled();
+
+    expect(firstPixel(topLayer(documents.get<RasterDocumentState>(parent.id)!).pixels)).toEqual([0, 0, 255, 255]);
+    expect(roundtrip.isOutOfSync(session.childDocId)).toBe(false);
+  });
+
+  it("rebuilds a link that a reload left as provenance alone", async () => {
+    const parent = await parentDocument();
+    const session = await roundtrip.open({ parentDocId: parent.id, target: { kind: "raster-layer", layerId: topLayer(parent).id }, targetEnv: "raster" });
+    const childId = session.childDocId;
+
+    // A reload: the documents come back from the snapshot store with their
+    // provenance, and the manager comes back empty.
+    const reloaded = new RoundTripManager({ documents, assets, environments: registry, historyFor: (id) => histories.get(id) });
+    expect(reloaded.sessionOf(childId)).toBeUndefined();
+
+    const rebuilt = reloaded.adoptRestored();
+
+    expect(rebuilt).toHaveLength(1);
+    expect(reloaded.sessionOf(childId)?.assetId).toBe(session.assetId);
+
+    // And the link works again: applying reaches the parent, and the parent's
+    // undo still leaves the child alone.
+    documents.update<RasterDocumentState>(childId, (state) => { state.layers[0]!.pixels = solid(0, 0, 255); });
+    await reloaded.apply(childId);
+    await environment.whenSettled();
+    expect(firstPixel(topLayer(documents.get<RasterDocumentState>(parent.id)!).pixels)).toEqual([0, 0, 255, 255]);
+
+    await histories.get(parent.id)!.undo();
+    await environment.whenSettled();
+    expect(firstPixel(documents.get<RasterDocumentState>(childId)!.state.layers[0]!.pixels)).toEqual([0, 0, 255, 255]);
+  });
+
+  it("does not rebuild a link twice", async () => {
+    const parent = await parentDocument();
+    await roundtrip.open({ parentDocId: parent.id, target: { kind: "raster-layer", layerId: topLayer(parent).id }, targetEnv: "raster" });
+
+    expect(roundtrip.adoptRestored()).toHaveLength(0);
+    expect(roundtrip.sessions).toHaveLength(1);
   });
 
   it("leaves the original asset untouched when branching", async () => {

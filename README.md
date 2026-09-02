@@ -40,7 +40,16 @@ Decisions taken where the specification left room, and the questions still open:
   caller that needs to look at the result.
 - **A round-trip that comes back a different size is placed, not stretched.**
   Scaling would be a silent edit nobody asked for.
-- **Open question: undoing in the parent currently moves the child too**, since
-  both hold the same asset reference and the head moves for both. Photoshop
-  leaves an open smart-object editor alone. Which is right here is a product
-  decision that has not been made.
+- **A document editing an asset is never moved by revisions of it.** That
+  covers its own applies, and it covers the parent undoing afterwards: an undo
+  in the composition is a statement about the composition, not an instruction
+  to discard work still open in another tab — the same choice Photoshop makes
+  for an open smart object. The two tabs can then show different pictures, so
+  `RoundTripManager.isOutOfSync` says when the parent no longer shows what the
+  child sent, and the child's tab marks it. Applying again resolves it.
+- **Links are rebuilt on restore.** A child's link is persisted as its
+  provenance; the session around it is not. `adoptRestored` puts the sessions
+  back, without which a restored child could not apply and would start
+  following the asset it exists to edit. What it cannot recover is the revision
+  the child last sent, so a rebuilt link reports itself in step until the next
+  apply rather than claiming a disagreement it cannot know about.

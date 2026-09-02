@@ -27,6 +27,8 @@ export interface RoundTripSession {
   readonly baseRev: number;
   readonly handles: number;
   readonly handleOffset: number;
+  /** The revision this child last sent up, or null before it has sent one. */
+  appliedRev: number | null;
   status: "open" | "applied" | "detached";
 }
 
@@ -66,8 +68,6 @@ export class RoundTripManager {
   readonly #environments: EnvironmentRegistry;
   readonly #historyFor: (documentId: string) => HistoryManager | undefined;
   readonly #subscription: Disposable;
-  /** Suppressed while a document writes its own revision; see #notifyHolders. */
-  #applying: string | null = null;
 
   constructor(options: RoundTripManagerOptions) {
     this.#documents = options.documents;
@@ -127,6 +127,7 @@ export class RoundTripManager {
       baseRev: this.#assets.mustGet(extracted.assetId).head,
       handles: request.handles ?? 0,
       handleOffset: extracted.handleOffset,
+      appliedRev: null,
       status: "open",
     };
     this.#sessions.set(session.id, session);
@@ -163,21 +164,51 @@ export class RoundTripManager {
     }
 
     const previousRev = this.#assets.mustGet(session.assetId).head;
-    // The child is what produced these bytes; it must not be told to reload
-    // them, which would discard whatever it holds beyond the exported form.
-    this.#applying = childDocId;
-    let rev: number;
-    try {
-      rev = await this.#assets.commitRevision(session.assetId, bytes, `${child.kind}-env`, note);
-    } finally {
-      this.#applying = null;
-    }
+    const rev = await this.#assets.commitRevision(session.assetId, bytes, `${child.kind}-env`, note);
+    session.appliedRev = rev;
 
     await this.#recordInParentHistory(session, previousRev, rev, note);
 
     session.status = "applied";
     child.dirty = false;
     this.#events.emit("applied", { parentDocId: session.parentDocId, childDocId, assetId: session.assetId, rev });
+  }
+
+  /**
+   * Rebuilds sessions for documents restored from a saved session.
+   *
+   * A child's link to its parent is persisted as its provenance, but the
+   * session around it is not. Without rebuilding, a restored child looks
+   * ordinary: applying it fails, and it starts following revisions of the very
+   * asset it is there to edit, so the parent's undo would reach into it.
+   *
+   * What cannot be recovered is what the child last sent up — nothing recorded
+   * it — so a rebuilt session reports itself in step until the next apply
+   * rather than claiming a disagreement it cannot know about.
+   */
+  adoptRestored(): readonly RoundTripSession[] {
+    const rebuilt: RoundTripSession[] = [];
+    for (const document of this.#documents.list() as readonly VravioDocument[]) {
+      const provenance = document.provenance;
+      if (!provenance || this.sessionOf(document.id)) continue;
+      const record = this.#assets.get(provenance.sourceAssetId);
+      if (!record) continue;
+      const session: RoundTripSession = {
+        id: crypto.randomUUID(),
+        parentDocId: provenance.parentDocId,
+        childDocId: document.id,
+        target: provenance.parentTarget,
+        assetId: provenance.sourceAssetId,
+        baseRev: record.head,
+        handles: 0,
+        handleOffset: 0,
+        appliedRev: null,
+        status: "open",
+      };
+      this.#sessions.set(session.id, session);
+      rebuilt.push(session);
+    }
+    return rebuilt;
   }
 
   /** Cut a child loose; it keeps its content and stops writing back. */
@@ -211,10 +242,42 @@ export class RoundTripManager {
     });
   }
 
+  /**
+   * Whether what the parent is showing is still what this child sent up.
+   *
+   * False once the parent has undone the applied step, or revised the asset by
+   * some other route. The child is deliberately left alone in that case, so
+   * this is what the shell has to show a tab with: without it the two tabs
+   * disagree and nothing on screen says why.
+   */
+  isOutOfSync(childDocId: string): boolean {
+    const session = this.sessionOf(childDocId);
+    if (!session || session.appliedRev === null) return false;
+    return this.#assets.get(session.assetId)?.head !== session.appliedRev;
+  }
+
   #notifyHolders(assetId: AssetId, rev: number, note: string | undefined): void {
     for (const document of this.#documents.list() as readonly VravioDocument[]) {
-      if (document.id === this.#applying || !document.assetRefs.has(assetId)) continue;
+      if (!document.assetRefs.has(assetId) || this.#editsAsset(document.id, assetId)) continue;
       this.#environments.find(document.kind)?.onAssetRevised(document, assetId, rev, note);
     }
+  }
+
+  /**
+   * Whether this document is the one editing that asset rather than showing it.
+   *
+   * An editor is never dragged by revisions of what it is editing. That covers
+   * its own applies — reloading its export would discard everything the flatten
+   * left behind — and it covers the parent undoing afterwards: an undo in the
+   * composition is a statement about the composition, not an instruction to
+   * throw away the work still open in another tab. Detached sessions count too;
+   * a document that was the editor does not become a follower by being cut
+   * loose.
+   */
+  #editsAsset(documentId: string, assetId: AssetId): boolean {
+    for (const session of this.#sessions.values()) {
+      if (session.childDocId === documentId && session.assetId === assetId) return true;
+    }
+    return false;
   }
 }

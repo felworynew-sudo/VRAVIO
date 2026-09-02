@@ -361,9 +361,13 @@ export function App() {
     </header>
 
     {documents.length > 1 && <div className="document-tabs" role="tablist" aria-label="Documents (Документы)">
-      {documents.map((document) => <div className="tab-wrap" key={document.id} data-kind={document.kind}>
+      {documents.map((document) => <div className="tab-wrap" key={document.id} data-kind={document.kind} data-linked={document.provenance ? "" : undefined}>
         <button role="tab" aria-selected={document.id === store.activeDocumentId} onClick={() => store.activateDocument(document.id)}>
           <EnvironmentIcon kind={document.kind} className="tab-environment-icon" />{localized(document.name, store.language)}{document.dirty && <i>●</i>}
+          {/* A tab opened out of another keeps its own result when the parent
+              undoes, so the two can end up showing different pictures. Nothing
+              else on screen would say why. */}
+          {kernel.roundtrip.isOutOfSync(document.id) && <b className="tab-out-of-sync" title={store.language === "ru" ? "Исходный документ показывает не то, что вы применили. Примените ещё раз, чтобы отдать текущую версию." : "The parent document is not showing what you applied. Apply again to send the current version."}>↑</b>}
         </button>
         <button className="tab-close" aria-label={`Close ${document.name}`} onClick={() => store.closeDocument(document.id)}>×</button>
       </div>)}
