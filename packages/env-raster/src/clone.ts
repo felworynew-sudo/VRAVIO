@@ -91,10 +91,14 @@ export function cloneStrokeSegment(
   angleDegrees = 0,
   pressureSize = true,
   pressureOpacity = false,
-  sourcePixels: Uint8ClampedArray = pixels
+  sourcePixels: Uint8ClampedArray = pixels,
+  /** Gap between dabs as a fraction of the tip, the same units the brush uses. */
+  spacing = 0.18
 ): void {
   const distance = Math.hypot(to.x - from.x, to.y - from.y);
-  const steps = Math.max(1, Math.ceil(distance / Math.max(1, size * 0.18)));
+  // The spacing option was declared and shown in the options bar but never
+  // reached here: the gap was a constant, so the control did nothing.
+  const steps = Math.max(1, Math.ceil(distance / Math.max(1, size * Math.max(0.01, spacing))));
   for (let step = 0; step <= steps; step += 1) {
     const t = step / steps;
     const currentX = from.x + (to.x - from.x) * t;

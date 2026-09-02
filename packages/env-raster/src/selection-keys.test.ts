@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createRectangleSelection, featherSelection, marqueeCorners, marqueeRect, selectionBounds } from "./index";
+import { confineToSelection, createRectangleSelection, featherSelection, marqueeCorners, marqueeRect, selectionBounds } from "./index";
 
 describe("marquee modifiers", () => {
   it("follows the pointer when nothing is held", () => {
@@ -82,5 +82,71 @@ describe("feathering a selection", () => {
 
   it("passes nothing through as nothing", () => {
     expect(featherSelection(null, W, H, 4)).toBeNull();
+  });
+});
+
+describe("a selection confines every edit", () => {
+  const W = 8, H = 8;
+  const flat = (value: number) => {
+    const pixels = new Uint8ClampedArray(W * H * 4);
+    for (let index = 0; index < pixels.length; index += 4) {
+      pixels[index] = value; pixels[index + 1] = value; pixels[index + 2] = value; pixels[index + 3] = 255;
+    }
+    return pixels;
+  };
+  const at = (pixels: Uint8ClampedArray, x: number, y: number) => pixels[(y * W + x) * 4]!;
+
+  it("puts back everything the edit touched outside the selection", () => {
+    const before = flat(10), after = flat(200);
+    const mask = new Uint8ClampedArray(W * H);
+    for (let y = 2; y < 6; y += 1) for (let x = 2; x < 6; x += 1) mask[y * W + x] = 255;
+
+    const result = confineToSelection(before, after, mask);
+
+    // This is the guarantee the tools rely on: an edit that reached here having
+    // painted the whole layer comes out having painted only the selection.
+    expect(at(result, 3, 3)).toBe(200);
+    expect(at(result, 0, 0)).toBe(10);
+    expect(at(result, 7, 7)).toBe(10);
+  });
+
+  it("fades the edit across a partially covered edge", () => {
+    const before = flat(0), after = flat(255);
+    const mask = new Uint8ClampedArray(W * H).fill(128);
+
+    const result = confineToSelection(before, after, mask);
+
+    // Cutting instead of blending would make feathering pointless.
+    expect(at(result, 4, 4)).toBe(128);
+  });
+
+  it("leaves a fully covered edit alone", () => {
+    const before = flat(0), after = flat(77);
+    const result = confineToSelection(before, after, new Uint8ClampedArray(W * H).fill(255));
+
+    expect([...result]).toEqual([...after]);
+  });
+
+  it("returns a new buffer rather than editing either side", () => {
+    const before = flat(10), after = flat(20);
+    const mask = new Uint8ClampedArray(W * H).fill(255);
+
+    const result = confineToSelection(before, after, mask);
+    result[0] = 99;
+
+    expect(after[0]).toBe(20);
+    expect(before[0]).toBe(10);
+  });
+
+  it("keeps alpha inside the rule too", () => {
+    const before = flat(10), after = new Uint8ClampedArray(W * H * 4);
+    const mask = new Uint8ClampedArray(W * H);
+    mask[0] = 255;
+
+    const result = confineToSelection(before, after, mask);
+
+    // An eraser outside the selection must not clear anything.
+    expect(result[3]).toBe(0);
+    expect(result[(1 * W + 1) * 4 + 3]).toBe(255);
   });
 });

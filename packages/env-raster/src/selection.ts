@@ -270,3 +270,40 @@ export function paintMask(
   }
   return mask;
 }
+
+/**
+ * Keeps an edit inside the selection.
+ *
+ * A selection is a statement about where work may happen, and it has to hold
+ * for every tool — the brush, the stamp, the smudge, the healing brush, and
+ * every filter added later. Enforcing that inside each tool means enforcing it
+ * again in each new one, and the first one that forgets is a bug nobody sees
+ * until pixels move where they should not have. So it is enforced once, at the
+ * point every pixel edit passes through.
+ *
+ * Partial coverage blends rather than cutting: a feathered selection has to
+ * fade the edit out across its edge, which is the whole reason for feathering.
+ */
+export function confineToSelection(
+  before: Uint8ClampedArray,
+  after: Uint8ClampedArray,
+  mask: Uint8ClampedArray,
+): Uint8ClampedArray {
+  const result = after.slice();
+  for (let index = 0; index < mask.length; index += 1) {
+    const coverage = mask[index]!;
+    if (coverage === 255) continue;
+    const at = index * 4;
+    if (coverage === 0) {
+      result[at] = before[at]!; result[at + 1] = before[at + 1]!;
+      result[at + 2] = before[at + 2]!; result[at + 3] = before[at + 3]!;
+      continue;
+    }
+    const weight = coverage / 255, rest = 1 - weight;
+    result[at] = Math.round(after[at]! * weight + before[at]! * rest);
+    result[at + 1] = Math.round(after[at + 1]! * weight + before[at + 1]! * rest);
+    result[at + 2] = Math.round(after[at + 2]! * weight + before[at + 2]! * rest);
+    result[at + 3] = Math.round(after[at + 3]! * weight + before[at + 3]! * rest);
+  }
+  return result;
+}

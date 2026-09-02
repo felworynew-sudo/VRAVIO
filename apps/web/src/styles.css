@@ -237,11 +237,21 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .clone-source-overlay .cursor-dark { stroke:#000; stroke-width:3px; vector-effect:non-scaling-stroke; }
 .clone-source-overlay .cursor-light { stroke:#fff; stroke-width:1px; vector-effect:non-scaling-stroke; }
 
-/* Clipped to a circle so the sample reads as the brush tip, not a swatch. */
+/* Sits inside the brush ring, on the same centre, and slightly through — it is
+   a promise of what the stroke will lay down, not the thing itself, and it must
+   not hide what is underneath while you aim. The tip's own softness is baked
+   into the pixels, so no border is drawn around it: an edge here would be a
+   hard edge the stroke is not going to produce. */
 .clone-source-preview {
   position:absolute; left:0; top:0; pointer-events:none; z-index:5;
-  border-radius:50%; box-shadow:0 0 0 1px rgb(255 255 255 / .55), 0 0 0 2px rgb(0 0 0 / .55);
+  transform:translate(-50%, -50%);
+  border-radius:50%; opacity:.72;
   image-rendering:pixelated; transition:opacity .12s linear;
+}
+/* The ring showing the source footprint scales with the document; the crosshair
+   inside it does not. */
+.clone-source-overlay .clone-source-ring {
+  stroke:#fff; stroke-width:1px; vector-effect:non-scaling-stroke; opacity:.75;
 }
 
 /* Patch: the outline of where the repair is being read from. */

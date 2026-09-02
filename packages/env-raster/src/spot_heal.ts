@@ -411,3 +411,36 @@ export function spotHealApply(
     opacity
   );
 }
+
+/**
+ * Copies the healed pixels back into a layer, and only those.
+ *
+ * Sampling all layers means the repair is computed on the composite, but the
+ * result belongs to one layer: writing the composite back would flatten
+ * everything under it into the layer being edited. Only what the mask covers
+ * crosses over.
+ */
+export function copyHealedRegion(
+  target: Uint8ClampedArray,
+  healed: Uint8ClampedArray,
+  mask: Uint8ClampedArray,
+  originX: number,
+  originY: number,
+  maskWidth: number,
+  maskHeight: number,
+  canvasWidth: number,
+  canvasHeight: number,
+): void {
+  for (let y = 0; y < maskHeight; y += 1) {
+    const canvasY = originY + y;
+    if (canvasY < 0 || canvasY >= canvasHeight) continue;
+    for (let x = 0; x < maskWidth; x += 1) {
+      if (mask[y * maskWidth + x] === 0) continue;
+      const canvasX = originX + x;
+      if (canvasX < 0 || canvasX >= canvasWidth) continue;
+      const at = (canvasY * canvasWidth + canvasX) * 4;
+      target[at] = healed[at]!; target[at + 1] = healed[at + 1]!;
+      target[at + 2] = healed[at + 2]!; target[at + 3] = healed[at + 3]!;
+    }
+  }
+}

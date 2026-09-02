@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
-  activeRasterLayer, appendLayer, clampRegionToDocument, layerAccepts, layerLockReason, layerOpaqueBounds, paintMask, marqueeCorners, marqueeRect, pickLayerAt, combineSelections, compositeRasterDocument, compositeRasterRegion, createContiguousColorSelection, drawShape, DirtyRegion, RasterTileCache, type ShapeKind, createEllipseSelection, createPolygonSelection, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
-  isRasterDocumentState, parseHexColor, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectionOutlinePath, toHexColor,
+  activeRasterLayer, appendLayer, clampRegionToDocument, copyHealedRegion, layerAccepts, layerLockReason, layerOpaqueBounds, paintMask, marqueeCorners, marqueeRect, pickLayerAt, combineSelections, compositeRasterDocument, compositeRasterRegion, createContiguousColorSelection, drawShape, DirtyRegion, RasterTileCache, type ShapeKind, createEllipseSelection, createPolygonSelection, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
+  confineToSelection, isRasterDocumentState, parseHexColor, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectionOutlinePath, toHexColor,
   translateLayerPixels, translateSelection, type PixelSelection, type Point, type RasterDocumentState, type RasterGuide, type RasterLayer, type RasterRect, type RasterTextData, type SelectionCombineMode,
   cloneDab, cloneStrokeSegment,
   blurDab, blurStrokeSegment, smudgeStrokeSegment,
@@ -587,7 +587,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     const options = toolOptions[activeToolId ?? ""] ?? {};
     const opacity = Number(options.opacity ?? 100) / 100 * Number(options.flow ?? 100) / 100;
     if (activeToolId === "raster.clone") {
-      cloneStrokeSegment(current.working, state.width, state.height, current.curveStart, current.pending, current.sourceOffsetX ?? 0, current.sourceOffsetY ?? 0, Number(options.size ?? 24), opacity, brushMask, Number(options.hardness ?? 82) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), true, false, current.sourcePixels);
+      cloneStrokeSegment(current.working, state.width, state.height, current.curveStart, current.pending, current.sourceOffsetX ?? 0, current.sourceOffsetY ?? 0, Number(options.size ?? 24), opacity, brushMask, Number(options.hardness ?? 82) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), true, false, current.sourcePixels, Number(options.spacing ?? 12) / 100);
     } else if (activeToolId === "raster.blur") {
       blurStrokeSegment(current.working, current.sourcePixels ?? current.before, state.width, state.height, current.curveStart, point, Number(options.size ?? 24), Number(options.strength ?? 50) / 100, brushMask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
     } else if (activeToolId === "raster.smudge") {
@@ -633,8 +633,14 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       kernel.documents.update<RasterDocumentState>(document.id, (current) => { const layer = current.layers.find((item) => item.id === layerId); if (!layer) return; if (target === "mask" && layer.mask) layer.mask.pixels = rgbaToMask(buffer); else layer.pixels = buffer.slice(); });
     };
 
+    // A selection confines every tool, without exception. Each tool honours it
+    // while painting, but this is the guarantee: an edit that reached here
+    // having touched pixels outside the selection has them put back, so a tool
+    // added later cannot quietly escape it.
+    const confined = target === "pixels" && state.selection ? confineToSelection(before, after, state.selection.mask) : after;
+
     // Show the result now; the gesture is over and the user is looking at it.
-    assign(after);
+    assign(confined);
 
     // Queue the bookkeeping. Two commits must not interleave: each reads the
     // asset head to name the revision it undoes to, and a head read between
@@ -647,7 +653,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         if (!assetId) {
           // No asset store available: fall back to buffer snapshots so the edit
           // is still reversible, just at the old memory cost.
-          await history.record({ label, memoryEstimate: before.byteLength + after.byteLength, redo: () => assign(after), undo: () => assign(before) });
+          await history.record({ label, memoryEstimate: before.byteLength + confined.byteLength, redo: () => assign(confined), undo: () => assign(before) });
           return;
         }
         const previousRev = kernel.assets.mustGet(assetId).head;
@@ -929,7 +935,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       if (!cloneOffsetRef.current || alignMode === "none") cloneOffsetRef.current = { x: sourcePointRef.current.x - point.x, y: sourcePointRef.current.y - point.y };
       const sourceOffsetX = cloneOffsetRef.current.x, sourceOffsetY = cloneOffsetRef.current.y;
       if (shiftFrom) {
-        cloneStrokeSegment(working, state.width, state.height, shiftFrom, point, sourceOffsetX, sourceOffsetY, Number(options.size ?? 24), opacity, brushMask, Number(options.hardness ?? 82) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), true, false, before);
+        cloneStrokeSegment(working, state.width, state.height, shiftFrom, point, sourceOffsetX, sourceOffsetY, Number(options.size ?? 24), opacity, brushMask, Number(options.hardness ?? 82) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), true, false, before, Number(options.spacing ?? 12) / 100);
         lastBrushPointRef.current = { toolId: activeToolId, layerId: layer.id, point }; renderWorking(working); void commitPixels(before, working, "Clone Line (Линия штампа)"); return;
       }
       cloneDab(working, state.width, state.height, point.x + sourceOffsetX, point.y + sourceOffsetY, point.x, point.y, Number(options.size ?? 24), opacity, Number(options.hardness ?? 82) / 100, brushMask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), true, false, before);
@@ -939,6 +945,9 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     }
     if (activeToolId === "raster.spotHeal") {
       if (maskTarget) return;
+      // Sampling all layers reads the picture as it looks, not as this one layer
+      // holds it — which is the whole point when the blemish is on a layer above.
+      const healSource = (toolOptions[activeToolId]?.sampleAllLayers === true) ? compositeRasterDocument(state) : null;
       canvas.setPointerCapture(event.pointerId);
       const before = layer.pixels.slice();
       const options = toolOptions[activeToolId] ?? {};
@@ -955,7 +964,14 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       if (shiftFrom) {
         const lineOriginX = Math.max(0, Math.floor(Math.min(shiftFrom.x, point.x)) - radius), lineOriginY = Math.max(0, Math.floor(Math.min(shiftFrom.y, point.y)) - radius), lineRight = Math.min(state.width, Math.ceil(Math.max(shiftFrom.x, point.x)) + radius), lineBottom = Math.min(state.height, Math.ceil(Math.max(shiftFrom.y, point.y)) + radius), lineWidth = lineRight - lineOriginX, lineHeight = lineBottom - lineOriginY, lineMask = new Uint8ClampedArray(lineWidth * lineHeight);
         spotHealStrokeSegment(lineMask, lineOriginX, lineOriginY, lineWidth, lineHeight, shiftFrom.x, shiftFrom.y, point.x, point.y, size, Number(options.hardness ?? 82) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
-        const working = before.slice(); spotHealApply(working, state.width, state.height, lineMask, lineOriginX, lineOriginY, lineWidth, lineHeight, Number(options.opacity ?? 100) / 100);
+        const working = before.slice();
+        if (healSource) {
+          // Computed on the composite, written back only where the mask covers:
+          // the repair belongs to this layer, the rest of the picture does not.
+          const healed = healSource.slice();
+          spotHealApply(healed, state.width, state.height, lineMask, lineOriginX, lineOriginY, lineWidth, lineHeight, Number(options.opacity ?? 100) / 100);
+          copyHealedRegion(working, healed, lineMask, lineOriginX, lineOriginY, lineWidth, lineHeight, state.width, state.height);
+        } else spotHealApply(working, state.width, state.height, lineMask, lineOriginX, lineOriginY, lineWidth, lineHeight, Number(options.opacity ?? 100) / 100);
         lastBrushPointRef.current = { toolId: activeToolId, layerId: layer.id, point }; renderWorking(working); void commitPixels(before, working, "Spot Healing Line (Линия восстановления)"); return;
       }
       spotHealDab(mask, originX, originY, maskW, maskH, point.x, point.y, size, Number(options.hardness ?? 82) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
@@ -1335,7 +1351,11 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     if (activeToolId === "raster.spotHeal" && spotHealMaskRef.current) {
       const maskData = spotHealMaskRef.current;
       const working = maskData.before.slice();
-      spotHealApply(working, state.width, state.height, maskData.mask, maskData.originX, maskData.originY, maskData.width, maskData.height, Number(options.opacity ?? 100) / 100);
+      if (toolOptions[activeToolId]?.sampleAllLayers === true) {
+        const healed = compositeRasterDocument(state);
+        spotHealApply(healed, state.width, state.height, maskData.mask, maskData.originX, maskData.originY, maskData.width, maskData.height, Number(options.opacity ?? 100) / 100);
+        copyHealedRegion(working, healed, maskData.mask, maskData.originX, maskData.originY, maskData.width, maskData.height, state.width, state.height);
+      } else spotHealApply(working, state.width, state.height, maskData.mask, maskData.originX, maskData.originY, maskData.width, maskData.height, Number(options.opacity ?? 100) / 100);
       spotHealMaskRef.current = null;
       if (current.frame !== null) cancelAnimationFrame(current.frame);
       gesture.current = null;
@@ -1345,7 +1365,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     }
     appendBrushPoint(current, pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent));
     if (activeToolId === "raster.clone") {
-      cloneStrokeSegment(current.working, state.width, state.height, current.curveStart, current.pending, current.sourceOffsetX ?? 0, current.sourceOffsetY ?? 0, Number(options.size ?? 24), opacity, brushMask, Number(options.hardness ?? 82) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), true, false, current.sourcePixels);
+      cloneStrokeSegment(current.working, state.width, state.height, current.curveStart, current.pending, current.sourceOffsetX ?? 0, current.sourceOffsetY ?? 0, Number(options.size ?? 24), opacity, brushMask, Number(options.hardness ?? 82) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), true, false, current.sourcePixels, Number(options.spacing ?? 12) / 100);
     } else if (activeToolId === "raster.patch") {
       const patchOffsetX = current.pending.x - current.curveStart.x;
       const patchOffsetY = current.pending.y - current.curveStart.y;
@@ -1428,7 +1448,10 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   };
   const draftKind = selectionGesture.current?.kind;
   const displayedSelection = marqueePreview ?? transformPreview?.selection ?? state.selection;
-  const transformBounds = transformPreview ? (transformPreview.text?.targetBounds ?? displayedSelection?.bounds ?? alphaBounds(transformPreview.pixels, state.width, state.height)) : null;
+  // The Move tool's "Transform controls" checkbox: with it off there is no frame
+  // and no handles, which is how Photoshop lets you drag without the furniture.
+  const showTransformControls = toolOptions["raster.move"]?.showTransform !== false;
+  const transformBounds = transformPreview && showTransformControls ? (transformPreview.text?.targetBounds ?? displayedSelection?.bounds ?? alphaBounds(transformPreview.pixels, state.width, state.height)) : null;
   // Cmd/Ctrl+H hides the marching ants without dropping the selection, so an
   // edge can be judged without the animation crawling over it.
   const committedSelectionPath = displayedSelection && !selectionEdgesHidden ? selectionOutlinePath(displayedSelection.mask, state.width, state.height) : "";
@@ -1486,6 +1509,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       image.data[to + 2] = gesture.source[from + 2]!; image.data[to + 3] = gesture.source[from + 3]!;
     }
     context.putImageData(image, 0, 0);
+
   };
 
   const updateBrushCursor = (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -1498,7 +1522,10 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       const preview = cloneSourceCanvasRef.current, workspace = workspaceRef.current;
       if (preview && workspace) {
         const rect = workspace.getBoundingClientRect();
-        preview.style.transform = `translate(${event.clientX - rect.left}px, ${event.clientY - rect.top}px) translate(-50%, -50%)`;
+        // Anchored on the pointer itself, so it sits inside the brush ring
+        // rather than beside it. The ring is drawn on the same centre.
+        preview.style.left = `${event.clientX - rect.left}px`;
+        preview.style.top = `${event.clientY - rect.top}px`;
       }
     }
   };
@@ -1538,6 +1565,19 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       image.data[to + 2] = layer.pixels[from + 2]!; image.data[to + 3] = layer.pixels[from + 3]!;
     }
     context.putImageData(image, 0, 0);
+
+    // The tip's own falloff, applied to the preview. A soft stamp does not lay
+    // down a disc with a hard edge, and a preview that shows one promises an
+    // edge the stroke will not produce.
+    const hardness = Math.max(0, Math.min(1, Number(toolOptions["raster.clone"]?.hardness ?? 82) / 100));
+    context.globalCompositeOperation = "destination-in";
+    const centre = size / 2;
+    const falloff = context.createRadialGradient(centre, centre, centre * hardness, centre, centre, centre);
+    falloff.addColorStop(0, "rgba(0,0,0,1)");
+    falloff.addColorStop(1, "rgba(0,0,0,0)");
+    context.fillStyle = falloff;
+    context.fillRect(0, 0, size, size);
+    context.globalCompositeOperation = "source-over";
   };
   const guidePointer = (event: React.PointerEvent<HTMLDivElement>, orientation: RasterGuide["orientation"], finish = false) => {
     const workspace = workspaceRef.current; if (!workspace) return;
@@ -1588,17 +1628,19 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
               clipped to a circle so it reads as the brush rather than a swatch. */}
           <canvas ref={cloneSourceCanvasRef} className="clone-source-preview" width={2} height={2} aria-hidden="true"
             style={cloneSourceView ? {
-              opacity: 1,
               width: `${Number(toolOptions["raster.clone"]?.size ?? 24) * viewport.zoom}px`,
               height: `${Number(toolOptions["raster.clone"]?.size ?? 24) * viewport.zoom}px`,
             } : { opacity: 0 }}/>
           {cloneSourceView && <svg className="clone-source-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">
             {/* The crosshair marks where the reading is coming from. Alt-clicking
                 sets it; before that there is nothing to point at. */}
+            {/* Drawn in screen units, not document units: a crosshair is part of
+                the interface, and interface does not grow with the zoom. Only
+                the ring, which shows the tip's real footprint, scales. */}
             <g transform={`translate(${cloneSourceView.x} ${cloneSourceView.y})`}>
-              <circle className="cursor-dark" r={Number(toolOptions["raster.clone"]?.size ?? 24) / 2} fill="none"/>
-              <path className="cursor-dark" d={`M${-9 / viewport.zoom} 0H${9 / viewport.zoom}M0 ${-9 / viewport.zoom}V${9 / viewport.zoom}`}/>
-              <path className="cursor-light" d={`M${-8 / viewport.zoom} 0H${8 / viewport.zoom}M0 ${-8 / viewport.zoom}V${8 / viewport.zoom}`}/>
+              <circle className="clone-source-ring" r={Number(toolOptions["raster.clone"]?.size ?? 24) / 2} fill="none"/>
+              <path className="cursor-dark" vectorEffect="non-scaling-stroke" d={`M${-9 / viewport.zoom} 0H${9 / viewport.zoom}M0 ${-9 / viewport.zoom}V${9 / viewport.zoom}`}/>
+              <path className="cursor-light" vectorEffect="non-scaling-stroke" d={`M${-8 / viewport.zoom} 0H${8 / viewport.zoom}M0 ${-8 / viewport.zoom}V${8 / viewport.zoom}`}/>
             </g>
           </svg>}
         </>

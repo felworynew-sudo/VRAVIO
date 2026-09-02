@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { cropRasterDocument, findSmartCrop, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createAdjustmentLayer, createRasterLayer, isRasterDocumentState, layerContentBounds, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
+import { confineToSelection, cropRasterDocument, findSmartCrop, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createAdjustmentLayer, createRasterLayer, isRasterDocumentState, layerContentBounds, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
 import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
 import { withBusyPainted } from "./busy";
 import { useShellStore, type Language } from "./store";
@@ -80,7 +80,13 @@ export function App() {
       if (markClean) kernel.documents.markSaved(active.id);
     } catch (error) { diagnostic("error", "file.save", error instanceof Error ? error.message : String(error), error); }
   };
-  const applyFilter = (pixels: Uint8ClampedArray, label: string) => { if (!active || !isRasterDocumentState(active.state)) return; const id=active.id,layerId=active.state.activeLayerId,before=active.state.layers.find((item)=>item.id===layerId)?.pixels.slice();if(!before)return;const assign=(value:Uint8ClampedArray)=>{kernel.documents.update<RasterDocumentState>(id,(state)=>{const layer=state.layers.find((item)=>item.id===layerId);if(layer)layer.pixels=value.slice();});};const history=kernel.historyByDocument.get(id);if(history)void history.execute({label:`Filter: ${label}`,memoryEstimate:before.byteLength+pixels.byteLength,redo:()=>assign(pixels),undo:()=>assign(before)}); };
+  const applyFilter = (pixels: Uint8ClampedArray, label: string) => { if (!active || !isRasterDocumentState(active.state)) return; const id=active.id,layerId=active.state.activeLayerId,before=active.state.layers.find((item)=>item.id===layerId)?.pixels.slice();if(!before)return;const assign=(value:Uint8ClampedArray)=>{kernel.documents.update<RasterDocumentState>(id,(state)=>{const layer=state.layers.find((item)=>item.id===layerId);if(layer)layer.pixels=value.slice();});};
+    // The same rule as every other tool: a filter may not touch pixels outside
+    // the selection. Filters run over the whole layer, so the confinement is
+    // what makes "apply to the selection" mean anything at all.
+    const selection=active.state.selection;
+    const confined=selection?confineToSelection(before,pixels,selection.mask):pixels;
+    const history=kernel.historyByDocument.get(id);if(history)void history.execute({label:`Filter: ${label}`,memoryEstimate:before.byteLength+confined.byteLength,redo:()=>assign(confined),undo:()=>assign(before)}); };
   const openCameraRawReprocess = async () => {
     if (!active) return;
     const source = active.origin?.kind === "asset" ? active.origin : null;
