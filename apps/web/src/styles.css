@@ -156,3 +156,37 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 @media (max-width:720px){.export-body{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr)}.export-settings{border-left:0;border-top:1px solid var(--border)}}
 .rasterize-confirm-backdrop{position:absolute;z-index:9;padding-top:0;place-items:center}.rasterize-confirm{width:min(420px,86%);display:grid;gap:12px;padding:20px;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--surface2);box-shadow:var(--shadow-lg)}.rasterize-confirm>strong{font-size:15px}.rasterize-confirm>p{margin:0;color:var(--muted);line-height:1.5}.rasterize-confirm>footer{display:flex;justify-content:flex-end;gap:8px}.rasterize-confirm>footer button{padding:8px 14px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface3);color:var(--text);cursor:pointer}.rasterize-confirm>footer button.primary{border-color:var(--focus);background:var(--focus);color:#fff}
 @media (max-width:800px){.workspace{grid-template-columns:40px 1fr}.welcome{grid-template-columns:1fr;padding:32px}.menu-bar nav{display:none}.new-document-body{grid-template-columns:110px 1fr}.document-parameters{grid-column:1/3;border-left:0;border-top:1px solid var(--border)}.preset-grid{grid-template-columns:1fr}.settings-layout{grid-template-columns:150px 1fr}.new-document-environments{grid-template-columns:repeat(2,1fr)}}
+
+/* Busy indication ------------------------------------------------------- */
+/* The pointer answers "did my click register" before anything else can. */
+:root[data-busy], :root[data-busy] * { cursor: progress !important; }
+
+.busy-cursor {
+  position: fixed; top: 0; left: 0; z-index: 9999; pointer-events: none;
+  display: flex; align-items: center; gap: 8px;
+  /* Offset from the hotspot so the spinner sits beside the cursor, not under it. */
+  margin: 18px 0 0 18px;
+}
+.busy-cursor-spinner {
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--accent, #6f8cff) 35%, transparent);
+  border-top-color: var(--accent, #6f8cff);
+  animation: busy-spin .7s linear infinite;
+}
+.busy-cursor-label {
+  display: none; white-space: nowrap; font-size: 11px; padding: 3px 7px; border-radius: 4px;
+  background: var(--panel, #22262e); color: var(--text, #e7e9ee);
+  box-shadow: 0 2px 10px rgb(0 0 0 / .45);
+}
+/* Only once the work has outlasted a moment, so quick operations do not flash. */
+.busy-cursor[data-slow] .busy-cursor-label { display: block; }
+
+@keyframes busy-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .busy-cursor-spinner { animation-duration: 2.4s; }
+}
+
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { cropRasterDocument, findSmartCrop, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createAdjustmentLayer, createRasterLayer, isRasterDocumentState, layerContentBounds, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
+import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
+import { withBusyPainted } from "./busy";
 import { useShellStore, type Language } from "./store";
 import type { EnvironmentKind, RenderBackend } from "@vravio/kernel";
 import { DockLayout } from "./DockLayout";
@@ -151,10 +153,15 @@ export function App() {
    * Runs on gradients and saturation rather than a model, so there is nothing to download and
    * it works on landscapes and product shots where face detection has nothing to find.
    */
-  const smartCrop = (aspect: number, label: string) => {
+  const smartCrop = async (aspect: number, label: string) => {
     if (!active || !isRasterDocumentState(active.state)) return;
     const state = active.state;
-    const { rect, score } = findSmartCrop(compositeRasterDocument(state), state.width, state.height, { aspect });
+    // Compositing the document and scoring every region of it takes seconds on a
+    // large file, with nothing on screen to say so.
+    const { rect, score } = await withBusyPainted(
+      localized("Finding a crop (Подбор кадра)", store.language),
+      () => findSmartCrop(compositeRasterDocument(state), state.width, state.height, { aspect }),
+    );
     if (rect.width < 8 || rect.height < 8) { diagnostic("warn", "smartcrop", "Suggested crop was too small to apply", { documentId: active.id }); return; }
     diagnostic("info", "smartcrop", `${label}: ${rect.width}×${rect.height} at ${rect.x},${rect.y}`, { score: Math.round(score * 1000) / 1000 });
     const history = kernel.historyByDocument.get(active.id);
@@ -323,9 +330,9 @@ export function App() {
           ["Invert (Инверсия)", "Ctrl+I", () => addImageAdjustment("invert", "Invert (Инверсия)"), !active || !isRasterDocumentState(active.state)],
           ["Posterize… (Постеризация…)", "", () => addImageAdjustment("posterize", "Posterize (Постеризация)"), !active || !isRasterDocumentState(active.state)],
           ["Threshold… (Порог…)", "", () => addImageAdjustment("threshold", "Threshold (Порог)"), !active || !isRasterDocumentState(active.state)],
-          ["Smart Crop 1:1 (Умное кадрирование 1:1)", "", () => smartCrop(1, "1:1"), !active || !isRasterDocumentState(active.state)],
-          ["Smart Crop 16:9 (Умное кадрирование 16:9)", "", () => smartCrop(16 / 9, "16:9"), !active || !isRasterDocumentState(active.state)],
-          ["Smart Crop 4:5 (Умное кадрирование 4:5)", "", () => smartCrop(4 / 5, "4:5"), !active || !isRasterDocumentState(active.state)],
+          ["Smart Crop 1:1 (Умное кадрирование 1:1)", "", () => { void smartCrop(1, "1:1"); }, !active || !isRasterDocumentState(active.state)],
+          ["Smart Crop 16:9 (Умное кадрирование 16:9)", "", () => { void smartCrop(16 / 9, "16:9"); }, !active || !isRasterDocumentState(active.state)],
+          ["Smart Crop 4:5 (Умное кадрирование 4:5)", "", () => { void smartCrop(4 / 5, "4:5"); }, !active || !isRasterDocumentState(active.state)],
           ["Image Size… (Размер изображения…)", "Ctrl+Alt+I", () => {}, true],
           ["Canvas Size… (Размер холста…)", "Ctrl+Alt+C", () => {}, true],
         ]}/>
@@ -393,6 +400,8 @@ export function App() {
     </div>}
 
     <SettingsDialog />
+    <BusyCursor />
+    <BusyAnnouncement />
     {diagnosticsOpen && <div className="dialog-backdrop" onMouseDown={() => setDiagnosticsOpen(false)}><section className="diagnostics-dialog" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><header><strong>Diagnostics log (Журнал диагностики)</strong><button onClick={() => setDiagnosticsOpen(false)}>×</button></header><div className="diagnostics-list">{diagnostics.length ? [...diagnostics].reverse().map((entry, index) => <article data-level={entry.level} key={`${entry.time}-${index}`}><time>{new Date(entry.time).toLocaleTimeString()}</time><b>{entry.area}</b><span>{entry.message}</span>{entry.detail && <pre>{entry.detail}</pre>}</article>) : <p>No events recorded (Событий пока нет).</p>}</div><footer><button onClick={() => { clearDiagnostics(); setDiagnostics([]); }}>Clear (Очистить)</button><button onClick={() => { const blob = new Blob([JSON.stringify(diagnostics, null, 2)], { type: "application/json" }); download(blob, `vravio-diagnostics-${Date.now()}.json`); }}>Export JSON (Экспорт JSON)</button></footer></section></div>}
     {filterGalleryOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<FilterGalleryDialog layer={layer} onApply={applyFilter} onClose={()=>setFilterGalleryOpen(false)}/>:null;})()}
     {liquifyOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<LiquifyDialog layer={layer} language={store.language} onApply={applyFilter} onClose={()=>setLiquifyOpen(false)}/>:null;})()}

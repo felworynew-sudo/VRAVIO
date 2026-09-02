@@ -13,6 +13,7 @@ import {
 import { createBufferRevisionOperation, type AssetId, type VravioDocument } from "@vravio/kernel";
 import { kernel } from "./kernel";
 import { defaultViewport, useShellStore, type DocumentViewport } from "./store";
+import { beginBusy, withBusy } from "./busy";
 import { diagnostic } from "./diagnostics";
 import { identityTextTransform, multiplyTextTransform, renderTextLayerPixels, textBoundsTransform, textFontString } from "./textRender";
 import { localized } from "./i18n";
@@ -605,11 +606,14 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
 
   const confirmRasterize = () => {
     if (!rasterizeConfirm) return;
+    const done = beginBusy("Rasterising layer (Растеризация слоя)");
+    try {
     const before = cloneRasterState(state), after = cloneRasterState(state);
     const target = after.layers.find((item) => item.id === rasterizeConfirm.layerId);
     if (target) { target.kind = "pixel"; delete target.text; delete target.adjustment; }
     setRasterizeConfirm(null);
     void commitDocumentState(before, after, "Rasterize Layer (Растрировать слой)");
+    } finally { done(); }
   };
 
   const announceTransform = (pending: PendingPixelTransform | null) => {
@@ -716,7 +720,9 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     const boxWidth = existing?.text?.boxWidth ?? textDraft.boxWidth, boxHeight = existing?.text?.boxHeight ?? textDraft.boxHeight, path = existing?.text?.path ?? textDraft.path, dynamicPreset = existing?.text?.dynamicPreset ?? textDraft.dynamicPreset;
     const textData = { value: textDraft.value, x: textX, y: textY, fontFamily, fontSize, lineHeight, letterSpacing, align, color, bold, italic, underline, mode: existing?.text?.mode ?? textDraft.mode, ...(boxWidth !== undefined ? { boxWidth } : {}), ...(boxHeight !== undefined ? { boxHeight } : {}), ...(path ? { path } : {}), ...(dynamicPreset ? { dynamicPreset } : {}) };
     layer.text = textData;
-    layer.pixels = renderTextLayerPixels(textData, state.width, state.height);
+    // Rasterising type paints the whole document surface and then scans it for
+    // the glyph bounds; on a large canvas that is long enough to look stuck.
+    layer.pixels = withBusy("Rasterising type (Растеризация текста)", () => renderTextLayerPixels(textData, state.width, state.height));
     layer.kind = "text";
     layer.name = textDraft.value.slice(0, 28) || layer.name;
     const after = cloneRasterState(state); const index = after.layers.findIndex((item) => item.id === layer.id); if (index >= 0) after.layers[index] = layer; else after.layers.push(layer); after.activeLayerId = layer.id;
