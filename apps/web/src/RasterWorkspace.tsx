@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   activeRasterLayer, appendLayer, clampRegionToDocument, copyHealedRegion, layerAccepts, layerLockReason, layerOpaqueBounds, paintMask, marqueeCorners, marqueeRect, pickLayerAt, combineSelections, compositeRasterDocument, compositeRasterRegion, createContiguousColorSelection, drawShape, DirtyRegion, RasterTileCache, type ShapeKind, createEllipseSelection, createPolygonSelection, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
-  changedRenderRegion, confineToSelection, layerDocumentPixels, setLayerPixels, isRasterDocumentState, layerRenderSignatures, liftSelection, parseHexColor, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectionOutlinePath, stampFloating, toHexColor,
+  accumulateUniquePixelBytes, changedRenderRegion, confineToSelection, visitPixelBuffers, layerDocumentPixels, mipForZoom, setLayerPixels, isRasterDocumentState, layerRenderSignatures, liftSelection, parseHexColor, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectionOutlinePath, stampFloating, toHexColor,
   translateLayerPixels, translateSelection, type FloatingPixels, type LayerRenderSignature, type PixelSelection, type Point, type RasterDocumentState, type RasterGuide, type RasterLayer, type RasterRect, type RasterTextData, type SelectionCombineMode,
   cloneDab, cloneStrokeSegment,
   blurDab, blurStrokeSegment, smudgeStrokeSegment,
@@ -52,11 +52,23 @@ function putPixels(canvas: HTMLCanvasElement, pixels: Uint8ClampedArray, width: 
 }
 
 /** Blits a region-sized buffer at its document offset, leaving the rest of the canvas untouched. */
-function putRegionPixels(canvas: HTMLCanvasElement, pixels: Uint8ClampedArray, region: RasterRect): void {
+function putRegionPixels(canvas: HTMLCanvasElement, pixels: Uint8ClampedArray, region: RasterRect, step = 1): void {
   if (!region.width || !region.height) return;
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Canvas 2D is not available");
-  context.putImageData(new ImageData(pixels as Uint8ClampedArray<ArrayBuffer>, region.width, region.height), region.x, region.y);
+  if (step <= 1) {
+    context.putImageData(new ImageData(pixels as Uint8ClampedArray<ArrayBuffer>, region.width, region.height), region.x, region.y);
+    return;
+  }
+  // A subsampled tile carries one pixel per `step`; the browser scales it back
+  // up, which is what makes compositing at a mip level worth doing at all.
+  const sampledWidth = Math.ceil(region.width / step), sampledHeight = Math.ceil(region.height / step);
+  const source = new OffscreenCanvas(sampledWidth, sampledHeight);
+  const sourceContext = source.getContext("2d");
+  if (!sourceContext) throw new Error("Canvas 2D is not available");
+  sourceContext.putImageData(new ImageData(pixels as Uint8ClampedArray<ArrayBuffer>, sampledWidth, sampledHeight), 0, 0);
+  context.clearRect(region.x, region.y, region.width, region.height);
+  context.drawImage(source, 0, 0, sampledWidth, sampledHeight, region.x, region.y, region.width, region.height);
 }
 
 /** Copies one rectangle out of a full-canvas buffer, for the single-layer blit fast path. */
@@ -196,17 +208,17 @@ function cloneRasterState(state: RasterDocumentState): RasterDocumentState {
  * buffers the two states disagree about are held open by the step.
  */
 function stateDeltaBytes(before: RasterDocumentState, after: RasterDocumentState): number {
-  const buffers = (state: RasterDocumentState): Set<ArrayBufferView> => {
-    const set = new Set<ArrayBufferView>();
-    for (const layer of state.layers) { set.add(layer.pixels); if (layer.mask) set.add(layer.mask.pixels); }
-    if (state.selection) set.add(state.selection.mask);
-    return set;
-  };
-  const first = buffers(before), second = buffers(after);
-  let bytes = 0;
-  for (const buffer of first) if (!second.has(buffer)) bytes += buffer.byteLength;
-  for (const buffer of second) if (!first.has(buffer)) bytes += buffer.byteLength;
-  return bytes;
+  const shared = new Set<ArrayBufferView>();
+  accumulateUniquePixelBytes(before, shared);
+  // Whatever the two states have in common is already counted, so what this
+  // adds is exactly what the step keeps alive on its own.
+  const added = accumulateUniquePixelBytes(after, shared);
+
+  const inAfter = new Set<ArrayBufferView>();
+  accumulateUniquePixelBytes(after, inAfter);
+  let dropped = 0;
+  visitPixelBuffers(before, (buffer) => { if (!inAfter.has(buffer)) dropped += buffer.byteLength; });
+  return added + dropped;
 }
 
 /**
@@ -303,7 +315,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const tiles = useRef(new RasterTileCache({ tileSize: 256 }));
   const documentDirty = useRef(new DirtyRegion());
   /** What the visible canvas currently holds, so idle renders repaint nothing. */
-  const painted = useRef<{ canvas: HTMLCanvasElement | null; revision: number; signatures?: readonly LayerRenderSignature[] }>({ canvas: null, revision: -1 });
+  const painted = useRef<{ canvas: HTMLCanvasElement | null; revision: number; signatures?: readonly LayerRenderSignature[]; mip?: number }>({ canvas: null, revision: -1 });
   const [lassoDraft, setLassoDraft] = useState<Point[]>([]);
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
   const [transformPreview, setTransformPreview] = useState<PendingPixelTransform | null>(null);
@@ -386,10 +398,14 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     // fifteen-layer document, several times per operation. The document's
     // revision is what says whether the pixels can have moved at all.
     const canvasChanged = painted.current.canvas !== canvas;
-    const revised = document.revision !== painted.current.revision;
+    // Zoomed out, the composite is sampled rather than made at full resolution:
+    // at six percent a 1920x1080 canvas is 115 pixels across on screen, and
+    // fifteen of every sixteen pixels composited for it are thrown away.
+    const mip = mipForZoom(viewport.zoom);
+    const revised = document.revision !== painted.current.revision || painted.current.mip !== mip;
     const signatures = layerRenderSignatures(state);
     const previousSignatures = painted.current.signatures;
-    painted.current = { canvas, revision: document.revision, signatures };
+    painted.current = { canvas, revision: document.revision, signatures, mip };
 
     // A canvas React has just mounted holds nothing, whatever the cache thinks.
     if (canvasChanged) tiles.current.invalidateAll();
@@ -406,9 +422,9 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         else if (changed.width > 0 && changed.height > 0) tiles.current.invalidate(changed);
       }
     }
-    const { repainted } = tiles.current.update(state, { x: 0, y: 0, width: state.width, height: state.height });
-    for (const tile of repainted) putRegionPixels(canvas, tile.pixels, tile.rect);
-  }, [document.revision, state]);
+    const { repainted } = tiles.current.update(state, { x: 0, y: 0, width: state.width, height: state.height }, mip);
+    for (const tile of repainted) putRegionPixels(canvas, tile.pixels, tile.rect, tile.step);
+  }, [document.revision, state, viewport.zoom]);
 
   // Text transforms never touch the document-sized raster during a drag. The base
   // canvas is painted once without the active text layer and a cropped overlay is

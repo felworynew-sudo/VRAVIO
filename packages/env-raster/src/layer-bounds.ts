@@ -91,3 +91,40 @@ export function layerAlphaAt(layer: RasterLayer, x: number, y: number): number {
   if (localX < 0 || localY < 0 || localX >= bounds.width || localY >= bounds.height) return 0;
   return layer.pixels[(localY * bounds.width + localX) * 4 + 3] ?? 0;
 }
+
+/**
+ * Every pixel buffer a document reaches: layers, masks and the selection.
+ *
+ * Patchy walks the same set to price its history, and the walk matters more
+ * than the sum: buffers are shared between a document and its history
+ * snapshots, so anything that counts them per snapshot reports several times
+ * the memory actually in use and starts discarding undo depth that costs
+ * nothing to keep.
+ */
+export function visitPixelBuffers(state: { layers: readonly RasterLayer[]; selection?: { mask: Uint8ClampedArray } | null }, visit: (buffer: ArrayBufferView) => void): void {
+  for (const layer of state.layers) {
+    visit(layer.pixels);
+    if (layer.mask) visit(layer.mask.pixels);
+  }
+  if (state.selection) visit(state.selection.mask);
+}
+
+/**
+ * Bytes held by buffers this document reaches and `seen` has not counted.
+ *
+ * Each buffer is charged once however many documents or snapshots point at it,
+ * and `seen` carries across calls so a whole history can be priced by walking
+ * its states in turn.
+ */
+export function accumulateUniquePixelBytes(
+  state: { layers: readonly RasterLayer[]; selection?: { mask: Uint8ClampedArray } | null },
+  seen: Set<ArrayBufferView>,
+): number {
+  let bytes = 0;
+  visitPixelBuffers(state, (buffer) => {
+    if (seen.has(buffer)) return;
+    seen.add(buffer);
+    bytes += buffer.byteLength;
+  });
+  return bytes;
+}

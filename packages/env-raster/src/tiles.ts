@@ -57,6 +57,8 @@ export interface RasterTile {
   readonly row: number;
   readonly rect: RasterRect;
   readonly pixels: Uint8ClampedArray;
+  /** Samples per pixel of `rect`: 1 at full resolution, 2 at half, and so on. */
+  readonly step: number;
 }
 
 export interface TileCacheOptions {
@@ -71,7 +73,25 @@ export interface TileUpdate {
   readonly repainted: readonly RasterTile[];
 }
 
-const key = (col: number, row: number) => `${col},${row}`;
+const key = (col: number, row: number, mip: number) => `${col},${row},${mip}`;
+
+/**
+ * How far to subsample for a given zoom.
+ *
+ * Borrowed from Patchy, whose tile keys carry a mip level beside their
+ * coordinates. Compositing at full resolution for a view that then throws
+ * fifteen of every sixteen pixels away is most of the cost of looking at a
+ * whole document at once: at six percent zoom a 1920x1080 canvas is 115x65 on
+ * screen. The step is a power of two so a tile's samples land on the same grid
+ * at every level and the cached tiles of one level are never a blurred copy of
+ * another's.
+ */
+export function mipForZoom(zoom: number): number {
+  if (!(zoom > 0) || zoom >= 1) return 0;
+  return Math.min(4, Math.floor(Math.log2(1 / zoom)));
+}
+
+const stepForMip = (mip: number) => 1 << mip;
 
 /**
  * Composited document, cached in fixed tiles and refreshed only where invalidated.
@@ -94,16 +114,26 @@ export class RasterTileCache {
   }
 
   get size(): number { return this.#tiles.size; }
-  get bytes(): number { return this.#tiles.size * this.tileSize * this.tileSize * 4; }
+  get bytes(): number {
+    // Counted from the tiles themselves: a mip level holds a quarter of the
+    // pixels of the one below it, and charging every tile the full size would
+    // evict the cheap ones first.
+    let total = 0;
+    for (const tile of this.#tiles.values()) total += tile.pixels.byteLength;
+    return total;
+  }
 
   invalidateAll(): void {
     for (const cacheKey of this.#tiles.keys()) this.#invalid.add(cacheKey);
   }
 
   invalidate(rect: RasterRect): void {
+    // Every level of a covered tile goes stale together: they are all views of
+    // the same pixels, and keeping one would show the edit at some zooms only.
     for (const { col, row } of this.#coveringTiles(rect)) {
-      const cacheKey = key(col, row);
-      if (this.#tiles.has(cacheKey)) this.#invalid.add(cacheKey);
+      for (const cacheKey of this.#tiles.keys()) {
+        if (cacheKey.startsWith(`${col},${row},`)) this.#invalid.add(cacheKey);
+      }
     }
   }
 
@@ -113,7 +143,7 @@ export class RasterTileCache {
     this.#invalid.clear();
   }
 
-  update(state: RasterDocumentState, viewport: RasterRect): TileUpdate {
+  update(state: RasterDocumentState, viewport: RasterRect, mip = 0): TileUpdate {
     if (state.width !== this.#documentWidth || state.height !== this.#documentHeight) {
       this.reset();
       this.#documentWidth = state.width;
@@ -122,7 +152,7 @@ export class RasterTileCache {
     const visible: RasterTile[] = [];
     const repainted: RasterTile[] = [];
     for (const { col, row } of this.#coveringTiles(clampRegionToDocument(state, viewport))) {
-      const cacheKey = key(col, row);
+      const cacheKey = key(col, row, mip);
       const cached = this.#tiles.get(cacheKey);
       if (cached && !this.#invalid.has(cacheKey)) {
         // Refresh insertion order so tiles on screen are the last to be evicted.
@@ -133,14 +163,15 @@ export class RasterTileCache {
       }
       const rect = clampRegionToDocument(state, { x: col * this.tileSize, y: row * this.tileSize, width: this.tileSize, height: this.tileSize });
       if (!rect.width || !rect.height) continue;
-      const tile: RasterTile = { col, row, rect, pixels: compositeRasterRegion(state, rect) };
+      const step = stepForMip(mip);
+      const tile: RasterTile = { col, row, rect, pixels: compositeRasterRegion(state, rect, { step }), step };
       this.#tiles.delete(cacheKey);
       this.#tiles.set(cacheKey, tile);
       this.#invalid.delete(cacheKey);
       visible.push(tile);
       repainted.push(tile);
     }
-    this.#evict(new Set(visible.map((tile) => key(tile.col, tile.row))));
+    this.#evict(new Set(visible.map((tile) => key(tile.col, tile.row, mip))));
     return { visible, repainted };
   }
 
