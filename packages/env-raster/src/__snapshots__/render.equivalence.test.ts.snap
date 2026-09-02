@@ -1,0 +1,45 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`composite output is stable > matches the recorded digest for every blend mode 1`] = `
+{
+  "color": "2eddce7b",
+  "colorBurn": "e0494d45",
+  "colorDodge": "cebe72c5",
+  "darken": "1e177272",
+  "darkerColor": "f97ca332",
+  "difference": "7ccbaa23",
+  "dissolve": "f4715e6b",
+  "divide": "83815d31",
+  "exclusion": "dfb0d653",
+  "hardLight": "d590fcf0",
+  "hardMix": "c03d5695",
+  "hue": "dc55f8c4",
+  "lighten": "dd106425",
+  "lighterColor": "377cee3d",
+  "linearBurn": "54bc1008",
+  "linearDodge": "9af29271",
+  "linearLight": "deaf9a44",
+  "luminosity": "f879eb8c",
+  "multiply": "eee8ffd7",
+  "normal": "f4715e6b",
+  "overlay": "5f8c37be",
+  "pinLight": "cdccffee",
+  "saturation": "27a2afa7",
+  "screen": "61ca637d",
+  "softLight": "cf3dabd7",
+  "subtract": "f2540e92",
+  "vividLight": "60b34944",
+}
+`;
+
+exports[`composite output is stable > matches the recorded digest for masks, clipping and adjustments 1`] = `
+{
+  "adjustment": "3773f925",
+  "clippedAdjustment": "e9a963d",
+  "clipping": "5a87b8fe",
+  "fillOpacity": "940b0d14",
+  "hiddenLayer": "714167bb",
+  "invertedMask": "d32d3108",
+  "mask": "593a951c",
+}
+`;

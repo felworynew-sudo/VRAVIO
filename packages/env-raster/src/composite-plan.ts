@@ -80,7 +80,11 @@ function blockingFeature(layer: RasterLayer): string | null {
   // An adjustment reads back everything already composited underneath it,
   // which the browser compositor cannot express.
   if (layer.kind === "adjustment" || layer.adjustment) return "adjustment layer";
-  if (layer.fillOpacity !== layer.opacity) return "fill opacity differs from layer opacity";
+  // Fill opacity and layer opacity are not separable once effects are out of
+  // the picture — the compositor multiplies them into a single source alpha,
+  // which is exactly what globalAlpha expresses. Effects are what makes them
+  // differ, and an enabled effect already sends the document down the other
+  // path.
   if (hasEnabledEffect(layer)) return "layer effects";
   return null;
 }

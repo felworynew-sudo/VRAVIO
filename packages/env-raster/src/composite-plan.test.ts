@@ -74,11 +74,14 @@ describe("composite plan", () => {
     expect(planComposite(state)).toMatchObject({ backend: "precise", reason: "adjustment layer" });
   });
 
-  it("falls back when fill opacity is separate from layer opacity", () => {
+  it("keeps fill opacity on the fast path when no effect distinguishes it", () => {
     const state = document();
-    addLayer(state, (layer) => { layer.opacity = 1; layer.fillOpacity = 0.5; });
+    addLayer(state, (layer) => { layer.opacity = 0.6; layer.fillOpacity = 0.5; });
 
-    expect(planComposite(state).backend).toBe("precise");
+    // Fill opacity only means something different from layer opacity when an
+    // effect is present to be excluded from it; with none, the compositor
+    // multiplies the two into one source alpha and globalAlpha says the same.
+    expect(planComposite(state).backend).toBe("canvas2d");
   });
 
   it("falls back for an enabled layer effect", () => {

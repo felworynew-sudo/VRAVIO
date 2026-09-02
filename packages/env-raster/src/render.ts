@@ -3,60 +3,106 @@ import { renderLayerEffects } from "./effects";
 import { applyAdjustment } from "./adjustments";
 import { effectiveLayerOpacity, flattenRasterLayers, isLayerEffectivelyVisible } from "./layer-tree";
 
-const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
+/**
+ * Blend modes as integers.
+ *
+ * The compositor dispatches on the mode once per pixel per channel. Comparing
+ * strings there cost more than the arithmetic it selected, so the mode is
+ * resolved to a number once per layer and the inner loop switches on that.
+ */
+const NORMAL = 0, DARKEN = 1, MULTIPLY = 2, COLOR_BURN = 3, LINEAR_BURN = 4, LIGHTEN = 5, SCREEN = 6,
+  COLOR_DODGE = 7, LINEAR_DODGE = 8, OVERLAY = 9, SOFT_LIGHT = 10, HARD_LIGHT = 11, VIVID_LIGHT = 12,
+  LINEAR_LIGHT = 13, PIN_LIGHT = 14, HARD_MIX = 15, DIFFERENCE = 16, EXCLUSION = 17, SUBTRACT = 18,
+  DIVIDE = 19, HUE = 20, SATURATION = 21, COLOR = 22, LUMINOSITY = 23, DARKER_COLOR = 24, LIGHTER_COLOR = 25;
 
-function blendChannel(mode: string, source: number, destination: number): number {
+const blendCodes: Record<string, number> = {
+  darken: DARKEN, multiply: MULTIPLY, colorBurn: COLOR_BURN, linearBurn: LINEAR_BURN,
+  lighten: LIGHTEN, screen: SCREEN, colorDodge: COLOR_DODGE, linearDodge: LINEAR_DODGE,
+  overlay: OVERLAY, softLight: SOFT_LIGHT, hardLight: HARD_LIGHT, vividLight: VIVID_LIGHT,
+  linearLight: LINEAR_LIGHT, pinLight: PIN_LIGHT, hardMix: HARD_MIX, difference: DIFFERENCE,
+  exclusion: EXCLUSION, subtract: SUBTRACT, divide: DIVIDE, hue: HUE, saturation: SATURATION,
+  color: COLOR, luminosity: LUMINOSITY, darkerColor: DARKER_COLOR, lighterColor: LIGHTER_COLOR,
+};
+
+/** Modes that mix whole colours rather than each channel on its own. */
+const isNonSeparable = (code: number) => code >= HUE;
+
+/** Unknown modes composite as `normal`, which is what `dissolve` currently does. */
+const blendCode = (mode: string): number => blendCodes[mode] ?? NORMAL;
+
+function blendChannel(code: number, source: number, destination: number): number {
   const s = source / 255, d = destination / 255;
-  if (mode === "darken") return Math.min(source, destination);
-  if (mode === "multiply") return s * d * 255;
-  if (mode === "colorBurn") return (s <= 0 ? 0 : 1 - Math.min(1, (1 - d) / s)) * 255;
-  if (mode === "linearBurn") return Math.max(0, s + d - 1) * 255;
-  if (mode === "lighten") return Math.max(source, destination);
-  if (mode === "screen") return (1 - (1 - s) * (1 - d)) * 255;
-  if (mode === "colorDodge") return (s >= 1 ? 1 : Math.min(1, d / (1 - s))) * 255;
-  if (mode === "linearDodge") return Math.min(1, s + d) * 255;
-  if (mode === "overlay") return (d <= .5 ? 2 * s * d : 1 - 2 * (1 - s) * (1 - d)) * 255;
-  if (mode === "softLight") return ((1 - 2 * s) * d * d + 2 * s * d) * 255;
-  if (mode === "hardLight") return (s <= .5 ? 2 * s * d : 1 - 2 * (1 - s) * (1 - d)) * 255;
-  if (mode === "vividLight") return (s <= .5 ? (s <= 0 ? 0 : 1 - Math.min(1, (1 - d) / (2 * s))) : (s >= 1 ? 1 : Math.min(1, d / (2 * (1 - s))))) * 255;
-  if (mode === "linearLight") return Math.max(0, Math.min(1, d + 2 * s - 1)) * 255;
-  if (mode === "pinLight") return (s <= .5 ? Math.min(d, 2 * s) : Math.max(d, 2 * s - 1)) * 255;
-  if (mode === "hardMix") return blendChannel("vividLight", source, destination) < 128 ? 0 : 255;
-  if (mode === "difference") return Math.abs(destination - source);
-  if (mode === "exclusion") return (s + d - 2 * s * d) * 255;
-  if (mode === "subtract") return Math.max(0, d - s) * 255;
-  if (mode === "divide") return (s <= 0 ? 1 : Math.min(1, d / s)) * 255;
-  return source;
+  switch (code) {
+    case DARKEN: return Math.min(source, destination);
+    case MULTIPLY: return s * d * 255;
+    case COLOR_BURN: return (s <= 0 ? 0 : 1 - Math.min(1, (1 - d) / s)) * 255;
+    case LINEAR_BURN: return Math.max(0, s + d - 1) * 255;
+    case LIGHTEN: return Math.max(source, destination);
+    case SCREEN: return (1 - (1 - s) * (1 - d)) * 255;
+    case COLOR_DODGE: return (s >= 1 ? 1 : Math.min(1, d / (1 - s))) * 255;
+    case LINEAR_DODGE: return Math.min(1, s + d) * 255;
+    case OVERLAY: return (d <= .5 ? 2 * s * d : 1 - 2 * (1 - s) * (1 - d)) * 255;
+    case SOFT_LIGHT: return ((1 - 2 * s) * d * d + 2 * s * d) * 255;
+    case HARD_LIGHT: return (s <= .5 ? 2 * s * d : 1 - 2 * (1 - s) * (1 - d)) * 255;
+    case VIVID_LIGHT: return (s <= .5 ? (s <= 0 ? 0 : 1 - Math.min(1, (1 - d) / (2 * s))) : (s >= 1 ? 1 : Math.min(1, d / (2 * (1 - s))))) * 255;
+    case LINEAR_LIGHT: return Math.max(0, Math.min(1, d + 2 * s - 1)) * 255;
+    case PIN_LIGHT: return (s <= .5 ? Math.min(d, 2 * s) : Math.max(d, 2 * s - 1)) * 255;
+    case HARD_MIX: return blendChannel(VIVID_LIGHT, source, destination) < 128 ? 0 : 255;
+    case DIFFERENCE: return Math.abs(destination - source);
+    case EXCLUSION: return (s + d - 2 * s * d) * 255;
+    case SUBTRACT: return Math.max(0, d - s) * 255;
+    case DIVIDE: return (s <= 0 ? 1 : Math.min(1, d / s)) * 255;
+    default: return source;
+  }
 }
 
-function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
-  const red = r / 255, green = g / 255, blue = b / 255, max = Math.max(red, green, blue), min = Math.min(red, green, blue), lightness = (max + min) / 2;
-  if (max === min) return [0, 0, lightness];
-  const delta = max - min, saturation = lightness > .5 ? delta / (2 - max - min) : delta / (max + min);
-  const hue = max === red ? ((green - blue) / delta + (green < blue ? 6 : 0)) / 6 : max === green ? ((blue - red) / delta + 2) / 6 : ((red - green) / delta + 4) / 6;
-  return [hue, saturation, lightness];
+/** Writes hue, saturation and lightness of an RGB triple into `out`. */
+function rgbToHsl(r: number, g: number, b: number, out: Float64Array): void {
+  const red = r / 255, green = g / 255, blue = b / 255;
+  const max = Math.max(red, green, blue), min = Math.min(red, green, blue), lightness = (max + min) / 2;
+  if (max === min) { out[0] = 0; out[1] = 0; out[2] = lightness; return; }
+  const delta = max - min;
+  out[1] = lightness > .5 ? delta / (2 - max - min) : delta / (max + min);
+  out[0] = max === red ? ((green - blue) / delta + (green < blue ? 6 : 0)) / 6 : max === green ? ((blue - red) / delta + 2) / 6 : ((red - green) / delta + 4) / 6;
+  out[2] = lightness;
 }
 
-function hslToRgb(h: number, s: number, l: number): [number, number, number] {
-  if (s === 0) return [l * 255, l * 255, l * 255];
+/** Writes the RGB of an HSL triple into `out`. */
+function hslToRgb(h: number, s: number, l: number, out: Float64Array): void {
+  if (s === 0) { out[0] = l * 255; out[1] = l * 255; out[2] = l * 255; return; }
   const q = l < .5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
   const channel = (value: number) => { let t = value; if (t < 0) t += 1; if (t > 1) t -= 1; return (t < 1 / 6 ? p + (q - p) * 6 * t : t < .5 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p) * 255; };
-  return [channel(h + 1 / 3), channel(h), channel(h - 1 / 3)];
+  out[0] = channel(h + 1 / 3); out[1] = channel(h); out[2] = channel(h - 1 / 3);
 }
 
-function blendRgb(mode: string, source: [number, number, number], destination: [number, number, number]): [number, number, number] {
-  if (mode === "darkerColor" || mode === "lighterColor") {
-    const sourceLuma = source[0] * .2126 + source[1] * .7152 + source[2] * .0722, destinationLuma = destination[0] * .2126 + destination[1] * .7152 + destination[2] * .0722;
-    return mode === "darkerColor" ? (sourceLuma < destinationLuma ? source : destination) : (sourceLuma > destinationLuma ? source : destination);
+const luma = (r: number, g: number, b: number) => r * .2126 + g * .7152 + b * .0722;
+
+/**
+ * Blends a whole colour for the modes that cannot work channel by channel,
+ * writing the result into `out`.
+ *
+ * The scratch buffers are passed in rather than allocated here: this runs once
+ * per pixel, and returning a fresh triple made the compositor spend more time
+ * in the garbage collector than in the blend.
+ */
+function blendNonSeparable(
+  code: number,
+  sr: number, sg: number, sb: number,
+  dr: number, dg: number, db: number,
+  out: Float64Array, sourceHsl: Float64Array, destinationHsl: Float64Array,
+): void {
+  if (code === DARKER_COLOR || code === LIGHTER_COLOR) {
+    const sourceLuma = luma(sr, sg, sb), destinationLuma = luma(dr, dg, db);
+    const takeSource = code === DARKER_COLOR ? sourceLuma < destinationLuma : sourceLuma > destinationLuma;
+    out[0] = takeSource ? sr : dr; out[1] = takeSource ? sg : dg; out[2] = takeSource ? sb : db;
+    return;
   }
-  if (["hue", "saturation", "color", "luminosity"].includes(mode)) {
-    const [sh, ss, sl] = rgbToHsl(...source), [dh, ds, dl] = rgbToHsl(...destination);
-    if (mode === "hue") return hslToRgb(sh, ds, dl);
-    if (mode === "saturation") return hslToRgb(dh, ss, dl);
-    if (mode === "color") return hslToRgb(sh, ss, dl);
-    return hslToRgb(dh, ds, sl);
-  }
-  return [blendChannel(mode, source[0], destination[0]), blendChannel(mode, source[1], destination[1]), blendChannel(mode, source[2], destination[2])];
+  rgbToHsl(sr, sg, sb, sourceHsl);
+  rgbToHsl(dr, dg, db, destinationHsl);
+  if (code === HUE) hslToRgb(sourceHsl[0]!, destinationHsl[1]!, destinationHsl[2]!, out);
+  else if (code === SATURATION) hslToRgb(destinationHsl[0]!, sourceHsl[1]!, destinationHsl[2]!, out);
+  else if (code === COLOR) hslToRgb(sourceHsl[0]!, sourceHsl[1]!, destinationHsl[2]!, out);
+  else hslToRgb(destinationHsl[0]!, destinationHsl[1]!, sourceHsl[2]!, out);
 }
 
 /** Clamps a requested region to the document, snapping to whole pixels. */
@@ -89,7 +135,16 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
   const output = new Uint8ClampedArray(outWidth * outHeight * 4);
   if (!area.width || !area.height) return output;
   const clippingBaseByParent = new Map<string, Uint8ClampedArray>();
-  for (const layer of flattenRasterLayers(state.layers)) {
+  // Allocated once per composite rather than per pixel; see blendNonSeparable.
+  const blendScratch = new Float64Array(3), sourceHsl = new Float64Array(3), destinationHsl = new Float64Array(3);
+  const layers = [...flattenRasterLayers(state.layers)];
+  // A layer only has to record its own coverage when something above it clips
+  // to it. Recording it unconditionally costs a buffer and a write per pixel
+  // per layer, which most documents never read back.
+  const clippedParents = new Set<string>();
+  for (const layer of layers) if (layer.clipping) clippedParents.add(layer.parentId ?? "root");
+
+  for (const layer of layers) {
     const parentKey = layer.parentId ?? "root";
     const effectiveOpacity = effectiveLayerOpacity(layer, state.layers);
     if (layer.kind === "group" || !isLayerEffectivelyVisible(layer, state.layers) || effectiveOpacity <= 0) {
@@ -113,23 +168,64 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
     }
     const renderedLayer = renderLayerEffects(layer, state.width, state.height);
     const clippingBase = layer.clipping ? clippingBaseByParent.get(parentKey) : undefined;
-    const ownAlpha = layer.clipping ? null : new Uint8ClampedArray(outWidth * outHeight);
-    for (let row = 0; row < outHeight; row += 1) for (let column = 0; column < outWidth; column += 1) {
-      const regionIndex = row * outWidth + column, index = regionIndex * 4;
-      const documentIndex = (area.y + row * step) * width + (area.x + column * step), sourceIndex = documentIndex * 4;
-      const maskAlpha = layer.mask?.enabled ? ((layer.mask.inverted ? 255 - layer.mask.pixels[documentIndex]! : layer.mask.pixels[documentIndex]!) / 255) * layer.mask.density : 1;
-      const baseAlpha = clippingBase ? clippingBase[regionIndex]! / 255 : layer.clipping ? 0 : 1;
-      const rawAlpha = (renderedLayer[sourceIndex + 3]! / 255) * maskAlpha;
-      if (ownAlpha) ownAlpha[regionIndex] = Math.round(rawAlpha * 255);
-      const sourceAlpha = rawAlpha * baseAlpha * effectiveOpacity * (layer.fillOpacity ?? 1);
-      if (sourceAlpha <= 0) continue;
-      const destinationAlpha = output[index + 3]! / 255;
-      const alpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha);
-      const blended = blendRgb(layer.blendMode, [renderedLayer[sourceIndex]!, renderedLayer[sourceIndex + 1]!, renderedLayer[sourceIndex + 2]!], [output[index]!, output[index + 1]!, output[index + 2]!]);
-      output[index] = Math.round(clamp01((blended[0] * sourceAlpha + output[index]! * destinationAlpha * (1 - sourceAlpha)) / alpha / 255) * 255);
-      output[index + 1] = Math.round(clamp01((blended[1] * sourceAlpha + output[index + 1]! * destinationAlpha * (1 - sourceAlpha)) / alpha / 255) * 255);
-      output[index + 2] = Math.round(clamp01((blended[2] * sourceAlpha + output[index + 2]! * destinationAlpha * (1 - sourceAlpha)) / alpha / 255) * 255);
-      output[index + 3] = Math.round(alpha * 255);
+    const ownAlpha = layer.clipping || !clippedParents.has(parentKey) ? null : new Uint8ClampedArray(outWidth * outHeight);
+    // Everything constant for the layer is read once. Inside the loop these are
+    // touched a few million times, and a property lookup there is not free.
+    const code = blendCode(layer.blendMode);
+    const nonSeparable = isNonSeparable(code);
+    const mask = layer.mask?.enabled ? layer.mask : null;
+    const maskPixels = mask?.pixels, maskInverted = mask?.inverted ?? false, maskDensity = mask?.density ?? 1;
+    const layerAlpha = effectiveOpacity * (layer.fillOpacity ?? 1);
+    const clipping = layer.clipping === true;
+    const opaqueNormal = code === NORMAL && layerAlpha >= 1 && !clipping;
+
+    for (let row = 0; row < outHeight; row += 1) {
+      const documentRow = (area.y + row * step) * width + area.x;
+      const outputRow = row * outWidth;
+      for (let column = 0; column < outWidth; column += 1) {
+        const regionIndex = outputRow + column, index = regionIndex * 4;
+        const documentIndex = documentRow + column * step, sourceIndex = documentIndex * 4;
+        const maskAlpha = maskPixels ? ((maskInverted ? 255 - maskPixels[documentIndex]! : maskPixels[documentIndex]!) / 255) * maskDensity : 1;
+        const baseAlpha = clippingBase ? clippingBase[regionIndex]! / 255 : clipping ? 0 : 1;
+        const rawAlpha = (renderedLayer[sourceIndex + 3]! / 255) * maskAlpha;
+        if (ownAlpha) ownAlpha[regionIndex] = Math.round(rawAlpha * 255);
+        const sourceAlpha = rawAlpha * baseAlpha * layerAlpha;
+        if (sourceAlpha <= 0) continue;
+
+        const sourceRed = renderedLayer[sourceIndex]!, sourceGreen = renderedLayer[sourceIndex + 1]!, sourceBlue = renderedLayer[sourceIndex + 2]!;
+        if (opaqueNormal && sourceAlpha >= 1) {
+          // Fully opaque `normal` pixels replace whatever is under them. The
+          // general formula reduces to exactly this, and painting over an
+          // opaque layer is the case a brush hits on almost every pixel.
+          output[index] = sourceRed; output[index + 1] = sourceGreen; output[index + 2] = sourceBlue; output[index + 3] = 255;
+          continue;
+        }
+        const destinationRed = output[index]!, destinationGreen = output[index + 1]!, destinationBlue = output[index + 2]!;
+        let blendedRed: number, blendedGreen: number, blendedBlue: number;
+        if (code === NORMAL) {
+          // The overwhelmingly common case: the source colour passes through
+          // untouched and only the Porter-Duff weighting below applies.
+          blendedRed = sourceRed; blendedGreen = sourceGreen; blendedBlue = sourceBlue;
+        } else if (nonSeparable) {
+          blendNonSeparable(code, sourceRed, sourceGreen, sourceBlue, destinationRed, destinationGreen, destinationBlue, blendScratch, sourceHsl, destinationHsl);
+          blendedRed = blendScratch[0]!; blendedGreen = blendScratch[1]!; blendedBlue = blendScratch[2]!;
+        } else {
+          blendedRed = blendChannel(code, sourceRed, destinationRed);
+          blendedGreen = blendChannel(code, sourceGreen, destinationGreen);
+          blendedBlue = blendChannel(code, sourceBlue, destinationBlue);
+        }
+
+        const destinationAlpha = output[index + 3]! / 255;
+        const carry = destinationAlpha * (1 - sourceAlpha);
+        const alpha = sourceAlpha + carry;
+        // Uint8ClampedArray clamps on assignment, so only the rounding is
+        // explicit here; it has to stay Math.round because the array itself
+        // rounds halves to even and the recorded output depends on it.
+        output[index] = Math.round((blendedRed * sourceAlpha + destinationRed * carry) / alpha);
+        output[index + 1] = Math.round((blendedGreen * sourceAlpha + destinationGreen * carry) / alpha);
+        output[index + 2] = Math.round((blendedBlue * sourceAlpha + destinationBlue * carry) / alpha);
+        output[index + 3] = Math.round(alpha * 255);
+      }
     }
     if (ownAlpha) clippingBaseByParent.set(parentKey, ownAlpha);
   }
