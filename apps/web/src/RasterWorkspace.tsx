@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import {
-  activeRasterLayer, combineSelections, compositeRasterDocument, createContiguousColorSelection, createEllipseSelection, createPolygonSelection, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
+  activeRasterLayer, appendLayer, clampRegionToDocument, combineSelections, compositeRasterDocument, compositeRasterRegion, createContiguousColorSelection, drawShape, DirtyRegion, RasterTileCache, type ShapeKind, createEllipseSelection, createPolygonSelection, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
   isRasterDocumentState, parseHexColor, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectionOutlinePath, toHexColor,
-  translateLayerPixels, translateSelection, type PixelSelection, type Point, type RasterDocumentState, type RasterGuide, type RasterLayer, type RasterRect, type SelectionCombineMode,
+  translateLayerPixels, translateSelection, type PixelSelection, type Point, type RasterDocumentState, type RasterGuide, type RasterLayer, type RasterRect, type RasterTextData, type SelectionCombineMode,
   cloneDab, cloneStrokeSegment,
   blurDab, blurStrokeSegment, smudgeStrokeSegment,
   dodgeBurnDab, dodgeBurnStrokeSegment, type DodgeBurnRange,
@@ -13,7 +13,7 @@ import type { VravioDocument } from "@vravio/kernel";
 import { kernel } from "./kernel";
 import { defaultViewport, useShellStore, type DocumentViewport } from "./store";
 import { diagnostic } from "./diagnostics";
-import { renderTextLayerPixels, textFontString } from "./textRender";
+import { identityTextTransform, multiplyTextTransform, renderTextLayerPixels, textBoundsTransform, textFontString } from "./textRender";
 import { localized } from "./i18n";
 
 /** Tools that mutate a layer's pixel buffer directly. A non-"pixel" layer (text, and later 3D) must be
@@ -32,6 +32,37 @@ function putPixels(canvas: HTMLCanvasElement, pixels: Uint8ClampedArray, width: 
   if (!context) throw new Error("Canvas 2D is not available");
   context.putImageData(new ImageData(pixels as Uint8ClampedArray<ArrayBuffer>, width, height), 0, 0);
 }
+
+/** Blits a region-sized buffer at its document offset, leaving the rest of the canvas untouched. */
+function putRegionPixels(canvas: HTMLCanvasElement, pixels: Uint8ClampedArray, region: RasterRect): void {
+  if (!region.width || !region.height) return;
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Canvas 2D is not available");
+  context.putImageData(new ImageData(pixels as Uint8ClampedArray<ArrayBuffer>, region.width, region.height), region.x, region.y);
+}
+
+/** Copies one rectangle out of a full-canvas buffer, for the single-layer blit fast path. */
+function cropPixels(pixels: Uint8ClampedArray, width: number, region: RasterRect): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(region.width * region.height * 4);
+  for (let row = 0; row < region.height; row += 1) {
+    const start = ((region.y + row) * width + region.x) * 4;
+    output.set(pixels.subarray(start, start + region.width * 4), row * region.width * 4);
+  }
+  return output;
+}
+
+function unionDirty(current: RasterRect | null, x0: number, y0: number, x1: number, y1: number, pad: number): RasterRect {
+  const left = Math.min(x0, x1) - pad, top = Math.min(y0, y1) - pad, right = Math.max(x0, x1) + pad, bottom = Math.max(y0, y1) + pad;
+  if (!current) return { x: left, y: top, width: right - left, height: bottom - top };
+  const nextLeft = Math.min(current.x, left), nextTop = Math.min(current.y, top);
+  return { x: nextLeft, y: nextTop, width: Math.max(current.x + current.width, right) - nextLeft, height: Math.max(current.y + current.height, bottom) - nextTop };
+}
+
+const shapeLayerNames: Record<string, string> = {
+  rectangle: "Rectangle (Прямоугольник)", roundedRectangle: "Rounded rectangle (Скруглённый прямоугольник)", ellipse: "Ellipse (Эллипс)",
+  line: "Line (Линия)", triangle: "Triangle (Треугольник)", polygon: "Polygon (Многоугольник)", star: "Star (Звезда)",
+};
+const shapeLayerName = (kind: string): string => shapeLayerNames[kind] ?? "Shape (Фигура)";
 
 function clampZoom(zoom: number): number {
   return Math.max(0.01, Math.min(64, zoom));
@@ -62,8 +93,24 @@ function withActiveLayerPixels(state: RasterDocumentState, pixels: Uint8ClampedA
   return { ...state, layers: state.layers.map((layer) => layer.id === state.activeLayerId ? { ...layer, pixels } : layer) };
 }
 
+function maskToRgba(mask: Uint8ClampedArray): Uint8ClampedArray {
+  const pixels = new Uint8ClampedArray(mask.length * 4);
+  for (let index = 0; index < mask.length; index += 1) { const value = mask[index]!; const offset = index * 4; pixels[offset] = value; pixels[offset + 1] = value; pixels[offset + 2] = value; pixels[offset + 3] = 255; }
+  return pixels;
+}
+
+function rgbaToMask(pixels: Uint8ClampedArray): Uint8ClampedArray {
+  const mask = new Uint8ClampedArray(pixels.length / 4);
+  for (let index = 0; index < mask.length; index += 1) mask[index] = Math.round((pixels[index * 4]! + pixels[index * 4 + 1]! + pixels[index * 4 + 2]!) / 3);
+  return mask;
+}
+
+function withLayerMaskPixels(state: RasterDocumentState, layerId: string, pixels: Uint8ClampedArray): RasterDocumentState {
+  return { ...state, layers: state.layers.map((layer) => layer.id === layerId && layer.mask ? { ...layer, mask: { ...layer.mask, pixels: rgbaToMask(pixels) } } : layer) };
+}
+
 function cloneRasterState(state: RasterDocumentState): RasterDocumentState {
-  return { ...state, layers: state.layers.map((layer) => ({ ...layer, pixels: layer.pixels.slice(), ...(layer.adjustment ? { adjustment: structuredClone(layer.adjustment) } : {}), ...(layer.mask ? { mask: { ...layer.mask, pixels: layer.mask.pixels.slice() } } : {}) })), selection: state.selection ? { mask: state.selection.mask.slice(), bounds: { ...state.selection.bounds } } : null, guides: (state.guides ?? []).map((guide) => ({ ...guide })) };
+  return { ...state, layers: state.layers.map((layer) => ({ ...layer, pixels: layer.pixels.slice(), ...(layer.text ? { text: structuredClone(layer.text) } : {}), ...(layer.adjustment ? { adjustment: structuredClone(layer.adjustment) } : {}), ...(layer.mask ? { mask: { ...layer.mask, pixels: layer.mask.pixels.slice() } } : {}) })), selection: state.selection ? { mask: state.selection.mask.slice(), bounds: { ...state.selection.bounds } } : null, guides: (state.guides ?? []).map((guide) => ({ ...guide })) };
 }
 
 function rasterStateByteLength(state: RasterDocumentState): number {
@@ -76,6 +123,8 @@ function alphaBounds(pixels: Uint8ClampedArray, width: number, height: number): 
   return right > left && bottom > top ? { x: left, y: top, width: right - left, height: bottom - top } : null;
 }
 
+interface PendingTextTransform { original: RasterTextData; initialBounds: RasterRect; targetBounds: RasterRect }
+
 interface PendingPixelTransform {
   before: RasterDocumentState;
   layerId: string;
@@ -84,18 +133,31 @@ interface PendingPixelTransform {
   pixels: Uint8ClampedArray;
   selection: PixelSelection | null;
   rotation: number;
+  text?: PendingTextTransform;
+}
+
+interface TextDraft {
+  point: Point;
+  value: string;
+  layerId?: string;
+  mode: "point" | "area" | "path" | "dynamic";
+  boxWidth?: number;
+  boxHeight?: number;
+  path?: { start: Point; control: Point; end: Point; flip?: boolean };
+  dynamicPreset?: "circle" | "arch" | "bow";
 }
 
 export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const workspaceRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const textTransformCanvasRef = useRef<HTMLCanvasElement>(null);
   const brushCursorRef = useRef<SVGGElement>(null);
-  const gesture = useRef<{ before: Uint8ClampedArray; working: Uint8ClampedArray; curveStart: Point; pending: Point; pointerId: number; frame: number | null; sourceOffsetX?: number; sourceOffsetY?: number; sourcePixels?: Uint8ClampedArray } | null>(null);
+  const gesture = useRef<{ before: Uint8ClampedArray; working: Uint8ClampedArray; curveStart: Point; pending: Point; pointerId: number; frame: number | null; dirty?: RasterRect | null; strokeBounds?: RasterRect | null; target: "pixels" | "mask"; layerId: string; sourceOffsetX?: number; sourceOffsetY?: number; sourcePixels?: Uint8ClampedArray } | null>(null);
   const selectionGesture = useRef<{ kind: "rectangle" | "ellipse" | "lasso"; from: Point; current: Point; points: Point[]; pointerId: number } | null>(null);
   const documentGesture = useRef<
-    | { kind: "move" | "crop"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number }
-    | { kind: "scale"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; handleX: -1 | 0 | 1; handleY: -1 | 0 | 1; dx: number; dy: number }
-    | { kind: "rotate"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; center: Point; startAngle: number; baseRotation: number; dx: number; dy: number }
+    | { kind: "move" | "crop"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean }
+    | { kind: "scale"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; handleX: -1 | 0 | 1; handleY: -1 | 0 | 1; dx: number; dy: number; text?: PendingTextTransform }
+    | { kind: "rotate"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; center: Point; startAngle: number; baseRotation: number; dx: number; dy: number; text?: PendingTextTransform }
     | null
   >(null);
   const pendingTransformRef = useRef<PendingPixelTransform | null>(null);
@@ -107,10 +169,17 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const sourcePointRef = useRef<{ x: number; y: number } | null>(null);
   const cloneOffsetRef = useRef<{ x: number; y: number } | null>(null);
   const lastBrushPointRef = useRef<{ toolId: string; layerId: string; point: Point } | null>(null);
+  const textCancelRef = useRef(false);
   const spotHealMaskRef = useRef<{ mask: Uint8ClampedArray; originX: number; originY: number; width: number; height: number; before: Uint8ClampedArray } | null>(null);
   const [selectionDraft, setSelectionDraft] = useState<RasterRect | null>(null);
+  const shapeGesture = useRef<{ from: Point; current: Point; pointerId: number } | null>(null);
+  const textGesture = useRef<{ from: Point; current: Point; pointerId: number; mode: string } | null>(null);
+  const [shapeDraft, setShapeDraft] = useState<RasterRect | null>(null);
+  const [textFrameDraft, setTextFrameDraft] = useState<RasterRect | null>(null);
+  const tiles = useRef(new RasterTileCache({ tileSize: 256 }));
+  const documentDirty = useRef(new DirtyRegion());
   const [lassoDraft, setLassoDraft] = useState<Point[]>([]);
-  const [textDraft, setTextDraft] = useState<{ point: Point; left: number; top: number; value: string; layerId?: string } | null>(null);
+  const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
   const [transformPreview, setTransformPreview] = useState<PendingPixelTransform | null>(null);
   const [brushPopup, setBrushPopup] = useState<{ left: number; top: number; detailed: boolean } | null>(null);
   const [spaceHeld, setSpaceHeld] = useState(false);
@@ -123,6 +192,9 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const activeToolId = useShellStore((state) => state.activeToolByDocument[document.id]);
   const toolOptions = useShellStore((state) => state.toolOptions);
   const foregroundColor = useShellStore((shell) => shell.foregroundColor);
+  const editingMaskLayerId = useShellStore((shell) => shell.editingMaskLayerIdByDocument[document.id] ?? null);
+  const maskForegroundIsWhite = useShellStore((shell) => shell.maskForegroundIsWhiteByDocument[document.id] ?? false);
+  const setMaskForegroundWhite = useShellStore((shell) => shell.setMaskForegroundWhite);
   const setForegroundColor = useShellStore((shell) => shell.setForegroundColor);
   const setToolOption = useShellStore((shell) => shell.setToolOption);
   const viewport = useShellStore((shell) => shell.viewports[document.id] ?? defaultViewport);
@@ -130,11 +202,37 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const preferences = useShellStore((shell) => shell.preferences);
   if (!isRasterDocumentState(document.state)) return <div className="workspace-error">Invalid raster document state</div>;
   const state = document.state;
+  const editingMaskLayer = editingMaskLayerId ? state.layers.find((layer) => layer.id === editingMaskLayerId && layer.mask) ?? null : null;
+  const paintColor = editingMaskLayer ? (maskForegroundIsWhite ? "#ffffff" : "#000000") : foregroundColor;
 
+  // Committed edits repaint through the tile cache: only tiles the edit actually touched are
+  // recomposited, instead of rebuilding the whole document on every revision (spec §4.2).
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (canvas) putPixels(canvas, compositeRasterDocument(state), state.width, state.height);
+    if (!canvas) return;
+    // An empty region means the edit did not report what it touched (a filter, a layer
+    // operation, an undo), so the whole document is assumed dirty. Only gestures narrow it.
+    const pending = documentDirty.current.isEmpty ? null : documentDirty.current.consume();
+    if (pending === null) tiles.current.invalidateAll();
+    else for (const rect of pending) tiles.current.invalidate(rect);
+    const { repainted } = tiles.current.update(state, { x: 0, y: 0, width: state.width, height: state.height });
+    for (const tile of repainted) putRegionPixels(canvas, tile.pixels, tile.rect);
   }, [document.revision, state]);
+
+  // Text transforms never touch the document-sized raster during a drag. The base
+  // canvas is painted once without the active text layer and a cropped overlay is
+  // handed to the compositor/GPU for translation, scaling and rotation.
+  useEffect(() => {
+    const textTransform = transformPreview?.text, overlay = textTransformCanvasRef.current;
+    if (!textTransform || !overlay) return;
+    const sourceLayer = state.layers.find((item) => item.id === transformPreview.layerId);
+    if (!sourceLayer) return;
+    const bounds = textTransform.initialBounds;
+    overlay.width = Math.max(1, Math.round(bounds.width)); overlay.height = Math.max(1, Math.round(bounds.height));
+    putPixels(overlay, cropPixels(sourceLayer.pixels, state.width, bounds), overlay.width, overlay.height);
+    const canvas = canvasRef.current;
+    if (canvas) putPixels(canvas, compositeRasterDocument({ ...state, layers: state.layers.map((item) => item.id === transformPreview.layerId ? { ...item, visible: false } : item) }), state.width, state.height);
+  }, [state, transformPreview?.layerId, transformPreview?.text?.initialBounds, transformPreview?.text?.original]);
 
   useEffect(() => () => { const current = gesture.current; if (current?.frame != null) cancelAnimationFrame(current.frame); }, []);
 
@@ -163,6 +261,16 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     measure(); const observer = new ResizeObserver(measure); observer.observe(workspace); return () => observer.disconnect();
   }, []);
 
+  // The navigator needs the size of the visible area to draw its viewport frame. Publishing it
+  // as an event keeps the measurement out of the shell store, which would otherwise re-render
+  // every panel on each resize frame.
+  useEffect(() => {
+    const publish = () => window.dispatchEvent(new CustomEvent("vravio-viewport-metrics", { detail: { documentId: document.id, workspaceWidth: workspaceSize.width, workspaceHeight: workspaceSize.height } }));
+    publish();
+    window.addEventListener("vravio-viewport-metrics-request", publish);
+    return () => window.removeEventListener("vravio-viewport-metrics-request", publish);
+  }, [document.id, workspaceSize.width, workspaceSize.height]);
+
   useEffect(() => {
     const keyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -182,19 +290,38 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     return () => window.removeEventListener("vravio-guides-clear", clear);
   }, [document.id]);
 
-  const renderWorking = (pixels: Uint8ClampedArray) => {
+  const renderWorking = (pixels: Uint8ClampedArray, target: "pixels" | "mask" = gesture.current?.target ?? "pixels", layerId = gesture.current?.layerId ?? state.activeLayerId) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    if (target === "mask") { putPixels(canvas, compositeRasterDocument(withLayerMaskPixels(state, layerId, pixels)), state.width, state.height); return; }
     const layer = activeRasterLayer(state);
     const direct = state.layers.length === 1 && layer.visible && layer.opacity === 1 && layer.blendMode === "normal";
     putPixels(canvas, direct ? pixels : compositeRasterDocument(withActiveLayerPixels(state, pixels)), state.width, state.height);
+  };
+
+  /**
+   * Repaints only the area the stroke has touched since the last frame. Compositing the whole
+   * document every pointermove is what makes brushes stutter on large canvases (spec §4.2), and
+   * a stroke only ever changes a few hundred pixels around the cursor.
+   */
+  const renderWorkingRegion = (pixels: Uint8ClampedArray, dirty: RasterRect) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const region = clampRegionToDocument(state, dirty);
+    if (!region.width || !region.height) return;
+    const layer = activeRasterLayer(state);
+    const direct = state.layers.length === 1 && layer.visible && layer.opacity === 1 && layer.blendMode === "normal";
+    putRegionPixels(canvas, direct ? cropPixels(pixels, state.width, region) : compositeRasterRegion(withActiveLayerPixels(state, pixels), region), region);
   };
 
   const scheduleWorkingRender = (current: NonNullable<typeof gesture.current>) => {
     if (current.frame !== null) return;
     current.frame = requestAnimationFrame(() => {
       current.frame = null;
-      if (gesture.current === current) renderWorking(current.working);
+      if (gesture.current !== current) return;
+      const dirty = current.dirty;
+      current.dirty = null;
+      if (dirty) renderWorkingRegion(current.working, dirty); else renderWorking(current.working);
     });
   };
 
@@ -206,18 +333,34 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       if (transforming.handleX === -1) left = point.x; else if (transforming.handleX === 1) right = point.x;
       if (transforming.handleY === -1) top = point.y; else if (transforming.handleY === 1) bottom = point.y;
       const target = { x: Math.min(left, right), y: Math.min(top, bottom), width: Math.max(1, Math.abs(right - left)), height: Math.max(1, Math.abs(bottom - top)) };
+      if (transforming.text) {
+        const current = pendingTransformRef.current; if (!current) return;
+        const preview: PendingPixelTransform = { ...current, text: { ...transforming.text, targetBounds: target } };
+        pendingTransformRef.current = preview; setTransformPreview(preview); announceTransform(preview); return;
+      }
       const pixels = scaleLayerPixels(transforming.basePixels, state.width, state.height, source, target, transforming.baseSelection);
       const selection = scaleSelection(transforming.baseSelection, state.width, state.height, source, target);
       const preview = { before: transforming.before, layerId: transforming.before.activeLayerId, dx: transforming.dx, dy: transforming.dy, pixels, selection, rotation: pendingTransformRef.current?.rotation ?? 0 };
       pendingTransformRef.current = preview; setTransformPreview(preview); announceTransform(preview); renderWorking(pixels);
     } else if (transforming.kind === "rotate") {
       const angle = transforming.baseRotation + (Math.atan2(point.y - transforming.center.y, point.x - transforming.center.x) - transforming.startAngle) * 180 / Math.PI;
+      if (transforming.text) {
+        const current = pendingTransformRef.current; if (!current) return;
+        const preview: PendingPixelTransform = { ...current, rotation: angle, text: transforming.text };
+        pendingTransformRef.current = preview; setTransformPreview(preview); announceTransform(preview); return;
+      }
       const pixels = rotateLayerPixels(transforming.basePixels, state.width, state.height, transforming.sourceBounds, angle - transforming.baseRotation, transforming.baseSelection);
       const selection = rotateSelection(transforming.baseSelection, state.width, state.height, transforming.sourceBounds, angle - transforming.baseRotation);
       const preview = { before: transforming.before, layerId: transforming.before.activeLayerId, dx: transforming.dx, dy: transforming.dy, pixels, selection, rotation: angle };
       pendingTransformRef.current = preview; setTransformPreview(preview); announceTransform(preview); renderWorking(pixels);
     } else if (transforming.kind === "move") {
       const deltaX = point.x - transforming.from.x, deltaY = point.y - transforming.from.y, dx = transforming.startDx + deltaX, dy = transforming.startDy + deltaY;
+      if (transforming.text) {
+        const current = pendingTransformRef.current; if (!current) return;
+        const start = transforming.text.targetBounds;
+        const preview: PendingPixelTransform = { ...current, dx, dy, text: { ...transforming.text, targetBounds: { ...start, x: start.x + deltaX, y: start.y + deltaY } } };
+        pendingTransformRef.current = preview; setTransformPreview(preview); announceTransform(preview); return;
+      }
       const working = translateLayerPixels(transforming.basePixels, state.width, state.height, deltaX, deltaY, transforming.baseSelection);
       renderWorking(working);
       const moved = translateSelection(transforming.baseSelection, state.width, state.height, deltaX, deltaY);
@@ -272,16 +415,25 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     } else if (activeToolId === "raster.dodge" || activeToolId === "raster.burn") {
       dodgeBurnStrokeSegment(current.working, state.width, state.height, current.curveStart, point, Number(options.size ?? 24), Number(options.exposure ?? 50) / 100, activeToolId === "raster.dodge" ? "dodge" : "burn", (options.range as DodgeBurnRange) ?? "midtones", state.selection?.mask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
     } else {
-      drawQuadraticStrokeSegment(current.working, state.width, state.height, current.curveStart, current.pending, end, Number(options.size ?? 24), parseHexColor(foregroundColor), opacity, activeToolId === "raster.eraser", state.selection?.mask, activeToolId === "raster.pencil" ? 1 : Number(options.hardness ?? 82) / 100, Number(options.spacing ?? 12) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), options.pressureSize !== false, options.pressureOpacity === true);
+      drawQuadraticStrokeSegment(current.working, state.width, state.height, current.curveStart, current.pending, end, Number(options.size ?? 24), parseHexColor(current.target === "mask" && activeToolId === "raster.eraser" ? "#ffffff" : paintColor), opacity, current.target === "pixels" && activeToolId === "raster.eraser", state.selection?.mask, activeToolId === "raster.pencil" ? 1 : Number(options.hardness ?? 82) / 100, Number(options.spacing ?? 12) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), options.pressureSize !== false, options.pressureOpacity === true);
     }
+    // Union every point the segment could have touched, padded by the brush radius (plus a
+    // margin for the neighbourhood-sampling tools) so the repaint never clips the stroke.
+    const pad = Number(options.size ?? 24) / 2 + 2;
+    current.dirty = unionDirty(current.dirty ?? null, current.curveStart.x, current.curveStart.y, current.pending.x, current.pending.y, pad);
+    current.dirty = unionDirty(current.dirty, point.x, point.y, end.x, end.y, pad);
+    // `dirty` is consumed every frame; `strokeBounds` survives so the commit can tell the tile
+    // cache exactly what the finished stroke changed.
+    current.strokeBounds = unionDirty(current.strokeBounds ?? null, current.dirty.x, current.dirty.y, current.dirty.x + current.dirty.width, current.dirty.y + current.dirty.height, 0);
     current.curveStart = end;
     current.pending = point;
   };
 
-  const commitPixels = async (before: Uint8ClampedArray, after: Uint8ClampedArray, label: string) => {
+  const commitPixels = async (before: Uint8ClampedArray, after: Uint8ClampedArray, label: string, target: "pixels" | "mask" = "pixels", layerId = state.activeLayerId, bounds?: RasterRect | null) => {
+    if (bounds) documentDirty.current.add(bounds);
     const history = kernel.historyByDocument.get(document.id);
     if (!history) throw new Error(`History missing for ${document.id}`);
-    const assign = (pixels: Uint8ClampedArray): void => { kernel.documents.update<RasterDocumentState>(document.id, (current) => { activeRasterLayer(current).pixels = pixels.slice(); }); };
+    const assign = (pixels: Uint8ClampedArray): void => { kernel.documents.update<RasterDocumentState>(document.id, (current) => { const layer = current.layers.find((item) => item.id === layerId); if (!layer) return; if (target === "mask" && layer.mask) layer.mask.pixels = rgbaToMask(pixels); else layer.pixels = pixels.slice(); }); };
     await history.execute({ label, memoryEstimate: before.byteLength + after.byteLength, redo: () => assign(after), undo: () => assign(before) });
   };
 
@@ -302,7 +454,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   };
 
   const announceTransform = (pending: PendingPixelTransform | null) => {
-    const bounds = pending?.selection?.bounds ?? (pending ? alphaBounds(pending.pixels, state.width, state.height) : null);
+    const bounds = pending?.text?.targetBounds ?? pending?.selection?.bounds ?? (pending ? alphaBounds(pending.pixels, state.width, state.height) : null);
     window.dispatchEvent(new CustomEvent("vravio-transform-state", { detail: pending && bounds ? { active: true, x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, rotation: pending.rotation } : null }));
   };
 
@@ -314,16 +466,26 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     announceTransform(null);
     diagnostic("info", "transform", commit ? "Transform committed" : "Transform cancelled", { documentId: document.id, layerId: pending.layerId, dx: pending.dx, dy: pending.dy });
     if (!commit) { const canvas = canvasRef.current; if (canvas) putPixels(canvas, compositeRasterDocument(state), state.width, state.height); return; }
+    if (pending.text) {
+      const history = kernel.historyByDocument.get(document.id);
+      if (!history) return;
+      const beforeText = structuredClone(pending.text.original);
+      const delta = textBoundsTransform(pending.text.initialBounds, pending.text.targetBounds, pending.rotation);
+      const afterText = { ...beforeText, transform: multiplyTextTransform(delta, beforeText.transform ?? identityTextTransform()) };
+      const assign = (value: RasterTextData) => kernel.documents.update<RasterDocumentState>(document.id, (current) => {
+        const target = current.layers.find((item) => item.id === pending.layerId); if (!target) return;
+        const started = performance.now();
+        target.text = structuredClone(value); target.pixels = renderTextLayerPixels(target.text, current.width, current.height);
+        const elapsedMs = performance.now() - started;
+        diagnostic(elapsedMs > 50 ? "warn" : "info", "text.transform", `Text raster cache rebuilt in ${elapsedMs.toFixed(1)} ms`, { documentId: document.id, layerId: pending.layerId, width: current.width, height: current.height });
+      });
+      void history.execute({ label: "Transform Type Layer (Трансформация текстового слоя)", memoryEstimate: JSON.stringify(beforeText).length + JSON.stringify(afterText).length, redo: () => { assign(afterText); }, undo: () => { assign(beforeText); } });
+      return;
+    }
     const after = cloneRasterState(pending.before);
     const layer = after.layers.find((item) => item.id === pending.layerId);
     if (layer) {
-      // A pure move keeps a text layer non-destructive: shift the live text anchor and
-      // re-render from it, instead of baking the dragged preview into a plain pixel cache
-      // (which would desync layer.text.x/y from what's actually on screen).
-      if (layer.kind === "text" && layer.text && pending.rotation === 0) {
-        layer.text = { ...layer.text, x: layer.text.x + pending.dx, y: layer.text.y + pending.dy };
-        layer.pixels = renderTextLayerPixels(layer.text, after.width, after.height);
-      } else layer.pixels = pending.pixels.slice();
+      layer.pixels = pending.pixels.slice();
     }
     after.selection = pending.selection ? { mask: pending.selection.mask.slice(), bounds: { ...pending.selection.bounds } } : null;
     if (nextActiveLayerId) after.activeLayerId = nextActiveLayerId;
@@ -333,11 +495,13 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   useEffect(() => {
     const start = () => {
       if (pendingTransformRef.current) return;
-      const before = cloneRasterState(state), layer = activeRasterLayer(before);
+      const sourceLayer = activeRasterLayer(state), liveText = sourceLayer.kind === "text" && sourceLayer.text && !state.selection;
+      const before = liveText ? state : cloneRasterState(state), layer = liveText ? sourceLayer : activeRasterLayer(before);
       const selection = before.selection ? restrictSelectionToAlpha(before.selection, layer.pixels, state.width, state.height) : null;
       if (before.selection && !selection) { diagnostic("info", "transform", "Transform ignored: selection contains no opaque pixels", { documentId: document.id, layerId: layer.id }); return; }
       if (!selection && !alphaBounds(layer.pixels, state.width, state.height)) { diagnostic("info", "transform", "Transform ignored: layer is empty", { documentId: document.id, layerId: layer.id }); return; }
-      const pending = { before, layerId: layer.id, dx: 0, dy: 0, pixels: layer.pixels.slice(), selection, rotation: 0 };
+      const bounds = layer.text?.visualBounds?.width ? layer.text.visualBounds : alphaBounds(layer.pixels, state.width, state.height)!;
+      const pending: PendingPixelTransform = { before, layerId: layer.id, dx: 0, dy: 0, pixels: liveText ? layer.pixels : layer.pixels.slice(), selection, rotation: 0, ...(liveText ? { text: { original: structuredClone(layer.text!), initialBounds: { ...bounds }, targetBounds: { ...bounds } } } : {}) };
       pendingTransformRef.current = pending; setTransformPreview(pending); announceTransform(pending);
     };
     const commit = () => finishPendingTransform(true), cancel = () => finishPendingTransform(false);
@@ -381,6 +545,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   };
 
   const commitText = () => {
+    textCancelRef.current = false;
     if (!textDraft?.value) { setTextDraft(null); return; }
     const before = cloneRasterState(state);
     const existing = textDraft.layerId ? state.layers.find((item) => item.id === textDraft.layerId) : null;
@@ -389,13 +554,22 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     const fontSize = existing?.text?.fontSize ?? Number(options.fontSize ?? 48), fontFamily = existing?.text?.fontFamily ?? String(options.fontFamily ?? "Arial");
     const textX = existing?.text?.x ?? textDraft.point.x, textY = existing?.text?.y ?? textDraft.point.y, lineHeight = existing?.text?.lineHeight ?? 1.2, letterSpacing = existing?.text?.letterSpacing ?? 0, align = existing?.text?.align ?? "left", color = existing?.text?.color ?? foregroundColor;
     const bold = existing?.text?.bold ?? false, italic = existing?.text?.italic ?? false, underline = existing?.text?.underline ?? false;
-    layer.text = { value: textDraft.value, x: textX, y: textY, fontFamily, fontSize, lineHeight, letterSpacing, align, color, bold, italic, underline };
-    layer.pixels = renderTextLayerPixels(layer.text, state.width, state.height);
+    const boxWidth = existing?.text?.boxWidth ?? textDraft.boxWidth, boxHeight = existing?.text?.boxHeight ?? textDraft.boxHeight, path = existing?.text?.path ?? textDraft.path, dynamicPreset = existing?.text?.dynamicPreset ?? textDraft.dynamicPreset;
+    const textData = { value: textDraft.value, x: textX, y: textY, fontFamily, fontSize, lineHeight, letterSpacing, align, color, bold, italic, underline, mode: existing?.text?.mode ?? textDraft.mode, ...(boxWidth !== undefined ? { boxWidth } : {}), ...(boxHeight !== undefined ? { boxHeight } : {}), ...(path ? { path } : {}), ...(dynamicPreset ? { dynamicPreset } : {}) };
+    layer.text = textData;
+    layer.pixels = renderTextLayerPixels(textData, state.width, state.height);
     layer.kind = "text";
     layer.name = textDraft.value.slice(0, 28) || layer.name;
     const after = cloneRasterState(state); const index = after.layers.findIndex((item) => item.id === layer.id); if (index >= 0) after.layers[index] = layer; else after.layers.push(layer); after.activeLayerId = layer.id;
     setTextDraft(null);
     void commitDocumentState(before, after, "Type Layer (Текстовый слой)");
+  };
+
+  const cancelText = () => {
+    textCancelRef.current = true;
+    setTextDraft(null);
+    const canvas = canvasRef.current;
+    if (canvas) putPixels(canvas, compositeRasterDocument(state), state.width, state.height);
   };
 
   const handlePointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -405,29 +579,33 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     if (!workspace) return;
     const point = pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent);
     const layer = activeRasterLayer(state);
+    const maskTarget = editingMaskLayer?.id === state.activeLayerId ? editingMaskLayer : null;
+    const paintTargetId = maskTarget?.id ?? layer.id;
+    const brushTargetKey = maskTarget ? `mask:${maskTarget.id}` : layer.id;
     const pendingTransform = pendingTransformRef.current;
     if (pendingTransform) {
-      const bounds = pendingTransform.selection?.bounds ?? alphaBounds(pendingTransform.pixels, state.width, state.height), tolerance = 11 / viewport.zoom;
+      const bounds = pendingTransform.text?.targetBounds ?? pendingTransform.selection?.bounds ?? alphaBounds(pendingTransform.pixels, state.width, state.height), tolerance = 11 / viewport.zoom;
       if (!bounds) { pendingTransformRef.current = null; setTransformPreview(null); announceTransform(null); diagnostic("warn", "transform", "Discarded invalid empty pending transform", { documentId: document.id, layerId: pendingTransform.layerId }); return; }
       const rotatePoint = { x: bounds.x + bounds.width / 2, y: bounds.y - 27 / viewport.zoom };
       if (Math.hypot(point.x - rotatePoint.x, point.y - rotatePoint.y) <= tolerance) {
         canvas.setPointerCapture(event.pointerId); const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
-        documentGesture.current = { kind: "rotate", from: point, current: point, pointerId: event.pointerId, before: pendingTransform.before, basePixels: pendingTransform.pixels.slice(), baseSelection: pendingTransform.selection ? { mask: pendingTransform.selection.mask.slice(), bounds: { ...pendingTransform.selection.bounds } } : null, sourceBounds: { ...bounds }, center, startAngle: Math.atan2(point.y - center.y, point.x - center.x), baseRotation: pendingTransform.rotation, dx: pendingTransform.dx, dy: pendingTransform.dy };
+        documentGesture.current = { kind: "rotate", from: point, current: point, pointerId: event.pointerId, before: pendingTransform.before, basePixels: pendingTransform.text ? pendingTransform.pixels : pendingTransform.pixels.slice(), baseSelection: pendingTransform.selection ? { mask: pendingTransform.selection.mask.slice(), bounds: { ...pendingTransform.selection.bounds } } : null, sourceBounds: { ...bounds }, center, startAngle: Math.atan2(point.y - center.y, point.x - center.x), baseRotation: pendingTransform.rotation, dx: pendingTransform.dx, dy: pendingTransform.dy, ...(pendingTransform.text ? { text: pendingTransform.text } : {}) };
         return;
       }
       const handles = [[-1,-1],[0,-1],[1,-1],[-1,0],[1,0],[-1,1],[0,1],[1,1]] as const;
       const handle = handles.find(([x, y]) => Math.hypot(point.x - (bounds.x + (x + 1) * bounds.width / 2), point.y - (bounds.y + (y + 1) * bounds.height / 2)) <= tolerance);
       if (handle) {
         canvas.setPointerCapture(event.pointerId);
-        documentGesture.current = { kind: "scale", from: point, current: point, pointerId: event.pointerId, before: pendingTransform.before, basePixels: pendingTransform.pixels.slice(), baseSelection: pendingTransform.selection ? { mask: pendingTransform.selection.mask.slice(), bounds: { ...pendingTransform.selection.bounds } } : null, sourceBounds: { ...bounds }, handleX: handle[0], handleY: handle[1], dx: pendingTransform.dx, dy: pendingTransform.dy };
+        documentGesture.current = { kind: "scale", from: point, current: point, pointerId: event.pointerId, before: pendingTransform.before, basePixels: pendingTransform.text ? pendingTransform.pixels : pendingTransform.pixels.slice(), baseSelection: pendingTransform.selection ? { mask: pendingTransform.selection.mask.slice(), bounds: { ...pendingTransform.selection.bounds } } : null, sourceBounds: { ...bounds }, handleX: handle[0], handleY: handle[1], dx: pendingTransform.dx, dy: pendingTransform.dy, ...(pendingTransform.text ? { text: pendingTransform.text } : {}) };
         return;
       }
     }
-    if (activeToolId && layer.kind !== "pixel" && RASTER_ONLY_TOOLS.has(activeToolId)) {
+    if (!maskTarget && activeToolId && layer.kind !== "pixel" && RASTER_ONLY_TOOLS.has(activeToolId)) {
       setRasterizeConfirm({ layerId: layer.id, layerName: layer.name });
       return;
     }
     if (activeToolId === "raster.clone") {
+      if (maskTarget) return;
       if (event.altKey) {
         sourcePointRef.current = { x: point.x, y: point.y };
         cloneOffsetRef.current = null;
@@ -448,11 +626,12 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         lastBrushPointRef.current = { toolId: activeToolId, layerId: layer.id, point }; renderWorking(working); void commitPixels(before, working, "Clone Line (Линия штампа)"); return;
       }
       cloneDab(working, state.width, state.height, point.x + sourceOffsetX, point.y + sourceOffsetY, point.x, point.y, Number(options.size ?? 24), opacity, Number(options.hardness ?? 82) / 100, state.selection?.mask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), true, false, before);
-      gesture.current = { before, working, curveStart: point, pending: point, pointerId: event.pointerId, frame: null, sourceOffsetX, sourceOffsetY, sourcePixels: before };
+      gesture.current = { before, working, curveStart: point, pending: point, pointerId: event.pointerId, frame: null, target: "pixels", layerId: layer.id, sourceOffsetX, sourceOffsetY, sourcePixels: before };
       renderWorking(working);
       return;
     }
     if (activeToolId === "raster.spotHeal") {
+      if (maskTarget) return;
       canvas.setPointerCapture(event.pointerId);
       const before = layer.pixels.slice();
       const options = toolOptions[activeToolId] ?? {};
@@ -474,23 +653,39 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       }
       spotHealDab(mask, originX, originY, maskW, maskH, point.x, point.y, size, Number(options.hardness ?? 82) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
       spotHealMaskRef.current = { mask, originX, originY, width: maskW, height: maskH, before };
-      gesture.current = { before, working: before.slice(), curveStart: point, pending: point, pointerId: event.pointerId, frame: null };
+      gesture.current = { before, working: before.slice(), curveStart: point, pending: point, pointerId: event.pointerId, frame: null, target: "pixels", layerId: layer.id };
       renderSpotHealOverlay(mask, originX, originY, maskW, maskH);
       return;
     }
     if (activeToolId === "raster.patch") {
+      if (maskTarget) return;
       if (!state.selection) return;
       canvas.setPointerCapture(event.pointerId);
-      gesture.current = { before: layer.pixels.slice(), working: layer.pixels.slice(), curveStart: point, pending: point, pointerId: event.pointerId, frame: null };
+      gesture.current = { before: layer.pixels.slice(), working: layer.pixels.slice(), curveStart: point, pending: point, pointerId: event.pointerId, frame: null, target: "pixels", layerId: layer.id };
       return;
     }
     const paintingTool = activeToolId === "raster.brush" || activeToolId === "raster.pencil" || activeToolId === "raster.highlighter" || activeToolId === "raster.eraser" || activeToolId === "raster.blur" || activeToolId === "raster.smudge" || activeToolId === "raster.dodge" || activeToolId === "raster.burn";
-    if (event.altKey && paintingTool) { setForegroundColor(toHexColor(sampleAverage(compositeRasterDocument(state), state.width, state.height, point.x, point.y, 1))); return; }
+    if (event.altKey && paintingTool) { if (maskTarget?.mask) { const sample = maskTarget.mask.pixels[Math.max(0, Math.min(maskTarget.mask.pixels.length - 1, Math.floor(point.y) * state.width + Math.floor(point.x)))] ?? 0; setMaskForegroundWhite(document.id, sample >= 128); } else setForegroundColor(toHexColor(sampleAverage(compositeRasterDocument(state), state.width, state.height, point.x, point.y, 1))); return; }
     if (activeToolId === "raster.text") {
-      const rect = workspace.getBoundingClientRect();
-      const hit = [...state.layers].reverse().find((item) => { if (item.kind !== "text" || !item.text) return false; const lines = item.text.value.split("\n"), width = Math.max(...lines.map((line) => line.length), 1) * item.text.fontSize * .65, height = lines.length * item.text.fontSize * item.text.lineHeight; return point.x >= item.text.x && point.x <= item.text.x + width && point.y >= item.text.y && point.y <= item.text.y + height; });
+      const hit = [...state.layers].reverse().find((item) => { if (item.kind !== "text" || !item.text) return false; const lines = item.text.value.split("\n"), width = item.text.boxWidth ?? Math.max(...lines.map((line) => line.length), 1) * item.text.fontSize * .65, height = item.text.boxHeight ?? lines.length * item.text.fontSize * item.text.lineHeight; const left = item.text.path ? Math.min(item.text.path.start.x, item.text.path.end.x, item.text.path.control.x) : item.text.x, top = item.text.path ? Math.min(item.text.path.start.y, item.text.path.end.y, item.text.path.control.y) - item.text.fontSize : item.text.y; return point.x >= left && point.x <= left + Math.max(width, item.text.path ? Math.abs(item.text.path.end.x - item.text.path.start.x) : 0) && point.y >= top && point.y <= top + Math.max(height, item.text.fontSize * 2); });
       if (hit?.text) kernel.documents.update<RasterDocumentState>(document.id, (current) => { current.activeLayerId = hit.id; });
-      setTextDraft({ point, left: event.clientX - rect.left, top: event.clientY - rect.top, value: hit?.text?.value ?? "", ...(hit ? { layerId: hit.id } : {}) });
+      if (hit?.text) {
+        textCancelRef.current = false;
+        setTextDraft({ point: { x: hit.text.x, y: hit.text.y }, value: hit.text.value, layerId: hit.id, mode: hit.text.mode ?? (hit.text.boxWidth ? "area" : "point"), ...(hit.text.boxWidth !== undefined ? { boxWidth: hit.text.boxWidth } : {}), ...(hit.text.boxHeight !== undefined ? { boxHeight: hit.text.boxHeight } : {}), ...(hit.text.path ? { path: hit.text.path } : {}), ...(hit.text.dynamicPreset ? { dynamicPreset: hit.text.dynamicPreset } : {}) });
+        putPixels(canvas, compositeRasterDocument({ ...state, layers: state.layers.map((item) => item.id === hit.id ? { ...item, visible: false } : item) }), state.width, state.height);
+        return;
+      }
+      const mode = String(toolOptions["raster.text"]?.textMode ?? "auto");
+      canvas.setPointerCapture(event.pointerId);
+      textGesture.current = { from: point, current: point, pointerId: event.pointerId, mode };
+      setTextFrameDraft({ x: point.x, y: point.y, width: 0, height: 0 });
+      return;
+    }
+    if (activeToolId === "raster.shape") {
+      if (layer.locked) return;
+      canvas.setPointerCapture(event.pointerId);
+      shapeGesture.current = { from: point, current: point, pointerId: event.pointerId };
+      setShapeDraft({ x: point.x, y: point.y, width: 0, height: 0 });
       return;
     }
     if (activeToolId === "raster.marquee" || activeToolId === "raster.ellipseMarquee" || activeToolId === "raster.lasso") {
@@ -513,10 +708,16 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       if (activeToolId === "raster.move" && layer.locked) return;
       const effectiveSelection = activeToolId === "raster.move" && state.selection ? restrictSelectionToAlpha(state.selection, layer.pixels, state.width, state.height) : null;
       if (activeToolId === "raster.move" && state.selection && !effectiveSelection) { diagnostic("info", "move", "Move ignored: selection contains no opaque pixels", { documentId: document.id, layerId: layer.id }); return; }
-      if (activeToolId === "raster.move" && !state.selection && !alphaBounds(layer.pixels, state.width, state.height)) { diagnostic("info", "move", "Move ignored: layer is empty", { documentId: document.id, layerId: layer.id }); return; }
+      if (activeToolId === "raster.move" && !state.selection && !(layer.kind === "text" && layer.text?.visualBounds?.width ? layer.text.visualBounds : alphaBounds(layer.pixels, state.width, state.height))) { diagnostic("info", "move", "Move ignored: layer is empty", { documentId: document.id, layerId: layer.id }); return; }
       canvas.setPointerCapture(event.pointerId);
-      const pending = activeToolId === "raster.move" ? pendingTransformRef.current : null;
-      documentGesture.current = { kind: activeToolId === "raster.crop" ? "crop" : "move", from: point, current: point, pointerId: event.pointerId, before: pending?.before ?? cloneRasterState(state), startDx: pending?.dx ?? 0, startDy: pending?.dy ?? 0, basePixels: pending?.pixels.slice() ?? layer.pixels.slice(), baseSelection: pending?.selection ? { mask: pending.selection.mask.slice(), bounds: { ...pending.selection.bounds } } : effectiveSelection ? { mask: effectiveSelection.mask.slice(), bounds: { ...effectiveSelection.bounds } } : null, rotation: pending?.rotation ?? 0 };
+      let pending = activeToolId === "raster.move" ? pendingTransformRef.current : null, createdTextTransform = false;
+      if (activeToolId === "raster.move" && !pending && layer.kind === "text" && layer.text && !effectiveSelection) {
+        const bounds = layer.text.visualBounds?.width ? layer.text.visualBounds : alphaBounds(layer.pixels, state.width, state.height)!;
+        pending = { before: state, layerId: layer.id, dx: 0, dy: 0, pixels: layer.pixels, selection: null, rotation: 0, text: { original: structuredClone(layer.text), initialBounds: { ...bounds }, targetBounds: { ...bounds } } };
+        pendingTransformRef.current = pending; setTransformPreview(pending); announceTransform(pending);
+        createdTextTransform = true;
+      }
+      documentGesture.current = { kind: activeToolId === "raster.crop" ? "crop" : "move", from: point, current: point, pointerId: event.pointerId, before: pending?.before ?? cloneRasterState(state), startDx: pending?.dx ?? 0, startDy: pending?.dy ?? 0, basePixels: pending ? (pending.text ? pending.pixels : pending.pixels.slice()) : layer.pixels.slice(), baseSelection: pending?.selection ? { mask: pending.selection.mask.slice(), bounds: { ...pending.selection.bounds } } : effectiveSelection ? { mask: effectiveSelection.mask.slice(), bounds: { ...effectiveSelection.bounds } } : null, rotation: pending?.rotation ?? 0, ...(pending?.text ? { text: pending.text } : {}), ...(createdTextTransform ? { createdTextTransform: true } : {}) };
       setSelectionDraft(activeToolId === "raster.crop" ? { x: point.x, y: point.y, width: 0, height: 0 } : null);
       return;
     }
@@ -530,32 +731,41 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       return;
     }
     if (activeToolId === "raster.fill") {
-      const before = layer.pixels.slice(), after = layer.pixels.slice(), options = toolOptions[activeToolId] ?? {};
-      const changed = floodFill(after, state.width, state.height, point.x, point.y, parseHexColor(foregroundColor), Number(options.tolerance ?? 32), state.selection?.mask);
-      if (changed) void commitPixels(before, after, "Paint Bucket (Заливка)");
+      const before = maskTarget?.mask ? maskToRgba(maskTarget.mask.pixels) : layer.pixels.slice(), after = before.slice(), options = toolOptions[activeToolId] ?? {};
+      const changed = floodFill(after, state.width, state.height, point.x, point.y, parseHexColor(paintColor), Number(options.tolerance ?? 32), state.selection?.mask);
+      if (changed) void commitPixels(before, after, maskTarget ? "Fill Layer Mask (Заливка маски слоя)" : "Paint Bucket (Заливка)", maskTarget ? "mask" : "pixels", paintTargetId);
       return;
     }
     if (activeToolId !== "raster.brush" && activeToolId !== "raster.eraser" && activeToolId !== "raster.pencil" && activeToolId !== "raster.highlighter" && activeToolId !== "raster.blur" && activeToolId !== "raster.smudge" && activeToolId !== "raster.dodge" && activeToolId !== "raster.burn") return;
     canvas.setPointerCapture(event.pointerId);
-    const before = layer.pixels.slice(), working = layer.pixels.slice();
+    if (maskTarget && (activeToolId === "raster.blur" || activeToolId === "raster.smudge" || activeToolId === "raster.dodge" || activeToolId === "raster.burn")) return;
+    const before = maskTarget?.mask ? maskToRgba(maskTarget.mask.pixels) : layer.pixels.slice(), working = before.slice();
     const options = toolOptions[activeToolId] ?? {};
     const opacity = Number(options.opacity ?? 100) / 100 * Number(options.flow ?? 100) / 100;
-    const previous = lastBrushPointRef.current, shiftFrom = event.shiftKey && previous?.toolId === activeToolId && previous.layerId === layer.id ? previous.point : null;
+    const previous = lastBrushPointRef.current, shiftFrom = event.shiftKey && previous?.toolId === activeToolId && previous.layerId === brushTargetKey ? previous.point : null;
     if (shiftFrom) {
       if (activeToolId === "raster.blur") blurStrokeSegment(working, before, state.width, state.height, shiftFrom, point, Number(options.size ?? 24), Number(options.strength ?? 50) / 100, state.selection?.mask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
       else if (activeToolId === "raster.smudge") smudgeStrokeSegment(working, before, state.width, state.height, shiftFrom, point, Number(options.size ?? 24), Number(options.strength ?? 50) / 100, state.selection?.mask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
       else if (activeToolId === "raster.dodge" || activeToolId === "raster.burn") dodgeBurnStrokeSegment(working, state.width, state.height, shiftFrom, point, Number(options.size ?? 24), Number(options.exposure ?? 50) / 100, activeToolId === "raster.dodge" ? "dodge" : "burn", (options.range as DodgeBurnRange) ?? "midtones", state.selection?.mask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
-      else { const control = { x: (shiftFrom.x + point.x) / 2, y: (shiftFrom.y + point.y) / 2, pressure: 1 }; drawQuadraticStrokeSegment(working, state.width, state.height, shiftFrom, control, point, Number(options.size ?? 24), parseHexColor(foregroundColor), opacity, activeToolId === "raster.eraser", state.selection?.mask, activeToolId === "raster.pencil" ? 1 : Number(options.hardness ?? 82) / 100, Number(options.spacing ?? 12) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), options.pressureSize !== false, options.pressureOpacity === true); }
-      lastBrushPointRef.current = { toolId: activeToolId, layerId: layer.id, point }; renderWorking(working); void commitPixels(before, working, "Straight Brush Line (Прямая линия кисти)"); return;
+      else { const control = { x: (shiftFrom.x + point.x) / 2, y: (shiftFrom.y + point.y) / 2, pressure: 1 }; drawQuadraticStrokeSegment(working, state.width, state.height, shiftFrom, control, point, Number(options.size ?? 24), parseHexColor(maskTarget && activeToolId === "raster.eraser" ? "#ffffff" : paintColor), opacity, !maskTarget && activeToolId === "raster.eraser", state.selection?.mask, activeToolId === "raster.pencil" ? 1 : Number(options.hardness ?? 82) / 100, Number(options.spacing ?? 12) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), options.pressureSize !== false, options.pressureOpacity === true); }
+      lastBrushPointRef.current = { toolId: activeToolId, layerId: brushTargetKey, point }; renderWorking(working, maskTarget ? "mask" : "pixels", paintTargetId); void commitPixels(before, working, maskTarget ? "Paint Layer Mask (Рисование по маске слоя)" : "Straight Brush Line (Прямая линия кисти)", maskTarget ? "mask" : "pixels", paintTargetId); return;
     }
     if (activeToolId === "raster.blur") blurDab(working, before, state.width, state.height, point, Number(options.size ?? 24), Number(options.strength ?? 50) / 100, state.selection?.mask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
     else if (activeToolId === "raster.dodge" || activeToolId === "raster.burn") dodgeBurnDab(working, state.width, state.height, point, Number(options.size ?? 24), Number(options.exposure ?? 50) / 100, activeToolId === "raster.dodge" ? "dodge" : "burn", (options.range as DodgeBurnRange) ?? "midtones", state.selection?.mask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
-    else if (activeToolId !== "raster.smudge") drawDab(working, state.width, state.height, point, Number(options.size ?? 24), parseHexColor(foregroundColor), opacity, activeToolId === "raster.eraser", activeToolId === "raster.pencil" ? 1 : Number(options.hardness ?? 82) / 100, state.selection?.mask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), options.pressureSize !== false, options.pressureOpacity === true);
-    gesture.current = { before, working, curveStart: point, pending: point, pointerId: event.pointerId, frame: null, sourcePixels: before };
-    renderWorking(working);
+    else if (activeToolId !== "raster.smudge") drawDab(working, state.width, state.height, point, Number(options.size ?? 24), parseHexColor(maskTarget && activeToolId === "raster.eraser" ? "#ffffff" : paintColor), opacity, !maskTarget && activeToolId === "raster.eraser", activeToolId === "raster.pencil" ? 1 : Number(options.hardness ?? 82) / 100, state.selection?.mask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), options.pressureSize !== false, options.pressureOpacity === true);
+    gesture.current = { before, working, curveStart: point, pending: point, pointerId: event.pointerId, frame: null, target: maskTarget ? "mask" : "pixels", layerId: paintTargetId, sourcePixels: before };
+    renderWorking(working, maskTarget ? "mask" : "pixels", paintTargetId);
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const textDrawing = textGesture.current;
+    if (textDrawing && textDrawing.pointerId === event.pointerId) {
+      const workspace = workspaceRef.current; if (!workspace) return;
+      const point = pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent);
+      textDrawing.current = point;
+      setTextFrameDraft({ x: Math.min(textDrawing.from.x, point.x), y: Math.min(textDrawing.from.y, point.y), width: Math.abs(point.x - textDrawing.from.x), height: Math.abs(point.y - textDrawing.from.y) });
+      return;
+    }
     const selecting = selectionGesture.current;
     if (selecting && selecting.pointerId === event.pointerId) {
       const workspace = workspaceRef.current;
@@ -564,6 +774,15 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       selecting.current = point;
       if (selecting.kind === "lasso") { selecting.points.push(point); setLassoDraft([...selecting.points]); }
       setSelectionDraft({ x: Math.min(selecting.from.x, point.x), y: Math.min(selecting.from.y, point.y), width: Math.abs(point.x - selecting.from.x), height: Math.abs(point.y - selecting.from.y) });
+      return;
+    }
+    const shaping = shapeGesture.current;
+    if (shaping && shaping.pointerId === event.pointerId) {
+      const workspace = workspaceRef.current;
+      if (!workspace) return;
+      const point = pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent);
+      shaping.current = point;
+      setShapeDraft({ x: shaping.from.x, y: shaping.from.y, width: point.x - shaping.from.x, height: point.y - shaping.from.y });
       return;
     }
     const transforming = documentGesture.current;
@@ -624,6 +843,51 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   };
 
   const finishGesture = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const textDrawing = textGesture.current;
+    if (textDrawing && textDrawing.pointerId === event.pointerId) {
+      textGesture.current = null; setTextFrameDraft(null);
+      const distance = Math.hypot(textDrawing.current.x - textDrawing.from.x, textDrawing.current.y - textDrawing.from.y);
+      const end = distance >= 4 ? textDrawing.current : { x: Math.min(state.width, textDrawing.from.x + 240), y: textDrawing.from.y };
+      const width = Math.max(24, Math.abs(end.x - textDrawing.from.x)), height = Math.max(24, Math.abs(end.y - textDrawing.from.y));
+      if (textDrawing.mode === "auto") {
+        setTextDraft({ point: textDrawing.from, value: "", mode: distance >= 4 ? "area" : "point", ...(distance >= 4 ? { boxWidth: width, boxHeight: height } : {}) });
+      } else {
+        const dynamic = textDrawing.mode.startsWith("dynamic"), preset = textDrawing.mode === "dynamicCircle" ? "circle" : textDrawing.mode === "dynamicBow" ? "bow" : "arch";
+        const middle = { x: (textDrawing.from.x + end.x) / 2, y: (textDrawing.from.y + end.y) / 2 };
+        const control = preset === "bow" ? { x: middle.x, y: middle.y + Math.max(30, width * .22) } : preset === "circle" ? { x: middle.x, y: middle.y - Math.max(60, width * .65) } : { x: middle.x, y: middle.y - Math.max(30, width * .28) };
+        setTextDraft({ point: textDrawing.from, value: "", mode: dynamic ? "dynamic" : "path", boxWidth: width, boxHeight: Math.max(height, width * .5), path: { start: textDrawing.from, control, end }, ...(dynamic ? { dynamicPreset: preset as "circle" | "arch" | "bow" } : {}) });
+      }
+      return;
+    }
+    const shaping = shapeGesture.current;
+    if (shaping && shaping.pointerId === event.pointerId) {
+      shapeGesture.current = null;
+      setShapeDraft(null);
+      const rect = { x: shaping.from.x, y: shaping.from.y, width: shaping.current.x - shaping.from.x, height: shaping.current.y - shaping.from.y };
+      if (Math.abs(rect.width) < 1 && Math.abs(rect.height) < 1) return;
+      const options = toolOptions["raster.shape"] ?? {};
+      const mode = String(options.shapeMode ?? "fill");
+      const kind = String(options.shapeKind ?? "rectangle") as ShapeKind;
+      // Photoshop puts every shape on its own layer, which keeps them independently
+      // movable and restyleable instead of being flattened into whatever was selected.
+      const before = cloneRasterState(state), after = cloneRasterState(state);
+      const shapeLayer = createRasterLayer(state.width, state.height, shapeLayerName(kind));
+      drawShape(shapeLayer.pixels, state.width, state.height, {
+        kind,
+        rect,
+        cornerRadius: Number(options.cornerRadius ?? 16),
+        sides: Number(options.sides ?? 5),
+        strokeWidth: Number(options.strokeWidth ?? 4),
+        fill: mode === "stroke" ? null : parseHexColor(String(options.color ?? foregroundColor)),
+        stroke: mode === "fill" ? null : parseHexColor(String(options.strokeColor ?? "#ffffff")),
+      }, state.selection?.mask);
+      appendLayer(after, shapeLayer);
+      after.activeLayerId = shapeLayer.id;
+      const strokePad = Number(options.strokeWidth ?? 4) + 2;
+      documentDirty.current.add({ x: Math.min(rect.x, rect.x + rect.width) - strokePad, y: Math.min(rect.y, rect.y + rect.height) - strokePad, width: Math.abs(rect.width) + strokePad * 2, height: Math.abs(rect.height) + strokePad * 2 });
+      void commitDocumentState(before, after, "Shape (Фигура)");
+      return;
+    }
     const selecting = selectionGesture.current;
     if (selecting && selecting.pointerId === event.pointerId) {
       selectionGesture.current = null;
@@ -648,11 +912,12 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       if (transformFrameRef.current !== null) { cancelAnimationFrame(transformFrameRef.current); transformFrameRef.current = null; }
       documentGesture.current = null;
       setSelectionDraft(null);
-      if (transforming.kind === "scale" || transforming.kind === "rotate") return;
+      if (transforming.kind === "scale" || transforming.kind === "rotate") { applyTransformFrame(transforming); return; }
       const dx = transforming.startDx + transforming.current.x - transforming.from.x, dy = transforming.startDy + transforming.current.y - transforming.from.y;
       if (transforming.kind === "move") {
         const deltaX = transforming.current.x - transforming.from.x, deltaY = transforming.current.y - transforming.from.y;
-        if (Math.hypot(deltaX, deltaY) < .25) { const canvas = canvasRef.current; if (canvas) putPixels(canvas, compositeRasterDocument(state), state.width, state.height); return; }
+        if (Math.hypot(deltaX, deltaY) < .25) { if (transforming.createdTextTransform) { pendingTransformRef.current = null; setTransformPreview(null); announceTransform(null); } const canvas = canvasRef.current; if (canvas) putPixels(canvas, compositeRasterDocument(state), state.width, state.height); return; }
+        if (transforming.text) { applyTransformFrame(transforming); return; }
         const pixels = translateLayerPixels(transforming.basePixels, state.width, state.height, deltaX, deltaY, transforming.baseSelection);
         const preview = { before: transforming.before, layerId: transforming.before.activeLayerId, dx, dy, pixels, selection: translateSelection(transforming.baseSelection, state.width, state.height, deltaX, deltaY), rotation: transforming.rotation };
         pendingTransformRef.current = preview;
@@ -690,13 +955,13 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       const patchOffsetY = current.pending.y - current.curveStart.y;
       patchFromSelection(current.working, state.width, state.height, state.selection?.mask ?? null, state.selection?.bounds ?? { x: 0, y: 0, width: state.width, height: state.height }, patchOffsetX, patchOffsetY, Number(options.opacity ?? 100) / 100, (options.mode as "source" | "destination") ?? "source", Number(options.feather ?? 0));
     } else if (activeToolId !== "raster.blur" && activeToolId !== "raster.smudge" && activeToolId !== "raster.dodge" && activeToolId !== "raster.burn") {
-      drawQuadraticStrokeSegment(current.working, state.width, state.height, current.curveStart, current.pending, current.pending, Number(options.size ?? 24), parseHexColor(foregroundColor), opacity, activeToolId === "raster.eraser", state.selection?.mask, activeToolId === "raster.pencil" ? 1 : Number(options.hardness ?? 82) / 100, Number(options.spacing ?? 12) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), options.pressureSize !== false, options.pressureOpacity === true);
+      drawQuadraticStrokeSegment(current.working, state.width, state.height, current.curveStart, current.pending, current.pending, Number(options.size ?? 24), parseHexColor(current.target === "mask" && activeToolId === "raster.eraser" ? "#ffffff" : paintColor), opacity, current.target === "pixels" && activeToolId === "raster.eraser", state.selection?.mask, activeToolId === "raster.pencil" ? 1 : Number(options.hardness ?? 82) / 100, Number(options.spacing ?? 12) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), options.pressureSize !== false, options.pressureOpacity === true);
     }
     if (current.frame !== null) cancelAnimationFrame(current.frame);
     gesture.current = null;
-    if (activeToolId && activeToolId !== "raster.patch") lastBrushPointRef.current = { toolId: activeToolId, layerId: activeRasterLayer(state).id, point: current.pending };
+    if (activeToolId && activeToolId !== "raster.patch") lastBrushPointRef.current = { toolId: activeToolId, layerId: current.target === "mask" ? `mask:${current.layerId}` : current.layerId, point: current.pending };
     const label = activeToolId === "raster.eraser" ? "Eraser (Ластик)" : activeToolId === "raster.pencil" ? "Pencil (Карандаш)" : activeToolId === "raster.highlighter" ? "Highlighter (Выделитель)" : activeToolId === "raster.clone" ? "Clone (Штамп)" : activeToolId === "raster.patch" ? "Patch (Заплатка)" : activeToolId === "raster.blur" ? "Blur (Размытие)" : activeToolId === "raster.smudge" ? "Smudge (Палец)" : activeToolId === "raster.dodge" ? "Dodge (Осветлитель)" : activeToolId === "raster.burn" ? "Burn (Затемнитель)" : "Brush Stroke (Мазок кисти)";
-    void commitPixels(current.before, current.working, label);
+    void commitPixels(current.before, current.working, current.target === "mask" ? "Paint Layer Mask (Рисование по маске слоя)" : label, current.target, current.layerId, current.strokeBounds ?? null);
   };
 
   const selectionRect = selectionDraft;
@@ -761,7 +1026,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   };
   const draftKind = selectionGesture.current?.kind;
   const displayedSelection = transformPreview?.selection ?? state.selection;
-  const transformBounds = transformPreview ? (displayedSelection?.bounds ?? alphaBounds(transformPreview.pixels, state.width, state.height)) : null;
+  const transformBounds = transformPreview ? (transformPreview.text?.targetBounds ?? displayedSelection?.bounds ?? alphaBounds(transformPreview.pixels, state.width, state.height)) : null;
   const committedSelectionPath = displayedSelection ? selectionOutlinePath(displayedSelection.mask, state.width, state.height) : "";
   const brushLike = activeToolId === "raster.brush" || activeToolId === "raster.pencil" || activeToolId === "raster.highlighter" || activeToolId === "raster.eraser" || activeToolId === "raster.clone" || activeToolId === "raster.spotHeal" || activeToolId === "raster.blur" || activeToolId === "raster.smudge" || activeToolId === "raster.dodge" || activeToolId === "raster.burn";
   const brushOptions = toolOptions[activeToolId ?? ""] ?? {};
@@ -798,13 +1063,43 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   return <div ref={workspaceRef} className="raster-workspace" data-active-tool={activeToolId} data-pixel-zoom={viewport.zoom >= 1 || undefined} data-space-held={spaceHeld || undefined} data-navigating={navigating || undefined} onPointerDownCapture={beginNavigation} onPointerMoveCapture={moveNavigation} onPointerUpCapture={endNavigation} onPointerCancelCapture={endNavigation} onWheel={handleWheel}>
     <div className="raster-stage" style={stageStyle}>
       <canvas ref={canvasRef} className={brushLike ? "brush-cursor-canvas" : ""} width={state.width} height={state.height} onPointerEnter={updateBrushCursor} onPointerLeave={() => { if (brushCursorRef.current) brushCursorRef.current.style.opacity = "0"; }} onPointerDown={handlePointerDown} onPointerMove={(event) => { updateBrushCursor(event); handlePointerMove(event); }} onPointerUp={finishGesture} onPointerCancel={finishGesture} onContextMenu={(event) => { event.preventDefault(); if (!brushLike) return; const rect = workspaceRef.current?.getBoundingClientRect(); if (rect) setBrushPopup({ left: Math.min(event.clientX - rect.left, rect.width - 300), top: Math.min(event.clientY - rect.top, rect.height - 430), detailed: false }); }} />
+      {transformPreview?.text && <canvas
+        ref={textTransformCanvasRef}
+        className="text-transform-preview"
+        style={{ left: transformPreview.text.targetBounds.x, top: transformPreview.text.targetBounds.y, width: transformPreview.text.targetBounds.width, height: transformPreview.text.targetBounds.height, transform: `rotate(${transformPreview.rotation}deg)` }}
+      />}
       {preferences.showGuides && <svg className="guide-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">{[...guides, ...(guideDraft ? [guideDraft] : [])].map((guide, index) => guide.orientation === "vertical" ? <line key={`${guide.orientation}-${index}`} x1={guide.position} y1="0" x2={guide.position} y2={state.height}/> : <line key={`${guide.orientation}-${index}`} x1="0" y1={guide.position} x2={state.width} y2={guide.position}/>)}</svg>}
       {brushLike && <svg className="brush-cursor-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><g ref={brushCursorRef} style={{ opacity: 0 }}>{preciseCursor ? <><path className="cursor-dark" d={`M${-7 / viewport.zoom} 0H${7 / viewport.zoom}M0 ${-7 / viewport.zoom}V${7 / viewport.zoom}`}/><path className="cursor-light" d={`M${-6 / viewport.zoom} 0H${6 / viewport.zoom}M0 ${-6 / viewport.zoom}V${6 / viewport.zoom}`}/></> : <><ellipse className="cursor-dark" rx={Number(brushOptions.size ?? 24) / 2} ry={Number(brushOptions.size ?? 24) * tipRoundness / 200}/><ellipse className="cursor-light" rx={Number(brushOptions.size ?? 24) / 2} ry={Number(brushOptions.size ?? 24) * tipRoundness / 200}/></>}</g></svg>}
       {selectionRect && selectionRect.width > 0 && selectionRect.height > 0 && <svg className="selection-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">
         {draftKind === "lasso" ? <polyline points={lassoDraft.map((point) => `${point.x},${point.y}`).join(" ")} /> : draftKind === "ellipse" ? <ellipse cx={selectionRect.x + selectionRect.width / 2} cy={selectionRect.y + selectionRect.height / 2} rx={selectionRect.width / 2} ry={selectionRect.height / 2} /> : <rect x={selectionRect.x} y={selectionRect.y} width={selectionRect.width} height={selectionRect.height} />}
       </svg>}
+      {shapeDraft && (Math.abs(shapeDraft.width) > 0 || Math.abs(shapeDraft.height) > 0) && (() => {
+        const box = { x: Math.min(shapeDraft.x, shapeDraft.x + shapeDraft.width), y: Math.min(shapeDraft.y, shapeDraft.y + shapeDraft.height), width: Math.abs(shapeDraft.width), height: Math.abs(shapeDraft.height) };
+        const kind = String(toolOptions["raster.shape"]?.shapeKind ?? "rectangle");
+        return <svg className="shape-draft" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">
+          {kind === "ellipse"
+            ? <ellipse cx={box.x + box.width / 2} cy={box.y + box.height / 2} rx={box.width / 2} ry={box.height / 2} />
+            : kind === "line"
+              ? <line x1={shapeDraft.x} y1={shapeDraft.y} x2={shapeDraft.x + shapeDraft.width} y2={shapeDraft.y + shapeDraft.height} />
+              : <rect x={box.x} y={box.y} width={box.width} height={box.height} rx={kind === "roundedRectangle" ? Number(toolOptions["raster.shape"]?.cornerRadius ?? 16) : 0} />}
+        </svg>;
+      })()}
       {!selectionDraft && committedSelectionPath && <svg className="selection-overlay committed-selection" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><path className="selection-soft-edge" d={committedSelectionPath} /><path className="selection-hard-edge" d={committedSelectionPath} /></svg>}
       {transformPreview && transformBounds && <svg className="transform-controls" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><rect x={transformBounds.x} y={transformBounds.y} width={transformBounds.width} height={transformBounds.height}/><line className="transform-rotation-stem" x1={transformBounds.x + transformBounds.width / 2} y1={transformBounds.y} x2={transformBounds.x + transformBounds.width / 2} y2={transformBounds.y - 27 / viewport.zoom}/><circle className="transform-rotation-handle" cx={transformBounds.x + transformBounds.width / 2} cy={transformBounds.y - 27 / viewport.zoom} r={5 / viewport.zoom}/>{([[0,0],[.5,0],[1,0],[0,.5],[1,.5],[0,1],[.5,1],[1,1]] as [number, number][]).map(([x,y], index) => <rect className="transform-handle" key={index} x={transformBounds.x + transformBounds.width * x - 4 / viewport.zoom} y={transformBounds.y + transformBounds.height * y - 4 / viewport.zoom} width={8 / viewport.zoom} height={8 / viewport.zoom}/>)}</svg>}
+      {textFrameDraft && <svg className="text-frame-draft" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><rect x={textFrameDraft.x} y={textFrameDraft.y} width={textFrameDraft.width} height={textFrameDraft.height}/></svg>}
+      {textDraft && (() => {
+        const existingLayer = textDraft.layerId ? state.layers.find((item) => item.id === textDraft.layerId) : null;
+        const draftOptions = toolOptions["raster.text"] ?? {};
+        const draftFont = existingLayer?.text?.fontFamily ?? String(draftOptions.fontFamily ?? "Arial");
+        const draftSize = existingLayer?.text?.fontSize ?? Number(draftOptions.fontSize ?? 48);
+        const draftColor = existingLayer?.text?.color ?? foregroundColor;
+        const draftAlign = existingLayer?.text?.align ?? "left";
+        const draftLineHeight = existingLayer?.text?.lineHeight ?? 1.2;
+        const anchorX = textDraft.path ? Math.min(textDraft.path.start.x, textDraft.path.end.x) : textDraft.point.x;
+        const anchorY = textDraft.path ? Math.min(textDraft.path.start.y, textDraft.path.end.y, textDraft.path.control.y) - draftSize : textDraft.point.y;
+        const wysiwyg: CSSProperties = { left: anchorX, top: anchorY, width: textDraft.mode === "point" ? Math.max(160, Math.min(520, state.width - anchorX)) : Math.max(24, textDraft.boxWidth ?? 240), minHeight: textDraft.mode === "area" ? Math.max(24, textDraft.boxHeight ?? 96) : draftSize * draftLineHeight * 1.5, fontFamily: draftFont, fontSize: draftSize, color: draftColor, textAlign: draftAlign as CSSProperties["textAlign"], lineHeight: draftLineHeight, fontWeight: existingLayer?.text?.bold ? 700 : 400, fontStyle: existingLayer?.text?.italic ? "italic" : "normal", textDecoration: existingLayer?.text?.underline ? "underline" : "none" };
+        return <><textarea className="canvas-text-entry" data-text-mode={textDraft.mode} autoFocus spellCheck={false} style={wysiwyg} value={textDraft.value} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => setTextDraft({ ...textDraft, value: event.target.value })} onBlur={() => { if (textCancelRef.current) textCancelRef.current = false; else commitText(); }} onKeyDown={(event) => { event.stopPropagation(); if (event.key === "Escape") { event.preventDefault(); cancelText(); } if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); commitText(); } }} placeholder="Type (Введите текст)"/>{textDraft.path && <svg className="text-path-guide" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><path d={`M ${textDraft.path.start.x} ${textDraft.path.start.y} Q ${textDraft.path.control.x} ${textDraft.path.control.y} ${textDraft.path.end.x} ${textDraft.path.end.y}`}/></svg>}</>;
+      })()}
     </div>
     {preferences.showRulers && <div className="rulers" aria-hidden="true"><div className="ruler-corner"/><div className="ruler-horizontal" onPointerDown={(event) => guidePointer(event, "horizontal")} onPointerMove={(event) => { if (guideDraft?.orientation === "horizontal") guidePointer(event, "horizontal"); }} onPointerUp={(event) => guidePointer(event, "horizontal", true)}>{horizontalTicks.map((value) => <i key={value} style={{ left: value * viewport.zoom + documentOriginX }}><span>{Math.round(value)}</span></i>)}</div><div className="ruler-vertical" onPointerDown={(event) => guidePointer(event, "vertical")} onPointerMove={(event) => { if (guideDraft?.orientation === "vertical") guidePointer(event, "vertical"); }} onPointerUp={(event) => guidePointer(event, "vertical", true)}>{verticalTicks.map((value) => <i key={value} style={{ top: value * viewport.zoom + documentOriginY }}><span>{Math.round(value)}</span></i>)}</div></div>}
     {brushPopup && brushLike && <aside className="brush-popup" style={{ left: Math.max(6, brushPopup.left), top: Math.max(6, brushPopup.top) }} onContextMenu={(event) => event.preventDefault()}>
@@ -820,17 +1115,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       {brushPopup.detailed && <div className="brush-detail-fields"><label>Spacing (Интервал)<input type="range" min="1" max="300" value={Number(brushOptions.spacing ?? 12)} onChange={(event) => setToolOption(activeToolId!, "spacing", event.target.valueAsNumber)}/><span>{Number(brushOptions.spacing ?? 12)}%</span></label><label>Roundness (Округлость)<input type="range" min="5" max="100" value={tipRoundness} onChange={(event) => setToolOption(activeToolId!, "roundness", event.target.valueAsNumber)}/><span>{tipRoundness}%</span></label><label>Angle (Угол)<input type="range" min="-180" max="180" value={tipAngle} onChange={(event) => setToolOption(activeToolId!, "angle", event.target.valueAsNumber)}/><span>{tipAngle}°</span></label></div>}
     </aside>}
     {transformPreview && <div className="pending-transform-hint">Enter — Apply (Применить) · Esc — Cancel (Отменить)</div>}
-    {textDraft && (() => {
-      const existingLayer = textDraft.layerId ? state.layers.find((item) => item.id === textDraft.layerId) : null;
-      const draftOptions = toolOptions["raster.text"] ?? {};
-      const draftFont = existingLayer?.text?.fontFamily ?? String(draftOptions.fontFamily ?? "Arial");
-      const draftSize = existingLayer?.text?.fontSize ?? Number(draftOptions.fontSize ?? 48);
-      const draftColor = existingLayer?.text?.color ?? foregroundColor;
-      const draftAlign = existingLayer?.text?.align ?? "left";
-      const draftLineHeight = existingLayer?.text?.lineHeight ?? 1.2;
-      const wysiwyg: CSSProperties = { fontFamily: draftFont, fontSize: Math.max(10, draftSize * viewport.zoom), color: draftColor, textAlign: draftAlign as CSSProperties["textAlign"], lineHeight: draftLineHeight, fontWeight: existingLayer?.text?.bold ? 700 : 400, fontStyle: existingLayer?.text?.italic ? "italic" : "normal", textDecoration: existingLayer?.text?.underline ? "underline" : "none" };
-      return <form className="canvas-text-entry" style={{ left: textDraft.left, top: textDraft.top }} onSubmit={(event) => { event.preventDefault(); commitText(); }}><textarea autoFocus style={wysiwyg} value={textDraft.value} onChange={(event) => setTextDraft({ ...textDraft, value: event.target.value })} onKeyDown={(event) => { event.stopPropagation(); if (event.key === "Escape") setTextDraft(null); if (event.key === "Enter" && event.ctrlKey) { event.preventDefault(); commitText(); } }} placeholder="Type (Введите текст)"/><button type="button" onClick={() => setTextDraft(null)}>×</button><button type="submit">✓</button></form>;
-    })()}
     <div className="canvas-badge">{state.width} × {state.height} · {Math.round(viewport.zoom * 100)}% · {Math.round(viewport.rotation * 10) / 10}° · sRGB · {state.layers.length} layer(s)</div>
     {rasterizeConfirm && <div className="dialog-backdrop rasterize-confirm-backdrop" onMouseDown={() => setRasterizeConfirm(null)}>
       <section className="rasterize-confirm" role="alertdialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>

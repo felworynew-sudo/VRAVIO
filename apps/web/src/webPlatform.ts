@@ -76,6 +76,11 @@ export function createWebPlatform(gpu: GPUContext): Platform {
     nativeFfmpeg: false,
     nativeThreads: false,
   };
-  const ml: MLPort = { backends: gpu.available.length ? gpu.available : ["wasm"], supportsLocalModels: true };
+  const ml: MLPort = {
+    backends: gpu.available.length ? gpu.available : ["wasm"],
+    supportsLocalModels: true,
+    // Inference follows the render ladder, with WebNN preferred when the browser exposes it.
+    backend: () => ("ml" in navigator ? "webnn" : gpu.active ?? gpu.available[0] ?? "wasm"),
+  };
   return { kind: "web", fs: new WebFileSystem(), codecs: new WebCodecs(), fonts: new WebFonts(), ml, gpu, capabilities };
 }

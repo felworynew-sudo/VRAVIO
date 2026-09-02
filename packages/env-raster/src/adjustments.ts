@@ -1,3 +1,4 @@
+import { sampleColorLookup } from "./lut";
 import type { RasterAdjustment } from "./types";
 
 const byte = (value: number): number => Math.max(0, Math.min(255, Math.round(value)));
@@ -57,6 +58,11 @@ export function adjustRgb(r: number, g: number, b: number, adjustment: RasterAdj
   if (adjustment.kind === "brightnessContrast") {
     const brightness = adjustment.brightness * 2.55, contrast = Math.max(-255, Math.min(255, adjustment.contrast * 2.55)), factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
     const apply = (value: number) => byte(factor * (value + brightness - 128) + 128); return [apply(r), apply(g), apply(b)];
+  }
+  if (adjustment.kind === "colorLookup") {
+    const [outR, outG, outB] = sampleColorLookup(adjustment.lut, r, g, b);
+    const mix = Math.max(0, Math.min(1, adjustment.amount));
+    return [byte(r + (outR - r) * mix), byte(g + (outG - g) * mix), byte(b + (outB - b) * mix)];
   }
   const [h, s, l] = rgbToHsl(r, g, b);
   return hslToRgb((h + adjustment.hue / 360 + 1) % 1, Math.max(0, Math.min(1, s * (1 + adjustment.saturation / 100))), Math.max(0, Math.min(1, l + adjustment.lightness / 100)));

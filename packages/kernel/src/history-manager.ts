@@ -1,13 +1,22 @@
-import type { ReversibleOperation } from "./types";
+import type { Disposable, ReversibleOperation } from "./types";
 
 interface HistoryEntry { operation: ReversibleOperation; timestamp: number }
 export interface HistoryManagerOptions { readonly limit?: number; readonly memoryLimitBytes?: number; readonly storageLimitBytes?: number }
+
+/** One row of the history panel timeline: applied steps first, then undone steps still available for redo. */
+export interface HistoryEntrySummary {
+  readonly position: number;
+  readonly label: string;
+  readonly timestamp: number;
+  readonly applied: boolean;
+}
 
 const estimate = (operation: ReversibleOperation, key: "memoryEstimate" | "storageEstimate") => Math.max(0, operation[key] ?? 0);
 
 export class HistoryManager {
   readonly #undoStack: HistoryEntry[] = [];
   readonly #redoStack: HistoryEntry[] = [];
+  readonly #listeners = new Set<() => void>();
   readonly #limit: number;
   #memoryLimitBytes: number;
   #storageLimitBytes: number;
@@ -28,6 +37,32 @@ export class HistoryManager {
   get redoCount(): number { return this.#redoStack.length; }
   get memoryBytes(): number { return this.#total("memoryEstimate"); }
   get storageBytes(): number { return this.#total("storageEstimate"); }
+  /** Number of applied steps; also the timeline cursor used by {@link jumpTo}. */
+  get position(): number { return this.#undoStack.length; }
+
+  /**
+   * The full timeline, oldest first. The redo stack is LIFO, so it is reversed here to
+   * read as "what happens next" rather than "what was undone most recently".
+   */
+  timeline(): readonly HistoryEntrySummary[] {
+    const applied = this.#undoStack.map((entry, index) => ({ position: index + 1, label: entry.operation.label, timestamp: entry.timestamp, applied: true }));
+    const undone = [...this.#redoStack].reverse().map((entry, index) => ({ position: applied.length + index + 1, label: entry.operation.label, timestamp: entry.timestamp, applied: false }));
+    return [...applied, ...undone];
+  }
+
+  /** Moves the cursor to `position` (0 = before the first step) by replaying undo/redo. */
+  async jumpTo(position: number): Promise<boolean> {
+    const total = this.#undoStack.length + this.#redoStack.length;
+    if (!Number.isInteger(position) || position < 0 || position > total) return false;
+    while (this.#undoStack.length > position) if (!await this.undo()) return false;
+    while (this.#undoStack.length < position) if (!await this.redo()) return false;
+    return true;
+  }
+
+  subscribe(listener: () => void): Disposable {
+    this.#listeners.add(listener);
+    return { dispose: () => this.#listeners.delete(listener) };
+  }
 
   async setBudgets(memoryLimitBytes: number, storageLimitBytes = this.#storageLimitBytes): Promise<void> {
     if (!(memoryLimitBytes > 0) || !(storageLimitBytes > 0)) throw new RangeError("History budgets must be positive");
@@ -44,6 +79,7 @@ export class HistoryManager {
     else this.#undoStack.push({ operation, timestamp: Date.now() });
     await this.#freeEntries(this.#redoStack.splice(0));
     await this.#trim();
+    this.#notify();
   }
 
   async executeBatch(label: string, operations: readonly ReversibleOperation[]): Promise<void> {
@@ -71,6 +107,7 @@ export class HistoryManager {
     if (!entry) return false;
     await entry.operation.undo();
     this.#redoStack.push(entry);
+    this.#notify();
     return true;
   }
 
@@ -79,11 +116,13 @@ export class HistoryManager {
     if (!entry) return false;
     await entry.operation.redo();
     this.#undoStack.push(entry);
+    this.#notify();
     return true;
   }
 
   async clear(): Promise<void> {
     await this.#freeEntries([...this.#undoStack.splice(0), ...this.#redoStack.splice(0)]);
+    this.#notify();
   }
 
   async #trim(): Promise<void> {
@@ -94,6 +133,8 @@ export class HistoryManager {
     }
     await this.#freeEntries(removed);
   }
+
+  #notify(): void { for (const listener of [...this.#listeners]) listener(); }
 
   #total(key: "memoryEstimate" | "storageEstimate"): number {
     return [...this.#undoStack, ...this.#redoStack].reduce((sum, entry) => sum + estimate(entry.operation, key), 0);

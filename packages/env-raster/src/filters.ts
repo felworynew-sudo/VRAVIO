@@ -6,6 +6,9 @@ const amount = [{ id: "amount", name: "Amount (Сила)", min: 0, max: 100, ste
 const radius = [{ id: "radius", name: "Radius (Радиус)", min: 1, max: 32, step: 1, value: 2 }];
 export const rasterFilterCatalog: RasterFilterDefinition[] = [
   ["invert","Invert (Инверсия)","Basics",none], ["brightness_contrast","Brightness/Contrast (Яркость/Контраст)","Basics",[{id:"brightness",name:"Brightness (Яркость)",min:-100,max:100,step:1,value:0},{id:"contrast",name:"Contrast (Контраст)",min:-100,max:100,step:1,value:20}]], ["grayscale","Grayscale (Оттенки серого)","Basics",none], ["desaturate","Desaturate (Обесцветить)","Basics",none], ["auto_tone","Auto Tone (Автотон)","Photo",none], ["auto_contrast","Auto Contrast (Автоконтраст)","Photo",none], ["auto_color","Auto Color (Автоцвет)","Photo",none], ["soft_glow","Soft Glow (Мягкое свечение)","Photo",amount], ["punchy_color","Punchy Color (Сочный цвет)","Photo",amount], ["noir","Noir (Нуар)","Photo",amount], ["cinematic_matte","Cinematic Matte (Кинематографический матовый)","Photo",amount], ["vintage_fade","Vintage Fade (Винтажное выцветание)","Photo",amount], ["sepia","Vintage Sepia (Винтажная сепия)","Photo",amount], ["threshold","Threshold (Порог)","Basics",[{id:"threshold",name:"Threshold (Порог)",min:0,max:255,step:1,value:128}]], ["posterize","Posterize (Постеризация)","Basics",[{id:"levels",name:"Levels (Уровни)",min:2,max:32,step:1,value:4}]], ["box_blur","Box Blur (Прямоугольное размытие)","Blur",radius], ["sharpen","Sharpen (Резкость)","Sharpen",amount], ["unsharp_mask","Unsharp Mask (Контурная резкость)","Sharpen",amount], ["gaussian_blur","Gaussian Blur (Размытие по Гауссу)","Blur",radius], ["motion_blur","Motion Blur (Размытие в движении)","Blur",radius], ["radial_blur","Radial Blur (Радиальное размытие)","Blur",radius], ["edge_detect","Edge Detect (Выделение краёв)","Stylize",none], ["emboss","Emboss (Тиснение)","Stylize",amount], ["glowing_edges","Glowing Edges (Светящиеся края)","Stylize",amount], ["twirl","Twirl (Скручивание)","Distort",amount], ["wave","Wave (Волна)","Distort",amount], ["pinch_bloat","Pinch/Bloat (Сжатие/Вздутие)","Distort",[{id:"amount",name:"Amount (Сила)",min:-100,max:100,step:1,value:25}]], ["clouds","Clouds (Облака)","Render",amount], ["pixelate","Pixel Mosaic (Мозаика)","Stylize",[{id:"size",name:"Cell size (Размер ячейки)",min:2,max:64,step:1,value:8}]], ["color_halftone","Color Halftone (Цветные полутона)","Stylize",radius], ["film_grain","Analog Grain (Аналоговое зерно)","Noise",amount], ["add_noise","Add Noise (Добавить шум)","Noise",amount], ["vignette","Lens Vignette (Виньетка)","Photo",amount], ["high_pass","High Pass (Цветовой контраст)","Sharpen",radius], ["median","Median (Медиана)","Noise",radius], ["dust_and_scratches","Dust & Scratches (Пыль и царапины)","Noise",radius], ["surface_blur","Surface Blur (Размытие по поверхности)","Blur",radius], ["lens_blur","Lens Blur (Размытие объектива)","Blur",radius], ["iris_blur","Iris Blur (Размытие диафрагмы)","Blur",radius], ["tilt_shift_blur","Tilt-Shift Blur (Наклон-сдвиг)","Blur",radius], ["plastic_wrap","Plastic Wrap (Целлофановая упаковка)","Stylize",amount],
+  ["duotone","Duotone (Дуотон)","Photo",[{id:"shadowHue",name:"Shadow hue (Тон теней)",min:0,max:359,step:1,value:210},{id:"highlightHue",name:"Highlight hue (Тон светов)",min:0,max:359,step:1,value:45},{id:"amount",name:"Amount (Сила)",min:0,max:100,step:1,value:100}]],
+  ["glitch","CRT Glitch (Глитч ЭЛТ)","Stylize",[{id:"shift",name:"Channel shift (Сдвиг каналов)",min:0,max:40,step:1,value:8},{id:"scanline",name:"Scanlines (Строки)",min:0,max:100,step:1,value:45},{id:"amount",name:"Amount (Сила)",min:0,max:100,step:1,value:100}]],
+  ["eink","E-Ink Dither (Дизеринг E-Ink)","Stylize",[{id:"levels",name:"Levels (Уровни)",min:2,max:8,step:1,value:2},{id:"amount",name:"Amount (Сила)",min:0,max:100,step:1,value:100}]],
 ].map(([id,name,category,parameters]) => ({ id, name, category, parameters })) as RasterFilterDefinition[];
 
 const byte = (value: number) => Math.max(0, Math.min(255, Math.round(value)));
@@ -114,6 +117,70 @@ function colorHalftoneFilter(source: Uint8ClampedArray, width: number, height: n
 }
 
 /** Direct TypeScript adaptation of Patchy's MIT built-in filter semantics. */
+/** Maps luminance onto a two-ink ramp, the way a Photoshop duotone reads. */
+function duotoneFilter(source: Uint8ClampedArray, shadowHue: number, highlightHue: number, mix: number): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(source.length);
+  const ink = (hue: number, level: number): [number, number, number] => {
+    const c = level, x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+    const [r, g, b] = hue < 60 ? [c, x, 0] : hue < 120 ? [x, c, 0] : hue < 180 ? [0, c, x] : hue < 240 ? [0, x, c] : hue < 300 ? [x, 0, c] : [c, 0, x];
+    return [r * 255, g * 255, b * 255];
+  };
+  for (let i = 0; i < source.length; i += 4) {
+    const r = source[i]!, g = source[i + 1]!, b = source[i + 2]!;
+    const luma = (r * 30 + g * 59 + b * 11) / 100 / 255;
+    const shadow = ink(shadowHue, 1 - luma), highlight = ink(highlightHue, luma);
+    for (let channel = 0; channel < 3; channel += 1) {
+      const toned = Math.min(255, shadow[channel]! * (1 - luma) + highlight[channel]! * luma + luma * 60);
+      output[i + channel] = byte(source[i + channel]! + (toned - source[i + channel]!) * mix);
+    }
+    output[i + 3] = source[i + 3]!;
+  }
+  return output;
+}
+
+/** Offsets the colour channels horizontally and darkens alternate rows, as a CRT capture does. */
+function glitchFilter(source: Uint8ClampedArray, width: number, height: number, shift: number, scanline: number, mix: number): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(source.length);
+  const sampleChannel = (x: number, y: number, channel: number): number => {
+    const clampedX = Math.max(0, Math.min(width - 1, x));
+    return source[(y * width + clampedX) * 4 + channel]!;
+  };
+  for (let y = 0; y < height; y += 1) {
+    // A per-row jitter keeps the tearing irregular without needing a random source.
+    const jitter = Math.round(Math.sin(y * 0.37) * shift);
+    for (let x = 0; x < width; x += 1) {
+      const index = (y * width + x) * 4;
+      const red = sampleChannel(x + jitter + shift, y, 0);
+      const green = sampleChannel(x, y, 1);
+      const blue = sampleChannel(x - jitter - shift, y, 2);
+      const darken = y % 2 === 0 ? 1 : 1 - scanline;
+      output[index] = byte(source[index]! + (red * darken - source[index]!) * mix);
+      output[index + 1] = byte(source[index + 1]! + (green * darken - source[index + 1]!) * mix);
+      output[index + 2] = byte(source[index + 2]! + (blue * darken - source[index + 2]!) * mix);
+      output[index + 3] = source[index + 3]!;
+    }
+  }
+  return output;
+}
+
+const bayer4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+
+/** Ordered-dither to a few grey levels; ordered rather than error-diffused so the result is
+ * position-dependent only, which keeps it tile-safe for regional recomposites. */
+function eInkFilter(source: Uint8ClampedArray, width: number, levels: number, mix: number): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(source.length);
+  const steps = Math.max(2, Math.round(levels)) - 1;
+  for (let i = 0; i < source.length; i += 4) {
+    const pixel = i / 4, x = pixel % width, y = Math.floor(pixel / width);
+    const luma = (source[i]! * 30 + source[i + 1]! * 59 + source[i + 2]! * 11) / 100;
+    const threshold = (bayer4[(y % 4) * 4 + (x % 4)]! + .5) / 16 - .5;
+    const quantized = Math.round(luma / 255 * steps + threshold) / steps * 255;
+    for (let channel = 0; channel < 3; channel += 1) output[i + channel] = byte(source[i + channel]! + (quantized - source[i + channel]!) * mix);
+    output[i + 3] = source[i + 3]!;
+  }
+  return output;
+}
+
 export function applyRasterFilter(source: Uint8ClampedArray, width: number, height: number, id: string, settings: Record<string, number> = {}): Uint8ClampedArray {
   const output = source.slice(), mix = Math.max(0,Math.min(1,value(settings,"amount",100)/100));
   if (["box_blur","gaussian_blur","surface_blur","lens_blur","iris_blur","tilt_shift_blur","median","dust_and_scratches","motion_blur","radial_blur"].includes(id)) return blur(source,width,height,value(settings,"radius",2));
@@ -122,6 +189,9 @@ export function applyRasterFilter(source: Uint8ClampedArray, width: number, heig
   if(id==="twirl") return twirlFilter(source,width,height,value(settings,"amount",100));
   if(id==="wave") return waveFilter(source,width,height,value(settings,"amount",100));
   if(id==="pinch_bloat") return pinchBloatFilter(source,width,height,value(settings,"amount",25));
+  if(id==="duotone") return duotoneFilter(source,value(settings,"shadowHue",210),value(settings,"highlightHue",45),mix);
+  if(id==="glitch") return glitchFilter(source,width,height,Math.round(value(settings,"shift",8)),value(settings,"scanline",45)/100,mix);
+  if(id==="eink") return eInkFilter(source,width,value(settings,"levels",2),mix);
   if(id==="clouds") return cloudsFilter(source,width,height,mix);
   if(id==="color_halftone") return colorHalftoneFilter(source,width,height,value(settings,"radius",2)*4);
   const blurred = ["soft_glow","high_pass","unsharp_mask","sharpen"].includes(id)?blur(source,width,height,2):null;

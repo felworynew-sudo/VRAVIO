@@ -1,3 +1,4 @@
+import { builtInLuts } from "./lut";
 import { parseHexColor } from "./color";
 import type { RasterAdjustment, RasterDocumentOptions, RasterDocumentState, RasterLayer, RasterLayerMask } from "./types";
 
@@ -26,6 +27,7 @@ export function defaultAdjustment(kind: RasterAdjustment["kind"]): RasterAdjustm
   if (kind === "brightnessContrast") return { kind, brightness: 0, contrast: 0 };
   if (kind === "posterize") return { kind, levels: 4 };
   if (kind === "threshold") return { kind, threshold: 128 };
+  if (kind === "colorLookup") return { kind, lut: builtInLuts[0]!, amount: 1 };
   return { kind: "invert" };
 }
 

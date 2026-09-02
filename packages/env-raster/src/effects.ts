@@ -35,8 +35,11 @@ function neighborhoodMinimumAlpha(source: Uint8ClampedArray, width: number, heig
 
 /** Produces a temporary rendered surface; source pixels remain untouched. */
 export function renderLayerEffects(layer: RasterLayer, width: number, height: number): Uint8ClampedArray {
-  const source = layer.pixels, output = new Uint8ClampedArray(source.length), effects = layer.effects ?? {};
+  const source = layer.pixels, effects = layer.effects ?? {};
+  // Allocate only once an effect is actually enabled: the compositor calls this for every
+  // layer on every frame, and the no-effects case is by far the most common.
   if (!Object.values(effects).some((effect) => effect?.enabled)) return source;
+  const output = new Uint8ClampedArray(source.length);
   const shadow = effects.dropShadow;
   if (shadow?.enabled) {
     const color = parseHexColor(shadow.color);

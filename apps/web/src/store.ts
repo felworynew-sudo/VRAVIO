@@ -86,6 +86,8 @@ interface ShellState {
   mruOrder: string[];
   activeToolByDocument: Record<string, string>;
   selectedLayerIdsByDocument: Record<string, string[]>;
+  editingMaskLayerIdByDocument: Record<string, string | null>;
+  maskForegroundIsWhiteByDocument: Record<string, boolean>;
   viewports: Record<string, DocumentViewport>;
   foregroundColor: string;
   backgroundColor: string;
@@ -104,6 +106,9 @@ interface ShellState {
   closeDocument(id: string): void;
   setTool(documentId: string, toolId: string): void;
   setSelectedLayers(documentId: string, layerIds: string[]): void;
+  setEditingMask(documentId: string, layerId: string | null): void;
+  setMaskForegroundWhite(documentId: string, white: boolean): void;
+  swapMaskColors(documentId: string): void;
   setToolOption(toolId: string, optionId: string, value: string | number | boolean): void;
   setViewport(documentId: string, patch: Partial<DocumentViewport>): void;
   setForegroundColor(color: string): void;
@@ -128,7 +133,7 @@ const names: Record<EnvironmentKind, string> = {
 const createHistory = (memoryBudgetMb: number) => new HistoryManager({ memoryLimitBytes: Math.max(64, memoryBudgetMb) * 1024 * 1024 });
 
 export const useShellStore = create<ShellState>((set) => ({
-  documentIds: [], activeDocumentId: null, mruOrder: [], activeToolByDocument: {}, selectedLayerIdsByDocument: {}, viewports: {}, foregroundColor: "#000000", backgroundColor: "#ffffff", toolOptions: {}, paletteOpen: false, settingsOpen: false, newDocumentKind: null,
+  documentIds: [], activeDocumentId: null, mruOrder: [], activeToolByDocument: {}, selectedLayerIdsByDocument: {}, editingMaskLayerIdByDocument: {}, maskForegroundIsWhiteByDocument: {}, viewports: {}, foregroundColor: "#000000", backgroundColor: "#ffffff", toolOptions: {}, paletteOpen: false, settingsOpen: false, newDocumentKind: null,
   theme: readPreference("vravio.theme", ["dark", "light", "contrast"] as const, "dark"),
   language: readPreference("vravio.language", ["en", "ru", "uk", "es", "de", "ja", "zh"] as const, "ru"),
   preferences: readPreferences(),
@@ -166,11 +171,17 @@ export const useShellStore = create<ShellState>((set) => ({
     const mruOrder = state.mruOrder.filter((documentId) => documentId !== id);
     const activeDocumentId = state.activeDocumentId === id ? mruOrder[0] ?? documentIds.at(-1) ?? null : state.activeDocumentId;
     const viewports = { ...state.viewports };
+    const editingMaskLayerIdByDocument = { ...state.editingMaskLayerIdByDocument };
+    const maskForegroundIsWhiteByDocument = { ...state.maskForegroundIsWhiteByDocument };
     delete viewports[id];
-    return { documentIds, mruOrder, activeDocumentId, viewports };
+    delete editingMaskLayerIdByDocument[id]; delete maskForegroundIsWhiteByDocument[id];
+    return { documentIds, mruOrder, activeDocumentId, viewports, editingMaskLayerIdByDocument, maskForegroundIsWhiteByDocument };
   }),
   setTool: (documentId, toolId) => set((state) => ({ activeToolByDocument: { ...state.activeToolByDocument, [documentId]: toolId } })),
   setSelectedLayers: (documentId, layerIds) => set((state) => ({ selectedLayerIdsByDocument: { ...state.selectedLayerIdsByDocument, [documentId]: layerIds } })),
+  setEditingMask: (documentId, layerId) => set((state) => ({ editingMaskLayerIdByDocument: { ...state.editingMaskLayerIdByDocument, [documentId]: layerId } })),
+  setMaskForegroundWhite: (documentId, white) => set((state) => ({ maskForegroundIsWhiteByDocument: { ...state.maskForegroundIsWhiteByDocument, [documentId]: white } })),
+  swapMaskColors: (documentId) => set((state) => ({ maskForegroundIsWhiteByDocument: { ...state.maskForegroundIsWhiteByDocument, [documentId]: !state.maskForegroundIsWhiteByDocument[documentId] } })),
   setToolOption: (toolId, optionId, value) => set((state) => ({ toolOptions: { ...state.toolOptions, [toolId]: { ...(state.toolOptions[toolId] ?? {}), [optionId]: value } } })),
   setViewport: (documentId, patch) => set((state) => ({ viewports: { ...state.viewports, [documentId]: { ...(state.viewports[documentId] ?? defaultViewport), ...patch } } })),
   setForegroundColor: (foregroundColor) => set({ foregroundColor }),

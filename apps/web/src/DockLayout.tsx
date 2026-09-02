@@ -5,15 +5,18 @@ import { environmentMeta } from "./environment";
 import { useShellStore } from "./store";
 import { useDocuments } from "./useDocuments";
 import { RasterWorkspace } from "./RasterWorkspace";
-import { appendLayer, appendRasterGroup, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, isRasterDocumentState, rasterLayerDescendantIds, rasterLayerRows, type RasterAdjustment, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerMask } from "@vravio/env-raster";
+import { appendLayer, appendRasterGroup, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, isRasterDocumentState, rasterLayerDescendantIds, rasterLayerRows, type RasterAdjustment, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerMask, builtInLuts, parseCubeLut } from "@vravio/env-raster";
 import { kernel } from "./kernel";
 import { EnvironmentIcon } from "./EnvironmentIcon";
 import { localized, text } from "./i18n";
 import { renderTextLayerPixels } from "./textRender";
+import { diagnostic } from "./diagnostics";
+import { ColorPanel } from "./ColorPanel";
+import { NavigatorPanel } from "./NavigatorPanel";
 import type { Language } from "./store";
 import "dockview-react/dist/styles/dockview.css";
 
-const LAYOUT_STORAGE_KEY = "vravio.workspace.default.v4";
+const LAYOUT_STORAGE_KEY = "vravio.workspace.default.v5";
 const EMPTY_LAYER_SELECTION: string[] = [];
 const MediaWorkspace = lazy(() => import("./MediaWorkspace").then((module) => ({ default: module.MediaWorkspace })));
 
@@ -40,13 +43,18 @@ function InspectorPanel({ params }: IDockviewPanelProps<{ kind?: string }>) {
     const layer = rasterState.layers.find((item) => item.id === rasterState.activeLayerId);
     if (layer?.kind === "text" && layer.text) {
       const updateText = (patch: Partial<NonNullable<RasterLayer["text"]>>) => kernel.documents.update<RasterDocumentState>(document.id, (state) => { const current = state.layers.find((item) => item.id === state.activeLayerId); if (!current?.text) return; current.text = { ...current.text, ...patch }; rasterizeTextLayer(current, state.width, state.height); });
-      return <div className="dock-panel-body property-stack"><strong>Type Properties (Свойства текста)</strong><label>Text (Текст)<textarea value={layer.text.value} onChange={(event) => updateText({ value: event.target.value })} /></label><label>Font (Шрифт)<input value={layer.text.fontFamily} onChange={(event) => updateText({ fontFamily: event.target.value })} /></label><label>Size (Кегль)<input type="number" min="1" max="1000" value={layer.text.fontSize} onChange={(event) => updateText({ fontSize: event.target.valueAsNumber })} /></label><label>Leading (Межстрочный)<input type="number" min="0.5" max="5" step="0.05" value={layer.text.lineHeight} onChange={(event) => updateText({ lineHeight: event.target.valueAsNumber })} /></label><label>Tracking (Межбуквенный)<input type="number" min="-50" max="200" value={layer.text.letterSpacing} onChange={(event) => updateText({ letterSpacing: event.target.valueAsNumber })} /></label><label>Align (Выравнивание)<select value={layer.text.align} onChange={(event) => updateText({ align: event.target.value as "left" | "center" | "right" })}><option value="left">Left (Слева)</option><option value="center">Center (По центру)</option><option value="right">Right (Справа)</option></select></label><label>Color (Цвет)<input type="color" value={layer.text.color} onChange={(event) => updateText({ color: event.target.value })} /></label><div className="text-style-toggles"><button className={layer.text.bold ? "active" : ""} onClick={() => updateText({ bold: !layer.text?.bold })} title="Bold (Полужирный)"><b>B</b></button><button className={layer.text.italic ? "active" : ""} onClick={() => updateText({ italic: !layer.text?.italic })} title="Italic (Курсив)"><i>I</i></button><button className={layer.text.underline ? "active" : ""} onClick={() => updateText({ underline: !layer.text?.underline })} title="Underline (Подчёркнутый)"><u>U</u></button></div></div>;
+      return <div className="dock-panel-body property-stack"><strong>Type Properties (Свойства текста)</strong><label>Text (Текст)<textarea value={layer.text.value} onChange={(event) => updateText({ value: event.target.value })} /></label><label>Type (Тип)<select value={layer.text.mode ?? (layer.text.boxWidth ? "area" : "point")} onChange={(event) => updateText({ mode: event.target.value as "point" | "area" | "path" | "dynamic" })}><option value="point">Point text (Точечный)</option><option value="area">Paragraph text (Блочный)</option>{layer.text.path && <option value="path">Text on path (Текст по контуру)</option>}{layer.text.path && <option value="dynamic">Dynamic text (Динамический)</option>}</select></label>{layer.text.mode === "dynamic" && <label>Dynamic shape (Динамическая форма)<select value={layer.text.dynamicPreset ?? "arch"} onChange={(event) => updateText({ dynamicPreset: event.target.value as "circle" | "arch" | "bow" })}><option value="circle">Circle (Круг)</option><option value="arch">Arch (Дуга)</option><option value="bow">Bow (Изгиб)</option></select></label>}{layer.text.path && <label className="export-check"><input type="checkbox" checked={layer.text.path.flip ?? false} onChange={(event) => updateText({ path: { ...layer.text!.path!, flip: event.target.checked } })}/>Flip path (Перевернуть контур)</label>}<label>Font (Шрифт)<input value={layer.text.fontFamily} onChange={(event) => updateText({ fontFamily: event.target.value })} /></label><label>Size (Кегль)<input type="number" min="1" max="1000" value={layer.text.fontSize} onChange={(event) => updateText({ fontSize: event.target.valueAsNumber })} /></label><label>Leading (Межстрочный)<input type="number" min="0.5" max="5" step="0.05" value={layer.text.lineHeight} onChange={(event) => updateText({ lineHeight: event.target.valueAsNumber })} /></label><label>Tracking (Межбуквенный)<input type="number" min="-50" max="200" value={layer.text.letterSpacing} onChange={(event) => updateText({ letterSpacing: event.target.valueAsNumber })} /></label><label>Align (Выравнивание)<select value={layer.text.align} onChange={(event) => updateText({ align: event.target.value as "left" | "center" | "right" })}><option value="left">Left (Слева)</option><option value="center">Center (По центру)</option><option value="right">Right (Справа)</option></select></label><label>Color (Цвет)<input type="color" value={layer.text.color} onChange={(event) => updateText({ color: event.target.value })} /></label><div className="text-style-toggles"><button className={layer.text.bold ? "active" : ""} onClick={() => updateText({ bold: !layer.text?.bold })} title="Bold (Полужирный)"><b>B</b></button><button className={layer.text.italic ? "active" : ""} onClick={() => updateText({ italic: !layer.text?.italic })} title="Italic (Курсив)"><i>I</i></button><button className={layer.text.underline ? "active" : ""} onClick={() => updateText({ underline: !layer.text?.underline })} title="Underline (Подчёркнутый)"><u>U</u></button></div></div>;
     }
     if (layer?.kind === "adjustment" && layer.adjustment) {
       const adjustment = layer.adjustment;
       const patchAdjustment = (patch: Partial<RasterAdjustment>) => kernel.documents.update<RasterDocumentState>(document.id, (state) => { const current = state.layers.find((item) => item.id === state.activeLayerId); if (current?.adjustment) current.adjustment = { ...current.adjustment, ...patch } as RasterAdjustment; });
       const slider = (label: string, key: string, value: number, min: number, max: number, step = 1) => <label>{label}<input type="range" min={min} max={max} step={step} value={value} onChange={(event) => patchAdjustment({ [key]: event.target.valueAsNumber } as Partial<RasterAdjustment>)}/><output>{value}</output></label>;
-      return <div className="dock-panel-body property-stack"><strong>Adjustment (Коррекция): {adjustment.kind}</strong>{adjustment.kind === "levels" && <>{slider("Input black (Чёрная точка)", "blackInput", adjustment.blackInput, 0, 254)}{slider("Gamma (Гамма)", "gamma", adjustment.gamma, .1, 10, .01)}{slider("Input white (Белая точка)", "whiteInput", adjustment.whiteInput, 1, 255)}</>}{adjustment.kind === "brightnessContrast" && <>{slider("Brightness (Яркость)", "brightness", adjustment.brightness, -100, 100)}{slider("Contrast (Контраст)", "contrast", adjustment.contrast, -100, 100)}</>}{adjustment.kind === "hueSaturation" && <>{slider("Hue (Цветовой тон)", "hue", adjustment.hue, -180, 180)}{slider("Saturation (Насыщенность)", "saturation", adjustment.saturation, -100, 100)}{slider("Lightness (Светлота)", "lightness", adjustment.lightness, -100, 100)}</>}{adjustment.kind === "colorBalance" && <>{slider("Cyan / Red (Голубой / Красный)", "cyanRed", adjustment.cyanRed, -100, 100)}{slider("Magenta / Green (Пурпурный / Зелёный)", "magentaGreen", adjustment.magentaGreen, -100, 100)}{slider("Yellow / Blue (Жёлтый / Синий)", "yellowBlue", adjustment.yellowBlue, -100, 100)}</>}{adjustment.kind === "posterize" && slider("Levels (Уровни)", "levels", adjustment.levels, 2, 255)}{adjustment.kind === "threshold" && slider("Threshold (Порог)", "threshold", adjustment.threshold, 0, 255)}{adjustment.kind === "curves" && <p className="panel-hint">Curve points are stored non-destructively (Опорные точки хранятся неразрушающе).</p>}{adjustment.kind === "invert" && <p className="panel-hint">No parameters (Нет параметров).</p>}</div>;
+      return <div className="dock-panel-body property-stack"><strong>Adjustment (Коррекция): {adjustment.kind}</strong>{adjustment.kind === "levels" && <>{slider("Input black (Чёрная точка)", "blackInput", adjustment.blackInput, 0, 254)}{slider("Gamma (Гамма)", "gamma", adjustment.gamma, .1, 10, .01)}{slider("Input white (Белая точка)", "whiteInput", adjustment.whiteInput, 1, 255)}</>}{adjustment.kind === "brightnessContrast" && <>{slider("Brightness (Яркость)", "brightness", adjustment.brightness, -100, 100)}{slider("Contrast (Контраст)", "contrast", adjustment.contrast, -100, 100)}</>}{adjustment.kind === "hueSaturation" && <>{slider("Hue (Цветовой тон)", "hue", adjustment.hue, -180, 180)}{slider("Saturation (Насыщенность)", "saturation", adjustment.saturation, -100, 100)}{slider("Lightness (Светлота)", "lightness", adjustment.lightness, -100, 100)}</>}{adjustment.kind === "colorBalance" && <>{slider("Cyan / Red (Голубой / Красный)", "cyanRed", adjustment.cyanRed, -100, 100)}{slider("Magenta / Green (Пурпурный / Зелёный)", "magentaGreen", adjustment.magentaGreen, -100, 100)}{slider("Yellow / Blue (Жёлтый / Синий)", "yellowBlue", adjustment.yellowBlue, -100, 100)}</>}{adjustment.kind === "posterize" && slider("Levels (Уровни)", "levels", adjustment.levels, 2, 255)}{adjustment.kind === "threshold" && slider("Threshold (Порог)", "threshold", adjustment.threshold, 0, 255)}{adjustment.kind === "colorLookup" && <>
+        <label>{text(language, "Look", "Профиль")}<select value={adjustment.lut.title} onChange={(event) => { const chosen = builtInLuts.find((item) => item.title === event.target.value); if (chosen) patchAdjustment({ lut: chosen } as Partial<RasterAdjustment>); }}>{[adjustment.lut, ...builtInLuts.filter((item) => item.title !== adjustment.lut.title)].map((item) => <option key={item.title} value={item.title}>{localized(item.title, language)}</option>)}</select></label>
+        <label>{text(language, "Amount", "Сила")}<input type="range" min={0} max={100} value={Math.round(adjustment.amount * 100)} onChange={(event) => patchAdjustment({ amount: event.target.valueAsNumber / 100 } as Partial<RasterAdjustment>)}/><output>{Math.round(adjustment.amount * 100)}</output></label>
+        <label className="lut-load">{text(language, "Load .cube", "Загрузить .cube")}<input type="file" accept=".cube,text/plain" onChange={(event) => { const file = event.target.files?.[0]; event.currentTarget.value = ""; if (!file) return; void file.text().then((content) => patchAdjustment({ lut: parseCubeLut(content, file.name.replace(/\.cube$/i, "")) } as Partial<RasterAdjustment>)).catch((error) => diagnostic("error", "lut.parse", error instanceof Error ? error.message : String(error), { file: file.name })); }}/></label>
+        <p className="panel-hint">{adjustment.lut.size}³ · {localized(adjustment.lut.title, language)}</p>
+      </>}{adjustment.kind === "curves" && <p className="panel-hint">Curve points are stored non-destructively (Опорные точки хранятся неразрушающе).</p>}{adjustment.kind === "invert" && <p className="panel-hint">No parameters (Нет параметров).</p>}</div>;
     }
   }
   return <div className="dock-panel-body"><p className="panel-hint">{text(language, "Selection-aware properties will appear here.", "Здесь будут отображаться свойства текущего выделения.")}</p><dl><dt>{text(language, "Selection", "Выделение")}</dt><dd>{text(language, "None", "Нет")}</dd><dt>{text(language, "Environment", "Среда")}</dt><dd>{String(params.kind ?? text(language, "Automatic", "Автоматически"))}</dd></dl></div>;
@@ -57,7 +65,7 @@ function rasterizeTextLayer(layer: RasterLayer, width: number, height: number): 
   layer.pixels = renderTextLayerPixels(layer.text, width, height);
 }
 
-function LayerThumbnail({ layer }: { layer: RasterLayer }) {
+function LayerThumbnail({ layer, active = false, onActivate }: { layer: RasterLayer; active?: boolean; onActivate?(): void }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const canvas = ref.current, context = canvas?.getContext("2d"); if (!canvas || !context) return;
@@ -74,10 +82,10 @@ function LayerThumbnail({ layer }: { layer: RasterLayer }) {
     context.putImageData(thumbnail, left, top);
   }, [layer.pixels, layer.width, layer.height]);
   if (layer.kind === "group") return <span className="layer-thumb layer-group-thumb"><img src="/ГРУППА.svg" alt=""/></span>;
-  return <span className="layer-thumb">{layer.kind === "text" && <b>T</b>}{layer.kind === "adjustment" && <b>◐</b>}<canvas ref={ref} width="36" height="28" /></span>;
+  return <span className={`layer-thumb${active ? " editing" : ""}`} onClick={(event) => { event.stopPropagation(); onActivate?.(); }}>{layer.kind === "text" && <b>T</b>}{layer.kind === "adjustment" && <b>◐</b>}<canvas ref={ref} width="36" height="28" /></span>;
 }
 
-function LayerMaskThumbnail({ mask, width, height }: { mask: RasterLayerMask; width: number; height: number }) {
+function LayerMaskThumbnail({ mask, width, height, active, onActivate }: { mask: RasterLayerMask; width: number; height: number; active: boolean; onActivate(): void }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
     const canvas = ref.current, context = canvas?.getContext("2d"); if (!canvas || !context) return;
@@ -89,7 +97,7 @@ function LayerMaskThumbnail({ mask, width, height }: { mask: RasterLayerMask; wi
     }
     context.putImageData(image, 0, 0);
   }, [mask.pixels, width, height]);
-  return <span className="layer-mask-thumb" title="Layer Mask (Маска слоя)"><canvas ref={ref} width="28" height="28"/>{mask.linked && <i>⛓</i>}</span>;
+  return <span className={`layer-mask-thumb${active ? " editing" : ""}`} title="Edit Layer Mask (Редактировать маску слоя)" onClick={(event) => { event.stopPropagation(); onActivate(); }}><canvas ref={ref} width="28" height="28"/>{mask.linked && <i>⛓</i>}</span>;
 }
 
 const layerEffectDefaults: RasterLayer["effects"] = {
@@ -186,6 +194,8 @@ function LayersPanel() {
   const [showAdjustments, setShowAdjustments] = useState(false);
   const selectedLayerIds = useShellStore((state) => (activeDocumentId ? state.selectedLayerIdsByDocument[activeDocumentId] : undefined) ?? EMPTY_LAYER_SELECTION);
   const setSelectedLayers = useShellStore((state) => state.setSelectedLayers);
+  const editingMaskLayerId = useShellStore((state) => activeDocumentId ? state.editingMaskLayerIdByDocument[activeDocumentId] ?? null : null);
+  const setEditingMask = useShellStore((state) => state.setEditingMask);
   useEffect(() => {
     const open = () => { const current = activeDocumentId ? kernel.documents.get<RasterDocumentState>(activeDocumentId) : null; if (current && isRasterDocumentState(current.state)) setStyleLayerId(current.state.activeLayerId); };
     window.addEventListener("vravio-layer-style-open", open); return () => window.removeEventListener("vravio-layer-style-open", open);
@@ -196,9 +206,9 @@ function LayersPanel() {
     const state = active.state;
     const addLayer = () => { let createdId = ""; kernel.documents.update<RasterDocumentState>(active.id, (current) => { const selected = current.layers.find((item) => item.id === current.activeLayerId); const parentId = selected?.kind === "group" ? selected.id : (selected?.parentId ?? null); const layer = createRasterLayer(current.width, current.height, `Layer ${current.layers.length + 1} (Слой ${current.layers.length + 1})`); appendLayer(current, layer, parentId); current.activeLayerId = layer.id; createdId = layer.id; }); setSelectedLayers(active.id, [createdId]); };
     const addGroup = () => { let createdId = ""; kernel.documents.update<RasterDocumentState>(active.id, (current) => { const number = current.layers.filter((item) => item.kind === "group").length + 1; const group = appendRasterGroup(current, `Group ${number} (Группа ${number})`); current.activeLayerId = group.id; createdId = group.id; }); setSelectedLayers(active.id, [createdId]); };
-    const adjustmentLabels: Array<[RasterAdjustment["kind"], string]> = [["brightnessContrast", "Brightness/Contrast (Яркость/Контраст)"], ["levels", "Levels (Уровни)"], ["curves", "Curves (Кривые)"], ["hueSaturation", "Hue/Saturation (Тон/Насыщенность)"], ["colorBalance", "Color Balance (Цветовой баланс)"], ["invert", "Invert (Инверсия)"], ["posterize", "Posterize (Постеризация)"], ["threshold", "Threshold (Порог)"]];
+    const adjustmentLabels: Array<[RasterAdjustment["kind"], string]> = [["brightnessContrast", "Brightness/Contrast (Яркость/Контраст)"], ["levels", "Levels (Уровни)"], ["curves", "Curves (Кривые)"], ["hueSaturation", "Hue/Saturation (Тон/Насыщенность)"], ["colorBalance", "Color Balance (Цветовой баланс)"], ["invert", "Invert (Инверсия)"], ["posterize", "Posterize (Постеризация)"], ["threshold", "Threshold (Порог)"], ["colorLookup", "Color Lookup (Поиск цвета)"]];
     const addAdjustment = (kind: RasterAdjustment["kind"], name: string) => { kernel.documents.update<RasterDocumentState>(active.id, (current) => { const selected = current.layers.find((item) => item.id === current.activeLayerId); const layer = createAdjustmentLayer(current.width, current.height, kind, name); appendLayer(current, layer, selected?.kind === "group" ? selected.id : (selected?.parentId ?? null)); current.activeLayerId = layer.id; }); setShowAdjustments(false); };
-    const deleteLayer = () => { let survivorId = ""; kernel.documents.update<RasterDocumentState>(active.id, (current) => { const index = current.layers.findIndex((item) => item.id === current.activeLayerId); if (index < 0) return; const target = current.layers[index]!; const removed = new Set([target.id, ...rasterLayerDescendantIds(current.layers, target.id)]); current.layers = current.layers.filter((item) => !removed.has(item.id)); if (!current.layers.some((item) => item.kind !== "group")) appendLayer(current, createRasterLayer(current.width, current.height, "Layer 1 (Слой 1)")); const next = current.layers[Math.min(index, current.layers.length - 1)] ?? current.layers[0]; if (!next) return; current.activeLayerId = next.id; survivorId = next.id; }); if (survivorId) setSelectedLayers(active.id, [survivorId]); };
+    const deleteLayer = () => { let survivorId = "", removedMaskTarget = false; kernel.documents.update<RasterDocumentState>(active.id, (current) => { const index = current.layers.findIndex((item) => item.id === current.activeLayerId); if (index < 0) return; const target = current.layers[index]!; const removed = new Set([target.id, ...rasterLayerDescendantIds(current.layers, target.id)]); removedMaskTarget = editingMaskLayerId ? removed.has(editingMaskLayerId) : false; current.layers = current.layers.filter((item) => !removed.has(item.id)); if (!current.layers.some((item) => item.kind !== "group")) appendLayer(current, createRasterLayer(current.width, current.height, "Layer 1 (Слой 1)")); const next = current.layers[Math.min(index, current.layers.length - 1)] ?? current.layers[0]; if (!next) return; current.activeLayerId = next.id; survivorId = next.id; }); if (removedMaskTarget) setEditingMask(active.id, null); if (survivorId) setSelectedLayers(active.id, [survivorId]); };
     const selectLayer = (id: string) => kernel.documents.update<RasterDocumentState>(active.id, (current) => { current.activeLayerId = id; });
     const clickLayer = (id: string, event: React.MouseEvent) => {
       selectLayer(id);
@@ -213,7 +223,7 @@ function LayersPanel() {
     };
     const toggleVisible = (id: string) => kernel.documents.update<RasterDocumentState>(active.id, (current) => { const layer = current.layers.find((item) => item.id === id); if (layer) layer.visible = !layer.visible; });
     const toggleExpanded = (id: string) => kernel.documents.update<RasterDocumentState>(active.id, (current) => { const layer = current.layers.find((item) => item.id === id); if (layer?.kind === "group") layer.expanded = layer.expanded === false; });
-    const addMask = () => kernel.documents.update<RasterDocumentState>(active.id, (current) => { const layer = current.layers.find((item) => item.id === current.activeLayerId); if (layer && layer.kind !== "group" && !layer.mask) layer.mask = createRasterLayerMask(current.width, current.height); });
+    const addMask = () => { let targetId: string | null = null; kernel.documents.update<RasterDocumentState>(active.id, (current) => { const layer = current.layers.find((item) => item.id === current.activeLayerId); if (layer && layer.kind !== "group" && !layer.mask) { layer.mask = createRasterLayerMask(current.width, current.height); targetId = layer.id; } }); if (targetId) setEditingMask(active.id, targetId); };
     const toggleClipping = () => kernel.documents.update<RasterDocumentState>(active.id, (current) => { const layer = current.layers.find((item) => item.id === current.activeLayerId); if (layer && layer.kind !== "group") layer.clipping = !layer.clipping; });
     const activeLayer = state.layers.find((layer) => layer.id === state.activeLayerId) ?? state.layers[0];
     if (!activeLayer) return <div className="dock-panel-body"><div className="empty-row">{text(language, "No layers", "Нет слоёв")}</div></div>;
@@ -222,7 +232,7 @@ function LayersPanel() {
     const styleLayer = state.layers.find((layer) => layer.id === styleLayerId);
     return <div className="dock-panel-body layers-panel">
       <div className="layer-controls"><select value={activeLayer.blendMode} onChange={(event) => updateActive({ blendMode: event.target.value as RasterBlendMode })}>{blendModes.map((mode) => <option key={mode} value={mode}>{mode}</option>)}</select><div className="layer-controls-row"><label><span>{text(language, "Opacity", "Непрозр.")}</span><input type="number" min="0" max="100" value={Math.round(activeLayer.opacity * 100)} onChange={(event) => updateActive({ opacity: Math.max(0, Math.min(1, event.target.valueAsNumber / 100)) })}/><i>%</i></label><label><span>{text(language, "Fill", "Заливка")}</span><input type="number" min="0" max="100" value={Math.round((activeLayer.fillOpacity ?? 1) * 100)} onChange={(event) => updateActive({ fillOpacity: Math.max(0, Math.min(1, event.target.valueAsNumber / 100)) })}/><i>%</i></label></div></div>
-      <div className="layer-list">{rasterLayerRows(state.layers).map(({ layer, depth }) => <div className={[layer.id === state.activeLayerId ? "active" : "", selectedLayerIds.includes(layer.id) ? "selected" : "", layer.kind === "group" ? "group" : "", "layer-row"].filter(Boolean).join(" ")} style={{ "--layer-depth": depth } as CSSProperties} key={layer.id}><button onClick={() => toggleVisible(layer.id)} aria-label={text(language, "Toggle visibility", "Переключить видимость")}><img src={layer.visible ? "/ГЛАЗ ОТКРЫТ.svg" : "/ГЛАЗ ЗАКРЫТ.svg"} alt=""/></button><button onClick={(event) => clickLayer(layer.id, event)} onDoubleClick={() => { selectLayer(layer.id); if (layer.kind !== "group") setStyleLayerId(layer.id); }}><span className="layer-hierarchy-space"/>{layer.kind === "group" && <span className="layer-disclosure" onClick={(event) => { event.stopPropagation(); toggleExpanded(layer.id); }}>{layer.expanded === false ? "▸" : "▾"}</span>}<LayerThumbnail layer={layer}/>{layer.mask && <LayerMaskThumbnail mask={layer.mask} width={state.width} height={state.height}/>}<span className="layer-row-text"><b>{localized(layer.name, language)}</b><small>{layer.kind === "group" ? (layer.groupMode === "isolated" ? "isolated" : "pass through") : `${layer.blendMode} · ${Math.round(layer.opacity * 100)}%`}</small></span></button></div>)}</div>
+      <div className="layer-list">{rasterLayerRows(state.layers).map(({ layer, depth }) => <div className={[layer.id === state.activeLayerId ? "active" : "", selectedLayerIds.includes(layer.id) ? "selected" : "", layer.kind === "group" ? "group" : "", "layer-row"].filter(Boolean).join(" ")} style={{ "--layer-depth": depth } as CSSProperties} key={layer.id}><button onClick={() => toggleVisible(layer.id)} aria-label={text(language, "Toggle visibility", "Переключить видимость")}><img src={layer.visible ? "/ГЛАЗ ОТКРЫТ.svg" : "/ГЛАЗ ЗАКРЫТ.svg"} alt=""/></button><button onClick={(event) => clickLayer(layer.id, event)} onDoubleClick={() => { selectLayer(layer.id); if (layer.kind !== "group") setStyleLayerId(layer.id); }}><span className="layer-hierarchy-space"/>{layer.kind === "group" && <span className="layer-disclosure" onClick={(event) => { event.stopPropagation(); toggleExpanded(layer.id); }}>{layer.expanded === false ? "▸" : "▾"}</span>}<LayerThumbnail layer={layer} active={layer.id === state.activeLayerId && editingMaskLayerId !== layer.id} onActivate={() => { selectLayer(layer.id); setEditingMask(active.id, null); setSelectedLayers(active.id, [layer.id]); }}/>{layer.mask && <LayerMaskThumbnail mask={layer.mask} width={state.width} height={state.height} active={editingMaskLayerId === layer.id} onActivate={() => { selectLayer(layer.id); setEditingMask(active.id, layer.id); setSelectedLayers(active.id, [layer.id]); }}/>}<span className="layer-row-text"><b>{localized(layer.name, language)}</b><small>{layer.kind === "group" ? (layer.groupMode === "isolated" ? "isolated" : "pass through") : `${layer.blendMode} · ${Math.round(layer.opacity * 100)}%`}</small></span></button></div>)}</div>
       <div className="layer-actions adjustment-actions">{showAdjustments && <div className="adjustment-menu">{adjustmentLabels.map(([kind, name]) => <button key={kind} onClick={() => addAdjustment(kind, name)}>{name}</button>)}</div>}<button onClick={() => setShowAdjustments((value) => !value)} title={text(language, "New adjustment layer", "Новый корректирующий слой")}><img src="/КОРРЕКТИРУЮЩИЙ СЛОЙ.svg" alt=""/></button><button className={activeLayer.clipping ? "active" : ""} onClick={toggleClipping} disabled={activeLayer.kind === "group"} title={text(language, "Create clipping mask", "Создать обтравочную маску")}><img src="/ОБТРАВОЧНАЯ МАСКА.svg" alt=""/></button><button onClick={addMask} disabled={activeLayer.kind === "group" || Boolean(activeLayer.mask)} title={text(language, "Add layer mask", "Добавить маску слоя")}><img src="/МАСКА СЛОЯ.svg" alt=""/></button><button onClick={addGroup} title={text(language, "New group", "Новая группа")}><img src="/ГРУППА.svg" alt=""/></button><button onClick={addLayer} title={text(language, "New layer", "Новый слой")}><img src="/НОВЫЙ СЛОЙ.svg" alt=""/></button><button onClick={deleteLayer} title={text(language, "Delete layer", "Удалить слой")}><img src="/КОРЗИНА.svg" alt=""/></button></div>
       {styleLayer && <LayerStyleDialog layer={styleLayer} onClose={() => setStyleLayerId(null)} onApply={(patch) => kernel.documents.update<RasterDocumentState>(active.id, (current) => { const target = current.layers.find((layer) => layer.id === styleLayer.id); if (target) Object.assign(target, patch); })}/>} 
     </div>;
@@ -232,7 +242,44 @@ function LayersPanel() {
 
 function HistoryPanel() {
   const language = useShellStore((state) => state.language);
-  return <div className="dock-panel-body"><div className="history-entry active">● {text(language, "Open document", "Открыть документ")}</div></div>;
+  const activeDocumentId = useShellStore((state) => state.activeDocumentId);
+  const history = activeDocumentId ? kernel.historyByDocument.get(activeDocumentId) : undefined;
+  const [, bump] = useState(0);
+
+  // The HistoryManager lives outside React, so the panel re-reads its timeline whenever
+  // a step is executed, undone or redone.
+  useEffect(() => {
+    if (!history) return;
+    const subscription = history.subscribe(() => bump((value) => value + 1));
+    return () => subscription.dispose();
+  }, [history]);
+
+  if (!activeDocumentId || !history) return <div className="dock-panel-body"><div className="empty-row">{text(language, "No document", "Нет документа")}</div></div>;
+
+  const timeline = history.timeline();
+  const jump = (position: number) => { void history.jumpTo(position); };
+
+  return <div className="dock-panel-body history-panel">
+    <div className="history-list">
+      <button className={`history-entry${history.position === 0 ? " active" : ""}`} onClick={() => jump(0)}>
+        <i className="history-bullet" aria-hidden="true" />
+        <span>{text(language, "Open document", "Открыть документ")}</span>
+      </button>
+      {timeline.map((entry) => <button
+        key={`${entry.position}-${entry.timestamp}`}
+        className={`history-entry${entry.position === history.position ? " active" : ""}${entry.applied ? "" : " undone"}`}
+        onClick={() => jump(entry.position)}
+        title={new Date(entry.timestamp).toLocaleTimeString()}
+      >
+        <i className="history-bullet" aria-hidden="true" />
+        <span>{localized(entry.label, language)}</span>
+      </button>)}
+    </div>
+    <footer className="history-footer">
+      <span>{history.position} / {timeline.length}</span>
+      {history.memoryBytes > 0 && <span>{(history.memoryBytes / (1024 * 1024)).toFixed(1)} MB</span>}
+    </footer>
+  </div>;
 }
 
 function AssetsPanel() {
@@ -252,9 +299,11 @@ const components = {
   history: HistoryPanel,
   assets: AssetsPanel,
   effects: EffectsPanel,
+  color: ColorPanel,
+  navigator: NavigatorPanel,
 };
 
-const panelIcons: Record<string, string> = { properties: "/ПАРАМЕТРЫ.svg", layers: "/СЛОИ.svg", history: "/НАЗАД.svg", assets: "/КВАДРАТ.svg", effects: "/ЭФЕКТЫ.svg", viewport: "/РАДИО.svg" };
+const panelIcons: Record<string, string> = { properties: "/ПАРАМЕТРЫ.svg", layers: "/СЛОИ.svg", history: "/НАЗАД.svg", assets: "/КВАДРАТ.svg", effects: "/ЭФЕКТЫ.svg", viewport: "/РАДИО.svg", color: "/Пипетка.svg", navigator: "/ЛУПА.svg" };
 function PanelTab({ api }: IDockviewPanelHeaderProps) {
   return <div className="panel-tab" title={api.title}><i aria-hidden="true" style={{ "--panel-mask": `url("${panelIcons[api.id] ?? "/ПАРАМЕТРЫ.svg"}")` } as CSSProperties}/><span>{api.title}</span></div>;
 }
@@ -272,6 +321,8 @@ function createDefaultLayout(event: DockviewReadyEvent, language: Language): voi
   event.api.addPanel({ id: "layers", component: "layers", title: text(language, "Layers / Tracks", "Слои / Дорожки"), position: { referencePanel: properties, direction: "within" } });
   event.api.addPanel({ id: "history", component: "history", title: text(language, "History", "История"), position: { referencePanel: properties, direction: "within" } });
   event.api.addPanel({ id: "assets", component: "assets", title: text(language, "Assets", "Ассеты"), position: { referencePanel: properties, direction: "within" } });
+  event.api.addPanel({ id: "color", component: "color", title: text(language, "Color", "Цвет"), position: { referencePanel: properties, direction: "within" } });
+  event.api.addPanel({ id: "navigator", component: "navigator", title: text(language, "Navigator", "Навигатор"), position: { referencePanel: properties, direction: "within" } });
 }
 
 export function DockLayout() {

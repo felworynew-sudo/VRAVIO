@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { rasterFilterCatalog, type RasterFilterDefinition, type RasterLayer } from "@vravio/env-raster";
+import { filterSpecById, hasGpuFilter } from "@vravio/env-raster";
+import { sharedGlFilterBackend } from "./glFilterBackend";
 
 const THUMBNAIL_EDGE = 48;
 
@@ -40,8 +42,28 @@ export function FilterGalleryDialog({ layer, onApply, onClose }: { layer: Raster
     () => Object.fromEntries(filter.parameters.map((parameter) => [parameter.id, settings[parameter.id] ?? parameter.value])),
     [filter, settings],
   );
+  // The source texture is cached per layer, so dragging a slider re-runs the shader without
+  // re-uploading the image. It has to be dropped as soon as the layer's pixels change.
+  useEffect(() => {
+    const backend = sharedGlFilterBackend();
+    return () => backend?.releaseTexture(layer.id);
+  }, [layer.id, layer.pixels]);
+
   useEffect(() => {
     const requestId = ++requestIdRef.current;
+    const spec = filterSpecById.get(filterId);
+    const backend = hasGpuFilter(filterId) ? sharedGlFilterBackend() : null;
+    if (backend && spec) {
+      // A single shader pass beats posting megabytes to a worker, so the GPU path runs inline
+      // and only falls through to the worker if the driver refuses it.
+      const gpuResult = backend.apply(spec, layer.pixels, layer.width, layer.height, effectiveSettings, layer.id);
+      if (gpuResult) {
+        setRendered(gpuResult);
+        setIsRendering(false);
+        setRenderError(null);
+        return;
+      }
+    }
     const worker = new Worker(new URL("./filter-worker.ts", import.meta.url), { type: "module" });
     const timer = window.setTimeout(() => {
       setIsRendering(true);
@@ -63,7 +85,7 @@ export function FilterGalleryDialog({ layer, onApply, onClose }: { layer: Raster
     };
     worker.onerror = (event) => { setRenderError(event.message); setIsRendering(false); };
     return () => { window.clearTimeout(timer); worker.terminate(); };
-  }, [layer.pixels, layer.width, layer.height, filterId, effectiveSettings]);
+  }, [layer.id, layer.pixels, layer.width, layer.height, filterId, effectiveSettings]);
   useEffect(()=>{const canvas=canvasRef.current,context=canvas?.getContext("2d");if(canvas&&context&&rendered)context.putImageData(new ImageData(rendered as Uint8ClampedArray<ArrayBuffer>,layer.width,layer.height),0,0);},[rendered,layer.width,layer.height]);
   const select=(next:RasterFilterDefinition)=>{setFilterId(next.id);setSettings(Object.fromEntries(next.parameters.map((parameter)=>[parameter.id,parameter.value])));};
   const sample = useMemo(() => downsampleThumbnail(layer.pixels, layer.width, layer.height, THUMBNAIL_EDGE), [layer.pixels, layer.width, layer.height]);

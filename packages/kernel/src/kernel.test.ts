@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AssetStore, AutosaveManager, CommandRegistry, DocumentSnapshotStore, DocumentStore, GPUContext, HistoryManager, KeymapManager, MemoryStorageAdapter, WorkerPool, type AssetId, type WorkerTaskClient } from "./index";
+import { AssetStore, AutosaveManager, CommandRegistry, DocumentSnapshotStore, DocumentStore, GPUContext, HistoryManager, KeymapManager, MemoryStorageAdapter, ModelConsentDeniedError, ModelStore, WorkerPool, type AssetId, type WorkerTaskClient } from "./index";
 
 describe("DocumentStore", () => {
   it("increments revisions without storing document state in a UI store", () => {
@@ -66,6 +66,43 @@ describe("HistoryManager", () => {
     await history.execute({ label: "new", redo() {}, undo() {} });
     expect(freed).toHaveBeenCalledOnce();
     expect(history.canRedo).toBe(false);
+  });
+
+  it("reports a timeline of applied and undone steps", async () => {
+    const history = new HistoryManager();
+    for (const label of ["one", "two", "three"]) await history.execute({ label, redo() {}, undo() {} });
+    await history.undo();
+    expect(history.position).toBe(2);
+    expect(history.timeline().map((entry) => [entry.position, entry.label, entry.applied])).toEqual([
+      [1, "one", true], [2, "two", true], [3, "three", false],
+    ]);
+  });
+
+  it("jumps to any timeline position in both directions", async () => {
+    let value = 0;
+    const history = new HistoryManager();
+    for (let index = 0; index < 4; index += 1) await history.execute({ label: `step ${index}`, redo: () => { value += 1; }, undo: () => { value -= 1; } });
+    expect(await history.jumpTo(1)).toBe(true);
+    expect(value).toBe(1);
+    expect(await history.jumpTo(4)).toBe(true);
+    expect(value).toBe(4);
+    expect(await history.jumpTo(0)).toBe(true);
+    expect(value).toBe(0);
+    expect(await history.jumpTo(9)).toBe(false);
+    expect(await history.jumpTo(-1)).toBe(false);
+  });
+
+  it("notifies subscribers when the timeline changes", async () => {
+    const listener = vi.fn();
+    const history = new HistoryManager();
+    const subscription = history.subscribe(listener);
+    await history.execute({ label: "step", redo() {}, undo() {} });
+    await history.undo();
+    await history.redo();
+    expect(listener).toHaveBeenCalledTimes(3);
+    subscription.dispose();
+    await history.undo();
+    expect(listener).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -229,5 +266,87 @@ describe("DocumentSnapshotStore", () => {
     const restored = await reader.restore();
     expect(restored.map((document) => document.id)).toEqual([source.id]);
     expect(targetDocuments.get<{ nodes: number[] }>(source.id)?.state.nodes).toEqual([1, 2]);
+  });
+});
+
+describe("ModelStore", () => {
+  const spec = {
+    id: "rmbg", url: "https://example.test/rmbg.onnx", sizeBytes: 40 * 1024 * 1024,
+    inputShape: [1, 3, 1024, 1024], tile: { size: 1024, overlap: 32 },
+    licence: "Non-commercial", commercialUse: false,
+  };
+
+  const memoryCache = () => {
+    const entries = new Map<string, ArrayBuffer>();
+    return {
+      entries,
+      async match(key: string) { const value = entries.get(key); return value ? new Response(value) : undefined; },
+      async put(key: string, response: Response) { entries.set(key, await response.arrayBuffer()); },
+      async delete(key: string) { return entries.delete(key); },
+      async keys() { return [...entries.keys()]; },
+    };
+  };
+
+  const streamingResponse = (bytes: number, chunkSize = 8) => {
+    let sent = 0;
+    return new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent >= bytes) { controller.close(); return; }
+        const size = Math.min(chunkSize, bytes - sent);
+        sent += size;
+        controller.enqueue(new Uint8Array(size).fill(7));
+      },
+    }), { headers: { "content-length": String(bytes) } });
+  };
+
+  it("asks before downloading a large model and honours a refusal", async () => {
+    const store = new ModelStore({ fetch: async () => streamingResponse(32), consentThresholdBytes: 1 });
+    await expect(store.load(spec, { onConsent: () => false })).rejects.toBeInstanceOf(ModelConsentDeniedError);
+  });
+
+  it("reports progress that ends at the full size", async () => {
+    const store = new ModelStore({ fetch: async () => streamingResponse(32, 8), consentThresholdBytes: Number.POSITIVE_INFINITY });
+    const seen: number[] = [];
+    const buffer = await store.load(spec, { onProgress: (progress) => seen.push(progress.receivedBytes) });
+    expect(buffer.byteLength).toBe(32);
+    expect(seen).toEqual([8, 16, 24, 32]);
+  });
+
+  it("serves a second load from the cache without fetching again", async () => {
+    const cache = memoryCache();
+    let fetches = 0;
+    const store = new ModelStore({ cache, consentThresholdBytes: Number.POSITIVE_INFINITY, fetch: async () => { fetches += 1; return streamingResponse(16); } });
+    await store.load(spec);
+    expect(await store.isCached(spec)).toBe(true);
+    const second = await store.load(spec);
+    expect(fetches).toBe(1);
+    expect(second.byteLength).toBe(16);
+    expect(await store.evict(spec)).toBe(true);
+    expect(await store.isCached(spec)).toBe(false);
+  });
+
+  it("shares one download between concurrent callers", async () => {
+    let fetches = 0;
+    const store = new ModelStore({ consentThresholdBytes: Number.POSITIVE_INFINITY, fetch: async () => { fetches += 1; return streamingResponse(16); } });
+    const [first, second] = await Promise.all([store.load(spec), store.load(spec)]);
+    expect(fetches).toBe(1);
+    expect(first.byteLength).toBe(second.byteLength);
+  });
+
+  it("cancels a download in progress", async () => {
+    const controller = new AbortController();
+    const store = new ModelStore({
+      consentThresholdBytes: Number.POSITIVE_INFINITY,
+      fetch: async () => streamingResponse(4096, 8),
+    });
+    const pending = store.load(spec, { signal: controller.signal, onProgress: () => controller.abort() });
+    await expect(pending).rejects.toThrow(/cancelled/i);
+  });
+
+  it("surfaces a failed download instead of caching an error page", async () => {
+    const cache = memoryCache();
+    const store = new ModelStore({ cache, consentThresholdBytes: Number.POSITIVE_INFINITY, fetch: async () => new Response("nope", { status: 404 }) });
+    await expect(store.load(spec)).rejects.toThrow(/404/);
+    expect(await store.isCached(spec)).toBe(false);
   });
 });

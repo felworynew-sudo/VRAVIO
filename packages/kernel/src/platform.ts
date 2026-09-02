@@ -1,4 +1,5 @@
 import type { GPUContext, RenderBackend } from "./gpu-context";
+import type { MLBackend } from "./model-store";
 
 export type PlatformKind = "web" | "desktop";
 
@@ -31,6 +32,8 @@ export interface FontPort { listLocalFonts(): Promise<readonly PlatformFont[]> }
 export interface MLPort {
   readonly backends: readonly (RenderBackend | "native")[];
   readonly supportsLocalModels: boolean;
+  /** The accelerator inference will actually run on, once probed. */
+  backend(): MLBackend;
 }
 
 export interface PlatformCapabilities {

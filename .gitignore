@@ -10,3 +10,4 @@ output/
 research/
 backup_*.ts
 backup_*.tsx
+.playwright-cli/

@@ -8,6 +8,7 @@ VRAVIO currently uses or studies the following open-source projects. Keep this f
 - **@ffmpeg/ffmpeg 0.12.15** and **@ffmpeg/util 0.12.2** — browser API and utilities. MIT. <https://github.com/ffmpegwasm/ffmpeg.wasm>
 - **@ffmpeg/core 0.12.10** — FFmpeg WebAssembly core used by the local clip exporter. GPL-2.0-or-later. Distribution of a production build must satisfy this licence or replace the core with a suitably configured/licensed media pipeline.
 - **three.js 0.185.1** (mrdoob and contributors) — WebGL 3D engine used for the 3D Text and 3D layer workspaces (extrusion/bevel geometry, GLTF/OBJ/STL model loading, orbit camera, lighting). MIT. Bundled font: `helvetiker_regular/bold.typeface.json`, generated from the Helvetiker typeface shipped with three.js's own examples (MIT). <https://github.com/mrdoob/three.js>
+- **jsPDF 4.2.1** (James Hall, yWorks GmbH and contributors) — PDF writer used by the raster export dialog's PDF target. MIT. <https://github.com/parallax/jsPDF>
 - **libraw-wasm 1.6.0** (ybouane) — Emscripten/WASM build of LibRaw used for full RAW develop (CR2/NEF/ARW/DNG/ORF/PEF/RW2 and more). The npm wrapper is ISC. The bundled LibRaw core itself is dual-licensed LGPL-2.1-or-later / CDDL-1.0 — keep this notice and the upstream LICENSE with any distributed build. <https://github.com/ybouane/LibRaw-Wasm>, <https://www.libraw.org/>.
 
 ## Architecture and algorithm references

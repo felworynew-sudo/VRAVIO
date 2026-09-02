@@ -1,3 +1,5 @@
+import type { ColorLookupTable } from "./lut";
+
 export type RasterBlendMode = "normal" | "dissolve" | "darken" | "multiply" | "colorBurn" | "linearBurn" | "darkerColor" | "lighten" | "screen" | "colorDodge" | "linearDodge" | "lighterColor" | "overlay" | "softLight" | "hardLight" | "vividLight" | "linearLight" | "pinLight" | "hardMix" | "difference" | "exclusion" | "subtract" | "divide" | "hue" | "saturation" | "color" | "luminosity";
 export type RasterLayerKind = "pixel" | "text" | "adjustment" | "fill" | "group" | "smart" | "shape" | "3d";
 
@@ -9,9 +11,12 @@ export type RasterAdjustment =
   | { kind: "brightnessContrast"; brightness: number; contrast: number }
   | { kind: "invert" }
   | { kind: "posterize"; levels: number }
-  | { kind: "threshold"; threshold: number };
+  | { kind: "threshold"; threshold: number }
+  | { kind: "colorLookup"; lut: ColorLookupTable; amount: number };
 
-export interface RasterTextData { value: string; x: number; y: number; fontFamily: string; fontSize: number; lineHeight: number; letterSpacing: number; align: "left" | "center" | "right"; color: string; bold?: boolean; italic?: boolean; underline?: boolean; /** Paragraph (bounded) text word-wraps within this width instead of only breaking on explicit newlines. */ boxWidth?: number }
+export interface RasterTextPath { start: { x: number; y: number }; control: { x: number; y: number }; end: { x: number; y: number }; flip?: boolean }
+export interface RasterTextTransform { a: number; b: number; c: number; d: number; e: number; f: number }
+export interface RasterTextData { value: string; x: number; y: number; fontFamily: string; fontSize: number; lineHeight: number; letterSpacing: number; align: "left" | "center" | "right"; color: string; bold?: boolean; italic?: boolean; underline?: boolean; mode?: "point" | "area" | "path" | "dynamic"; /** Paragraph (bounded) text word-wraps within this width instead of only breaking on explicit newlines. */ boxWidth?: number; boxHeight?: number; path?: RasterTextPath; dynamicPreset?: "circle" | "arch" | "bow"; /** Non-destructive affine transform applied to the live text geometry. */ transform?: RasterTextTransform; /** Cached visible raster bounds, refreshed by the text renderer. */ visualBounds?: RasterRect }
 export interface RasterLayerEffects {
   dropShadow?: { enabled: boolean; color: string; opacity: number; offsetX: number; offsetY: number };
   innerShadow?: { enabled: boolean; color: string; opacity: number; offsetX: number; offsetY: number };

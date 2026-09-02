@@ -1,4 +1,4 @@
-import type { RasterDocumentState, RgbaColor } from "./types";
+import type { RasterDocumentState, RasterRect, RgbaColor } from "./types";
 import { renderLayerEffects } from "./effects";
 import { applyAdjustment } from "./adjustments";
 import { effectiveLayerOpacity, flattenRasterLayers, isLayerEffectivelyVisible } from "./layer-tree";
@@ -59,8 +59,35 @@ function blendRgb(mode: string, source: [number, number, number], destination: [
   return [blendChannel(mode, source[0], destination[0]), blendChannel(mode, source[1], destination[1]), blendChannel(mode, source[2], destination[2])];
 }
 
-export function compositeRasterDocument(state: RasterDocumentState): Uint8ClampedArray {
-  const output = new Uint8ClampedArray(state.width * state.height * 4);
+/** Clamps a requested region to the document, snapping to whole pixels. */
+export function clampRegionToDocument(state: RasterDocumentState, region: RasterRect): RasterRect {
+  const x = Math.max(0, Math.min(state.width, Math.floor(region.x)));
+  const y = Math.max(0, Math.min(state.height, Math.floor(region.y)));
+  const right = Math.max(x, Math.min(state.width, Math.ceil(region.x + region.width)));
+  const bottom = Math.max(y, Math.min(state.height, Math.ceil(region.y + region.height)));
+  return { x, y, width: right - x, height: bottom - y };
+}
+
+/**
+ * Composites the document inside `region` only, returning a buffer sized to that region.
+ *
+ * Interactive tools repaint a few hundred pixels around the cursor, so compositing the whole
+ * canvas each frame is what makes brushes stutter on large documents. Layer pixels, masks and
+ * adjustments are all addressed in document space while the output is addressed in region
+ * space, which is the only subtlety here.
+ */
+export interface CompositeOptions {
+  /** Sample every Nth pixel, producing a reduced-resolution result. Used for thumbnails and low zoom. */
+  readonly step?: number;
+}
+
+export function compositeRasterRegion(state: RasterDocumentState, region: RasterRect, options: CompositeOptions = {}): Uint8ClampedArray {
+  const { width } = state;
+  const area = clampRegionToDocument(state, region);
+  const step = Math.max(1, Math.floor(options.step ?? 1));
+  const outWidth = Math.ceil(area.width / step), outHeight = Math.ceil(area.height / step);
+  const output = new Uint8ClampedArray(outWidth * outHeight * 4);
+  if (!area.width || !area.height) return output;
   const clippingBaseByParent = new Map<string, Uint8ClampedArray>();
   for (const layer of flattenRasterLayers(state.layers)) {
     const parentKey = layer.parentId ?? "root";
@@ -73,10 +100,10 @@ export function compositeRasterDocument(state: RasterDocumentState): Uint8Clampe
       const clippingBase = layer.clipping ? clippingBaseByParent.get(parentKey) : undefined;
       const before = layer.mask?.enabled || clippingBase ? output.slice() : null;
       applyAdjustment(output, layer.adjustment, effectiveOpacity);
-      if (before) for (let index = 0; index < output.length; index += 4) {
-        const maskIndex = index / 4;
-        const sample = layer.mask?.enabled ? (layer.mask.inverted ? 255 - layer.mask.pixels[maskIndex]! : layer.mask.pixels[maskIndex]!) : 255;
-        const amount = sample / 255 * (layer.mask?.density ?? 1) * (clippingBase ? clippingBase[maskIndex]! / 255 : 1);
+      if (before) for (let row = 0; row < outHeight; row += 1) for (let column = 0; column < outWidth; column += 1) {
+        const index = (row * outWidth + column) * 4, documentIndex = (area.y + row * step) * width + (area.x + column * step);
+        const sample = layer.mask?.enabled ? (layer.mask.inverted ? 255 - layer.mask.pixels[documentIndex]! : layer.mask.pixels[documentIndex]!) : 255;
+        const amount = sample / 255 * (layer.mask?.density ?? 1) * (clippingBase ? clippingBase[row * outWidth + column]! / 255 : 1);
         output[index] = Math.round(before[index]! + (output[index]! - before[index]!) * amount);
         output[index + 1] = Math.round(before[index + 1]! + (output[index + 1]! - before[index + 1]!) * amount);
         output[index + 2] = Math.round(before[index + 2]! + (output[index + 2]! - before[index + 2]!) * amount);
@@ -86,18 +113,19 @@ export function compositeRasterDocument(state: RasterDocumentState): Uint8Clampe
     }
     const renderedLayer = renderLayerEffects(layer, state.width, state.height);
     const clippingBase = layer.clipping ? clippingBaseByParent.get(parentKey) : undefined;
-    const ownAlpha = layer.clipping ? null : new Uint8ClampedArray(state.width * state.height);
-    for (let index = 0; index < output.length; index += 4) {
-      const maskIndex = index / 4;
-      const maskAlpha = layer.mask?.enabled ? ((layer.mask.inverted ? 255 - layer.mask.pixels[maskIndex]! : layer.mask.pixels[maskIndex]!) / 255) * layer.mask.density : 1;
-      const baseAlpha = clippingBase ? clippingBase[maskIndex]! / 255 : layer.clipping ? 0 : 1;
-      const rawAlpha = (renderedLayer[index + 3]! / 255) * maskAlpha;
-      if (ownAlpha) ownAlpha[maskIndex] = Math.round(rawAlpha * 255);
+    const ownAlpha = layer.clipping ? null : new Uint8ClampedArray(outWidth * outHeight);
+    for (let row = 0; row < outHeight; row += 1) for (let column = 0; column < outWidth; column += 1) {
+      const regionIndex = row * outWidth + column, index = regionIndex * 4;
+      const documentIndex = (area.y + row * step) * width + (area.x + column * step), sourceIndex = documentIndex * 4;
+      const maskAlpha = layer.mask?.enabled ? ((layer.mask.inverted ? 255 - layer.mask.pixels[documentIndex]! : layer.mask.pixels[documentIndex]!) / 255) * layer.mask.density : 1;
+      const baseAlpha = clippingBase ? clippingBase[regionIndex]! / 255 : layer.clipping ? 0 : 1;
+      const rawAlpha = (renderedLayer[sourceIndex + 3]! / 255) * maskAlpha;
+      if (ownAlpha) ownAlpha[regionIndex] = Math.round(rawAlpha * 255);
       const sourceAlpha = rawAlpha * baseAlpha * effectiveOpacity * (layer.fillOpacity ?? 1);
       if (sourceAlpha <= 0) continue;
       const destinationAlpha = output[index + 3]! / 255;
       const alpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha);
-      const blended = blendRgb(layer.blendMode, [renderedLayer[index]!, renderedLayer[index + 1]!, renderedLayer[index + 2]!], [output[index]!, output[index + 1]!, output[index + 2]!]);
+      const blended = blendRgb(layer.blendMode, [renderedLayer[sourceIndex]!, renderedLayer[sourceIndex + 1]!, renderedLayer[sourceIndex + 2]!], [output[index]!, output[index + 1]!, output[index + 2]!]);
       output[index] = Math.round(clamp01((blended[0] * sourceAlpha + output[index]! * destinationAlpha * (1 - sourceAlpha)) / alpha / 255) * 255);
       output[index + 1] = Math.round(clamp01((blended[1] * sourceAlpha + output[index + 1]! * destinationAlpha * (1 - sourceAlpha)) / alpha / 255) * 255);
       output[index + 2] = Math.round(clamp01((blended[2] * sourceAlpha + output[index + 2]! * destinationAlpha * (1 - sourceAlpha)) / alpha / 255) * 255);
@@ -106,6 +134,29 @@ export function compositeRasterDocument(state: RasterDocumentState): Uint8Clampe
     if (ownAlpha) clippingBaseByParent.set(parentKey, ownAlpha);
   }
   return output;
+}
+
+export function compositeRasterDocument(state: RasterDocumentState): Uint8ClampedArray {
+  return compositeRasterRegion(state, { x: 0, y: 0, width: state.width, height: state.height });
+}
+
+export interface RasterThumbnail { pixels: Uint8ClampedArray; width: number; height: number }
+
+/**
+ * Composites the document straight into thumbnail resolution.
+ *
+ * Compositing at full size and then downscaling costs the same as a full repaint — over a
+ * second on a large multi-layer document — which is far too much for a navigator preview that
+ * refreshes on every edit. Sampling every Nth pixel makes the cost proportional to the
+ * thumbnail instead of the canvas.
+ */
+export function compositeRasterThumbnail(state: RasterDocumentState, maxSize: number): RasterThumbnail {
+  const step = Math.max(1, Math.ceil(Math.max(state.width, state.height) / Math.max(1, maxSize)));
+  return {
+    pixels: compositeRasterRegion(state, { x: 0, y: 0, width: state.width, height: state.height }, { step }),
+    width: Math.ceil(state.width / step),
+    height: Math.ceil(state.height / step),
+  };
 }
 
 export function sampleAverage(pixels: Uint8ClampedArray, width: number, height: number, centerX: number, centerY: number, sampleSize = 1): RgbaColor {
