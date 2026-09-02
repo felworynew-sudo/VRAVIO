@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   blurStrokeSegment, cloneStrokeSegment, createRectangleSelection, dodgeBurnStrokeSegment,
-  drawQuadraticStrokeSegment, drawShape, floodFill, sampleAverage, smudgeStrokeSegment, translateLayerPixels,
+  drawQuadraticStrokeSegment, drawShape, floodFill, sampleAverage, smudgeStrokeSegment, translateLayerPixels, liftSelection, stampFloating,
 } from "./index";
 import type { Point, RgbaColor } from "./types";
 
@@ -168,5 +168,82 @@ describe("moving a feathered selection", () => {
       if (once[index] === 0 && chained[index]! > 0) strayed += 1;
     }
     expect(strayed).toBeGreaterThan(0);
+  });
+});
+
+describe("floating a selection instead of re-cutting it", () => {
+  const solid = () => {
+    const pixels = new Uint8ClampedArray(W * H * 4);
+    for (let y = 32; y < 96; y += 1) for (let x = 32; x < 96; x += 1) {
+      const at = (y * W + x) * 4;
+      pixels[at] = 60; pixels[at + 1] = 180; pixels[at + 2] = 240; pixels[at + 3] = 255;
+    }
+    return pixels;
+  };
+  const soft = () => createRectangleSelection(W, H, 40, 40, 88, 88, 10);
+
+  it("takes exactly what it leaves", () => {
+    const source = solid();
+    const float = liftSelection(source, W, H, soft());
+
+    // A feathered edge has to stay continuous across the pair: the alpha the
+    // float takes plus the alpha the base keeps is the alpha there was.
+    for (let index = 3; index < source.length; index += 4) {
+      expect(float.content[index]! + float.base[index]!).toBeGreaterThanOrEqual(source[index]! - 1);
+      expect(float.content[index]! + float.base[index]!).toBeLessThanOrEqual(source[index]! + 1);
+    }
+  });
+
+  it("puts the content back close to where it came from at no offset", () => {
+    const source = solid();
+    const float = liftSelection(source, W, H, soft());
+
+    const back = stampFloating(float, W, H, 0, 0);
+
+    // Exact where the selection is solid and exact where it is absent. Along the
+    // feathered ramp it is not, and cannot be: the split is linear in coverage
+    // while the recombination is source-over, so the two halves of a soft edge
+    // laid over one another come to less than the whole. GIMP and Photoshop
+    // have the same artefact, and it is the price of leaving a real hole —
+    // a split that round-tripped exactly would leave the edge behind.
+    const mask = soft().mask;
+    for (let index = 0; index < mask.length; index += 1) {
+      const coverage = mask[index]!;
+      if (coverage !== 0 && coverage !== 255) continue;
+      expect(Math.abs(back[index * 4 + 3]! - source[index * 4 + 3]!)).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it("moves the same however many times it is placed", () => {
+    const float = liftSelection(solid(), W, H, soft());
+
+    const once = stampFloating(float, W, H, 30, 20);
+    // Placing is pure composition: the hole was cut when the content was lifted
+    // and cannot be cut again, so arriving in ten steps is arriving in one.
+    let stepped = new Uint8ClampedArray(0);
+    for (const [dx, dy] of [[7, 4], [15, 9], [23, 15], [30, 20]] as const) stepped = stampFloating(float, W, H, dx, dy);
+
+    expect([...stepped]).toEqual([...once]);
+  });
+
+  it("leaves one hole, not one per step", () => {
+    const float = liftSelection(solid(), W, H, soft());
+    const far = stampFloating(float, W, H, 60, 40);
+
+    // Everything the content used to cover and no longer does is either empty
+    // or the soft rim of the single hole — never a second copy of the edge.
+    let opaqueLeftBehind = 0;
+    for (let y = 40; y < 60; y += 1) for (let x = 40; x < 60; x += 1) {
+      if (far[(y * W + x) * 4 + 3]! > 200) opaqueLeftBehind += 1;
+    }
+    expect(opaqueLeftBehind).toBe(0);
+  });
+
+  it("floats the whole layer when nothing is selected", () => {
+    const source = solid();
+    const float = liftSelection(source, W, H, null);
+
+    expect([...float.content]).toEqual([...source]);
+    expect([...float.base].every((value) => value === 0)).toBe(true);
   });
 });

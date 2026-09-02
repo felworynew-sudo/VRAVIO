@@ -188,3 +188,89 @@ export function cropRasterDocument(state: RasterDocumentState, crop: RasterRect)
   }
   return { ...state, width, height, layers, selection };
 }
+
+export interface FloatingPixels {
+  /** The layer with the selected content taken out, computed once. */
+  readonly base: Uint8ClampedArray;
+  /** The content that was taken, in place, transparent everywhere else. */
+  readonly content: Uint8ClampedArray;
+  /** Where the content sat when it was lifted, for bounding the redraw. */
+  readonly bounds: RasterRect;
+}
+
+/**
+ * Takes the selected content off a layer, once.
+ *
+ * This is GIMP's floating selection and Photoshop's floating content, and the
+ * reason both work that way: a move that cuts and pastes on every frame is
+ * cutting from an image it has already cut from, so a soft edge leaves a
+ * fraction of itself behind at every position the pointer passed through. Lift
+ * once, then move what was lifted — the hole is made a single time and cannot
+ * be made again.
+ *
+ * Coverage is honoured on both halves: what the float takes is exactly what the
+ * base loses, so a feathered edge stays continuous across the pair.
+ */
+export function liftSelection(
+  pixels: Uint8ClampedArray, width: number, height: number, selection: PixelSelection | null,
+): FloatingPixels {
+  const base = pixels.slice();
+  const content = new Uint8ClampedArray(pixels.length);
+  if (!selection) {
+    // No selection means the whole layer floats and the layer is left empty.
+    content.set(pixels);
+    base.fill(0);
+    return { base, content, bounds: { x: 0, y: 0, width, height } };
+  }
+
+  const left = Math.max(0, Math.floor(selection.bounds.x)), top = Math.max(0, Math.floor(selection.bounds.y));
+  const right = Math.min(width, Math.ceil(selection.bounds.x + selection.bounds.width));
+  const bottom = Math.min(height, Math.ceil(selection.bounds.y + selection.bounds.height));
+  for (let y = top; y < bottom; y += 1) for (let x = left; x < right; x += 1) {
+    const index = y * width + x;
+    const coverage = selection.mask[index]! / 255;
+    if (coverage <= 0) continue;
+    const at = index * 4;
+    const alpha = pixels[at + 3]!;
+    content[at] = pixels[at]!; content[at + 1] = pixels[at + 1]!; content[at + 2] = pixels[at + 2]!;
+    content[at + 3] = Math.round(alpha * coverage);
+    base[at + 3] = Math.round(alpha * (1 - coverage));
+  }
+  return { base, content, bounds: { x: left, y: top, width: right - left, height: bottom - top } };
+}
+
+/**
+ * Puts floating content back down at an offset, over the layer it came from.
+ *
+ * Pure composition — nothing is removed here, so however many times a float is
+ * placed, the hole underneath stays the one hole that was cut when it was
+ * lifted.
+ */
+export function stampFloating(
+  float: FloatingPixels, width: number, height: number, dx: number, dy: number,
+): Uint8ClampedArray {
+  const output = float.base.slice();
+  const offsetX = Math.round(dx), offsetY = Math.round(dy);
+  const { bounds } = float;
+  for (let y = bounds.y; y < bounds.y + bounds.height; y += 1) {
+    const targetY = y + offsetY;
+    if (targetY < 0 || targetY >= height) continue;
+    for (let x = bounds.x; x < bounds.x + bounds.width; x += 1) {
+      const targetX = x + offsetX;
+      if (targetX < 0 || targetX >= width) continue;
+      const source = (y * width + x) * 4;
+      const sourceAlpha = float.content[source + 3]! / 255;
+      if (sourceAlpha <= 0) continue;
+      const target = (targetY * width + targetX) * 4;
+      const destinationAlpha = output[target + 3]! / 255;
+      const alpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha);
+      if (alpha <= 0) continue;
+      const carry = destinationAlpha * (1 - sourceAlpha);
+      output[target] = Math.round((float.content[source]! * sourceAlpha + output[target]! * carry) / alpha);
+      output[target + 1] = Math.round((float.content[source + 1]! * sourceAlpha + output[target + 1]! * carry) / alpha);
+      output[target + 2] = Math.round((float.content[source + 2]! * sourceAlpha + output[target + 2]! * carry) / alpha);
+      output[target + 3] = Math.round(alpha * 255);
+    }
+  }
+  return output;
+}

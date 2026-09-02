@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   activeRasterLayer, appendLayer, clampRegionToDocument, copyHealedRegion, layerAccepts, layerLockReason, layerOpaqueBounds, paintMask, marqueeCorners, marqueeRect, pickLayerAt, combineSelections, compositeRasterDocument, compositeRasterRegion, createContiguousColorSelection, drawShape, DirtyRegion, RasterTileCache, type ShapeKind, createEllipseSelection, createPolygonSelection, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
-  confineToSelection, isRasterDocumentState, parseHexColor, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectionOutlinePath, toHexColor,
-  translateLayerPixels, translateSelection, type PixelSelection, type Point, type RasterDocumentState, type RasterGuide, type RasterLayer, type RasterRect, type RasterTextData, type SelectionCombineMode,
+  confineToSelection, isRasterDocumentState, liftSelection, parseHexColor, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectionOutlinePath, stampFloating, toHexColor,
+  translateLayerPixels, translateSelection, type FloatingPixels, type PixelSelection, type Point, type RasterDocumentState, type RasterGuide, type RasterLayer, type RasterRect, type RasterTextData, type SelectionCombineMode,
   cloneDab, cloneStrokeSegment,
   blurDab, blurStrokeSegment, smudgeStrokeSegment,
   dodgeBurnDab, dodgeBurnStrokeSegment, type DodgeBurnRange,
@@ -238,6 +238,13 @@ interface PendingPixelTransform {
   selection: PixelSelection | null;
   rotation: number;
   text?: PendingTextTransform;
+  /**
+   * Content lifted off the layer, kept for the life of the transform.
+   *
+   * Carried here so a second drag places the same float instead of cutting a
+   * second hole out of an image the first drag already cut from.
+   */
+  float?: FloatingPixels;
 }
 
 interface TextDraft {
@@ -259,12 +266,18 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const gesture = useRef<{ before: Uint8ClampedArray; working: Uint8ClampedArray; curveStart: Point; pending: Point; pointerId: number; frame: number | null; dirty?: RasterRect | null; strokeBounds?: RasterRect | null; target: "pixels" | "mask"; layerId: string; sourceOffsetX?: number; sourceOffsetY?: number; sourcePixels?: Uint8ClampedArray } | null>(null);
   const selectionGesture = useRef<{ kind: "rectangle" | "ellipse" | "lasso"; from: Point; current: Point; points: Point[]; pointerId: number; mode: SelectionCombineMode; spaceAnchor: Point | null } | null>(null);
   const documentGesture = useRef<
-    | { kind: "move" | "crop"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean; /** basePixels is the transform's original, so offsets are the running total. */ fromOrigin?: boolean }
+    | { kind: "move" | "crop"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean; /** basePixels is the transform's original, so offsets are the running total. */ fromOrigin?: boolean; /** Content lifted off the layer once; moving places it, never re-cuts. */ float?: FloatingPixels }
     | { kind: "scale"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; handleX: -1 | 0 | 1; handleY: -1 | 0 | 1; dx: number; dy: number; text?: PendingTextTransform }
     | { kind: "rotate"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; center: Point; startAngle: number; baseRotation: number; dx: number; dy: number; text?: PendingTextTransform }
     | null
   >(null);
   const pendingTransformRef = useRef<PendingPixelTransform | null>(null);
+  // Dev-only window into the transform in flight. Its numbers are the ones that
+  // decide what a move produces, and they are otherwise unreachable.
+  if (import.meta.env.DEV) (globalThis as Record<string, unknown>).__transform = () => {
+    const pending = pendingTransformRef.current;
+    return pending && { dx: pending.dx, dy: pending.dy, hasFloat: Boolean(pending.float), layerId: pending.layerId };
+  };
   const transformFrameRef = useRef<number | null>(null);
   /** What the last move frame repainted, so the next one can cover it. */
   const movePaintedRef = useRef<RasterRect | null>(null);
@@ -530,15 +543,18 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         const preview: PendingPixelTransform = { ...current, dx, dy, text: { ...transforming.text, targetBounds: { ...start, x: start.x + deltaX, y: start.y + deltaY } } };
         pendingTransformRef.current = preview; setTransformPreview(preview); announceTransform(preview); return;
       }
-      // When the base is the original, the offset is the running total; when it
-      // is a fresh gesture on the layer itself, it is this drag's delta.
-      const shiftX = transforming.fromOrigin ? dx : deltaX, shiftY = transforming.fromOrigin ? dy : deltaY;
-      const working = translateLayerPixels(transforming.basePixels, state.width, state.height, shiftX, shiftY, transforming.baseSelection);
+      // The offset is the running total whenever the base is the transform's
+      // original — which a float always is, since it was lifted from it.
+      const shiftX = transforming.float || transforming.fromOrigin ? dx : deltaX;
+      const shiftY = transforming.float || transforming.fromOrigin ? dy : deltaY;
+      const working = transforming.float
+        ? stampFloating(transforming.float, state.width, state.height, shiftX, shiftY)
+        : translateLayerPixels(transforming.basePixels, state.width, state.height, shiftX, shiftY, transforming.baseSelection);
       // Only where the content was and where it went can have changed. Redrawing
       // the whole canvas each frame composited the entire document to move a
       // square across it. The previous frame's area is folded in as well, or a
       // fast drag would leave the layer painted where it no longer is.
-      const was = layerOpaqueBounds(transforming.basePixels, state.width, state.height);
+      const was = transforming.float ? transforming.float.bounds : layerOpaqueBounds(transforming.basePixels, state.width, state.height);
       const now = was ? { ...was, x: was.x + shiftX, y: was.y + shiftY } : null;
       const touched = [movePaintedRef.current, was, now].filter((rect): rect is RasterRect => Boolean(rect));
       if (touched.length) {
@@ -547,7 +563,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         renderWorkingRegion(working, region);
       } else renderWorking(working);
       const moved = translateSelection(transforming.baseSelection, state.width, state.height, shiftX, shiftY);
-      const preview = { before: transforming.before, layerId: transforming.before.activeLayerId, dx, dy, pixels: working, selection: moved, rotation: transforming.rotation };
+      const preview = { before: transforming.before, layerId: transforming.before.activeLayerId, dx, dy, pixels: working, selection: moved, rotation: transforming.rotation, ...(transforming.float ? { float: transforming.float } : {}) };
       pendingTransformRef.current = preview;
       setTransformPreview(preview);
       announceTransform(preview);
@@ -1076,7 +1092,13 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       // ring, once per drag, none of which was ever committed.
       const origin = pending && !pending.text ? pending.before.layers.find((item) => item.id === pending.layerId) : null;
       const originSelection = origin ? restrictSelectionToAlpha(pending!.before.selection ?? null, origin.pixels, state.width, state.height) : null;
-      documentGesture.current = { kind: activeToolId === "raster.crop" ? "crop" : "move", from: point, current: point, pointerId: event.pointerId, before: pending?.before ?? cloneRasterState(gestureState), startDx: pending?.dx ?? 0, startDy: pending?.dy ?? 0, basePixels: origin ? origin.pixels.slice() : pending ? (pending.text ? pending.pixels : pending.pixels.slice()) : layer.pixels.slice(), baseSelection: origin ? (originSelection ? { mask: originSelection.mask.slice(), bounds: { ...originSelection.bounds } } : null) : pending?.selection ? { mask: pending.selection.mask.slice(), bounds: { ...pending.selection.bounds } } : effectiveSelection ? { mask: effectiveSelection.mask.slice(), bounds: { ...effectiveSelection.bounds } } : null, rotation: pending?.rotation ?? 0, ...(pending?.text ? { text: pending.text } : {}), ...(createdTextTransform ? { createdTextTransform: true } : {}), ...(origin ? { fromOrigin: true } : {}) };
+      // The content is lifted off the layer once and then placed, never cut
+      // again. Cutting per frame is what left a fraction of a soft edge behind
+      // at every position the pointer passed through.
+      const float = activeToolId === "raster.move" && !pending?.text
+        ? pending?.float ?? liftSelection(origin ? origin.pixels : layer.pixels, state.width, state.height, origin ? originSelection : effectiveSelection)
+        : undefined;
+      documentGesture.current = { kind: activeToolId === "raster.crop" ? "crop" : "move", from: point, current: point, pointerId: event.pointerId, before: pending?.before ?? cloneRasterState(gestureState), startDx: pending?.dx ?? 0, startDy: pending?.dy ?? 0, basePixels: origin ? origin.pixels.slice() : pending ? (pending.text ? pending.pixels : pending.pixels.slice()) : layer.pixels.slice(), baseSelection: origin ? (originSelection ? { mask: originSelection.mask.slice(), bounds: { ...originSelection.bounds } } : null) : pending?.selection ? { mask: pending.selection.mask.slice(), bounds: { ...pending.selection.bounds } } : effectiveSelection ? { mask: effectiveSelection.mask.slice(), bounds: { ...effectiveSelection.bounds } } : null, rotation: pending?.rotation ?? 0, ...(pending?.text ? { text: pending.text } : {}), ...(createdTextTransform ? { createdTextTransform: true } : {}), ...(origin ? { fromOrigin: true } : {}), ...(float ? { float } : {}) };
       setSelectionDraft(activeToolId === "raster.crop" ? { x: point.x, y: point.y, width: 0, height: 0 } : null);
       return;
     }
@@ -1348,8 +1370,16 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         const deltaX = transforming.current.x - transforming.from.x, deltaY = transforming.current.y - transforming.from.y;
         if (Math.hypot(deltaX, deltaY) < .25) { if (transforming.createdTextTransform) { pendingTransformRef.current = null; setTransformPreview(null); announceTransform(null); } const canvas = canvasRef.current; if (canvas) putPixels(canvas, compositeRasterDocument(state), state.width, state.height); return; }
         if (transforming.text) { applyTransformFrame(transforming); return; }
-        const pixels = translateLayerPixels(transforming.basePixels, state.width, state.height, deltaX, deltaY, transforming.baseSelection);
-        const preview = { before: transforming.before, layerId: transforming.before.activeLayerId, dx, dy, pixels, selection: translateSelection(transforming.baseSelection, state.width, state.height, deltaX, deltaY), rotation: transforming.rotation };
+        // The same arithmetic the live frames use. This path had its own copy
+        // that cut from the original by this drag's delta alone, so releasing
+        // the button threw away the correct preview and replaced it with one
+        // that had lost every earlier drag.
+        const shiftX = transforming.float || transforming.fromOrigin ? dx : deltaX;
+        const shiftY = transforming.float || transforming.fromOrigin ? dy : deltaY;
+        const pixels = transforming.float
+          ? stampFloating(transforming.float, state.width, state.height, shiftX, shiftY)
+          : translateLayerPixels(transforming.basePixels, state.width, state.height, shiftX, shiftY, transforming.baseSelection);
+        const preview = { before: transforming.before, layerId: transforming.before.activeLayerId, dx, dy, pixels, selection: translateSelection(transforming.baseSelection, state.width, state.height, shiftX, shiftY), rotation: transforming.rotation, ...(transforming.float ? { float: transforming.float } : {}) };
         pendingTransformRef.current = preview;
         setTransformPreview(preview);
         announceTransform(preview);
