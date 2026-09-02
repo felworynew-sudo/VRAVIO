@@ -376,3 +376,103 @@ export function sampleAverage(pixels: Uint8ClampedArray, width: number, height: 
   }
   return { r: Math.round(r / count), g: Math.round(g / count), b: Math.round(b / count), a: Math.round(a / count) };
 }
+
+/**
+ * What a layer contributes to the picture, as one comparable value.
+ *
+ * Borrowed from Patchy, which keeps a render revision per layer and diffs two
+ * of these lists to work out how much of the canvas an undo has to repaint. The
+ * same question comes up on every document change here: today anything that
+ * does not report a dirty region — a changed opacity, a hidden layer, a
+ * reorder, an undo — is treated as "everything changed" and recomposites the
+ * whole document. Comparing signatures says which layers actually differ.
+ *
+ * Buffer identity stands in for their revision counter, which works because
+ * every path that edits pixels assigns a fresh buffer rather than writing
+ * through the old one.
+ */
+export interface LayerRenderSignature {
+  readonly id: string;
+  readonly pixels: Uint8ClampedArray;
+  readonly mask: Uint8ClampedArray | null;
+  readonly maskEnabled: boolean;
+  readonly visible: boolean;
+  readonly opacity: number;
+  readonly fillOpacity: number;
+  readonly blendMode: string;
+  readonly clipping: boolean;
+  readonly effects: unknown;
+  readonly adjustment: unknown;
+  readonly parentId: string | null;
+  readonly orderKey: string;
+}
+
+export function layerRenderSignatures(state: RasterDocumentState): LayerRenderSignature[] {
+  return flattenRasterLayers(state.layers).map((layer) => ({
+    id: layer.id,
+    pixels: layer.pixels,
+    mask: layer.mask?.pixels ?? null,
+    maskEnabled: layer.mask?.enabled ?? false,
+    visible: layer.visible,
+    opacity: layer.opacity,
+    fillOpacity: layer.fillOpacity ?? 1,
+    blendMode: layer.blendMode,
+    clipping: layer.clipping === true,
+    effects: layer.effects,
+    adjustment: layer.adjustment,
+    parentId: layer.parentId,
+    orderKey: layer.orderKey,
+  }));
+}
+
+const sameSignature = (a: LayerRenderSignature, b: LayerRenderSignature): boolean =>
+  a.pixels === b.pixels && a.mask === b.mask && a.maskEnabled === b.maskEnabled
+  && a.visible === b.visible && a.opacity === b.opacity && a.fillOpacity === b.fillOpacity
+  && a.blendMode === b.blendMode && a.clipping === b.clipping
+  && a.effects === b.effects && a.adjustment === b.adjustment
+  && a.parentId === b.parentId && a.orderKey === b.orderKey;
+
+/**
+ * The region that can look different between two states, or null for "all of it".
+ *
+ * Null is returned whenever the answer cannot be bounded honestly: the layer
+ * set changed, an adjustment layer is involved (it reads back everything
+ * beneath it), or a layer carries an effect (which draws outside its own
+ * pixels). Guessing smaller than the truth leaves stale pixels on screen, which
+ * is a worse failure than repainting too much.
+ */
+export function changedRenderRegion(
+  before: readonly LayerRenderSignature[],
+  after: readonly LayerRenderSignature[],
+  state: RasterDocumentState,
+): RasterRect | null {
+  if (before.length !== after.length) return null;
+  for (let index = 0; index < before.length; index += 1) if (before[index]!.id !== after[index]!.id) return null;
+
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+  const include = (rect: RasterRect | null) => {
+    if (!rect) return;
+    left = Math.min(left, rect.x); top = Math.min(top, rect.y);
+    right = Math.max(right, rect.x + rect.width); bottom = Math.max(bottom, rect.y + rect.height);
+  };
+
+  for (let index = 0; index < before.length; index += 1) {
+    const was = before[index]!, now = after[index]!;
+    if (sameSignature(was, now)) continue;
+    // An adjustment reads everything below it and an effect paints outside the
+    // layer, so neither can be bounded by the layer's own content.
+    if (was.adjustment || now.adjustment || hasEnabledEffectValue(was.effects) || hasEnabledEffectValue(now.effects)) return null;
+    include(layerOpaqueBounds(was.pixels, state.width, state.height));
+    include(layerOpaqueBounds(now.pixels, state.width, state.height));
+  }
+
+  if (right <= left || bottom <= top) return { x: 0, y: 0, width: 0, height: 0 };
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+function hasEnabledEffectValue(effects: unknown): boolean {
+  if (!effects || typeof effects !== "object") return false;
+  return Object.values(effects as Record<string, unknown>).some(
+    (effect) => typeof effect === "object" && effect !== null && (effect as { enabled?: boolean }).enabled === true,
+  );
+}

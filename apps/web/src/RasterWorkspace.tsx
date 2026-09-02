@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   activeRasterLayer, appendLayer, clampRegionToDocument, copyHealedRegion, layerAccepts, layerLockReason, layerOpaqueBounds, paintMask, marqueeCorners, marqueeRect, pickLayerAt, combineSelections, compositeRasterDocument, compositeRasterRegion, createContiguousColorSelection, drawShape, DirtyRegion, RasterTileCache, type ShapeKind, createEllipseSelection, createPolygonSelection, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
-  confineToSelection, isRasterDocumentState, liftSelection, parseHexColor, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectionOutlinePath, stampFloating, toHexColor,
-  translateLayerPixels, translateSelection, type FloatingPixels, type PixelSelection, type Point, type RasterDocumentState, type RasterGuide, type RasterLayer, type RasterRect, type RasterTextData, type SelectionCombineMode,
+  changedRenderRegion, confineToSelection, isRasterDocumentState, layerRenderSignatures, liftSelection, parseHexColor, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectionOutlinePath, stampFloating, toHexColor,
+  translateLayerPixels, translateSelection, type FloatingPixels, type LayerRenderSignature, type PixelSelection, type Point, type RasterDocumentState, type RasterGuide, type RasterLayer, type RasterRect, type RasterTextData, type SelectionCombineMode,
   cloneDab, cloneStrokeSegment,
   blurDab, blurStrokeSegment, smudgeStrokeSegment,
   dodgeBurnDab, dodgeBurnStrokeSegment, type DodgeBurnRange,
@@ -303,7 +303,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const tiles = useRef(new RasterTileCache({ tileSize: 256 }));
   const documentDirty = useRef(new DirtyRegion());
   /** What the visible canvas currently holds, so idle renders repaint nothing. */
-  const painted = useRef<{ canvas: HTMLCanvasElement | null; revision: number }>({ canvas: null, revision: -1 });
+  const painted = useRef<{ canvas: HTMLCanvasElement | null; revision: number; signatures?: readonly LayerRenderSignature[] }>({ canvas: null, revision: -1 });
   const [lassoDraft, setLassoDraft] = useState<Point[]>([]);
   const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
   const [transformPreview, setTransformPreview] = useState<PendingPixelTransform | null>(null);
@@ -377,16 +377,24 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     // revision is what says whether the pixels can have moved at all.
     const canvasChanged = painted.current.canvas !== canvas;
     const revised = document.revision !== painted.current.revision;
-    painted.current = { canvas, revision: document.revision };
+    const signatures = layerRenderSignatures(state);
+    const previousSignatures = painted.current.signatures;
+    painted.current = { canvas, revision: document.revision, signatures };
 
     // A canvas React has just mounted holds nothing, whatever the cache thinks.
     if (canvasChanged) tiles.current.invalidateAll();
     else if (revised) {
-      // An empty region means the edit did not report what it touched (a filter, a layer
-      // operation, an undo), so the whole document is assumed dirty. Only gestures narrow it.
       const pending = documentDirty.current.isEmpty ? null : documentDirty.current.consume();
-      if (pending === null) tiles.current.invalidateAll();
-      else for (const rect of pending) tiles.current.invalidate(rect);
+      if (pending !== null) for (const rect of pending) tiles.current.invalidate(rect);
+      else {
+        // The edit did not say what it touched — a filter, a layer operation, an
+        // undo. Rather than assume the whole document, ask which layers render
+        // differently now and repaint what they cover. Null still means "cannot
+        // be bounded honestly", and then everything goes.
+        const changed = previousSignatures ? changedRenderRegion(previousSignatures, signatures, state) : null;
+        if (!changed) tiles.current.invalidateAll();
+        else if (changed.width > 0 && changed.height > 0) tiles.current.invalidate(changed);
+      }
     }
     const { repainted } = tiles.current.update(state, { x: 0, y: 0, width: state.width, height: state.height });
     for (const tile of repainted) putRegionPixels(canvas, tile.pixels, tile.rect);
