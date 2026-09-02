@@ -51,12 +51,28 @@ export interface Command {
   execute(context: CommandContext): void | Promise<void>;
 }
 
+/**
+ * Why the history is releasing a step.
+ *
+ * The difference matters to anything holding an external resource. When the
+ * redo branch is discarded the step's *result* becomes unreachable; when the
+ * step is evicted from the front, the state *before* it does. Guessing from
+ * the current state is not possible: by the time `free` runs the replacing
+ * step is already applied, so a guess would collect the very revision it
+ * stands on.
+ */
+export type FreeReason =
+  /** The redo branch was thrown away; this step will never be applied again. */
+  | "discarded"
+  /** Evicted from the front of the timeline; there is no way back past it. */
+  | "evicted";
+
 export interface ReversibleOperation {
   readonly label: string;
   readonly memoryEstimate?: number;
   readonly storageEstimate?: number;
   redo(): void | Promise<void>;
   undo(): void | Promise<void>;
-  free?(): void | Promise<void>;
+  free?(reason: FreeReason): void | Promise<void>;
   mergeWith?(next: ReversibleOperation): ReversibleOperation | null;
 }

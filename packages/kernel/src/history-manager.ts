@@ -1,7 +1,28 @@
-import type { Disposable, ReversibleOperation } from "./types";
+import type { Disposable, FreeReason, ReversibleOperation } from "./types";
 
 interface HistoryEntry { operation: ReversibleOperation; timestamp: number }
-export interface HistoryManagerOptions { readonly limit?: number; readonly memoryLimitBytes?: number; readonly storageLimitBytes?: number }
+export interface HistoryManagerOptions {
+  readonly limit?: number;
+  readonly memoryLimitBytes?: number;
+  readonly storageLimitBytes?: number;
+  /**
+   * Heap fill ratio in 0..1, or null when it cannot be measured.
+   *
+   * Budgets alone are guesswork: a raster step can weigh 50 MB and the tab dies
+   * before the limit is reached. Watching the heap lets the timeline shed weight
+   * before that happens — the trick miniPaint uses.
+   */
+  readonly heapPressure?: () => number | null;
+}
+
+/** Above this heap fill ratio the timeline starts shedding old steps. */
+const heapPressureLimit = 0.8;
+
+function defaultHeapPressure(): number | null {
+  const memory = (globalThis as { performance?: { memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number } } }).performance?.memory;
+  if (!memory?.jsHeapSizeLimit) return null;
+  return memory.usedJSHeapSize / memory.jsHeapSizeLimit;
+}
 
 /** One row of the history panel timeline: applied steps first, then undone steps still available for redo. */
 export interface HistoryEntrySummary {
@@ -20,12 +41,14 @@ export class HistoryManager {
   readonly #limit: number;
   #memoryLimitBytes: number;
   #storageLimitBytes: number;
+  readonly #heapPressure: () => number | null;
 
   constructor(options: number | HistoryManagerOptions = 200) {
     const normalized = typeof options === "number" ? { limit: options } : options;
     this.#limit = normalized.limit ?? 200;
     this.#memoryLimitBytes = normalized.memoryLimitBytes ?? 512 * 1024 * 1024;
     this.#storageLimitBytes = normalized.storageLimitBytes ?? Number.POSITIVE_INFINITY;
+    this.#heapPressure = normalized.heapPressure ?? defaultHeapPressure;
     if (!Number.isInteger(this.#limit) || this.#limit < 1) throw new RangeError("History limit must be a positive integer");
     if (!(this.#memoryLimitBytes > 0) || !(this.#storageLimitBytes > 0)) throw new RangeError("History budgets must be positive");
   }
@@ -77,7 +100,7 @@ export class HistoryManager {
     const merged = merge && previous ? previous.operation.mergeWith?.(operation) : null;
     if (merged && previous) previous.operation = merged;
     else this.#undoStack.push({ operation, timestamp: Date.now() });
-    await this.#freeEntries(this.#redoStack.splice(0));
+    await this.#freeEntries(this.#redoStack.splice(0), "discarded");
     await this.#trim();
     this.#notify();
   }
@@ -97,7 +120,7 @@ export class HistoryManager {
         }
       },
       undo: async () => { for (const operation of [...operations].reverse()) await operation.undo(); },
-      free: async () => { for (const operation of operations) await operation.free?.(); },
+      free: async (reason) => { for (const operation of operations) await operation.free?.(reason); },
     };
     await this.execute(batch);
   }
@@ -121,17 +144,27 @@ export class HistoryManager {
   }
 
   async clear(): Promise<void> {
-    await this.#freeEntries([...this.#undoStack.splice(0), ...this.#redoStack.splice(0)]);
+    await this.#freeEntries([...this.#undoStack.splice(0), ...this.#redoStack.splice(0)], "evicted");
     this.#notify();
   }
 
   async #trim(): Promise<void> {
     const removed: HistoryEntry[] = [];
-    while (this.#undoStack.length > 1 && (this.#undoStack.length > this.#limit || this.memoryBytes > this.#memoryLimitBytes || this.storageBytes > this.#storageLimitBytes)) {
+    const pressure = this.#heapPressure();
+    // Under heap pressure shed down to half the current weight instead of
+    // waiting for a budget that may never be reached.
+    let relief = pressure !== null && pressure > heapPressureLimit ? this.memoryBytes / 2 : 0;
+
+    while (
+      this.#undoStack.length > 1 &&
+      (this.#undoStack.length > this.#limit || this.memoryBytes > this.#memoryLimitBytes || this.storageBytes > this.#storageLimitBytes || relief > 0)
+    ) {
       const entry = this.#undoStack.shift();
-      if (entry) removed.push(entry);
+      if (!entry) break;
+      relief -= estimate(entry.operation, "memoryEstimate");
+      removed.push(entry);
     }
-    await this.#freeEntries(removed);
+    await this.#freeEntries(removed, "evicted");
   }
 
   #notify(): void { for (const listener of [...this.#listeners]) listener(); }
@@ -140,7 +173,7 @@ export class HistoryManager {
     return [...this.#undoStack, ...this.#redoStack].reduce((sum, entry) => sum + estimate(entry.operation, key), 0);
   }
 
-  async #freeEntries(entries: readonly HistoryEntry[]): Promise<void> {
-    for (const entry of entries) await entry.operation.free?.();
+  async #freeEntries(entries: readonly HistoryEntry[], reason: FreeReason): Promise<void> {
+    for (const entry of entries) await entry.operation.free?.(reason);
   }
 }

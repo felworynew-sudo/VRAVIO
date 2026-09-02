@@ -137,13 +137,50 @@ export class AssetStore {
     return this.#adapter.get(revision.storageKey);
   }
 
-  async rollback(id: AssetId, toRev: number): Promise<void> {
+  /**
+   * Points the asset at a revision that already exists.
+   *
+   * This is how undo and redo work for destructive pixel edits: the bytes stay
+   * where they are and only the head moves, so a stroke costs one revision
+   * rather than a full snapshot pair.
+   */
+  async setHead(id: AssetId, rev: number, producedBy = "undo"): Promise<void> {
     await this.initialize();
     const record = this.mustGet(id);
-    if (!record.revisions.some((revision) => revision.rev === toRev)) throw new RangeError(`Unknown asset revision: ${id}@${toRev}`);
-    record.head = toRev;
+    if (!record.revisions.some((revision) => revision.rev === rev)) throw new RangeError(`Unknown asset revision: ${id}@${rev}`);
+    if (record.head === rev) return;
+    record.head = rev;
     await this.#persist();
-    this.#events.emit("revised", { assetId: id, rev: toRev, producedBy: "undo" });
+    this.#events.emit("revised", { assetId: id, rev, producedBy });
+  }
+
+  async rollback(id: AssetId, toRev: number): Promise<void> {
+    await this.setHead(id, toRev, "undo");
+  }
+
+  /**
+   * Collects a revision the history can no longer reach.
+   *
+   * Every brush stroke commits a full-layer revision, so without collection the
+   * storage grows for the whole session. The current head and the last surviving
+   * revision are never touched: dropping either would leave a document with no
+   * bytes to draw.
+   */
+  async dropRevision(id: AssetId, rev: number): Promise<boolean> {
+    await this.initialize();
+    const record = this.#records.get(id);
+    if (!record || record.head === rev || record.revisions.length <= 1) return false;
+
+    const index = record.revisions.findIndex((revision) => revision.rev === rev);
+    if (index === -1) return false;
+
+    const [removed] = record.revisions.splice(index, 1);
+    if (removed) await this.#adapter.remove(removed.storageKey);
+    // Rebuilt rather than keyed out: two revisions can share a hash, and
+    // deleting by hash would unmap one that is still stored.
+    this.#rebuildHashIndex();
+    await this.#persist();
+    return true;
   }
 
   async retain(id: AssetId): Promise<number> { const record = this.mustGet(id); record.refCount += 1; await this.#persist(); return record.refCount; }
