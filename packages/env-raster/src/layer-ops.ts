@@ -334,3 +334,36 @@ export function layerLockReason(layer: RasterLayer, action: LayerAction): string
   if (action === "move" && layer.lockPosition) return "Layer position is locked (Положение слоя закреплено)";
   return null;
 }
+
+/**
+ * Links layers so they move as one, or unlinks them if they already are.
+ *
+ * Photoshop's chain. A shared token rather than a list of partners on each
+ * layer: with lists, unlinking one side leaves the other still claiming it, and
+ * every operation has to repair the disagreement.
+ */
+export function toggleLayerLink(state: RasterDocumentState, layerIds: readonly string[]): boolean {
+  const members = layerIds.map((id) => find(state, id)).filter((layer): layer is RasterLayer => Boolean(layer));
+  if (members.length < 2) {
+    // One layer on its own can still be unlinked from whatever it belongs to.
+    const only = members[0];
+    if (only?.linkGroup) { delete only.linkGroup; return true; }
+    return false;
+  }
+  const shared = members[0]!.linkGroup;
+  if (shared && members.every((layer) => layer.linkGroup === shared)) {
+    for (const layer of members) delete layer.linkGroup;
+    return true;
+  }
+  const token = crypto.randomUUID();
+  for (const layer of members) layer.linkGroup = token;
+  return true;
+}
+
+/** Every layer that moves when this one does, itself included. */
+export function linkedLayers(state: RasterDocumentState, layerId: string): RasterLayer[] {
+  const layer = find(state, layerId);
+  if (!layer) return [];
+  if (!layer.linkGroup) return [layer];
+  return state.layers.filter((item) => item.linkGroup === layer.linkGroup);
+}

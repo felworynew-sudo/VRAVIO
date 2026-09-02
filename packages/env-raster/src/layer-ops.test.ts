@@ -3,7 +3,7 @@ import {
   appendLayer, createRasterDocument, createRasterGroup, createRasterLayer, createRasterLayerMask,
   createRectangleSelection, duplicateLayer, groupLayers, layerFromSelection, mergeLayerDown,
   mergeVisibleLayers, moveLayerInStack, placeLayer, rasterLayerRows, stampVisibleLayers, ungroupLayer,
-  dropPositionInRow, dropTargetForRow,
+  dropPositionInRow, dropTargetForRow, toggleLayerLink, linkedLayers,
 } from "./index";
 import type { RasterDocumentState, RasterLayer } from "./types";
 
@@ -419,5 +419,69 @@ describe("dropping a dragged row", () => {
 
   it("reports nothing for a row that is gone", () => {
     expect(dropTargetForRow(stack(), "missing", "above")).toBeNull();
+  });
+});
+
+describe("linking layers", () => {
+  it("links a pair and moves them as one", () => {
+    const state = doc();
+    const one = add(state, "One");
+    const two = add(state, "Two");
+    add(state, "Three");
+
+    expect(toggleLayerLink(state, [one.id, two.id])).toBe(true);
+    expect(linkedLayers(state, one.id).map((layer) => layer.name).sort()).toEqual(["One", "Two"]);
+    expect(linkedLayers(state, two.id)).toHaveLength(2);
+  });
+
+  it("unlinks a pair that is already linked", () => {
+    const state = doc();
+    const one = add(state, "One");
+    const two = add(state, "Two");
+    toggleLayerLink(state, [one.id, two.id]);
+
+    expect(toggleLayerLink(state, [one.id, two.id])).toBe(true);
+    expect(one.linkGroup).toBeUndefined();
+    expect(two.linkGroup).toBeUndefined();
+  });
+
+  it("takes one layer out of a link it belongs to", () => {
+    const state = doc();
+    const one = add(state, "One");
+    const two = add(state, "Two");
+    const three = add(state, "Three");
+    toggleLayerLink(state, [one.id, two.id, three.id]);
+
+    expect(toggleLayerLink(state, [two.id])).toBe(true);
+    expect(two.linkGroup).toBeUndefined();
+    // The rest keep each other; a shared token means the others need no repair.
+    expect(linkedLayers(state, one.id).map((layer) => layer.name).sort()).toEqual(["One", "Three"]);
+  });
+
+  it("joins layers that were in different links", () => {
+    const state = doc();
+    const one = add(state, "One");
+    const two = add(state, "Two");
+    const three = add(state, "Three");
+    const four = add(state, "Four");
+    toggleLayerLink(state, [one.id, two.id]);
+    toggleLayerLink(state, [three.id, four.id]);
+
+    toggleLayerLink(state, [two.id, three.id]);
+
+    expect(two.linkGroup).toBe(three.linkGroup);
+    expect(two.linkGroup).not.toBe(one.linkGroup);
+  });
+
+  it("reports an unlinked layer as alone", () => {
+    const state = doc();
+    const only = add(state, "Only");
+
+    expect(linkedLayers(state, only.id).map((layer) => layer.name)).toEqual(["Only"]);
+    expect(toggleLayerLink(state, [only.id])).toBe(false);
+  });
+
+  it("knows nothing about a layer that is gone", () => {
+    expect(linkedLayers(doc(), "missing")).toEqual([]);
   });
 });

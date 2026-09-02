@@ -69,6 +69,14 @@ export interface RasterLayer {
   lockPosition?: boolean;
   /** Panel colour marker, as Photoshop's layer context menu sets. */
   colorLabel?: "none" | "red" | "orange" | "yellow" | "green" | "blue" | "violet" | "grey";
+  /**
+   * Layers sharing this token move and transform together.
+   *
+   * Photoshop's chain link. Stored as a shared token rather than a list of
+   * partners so that linking and unlinking cannot leave the two halves of a
+   * pair disagreeing about each other.
+   */
+  linkGroup?: string;
   kind: RasterLayerKind;
   adjustment?: RasterAdjustment;
   text?: RasterTextData;
