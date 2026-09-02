@@ -1,8 +1,12 @@
-import { AssetStore, AutosaveManager, CommandRegistry, DocumentSnapshotStore, DocumentStore, GPUContext, HistoryManager, KeymapManager, MemoryStorageAdapter, OpfsStorageAdapter } from "@vravio/kernel";
+import { AssetStore, AutosaveManager, CommandRegistry, DocumentSnapshotStore, DocumentStore, GPUContext, HistoryManager, KeymapManager, ResilientStorageAdapter } from "@vravio/kernel";
 import { createWebPlatform } from "./webPlatform";
 
-const assetStorage = OpfsStorageAdapter.isSupported() ? new OpfsStorageAdapter("vravio-assets") : new MemoryStorageAdapter();
-const sessionStorage = OpfsStorageAdapter.isSupported() ? new OpfsStorageAdapter("vravio-session") : new MemoryStorageAdapter();
+// Which store actually works is settled by writing a byte and reading it back,
+// not by asking whether the API exists: Safari reports an origin private file
+// system it long refused to write to, and a private window can fail later
+// still. See ResilientStorageAdapter.
+const assetStorage = new ResilientStorageAdapter("vravio-assets");
+const sessionStorage = new ResilientStorageAdapter("vravio-session");
 const assets = new AssetStore(assetStorage);
 // Pixel edits are recorded as asset revisions and released by undo history,
 // which does not survive a reload. Whatever the previous session left behind
@@ -26,6 +30,8 @@ export const kernel = {
   gpuReady: gpu.initialize(),
   autosave,
   sessionReady,
+  /** Which store the probe settled on, for the diagnostics panel. */
+  storage: assetStorage,
   historyByDocument: new Map<string, HistoryManager>(),
 };
 

@@ -77,13 +77,34 @@ function rulerStep(zoom: number): number {
   return (normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10) * power;
 }
 
+/**
+ * How hard the pointer is pressing, on a scale the brush can use.
+ *
+ * The Pointer Events specification says a device with no pressure sensor must
+ * report 0.5 while a button is held, and 0 only when nothing is touching.
+ * Safari reports a hard 0 throughout a stroke for pens and touches it has no
+ * pressure for, and taking that at face value scales the brush to nothing: a
+ * 24-pixel tip becomes 0.6 of a pixel, so the stroke is committed and saved and
+ * simply cannot be seen.
+ *
+ * A zero arriving mid-stroke therefore means "this device is not telling me",
+ * not "the user is not pressing".
+ */
+export function strokePressure(event: { pointerType: string; pressure: number; buttons: number }): number {
+  if (event.pointerType === "mouse") return 1;
+  if (event.pressure > 0) return Math.max(0.05, event.pressure);
+  // Down but reporting nothing: fall back to the value the specification
+  // reserves for a device without a sensor.
+  return event.buttons === 0 ? 0.05 : 0.5;
+}
+
 function pointFromNativeEvent(workspace: HTMLDivElement, viewport: DocumentViewport, width: number, height: number, event: PointerEvent): Point {
   const rect = workspace.getBoundingClientRect();
   const dx = event.clientX - rect.left - rect.width / 2 - viewport.panX;
   const dy = event.clientY - rect.top - rect.height / 2 - viewport.panY;
   const radians = viewport.rotation * Math.PI / 180;
   const cosine = Math.cos(radians), sine = Math.sin(radians);
-  return { x: (cosine * dx + sine * dy) / viewport.zoom + width / 2, y: (-sine * dx + cosine * dy) / viewport.zoom + height / 2, pressure: event.pointerType === "mouse" ? 1 : Math.max(0.05, event.pressure) };
+  return { x: (cosine * dx + sine * dy) / viewport.zoom + width / 2, y: (-sine * dx + cosine * dy) / viewport.zoom + height / 2, pressure: strokePressure(event) };
 }
 
 function zoomAroundClient(workspace: HTMLDivElement, viewport: DocumentViewport, zoom: number, clientX: number, clientY: number): Partial<DocumentViewport> {
@@ -166,6 +187,8 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   >(null);
   const pendingTransformRef = useRef<PendingPixelTransform | null>(null);
   const transformFrameRef = useRef<number | null>(null);
+  /** Serializes the storage half of pixel commits; see commitPixels. */
+  const commitQueue = useRef<Promise<void>>(Promise.resolve());
   const previousActiveLayerId = useRef<string | null>(null);
   const previousToolId = useRef<string | null>(null);
   const navigationGesture = useRef<{ kind: "pan" | "rotate" | "zoom"; pointerId: number; startX: number; startY: number; initial: DocumentViewport; alt: boolean; moved: boolean } | null>(null);
@@ -436,6 +459,13 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   /**
    * Records a destructive pixel edit.
    *
+   * The edit lands in the document first and is written to the asset store
+   * afterwards. That order matters: the store is on OPFS, and a full layer is
+   * eight megabytes each way, so making the document wait for it left a window
+   * of tens of milliseconds after the pointer came up in which the layer still
+   * held the previous pixels. A second stroke started inside that window read
+   * the stale buffer and was lost when the first commit finally landed.
+   *
    * The buffers go to the asset store and the history step keeps two revision
    * numbers. Holding the before and after buffers inside the step instead would
    * cost 16 MB per stroke on a 1920x1080 layer, and the memory budget would
@@ -450,23 +480,38 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       kernel.documents.update<RasterDocumentState>(document.id, (current) => { const layer = current.layers.find((item) => item.id === layerId); if (!layer) return; if (target === "mask" && layer.mask) layer.mask.pixels = rgbaToMask(buffer); else layer.pixels = buffer.slice(); });
     };
 
-    const assetId = await ensureBufferAsset(layerId, target, before, label);
-    if (!assetId) {
-      // No asset store available: fall back to buffer snapshots so the edit is
-      // still reversible, just at the old memory cost.
-      await history.execute({ label, memoryEstimate: before.byteLength + after.byteLength, redo: () => assign(after), undo: () => assign(before) });
-      return;
-    }
+    // Show the result now; the gesture is over and the user is looking at it.
+    assign(after);
 
-    const previousRev = kernel.assets.mustGet(assetId).head;
-    const nextRev = await kernel.assets.commitRevision(assetId, toBytes(after), "raster", label);
-    await history.execute(createBufferRevisionOperation({ assets: kernel.assets, assetId, label, producedBy: "raster", apply: assign }, previousRev, nextRev));
+    // Queue the bookkeeping. Two commits must not interleave: each reads the
+    // asset head to name the revision it undoes to, and a head read between
+    // another commit's write and its own would record a step that undoes to
+    // the wrong picture.
+    commitQueue.current = commitQueue.current
+      .catch(() => undefined)
+      .then(async () => {
+        const assetId = await ensureBufferAsset(layerId, target, before, label);
+        if (!assetId) {
+          // No asset store available: fall back to buffer snapshots so the edit
+          // is still reversible, just at the old memory cost.
+          await history.record({ label, memoryEstimate: before.byteLength + after.byteLength, redo: () => assign(after), undo: () => assign(before) });
+          return;
+        }
+        const previousRev = kernel.assets.mustGet(assetId).head;
+        const nextRev = await kernel.assets.commitRevision(assetId, toBytes(after), "raster", label);
+        await history.record(createBufferRevisionOperation({ assets: kernel.assets, assetId, label, producedBy: "raster", apply: assign }, previousRev, nextRev));
+      });
+    await commitQueue.current;
   };
 
   /** Binds a layer buffer to an asset on first edit, seeding it with the pre-edit bytes. */
   const ensureBufferAsset = async (layerId: string, target: "pixels" | "mask", before: Uint8ClampedArray, label: string): Promise<AssetId | null> => {
     await kernel.assetsReady;
-    const layer = state.layers.find((item) => item.id === layerId);
+    // Read the live document, not the state this render closed over: commits are
+    // queued, so by the time this runs an earlier one may already have bound the
+    // asset, and working from the stale copy would bind a second one.
+    const live = kernel.documents.get<RasterDocumentState>(document.id)?.state;
+    const layer = live?.layers.find((item) => item.id === layerId);
     if (!layer) return null;
 
     const key = target === "mask" ? "maskAssetId" : "pixelAssetId";

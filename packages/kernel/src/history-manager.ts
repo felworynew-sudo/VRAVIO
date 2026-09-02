@@ -96,6 +96,20 @@ export class HistoryManager {
 
   async execute(operation: ReversibleOperation, merge = false): Promise<void> {
     await operation.redo();
+    await this.record(operation, merge);
+  }
+
+  /**
+   * Records an operation whose effect is already in place.
+   *
+   * An interactive edit is applied the moment the gesture ends — the user is
+   * looking at it. Making the timeline re-apply it means waiting for whatever
+   * the operation does to bring the state back, which for a pixel edit is a
+   * round trip through storage, and the next gesture begins inside that
+   * window. Recording it instead keeps the timeline honest without replaying
+   * work that has already happened.
+   */
+  async record(operation: ReversibleOperation, merge = false): Promise<void> {
     const previous = this.#undoStack.at(-1);
     const merged = merge && previous ? previous.operation.mergeWith?.(operation) : null;
     if (merged && previous) previous.operation = merged;

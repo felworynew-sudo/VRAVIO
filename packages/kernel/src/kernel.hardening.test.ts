@@ -208,6 +208,45 @@ describe("HistoryManager release reasons", () => {
   });
 });
 
+describe("recording an edit that is already applied", () => {
+  it("does not replay the operation", async () => {
+    const history = new HistoryManager({ limit: 10 });
+    let redos = 0;
+
+    await history.record({ label: "Brush", memoryEstimate: 0, redo: () => { redos += 1; }, undo: () => {} });
+
+    // An interactive edit is on screen the moment the gesture ends. Replaying it
+    // means waiting for a round trip through storage, and the next gesture
+    // starts inside that window and is lost.
+    expect(redos).toBe(0);
+    expect(history.undoCount).toBe(1);
+  });
+
+  it("undoes and redoes a recorded step like any other", async () => {
+    const history = new HistoryManager({ limit: 10 });
+    const applied: string[] = [];
+
+    await history.record({ label: "Brush", memoryEstimate: 0, redo: () => { applied.push("redo"); }, undo: () => { applied.push("undo"); } });
+    await history.undo();
+    await history.redo();
+
+    expect(applied).toEqual(["undo", "redo"]);
+  });
+
+  it("discards a pending redo branch when a recorded step lands on it", async () => {
+    const freed: string[] = [];
+    const history = new HistoryManager({ limit: 10 });
+    const step = (label: string) => ({ label, memoryEstimate: 0, redo: () => {}, undo: () => {}, free: (reason: string) => { freed.push(`${label}:${reason}`); } });
+
+    await history.execute(step("a"));
+    await history.undo();
+    await history.record(step("b"));
+
+    expect(freed).toEqual(["a:discarded"]);
+    expect(history.redoCount).toBe(0);
+  });
+});
+
 describe("buffer revisions instead of buffer snapshots", () => {
   const layerBytes = (fill: number, size = 64) => new Uint8Array(size).fill(fill);
 
