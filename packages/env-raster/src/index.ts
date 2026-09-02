@@ -22,3 +22,5 @@ export * from "./patch";
 export * from "./heal_membrane";
 export * from "./retouch";
 export * from "./liquify";
+export { canvasBlendModes, planComposite } from "./composite-plan";
+export type { CompositeBackend, CompositePlan, PixelDepth } from "./composite-plan";

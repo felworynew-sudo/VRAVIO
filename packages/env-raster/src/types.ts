@@ -87,7 +87,8 @@ export interface RasterDocumentState {
   colorSpace: "srgb";
   resolution: number;
   resolutionUnit: "ppi" | "ppcm";
-  bitDepth: 8;
+  /** 16 and 32 bit force the precise compositing path; see composite-plan.ts. */
+  bitDepth: 8 | 16 | 32;
   pixelAspectRatio: number;
   backgroundColor: string | null;
   layers: RasterLayer[];
