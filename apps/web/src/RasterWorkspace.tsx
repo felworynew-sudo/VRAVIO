@@ -298,6 +298,8 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const [spaceHeld, setSpaceHeld] = useState(false);
   /** "in" or "out" while space and a modifier turn the pointer into a zoom tool. */
   const [spaceZoom, setSpaceZoom] = useState<"in" | "out" | null>(null);
+  /** How far the patch has been dragged, for the outline that shows where it reads. */
+  const [patchOffset, setPatchOffset] = useState<{ x: number; y: number } | null>(null);
   /** Space's own state, so a modifier pressed after it can be read without a re-render. */
   const spaceDown = useRef(false);
   const [navigating, setNavigating] = useState(false);
@@ -954,8 +956,18 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     }
     if (activeToolId === "raster.patch") {
       if (maskTarget) return;
-      if (!state.selection) return;
+      // Photoshop's Patch draws its own selection when there is none, then
+      // patches when you drag inside it. Doing nothing silently — which is what
+      // this did — leaves no way to discover that a selection was needed.
+      if (!state.selection) {
+        canvas.setPointerCapture(event.pointerId);
+        selectionGesture.current = { kind: "lasso", from: point, current: point, points: [point], pointerId: event.pointerId, mode: "replace", spaceAnchor: null };
+        setSelectionDraft({ x: point.x, y: point.y, width: 0, height: 0 });
+        setLassoDraft([point]);
+        return;
+      }
       canvas.setPointerCapture(event.pointerId);
+      setPatchOffset({ x: 0, y: 0 });
       gesture.current = { before: layer.pixels.slice(), working: layer.pixels.slice(), curveStart: point, pending: point, pointerId: event.pointerId, frame: null, target: "pixels", layerId: layer.id };
       return;
     }
@@ -1153,6 +1165,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   };
 
   const finishGesture = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    setPatchOffset(null);
     const textDrawing = textGesture.current;
     if (textDrawing && textDrawing.pointerId === event.pointerId) {
       textGesture.current = null; setTextFrameDraft(null);
@@ -1265,6 +1278,11 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     } else if (activeToolId === "raster.patch") {
       const patchOffsetX = current.pending.x - current.curveStart.x;
       const patchOffsetY = current.pending.y - current.curveStart.y;
+      // Each frame patches the original, not the previous frame's result. Left
+      // to accumulate, dragging a patch a hundred pixels applied it a hundred
+      // times and the area turned to mush.
+      current.working.set(current.before);
+      setPatchOffset({ x: patchOffsetX, y: patchOffsetY });
       patchFromSelection(current.working, state.width, state.height, brushMask ?? null, state.selection?.bounds ?? { x: 0, y: 0, width: state.width, height: state.height }, patchOffsetX, patchOffsetY, Number(options.opacity ?? 100) / 100, (options.mode as "source" | "destination") ?? "source", Number(options.feather ?? 0));
     } else if (activeToolId !== "raster.blur" && activeToolId !== "raster.smudge" && activeToolId !== "raster.dodge" && activeToolId !== "raster.burn") {
       drawQuadraticStrokeSegment(current.working, state.width, state.height, current.curveStart, current.pending, current.pending, Number(options.size ?? 24), parseHexColor(current.target === "mask" && activeToolId === "raster.eraser" ? "#ffffff" : paintColor), opacity, current.target === "pixels" && activeToolId === "raster.eraser", brushMask, activeToolId === "raster.pencil" ? 1 : Number(options.hardness ?? 82) / 100, Number(options.spacing ?? 12) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), options.pressureSize !== false, options.pressureOpacity === true);
@@ -1429,6 +1447,14 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         style={{ left: transformPreview.text.targetBounds.x, top: transformPreview.text.targetBounds.y, width: transformPreview.text.targetBounds.width, height: transformPreview.text.targetBounds.height, transform: `rotate(${transformPreview.rotation}deg)` }}
       />}
       {preferences.showGuides && <svg className="guide-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">{[...guides, ...(guideDraft ? [guideDraft] : [])].map((guide, index) => guide.orientation === "vertical" ? <line key={`${guide.orientation}-${index}`} x1={guide.position} y1="0" x2={guide.position} y2={state.height}/> : <line key={`${guide.orientation}-${index}`} x1="0" y1={guide.position} x2={state.width} y2={guide.position}/>)}</svg>}
+      {activeToolId === "raster.patch" && patchOffset && committedSelectionPath && (
+        <svg className="patch-source-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">
+          {/* Where the patch is reading from. The destination keeps its own
+              marching ants, so the pair shows both halves of the operation at
+              once — otherwise a drag looks like it is moving the selection. */}
+          <path className="patch-source-path" d={committedSelectionPath} transform={`translate(${patchOffset.x} ${patchOffset.y})`}/>
+        </svg>
+      )}
       {activeToolId === "raster.clone" && (
         <>
           {/* The sample, shown inside the tip: what the next dab will lay down,

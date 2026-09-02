@@ -65,7 +65,11 @@ export const rasterToolGroups: readonly (readonly string[])[] = [
   ["raster.brush", "raster.pencil", "raster.highlighter"],
   ["raster.eraser"],
   ["raster.blur", "raster.smudge"],
-  ["raster.clone", "raster.spotHeal", "raster.patch"],
+  // Photoshop keeps healing and cloning apart: the healing group is J, the
+  // stamp is S. Folding them together hid the patch tool behind a flyout on a
+  // tool it has nothing to do with.
+  ["raster.spotHeal", "raster.patch"],
+  ["raster.clone"],
   ["raster.dodge", "raster.burn"],
   ["raster.fill"],
   ["raster.eyedropper"],
