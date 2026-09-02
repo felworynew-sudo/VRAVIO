@@ -1,5 +1,5 @@
 import type { CommandContext, EnvironmentKind } from "@vravio/kernel";
-import { activeRasterLayer, selectAllPixels, createRasterLayer, invertPixelSelection, isRasterDocumentState, restrictSelectionToAlpha, selectOpaquePixels, type PixelSelection, type RasterDocumentState } from "@vravio/env-raster";
+import { activeRasterLayer, groupLayers, layerFromSelection, mergeLayerDown, mergeVisibleLayers, moveLayerInStack, selectAllPixels, stampVisibleLayers, ungroupLayer, createRasterLayer, invertPixelSelection, isRasterDocumentState, restrictSelectionToAlpha, selectOpaquePixels, type PixelSelection, type RasterDocumentState, type RasterLayer } from "@vravio/env-raster";
 import { kernel } from "./kernel";
 import { useShellStore } from "./store";
 
@@ -46,6 +46,52 @@ async function changeRasterSelection(documentId: string, label: string, change: 
   await history.execute({ label, redo: () => assign(after), undo: () => assign(before) });
 }
 
+/**
+ * Applies a change to the layer tree as one undoable step.
+ *
+ * Layer operations rearrange structure and can rewrite pixels, so the step
+ * holds a snapshot of each side. The snapshots share their pixel buffers with
+ * the document — every path that edits pixels replaces the buffer rather than
+ * writing through it — so the cost is the tree, not the image.
+ */
+async function changeRasterDocument(documentId: string, label: string, mutate: (state: RasterDocumentState) => boolean): Promise<void> {
+  const document = kernel.documents.get<RasterDocumentState>(documentId);
+  const history = kernel.historyByDocument.get(documentId);
+  if (!document || !history || !isRasterDocumentState(document.state)) return;
+
+  const before = snapshotLayers(document.state);
+  const draft = snapshotLayers(document.state);
+  const working: RasterDocumentState = { ...document.state, layers: draft.layers, activeLayerId: draft.activeLayerId, selection: document.state.selection };
+  if (!mutate(working)) return;
+  const after = { layers: working.layers, activeLayerId: working.activeLayerId };
+
+  const assign = (snapshot: { layers: RasterLayer[]; activeLayerId: string }): void => {
+    kernel.documents.update<RasterDocumentState>(documentId, (state) => {
+      state.layers = snapshot.layers.map((layer) => ({ ...layer }));
+      state.activeLayerId = snapshot.activeLayerId;
+    });
+  };
+  await history.execute({
+    label,
+    memoryEstimate: 0,
+    redo: () => assign(after),
+    undo: () => assign(before),
+  });
+}
+
+/** Copies the layer tree's structure while sharing the pixel buffers. */
+function snapshotLayers(state: RasterDocumentState): { layers: RasterLayer[]; activeLayerId: string } {
+  return {
+    layers: state.layers.map((layer) => ({
+      ...layer,
+      ...(layer.mask ? { mask: { ...layer.mask } } : {}),
+      ...(layer.text ? { text: structuredClone(layer.text) } : {}),
+      ...(layer.adjustment ? { adjustment: structuredClone(layer.adjustment) } : {}),
+    })),
+    activeLayerId: state.activeLayerId,
+  };
+}
+
 export function ensureCommandsRegistered(): void {
   if (initialized) return;
   initialized = true;
@@ -61,13 +107,12 @@ export function ensureCommandsRegistered(): void {
   kernel.commands.register({ id: "file.save", label: "Save (Сохранить)", category: "File (Файл)", shortcut: "Mod+S", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: () => dispatch("vravio-file-save") });
   kernel.commands.register({ id: "file.saveAs", label: "Save As… (Сохранить как…)", category: "File (Файл)", shortcut: "Mod+Shift+S", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: () => dispatch("vravio-file-save-as") });
   kernel.commands.register({ id: "file.saveCopy", label: "Save a Copy… (Сохранить копию…)", category: "File (Файл)", shortcut: "Mod+Alt+S", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: () => dispatch("vravio-file-save-copy") });
-  kernel.commands.register({ id: "file.export", label: "Export… (Экспортировать…)", category: "File (Файл)", shortcut: "Mod+Shift+E", isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: () => dispatch("vravio-file-export") });
+  kernel.commands.register({ id: "file.export", label: "Export… (Экспортировать…)", category: "File (Файл)", shortcut: "Mod+Shift+Alt+W", isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: () => dispatch("vravio-file-export") });
   kernel.commands.register({ id: "file.close", label: "Close Document (Закрыть документ)", category: "File (Файл)", shortcut: "Mod+W", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: ({ activeDocumentId }) => { if (activeDocumentId) useShellStore.getState().closeDocument(activeDocumentId); } });
   kernel.commands.register({
     id: "layer.openElsewhere",
     label: "Edit Layer in Its Own Tab (Открыть слой в отдельной вкладке)",
     category: "Layer (Слой)",
-    shortcut: "Mod+E",
     isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster",
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void openTargetElsewhere(activeDocumentId, "raster", false); },
   });
@@ -75,7 +120,6 @@ export function ensureCommandsRegistered(): void {
     id: "layer.openElsewhereBranch",
     label: "Edit Layer as a Copy (Открыть слой копией)",
     category: "Layer (Слой)",
-    shortcut: "Mod+Alt+E",
     isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster",
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void openTargetElsewhere(activeDocumentId, "raster", true); },
   });
@@ -95,12 +139,33 @@ export function ensureCommandsRegistered(): void {
     execute: ({ activeDocumentId }) => { if (activeDocumentId) kernel.roundtrip.detach(activeDocumentId); },
   });
   kernel.commands.register({ id: "layer.new", label: "New Layer (Новый слой)", category: "Layer (Слой)", shortcut: "Mod+Shift+N", isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; kernel.documents.update<RasterDocumentState>(activeDocumentId, (state) => { const layer = createRasterLayer(state.width, state.height, `Layer ${state.layers.length + 1} (Слой ${state.layers.length + 1})`); state.layers.push(layer); state.activeLayerId = layer.id; }); } });
+  // Photoshop's layer shortcuts, in its own order and with its own keys.
+  const raster = ({ activeDocumentId }: { activeDocumentId?: string | null }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster";
+  const editLayers = (documentId: string, label: string, mutate: (state: RasterDocumentState) => boolean) =>
+    changeRasterDocument(documentId, label, mutate);
+
+  kernel.commands.register({ id: "layer.duplicate", label: "Duplicate Layer (Создать дубликат слоя)", category: "Layer (Слой)", shortcut: "Mod+J", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; const document = kernel.documents.get<RasterDocumentState>(activeDocumentId); if (!document) return; void editLayers(activeDocumentId, "Layer via Copy (Слой копированием)", (state) => Boolean(layerFromSelection(state, state.activeLayerId, state.selection, false))); } });
+  kernel.commands.register({ id: "layer.viaCut", label: "Layer via Cut (Вырезать на новый слой)", category: "Layer (Слой)", shortcut: "Mod+Shift+J", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && kernel.documents.get<RasterDocumentState>(activeDocumentId)?.state.selection), execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, "Layer via Cut (Слой вырезанием)", (state) => Boolean(layerFromSelection(state, state.activeLayerId, state.selection, true))); } });
+  kernel.commands.register({ id: "layer.mergeDown", label: "Merge Down (Объединить с предыдущим)", category: "Layer (Слой)", shortcut: "Mod+E", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, "Merge Down (Объединить с предыдущим)", (state) => Boolean(mergeLayerDown(state, state.activeLayerId))); } });
+  kernel.commands.register({ id: "layer.mergeVisible", label: "Merge Visible (Объединить видимые)", category: "Layer (Слой)", shortcut: "Mod+Shift+E", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, "Merge Visible (Объединить видимые)", (state) => Boolean(mergeVisibleLayers(state))); } });
+  kernel.commands.register({ id: "layer.stampVisible", label: "Stamp Visible (Отпечаток видимых)", category: "Layer (Слой)", shortcut: "Mod+Shift+Alt+E", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, "Stamp Visible (Отпечаток видимых)", (state) => Boolean(stampVisibleLayers(state))); } });
+  kernel.commands.register({ id: "layer.group", label: "Group Layers (Сгруппировать слои)", category: "Layer (Слой)", shortcut: "Mod+G", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; const chosen = useShellStore.getState().selectedLayerIdsByDocument[activeDocumentId] ?? []; void editLayers(activeDocumentId, "Group Layers (Сгруппировать слои)", (state) => Boolean(groupLayers(state, chosen.length ? chosen : [state.activeLayerId]))); } });
+  kernel.commands.register({ id: "layer.ungroup", label: "Ungroup Layers (Разгруппировать слои)", category: "Layer (Слой)", shortcut: "Mod+Shift+G", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, "Ungroup Layers (Разгруппировать слои)", (state) => ungroupLayer(state, state.activeLayerId)); } });
+  for (const [id, label, shortcut, move] of [
+    ["layer.bringForward", "Bring Forward (Переложить вперёд)", "Mod+]", "up"],
+    ["layer.sendBackward", "Send Backward (Переложить назад)", "Mod+[", "down"],
+    ["layer.bringToFront", "Bring to Front (На передний план)", "Mod+Shift+]", "top"],
+    ["layer.sendToBack", "Send to Back (На задний план)", "Mod+Shift+[", "bottom"],
+  ] as const) {
+    kernel.commands.register({ id, label, category: "Layer (Слой)", shortcut, isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, label, (state) => moveLayerInStack(state, state.activeLayerId, move)); } });
+  }
+
   kernel.commands.register({ id: "edit.undo", label: "Undo (Отменить)", category: "Edit (Правка)", shortcut: "Mod+Z", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && kernel.historyByDocument.get(activeDocumentId)?.canUndo), execute: async ({ activeDocumentId }) => { if (activeDocumentId) await kernel.historyByDocument.get(activeDocumentId)?.undo(); } });
   kernel.commands.register({ id: "edit.redo", label: "Redo (Повторить)", category: "Edit (Правка)", shortcut: "Mod+Shift+Z", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && kernel.historyByDocument.get(activeDocumentId)?.canRedo), execute: async ({ activeDocumentId }) => { if (activeDocumentId) await kernel.historyByDocument.get(activeDocumentId)?.redo(); } });
   // Select All takes the whole canvas, as it does in Photoshop. Selecting the
   // layer's opaque pixels is a different operation and keeps its own entry.
   kernel.commands.register({ id: "select.all", label: "Select All (Выделить все)", category: "Select (Выделение)", shortcut: "Mod+A", isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: async ({ activeDocumentId }) => { if (activeDocumentId) await changeRasterSelection(activeDocumentId, "Select All (Выделить все)", (state) => selectAllPixels(state.width, state.height)); } });
-  kernel.commands.register({ id: "select.opaque", label: "Select Layer Content (Выделить содержимое слоя)", category: "Select (Выделение)", shortcut: "Mod+Alt+A", isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: async ({ activeDocumentId }) => { if (activeDocumentId) await changeRasterSelection(activeDocumentId, "Select Layer Content (Выделить содержимое слоя)", (state) => selectOpaquePixels(activeRasterLayer(state).pixels, state.width, state.height)); } });
+  kernel.commands.register({ id: "select.opaque", label: "Select Layer Content (Выделить содержимое слоя)", category: "Select (Выделение)", isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: async ({ activeDocumentId }) => { if (activeDocumentId) await changeRasterSelection(activeDocumentId, "Select Layer Content (Выделить содержимое слоя)", (state) => selectOpaquePixels(activeRasterLayer(state).pixels, state.width, state.height)); } });
   kernel.commands.register({ id: "select.none", label: "Deselect (Снять выделение)", category: "Select (Выделение)", shortcut: "Mod+D", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && isRasterDocumentState(kernel.documents.get(activeDocumentId)?.state) && kernel.documents.get<RasterDocumentState>(activeDocumentId)?.state.selection), execute: async ({ activeDocumentId }) => { if (!activeDocumentId) return; const current = kernel.documents.get<RasterDocumentState>(activeDocumentId)?.state.selection; if (current) lastSelectionByDocument.set(activeDocumentId, { mask: current.mask.slice(), bounds: { ...current.bounds } }); await changeRasterSelection(activeDocumentId, "Deselect (Снять выделение)", () => null); } });
   kernel.commands.register({ id: "select.reselect", label: "Reselect (Выделить снова)", category: "Select (Выделение)", shortcut: "Mod+Shift+D", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && lastSelectionByDocument.has(activeDocumentId)), execute: async ({ activeDocumentId }) => { if (!activeDocumentId) return; const previous = lastSelectionByDocument.get(activeDocumentId); if (previous) await changeRasterSelection(activeDocumentId, "Reselect (Выделить снова)", () => ({ mask: previous.mask.slice(), bounds: { ...previous.bounds } })); } });
   kernel.commands.register({ id: "select.feather", label: "Feather Selection… (Растушевать выделение…)", category: "Select (Выделение)", shortcut: "Shift+F6", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && kernel.documents.get<RasterDocumentState>(activeDocumentId)?.state.selection), execute: () => dispatch("vravio-select-feather") });
@@ -113,7 +178,7 @@ export function ensureCommandsRegistered(): void {
   kernel.commands.register({ id: "view.resetRotation", label: "Reset View Rotation (Сбросить вращение вида)", category: "View (Просмотр)", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: ({ activeDocumentId }) => { if (activeDocumentId) useShellStore.getState().setViewport(activeDocumentId, { rotation: 0 }); } });
   kernel.commands.register({ id: "view.theme", label: "Cycle Theme (Сменить тему)", category: "View (Просмотр)", execute: () => useShellStore.getState().cycleTheme() });
   kernel.commands.register({ id: "app.settings", label: "Settings (Настройки)", category: "Edit (Правка)", execute: () => useShellStore.getState().setSettingsOpen(true) });
-  kernel.commands.register({ id: "view.commandPalette", label: "Command Palette (Палитра команд)", category: "View (Просмотр)", shortcut: "Mod+K", execute: () => useShellStore.getState().setPaletteOpen(true) });
+  kernel.commands.register({ id: "view.commandPalette", label: "Search (Поиск)", category: "Edit (Правка)", shortcut: "Mod+F", execute: () => useShellStore.getState().setPaletteOpen(true) });
   for (const command of kernel.commands.list()) if (command.shortcut) kernel.keymap.bind(command.id, command.shortcut);
 }
 

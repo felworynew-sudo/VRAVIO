@@ -28,3 +28,4 @@ export * from "./raster-asset";
 export * from "./environment";
 export * from "./ml-tensor";
 export * from "./ml-inference";
+export * from "./layer-ops";
