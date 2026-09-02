@@ -7,6 +7,7 @@ export * from "./event-bus";
 export * from "./gpu-context";
 export * from "./history-manager";
 export * from "./keymap-manager";
+export * from "./platform";
 export * from "./storage-adapter";
 export * from "./types";
 export * from "./worker-pool";

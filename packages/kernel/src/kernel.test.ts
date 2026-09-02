@@ -37,6 +37,36 @@ describe("HistoryManager", () => {
     expect(await history.redo()).toBe(true);
     expect(value).toBe(1);
   });
+
+  it("evicts old operations by memory budget and releases their resources", async () => {
+    const freed: number[] = [];
+    const history = new HistoryManager({ limit: 20, memoryLimitBytes: 10 });
+    for (let index = 0; index < 3; index += 1) await history.execute({ label: String(index), memoryEstimate: 6, redo() {}, undo() {}, free: () => { freed.push(index); } });
+    expect(history.undoCount).toBe(1);
+    expect(history.memoryBytes).toBe(6);
+    expect(freed).toEqual([0, 1]);
+  });
+
+  it("rolls back a failed batch and records nothing", async () => {
+    let value = 0;
+    const history = new HistoryManager();
+    await expect(history.executeBatch("Transaction", [
+      { label: "first", redo: () => { value += 1; }, undo: () => { value -= 1; } },
+      { label: "fail", redo: () => { throw new Error("stop"); }, undo() {} },
+    ])).rejects.toThrow("stop");
+    expect(value).toBe(0);
+    expect(history.canUndo).toBe(false);
+  });
+
+  it("frees the redo branch when a new operation replaces it", async () => {
+    const freed = vi.fn();
+    const history = new HistoryManager();
+    await history.execute({ label: "old", redo() {}, undo() {}, free: freed });
+    await history.undo();
+    await history.execute({ label: "new", redo() {}, undo() {} });
+    expect(freed).toHaveBeenCalledOnce();
+    expect(history.canRedo).toBe(false);
+  });
 });
 
 describe("CommandRegistry", () => {

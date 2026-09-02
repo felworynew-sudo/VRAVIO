@@ -17,6 +17,7 @@ import { FilterGalleryDialog } from "./FilterGalleryDialog";
 import { LiquifyDialog } from "./LiquifyDialog";
 import { rawExtensionOf, rawFileExtensions, type DecodedRaw } from "./rawDecode";
 import { CameraRawDialog } from "./CameraRawDialog";
+import { PerformanceOverlay } from "./PerformanceOverlay";
 import { renderTextLayerPixels } from "./textRender";
 import "./styles.css";
 
@@ -61,10 +62,10 @@ export function App() {
     const surface = window.document.createElement("canvas"); surface.width = bitmap.width; surface.height = bitmap.height; const context = surface.getContext("2d"); if (!context) return; context.drawImage(bitmap, 0, 0); bitmap.close();
     kernel.documents.update<RasterDocumentState>(id, (state) => { state.layers[0]!.pixels = context.getImageData(0, 0, state.width, state.height).data; });
   };
-  const download = (blob: Blob, name: string) => { const url = URL.createObjectURL(blob), anchor = window.document.createElement("a"); anchor.href = url; anchor.download = name; anchor.click(); setTimeout(() => URL.revokeObjectURL(url), 0); };
+  const download = (blob: Blob, name: string) => { void kernel.platform.fs.saveFile({ name, mime: blob.type || "application/octet-stream", data: blob }).catch((error) => diagnostic("error", "file.save", error instanceof Error ? error.message : String(error), error)); };
   const exportPng = async () => { if (!active || !isRasterDocumentState(active.state)) return; const surface = window.document.createElement("canvas"); surface.width = active.state.width; surface.height = active.state.height; surface.getContext("2d")?.putImageData(new ImageData(compositeRasterDocument(active.state) as Uint8ClampedArray<ArrayBuffer>, active.state.width, active.state.height), 0, 0); const blob = await new Promise<Blob | null>((resolve) => surface.toBlob(resolve, "image/png")); if (blob) download(blob, active.name.replace(/\.[^.]+$/, "") + ".png"); };
   const saveProject = () => { if (!active) return; const replacer = (_key: string, value: unknown) => value instanceof Uint8ClampedArray ? { __type: "Uint8ClampedArray", data: Array.from(value) } : value; download(new Blob([JSON.stringify(active.state, replacer)], { type: "application/json" }), active.name.replace(/\.[^.]+$/, "") + ".vravio.json"); };
-  const applyFilter = (pixels: Uint8ClampedArray, label: string) => { if (!active || !isRasterDocumentState(active.state)) return; const id=active.id,layerId=active.state.activeLayerId,before=active.state.layers.find((item)=>item.id===layerId)?.pixels.slice();if(!before)return;const assign=(value:Uint8ClampedArray)=>{kernel.documents.update<RasterDocumentState>(id,(state)=>{const layer=state.layers.find((item)=>item.id===layerId);if(layer)layer.pixels=value.slice();});};const history=kernel.historyByDocument.get(id);if(history)void history.execute({label:`Filter: ${label}`,redo:()=>assign(pixels),undo:()=>assign(before)}); };
+  const applyFilter = (pixels: Uint8ClampedArray, label: string) => { if (!active || !isRasterDocumentState(active.state)) return; const id=active.id,layerId=active.state.activeLayerId,before=active.state.layers.find((item)=>item.id===layerId)?.pixels.slice();if(!before)return;const assign=(value:Uint8ClampedArray)=>{kernel.documents.update<RasterDocumentState>(id,(state)=>{const layer=state.layers.find((item)=>item.id===layerId);if(layer)layer.pixels=value.slice();});};const history=kernel.historyByDocument.get(id);if(history)void history.execute({label:`Filter: ${label}`,memoryEstimate:before.byteLength+pixels.byteLength,redo:()=>assign(pixels),undo:()=>assign(before)}); };
   const openCameraRawReprocess = async () => {
     if (!active) return;
     const source = active.origin?.kind === "asset" ? active.origin : null;
@@ -97,7 +98,7 @@ export function App() {
     const after: LayerSnapshot[] = targets.map((layer, index) => ({ id: layer.id, pixels: translateLayerPixels(layer.pixels, state.width, state.height, offsets[index]!.dx, offsets[index]!.dy) }));
     const assign = (list: LayerSnapshot[]) => { kernel.documents.update<RasterDocumentState>(id, (current) => { for (const item of list) { const layer = current.layers.find((entry) => entry.id === item.id); if (layer) layer.pixels = item.pixels.slice(); } }); };
     const history = kernel.historyByDocument.get(id);
-    if (history) void history.execute({ label: kind === "align" ? `Align: ${edge}` : `Distribute: ${edge}`, redo: () => assign(after), undo: () => assign(before) });
+    if (history) void history.execute({ label: kind === "align" ? `Align: ${edge}` : `Distribute: ${edge}`, memoryEstimate: [...before, ...after].reduce((sum, item) => sum + item.pixels.byteLength, 0), redo: () => assign(after), undo: () => assign(before) });
   };
 
   const addImageAdjustment = (kind: RasterAdjustment["kind"], name: string) => {
@@ -280,6 +281,7 @@ export function App() {
       {active ? <DockLayout /> : <WelcomeScreen language={store.language} requestNewDocument={store.requestNewDocument} />}
     </main>
     <footer className="status-bar"><span>{localized(active ? environmentMeta[active.kind].label : "Ready (Готово)", store.language)}</span><span>{active ? `${Math.round((store.viewports[active.id]?.zoom ?? 1) * 100)}% · ` : ""}sRGB · {renderBackend ?? "detecting"}</span></footer>
+    {store.preferences.showPerformanceOverlay && <PerformanceOverlay documentId={active?.id ?? null} />}
 
     {store.paletteOpen && <div className="dialog-backdrop" onMouseDown={() => store.setPaletteOpen(false)}>
       <section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette (Палитра команд)" onMouseDown={(event) => event.stopPropagation()}>

@@ -66,6 +66,10 @@ function cloneRasterState(state: RasterDocumentState): RasterDocumentState {
   return { ...state, layers: state.layers.map((layer) => ({ ...layer, pixels: layer.pixels.slice(), ...(layer.adjustment ? { adjustment: structuredClone(layer.adjustment) } : {}) })), selection: state.selection ? { mask: state.selection.mask.slice(), bounds: { ...state.selection.bounds } } : null, guides: (state.guides ?? []).map((guide) => ({ ...guide })) };
 }
 
+function rasterStateByteLength(state: RasterDocumentState): number {
+  return state.layers.reduce((sum, layer) => sum + layer.pixels.byteLength, state.selection?.mask.byteLength ?? 0);
+}
+
 function alphaBounds(pixels: Uint8ClampedArray, width: number, height: number): RasterRect | null {
   let left = width, top = height, right = 0, bottom = 0;
   for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) if (pixels[(y * width + x) * 4 + 3]) { left = Math.min(left, x); top = Math.min(top, y); right = Math.max(right, x + 1); bottom = Math.max(bottom, y + 1); }
@@ -278,14 +282,14 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     const history = kernel.historyByDocument.get(document.id);
     if (!history) throw new Error(`History missing for ${document.id}`);
     const assign = (pixels: Uint8ClampedArray): void => { kernel.documents.update<RasterDocumentState>(document.id, (current) => { activeRasterLayer(current).pixels = pixels.slice(); }); };
-    await history.execute({ label, redo: () => assign(after), undo: () => assign(before) });
+    await history.execute({ label, memoryEstimate: before.byteLength + after.byteLength, redo: () => assign(after), undo: () => assign(before) });
   };
 
   const commitDocumentState = async (before: RasterDocumentState, after: RasterDocumentState, label: string) => {
     const history = kernel.historyByDocument.get(document.id);
     if (!history) throw new Error(`History missing for ${document.id}`);
     const assign = (snapshot: RasterDocumentState): void => { kernel.documents.update<RasterDocumentState>(document.id, (current) => { Object.assign(current, cloneRasterState(snapshot)); }); };
-    await history.execute({ label, redo: () => assign(after), undo: () => assign(before) });
+    await history.execute({ label, memoryEstimate: rasterStateByteLength(before) + rasterStateByteLength(after), redo: () => assign(after), undo: () => assign(before) });
   };
 
   const confirmRasterize = () => {
@@ -373,7 +377,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     if (!history) throw new Error(`History missing for ${document.id}`);
     const clone = (selection: PixelSelection | null): PixelSelection | null => selection ? { mask: selection.mask.slice(), bounds: { ...selection.bounds } } : null;
     const assign = (selection: PixelSelection | null): void => { kernel.documents.update<RasterDocumentState>(document.id, (current) => { current.selection = clone(selection); }); };
-    await history.execute({ label: "Marquee Selection (Прямоугольное выделение)", redo: () => assign(after), undo: () => assign(before) });
+    await history.execute({ label: "Marquee Selection (Прямоугольное выделение)", memoryEstimate: (before?.mask.byteLength ?? 0) + (after?.mask.byteLength ?? 0), redo: () => assign(after), undo: () => assign(before) });
   };
 
   const commitText = () => {

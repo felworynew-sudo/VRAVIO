@@ -38,6 +38,7 @@ export interface ShellPreferences {
   renderer: RendererPreference;
   memoryBudgetMb: number;
   workerCount: number;
+  showPerformanceOverlay: boolean;
   dragZoom: boolean;
   showTooltips: boolean;
   contextualBar: boolean;
@@ -58,7 +59,7 @@ const detectedConcurrency = typeof navigator === "undefined" || !navigator.hardw
 
 const defaultPreferences: ShellPreferences = {
   renderer: "auto", memoryBudgetMb: 1024, workerCount: Math.max(1, Math.min(8, detectedConcurrency - 1)),
-  dragZoom: true, showTooltips: true, contextualBar: true, snapToGuides: true, smartGuides: true, showRulers: false, showGuides: true,
+  dragZoom: true, showTooltips: true, contextualBar: true, showPerformanceOverlay: false, snapToGuides: true, smartGuides: true, showRulers: false, showGuides: true,
   guideColor: "#00a8ff", canvasSurround: "#2b2f36", focusColor: "#84a8ff",
   rasterColor: "#a100ff", vectorColor: "#0068ff", audioColor: "#ffb600", videoColor: "#ff0000",
 };
@@ -124,6 +125,7 @@ const names: Record<EnvironmentKind, string> = {
   audio: "Audio session (Аудиосессия)",
   video: "Video project (Видеопроект)",
 };
+const createHistory = (memoryBudgetMb: number) => new HistoryManager({ memoryLimitBytes: Math.max(64, memoryBudgetMb) * 1024 * 1024 });
 
 export const useShellStore = create<ShellState>((set) => ({
   documentIds: [], activeDocumentId: null, mruOrder: [], activeToolByDocument: {}, selectedLayerIdsByDocument: {}, viewports: {}, foregroundColor: "#000000", backgroundColor: "#ffffff", toolOptions: {}, paletteOpen: false, settingsOpen: false, newDocumentKind: null,
@@ -135,7 +137,7 @@ export const useShellStore = create<ShellState>((set) => ({
       ? createRasterDocument(options?.width, options?.height, options ? { resolution: options.resolution, resolutionUnit: options.resolutionUnit, backgroundColor: options.backgroundColor, pixelAspectRatio: options.pixelAspectRatio } : {})
       : { kind, schemaVersion: 1, ...(options ? { canvas: { width: options.width, height: options.height, resolution: options.resolution, resolutionUnit: options.resolutionUnit, artboards: options.artboards ?? false }, ...(kind === "video" ? { timeline: { frameRate: options.frameRate ?? 30, width: options.width, height: options.height } } : {}), ...(kind === "audio" ? { audio: { sampleRate: options.sampleRate ?? 48000, channels: options.channels ?? 2, bitDepth: options.audioBitDepth ?? 24 } } : {}) } : {}) };
     const document = kernel.documents.create(kind, options?.name?.trim() || names[kind], initialState);
-    kernel.historyByDocument.set(document.id, new HistoryManager());
+    kernel.historyByDocument.set(document.id, createHistory(state.preferences.memoryBudgetMb));
     const tool = defaultTool(kind);
     return { documentIds: [...state.documentIds, document.id], activeDocumentId: document.id, mruOrder: [document.id, ...state.mruOrder], newDocumentKind: null, viewports: { ...state.viewports, [document.id]: { ...defaultViewport } }, activeToolByDocument: tool ? { ...state.activeToolByDocument, [document.id]: tool } : state.activeToolByDocument };
   }),
@@ -145,7 +147,7 @@ export const useShellStore = create<ShellState>((set) => ({
     for (const id of documentIds) {
       const document = kernel.documents.get(id);
       if (!document) continue;
-      kernel.historyByDocument.set(id, new HistoryManager());
+      kernel.historyByDocument.set(id, createHistory(state.preferences.memoryBudgetMb));
       viewports[id] = { ...defaultViewport };
       const tool = defaultTool(document.kind);
       if (tool) activeToolByDocument[id] = tool;
@@ -158,6 +160,7 @@ export const useShellStore = create<ShellState>((set) => ({
   activateDocument: (id) => set((state) => ({ activeDocumentId: id, mruOrder: [id, ...state.mruOrder.filter((item) => item !== id)] })),
   closeDocument: (id) => set((state) => {
     kernel.documents.close(id);
+    void kernel.historyByDocument.get(id)?.clear();
     kernel.historyByDocument.delete(id);
     const documentIds = state.documentIds.filter((documentId) => documentId !== id);
     const mruOrder = state.mruOrder.filter((documentId) => documentId !== id);
@@ -180,6 +183,11 @@ export const useShellStore = create<ShellState>((set) => ({
   setLanguage: (language) => { savePreference("vravio.language", language); set({ language }); },
   updatePreferences: (patch) => set((state) => {
     const preferences = { ...state.preferences, ...patch };
+    if (patch.memoryBudgetMb !== undefined) for (const history of kernel.historyByDocument.values()) void history.setBudgets(Math.max(64, patch.memoryBudgetMb) * 1024 * 1024);
+    if (patch.renderer !== undefined) {
+      const requested = patch.renderer === "canvas2d" ? "cpu" : patch.renderer === "auto" ? kernel.gpu.available[0] : patch.renderer;
+      if (requested) kernel.gpu.select(requested, "settings");
+    }
     savePreference("vravio.preferences", JSON.stringify(preferences));
     return { preferences };
   }),

@@ -53,7 +53,10 @@ export interface Command {
 
 export interface ReversibleOperation {
   readonly label: string;
+  readonly memoryEstimate?: number;
+  readonly storageEstimate?: number;
   redo(): void | Promise<void>;
   undo(): void | Promise<void>;
+  free?(): void | Promise<void>;
   mergeWith?(next: ReversibleOperation): ReversibleOperation | null;
 }
