@@ -141,31 +141,37 @@ export function patchFromSelection(
 ): void {
   if (!selectionMask) return;
 
-  const localMask = new Uint8ClampedArray(selectionBounds.width * selectionBounds.height);
-  for (let y = 0; y < selectionBounds.height; y += 1) for (let x = 0; x < selectionBounds.width; x += 1) {
-    const canvasX = selectionBounds.x + x, canvasY = selectionBounds.y + y;
-    if (canvasX >= 0 && canvasX < canvasWidth && canvasY >= 0 && canvasY < canvasHeight) localMask[y * selectionBounds.width + x] = selectionMask[canvasY * canvasWidth + canvasX]!;
+  // The membrane is solved over this rectangle, and it needs cells outside the
+  // selection to hold its boundary values. A rectangular selection fills its own
+  // bounds exactly, leaving none: the solver then has nothing to solve against,
+  // returns untouched, and the patch writes the destination back over itself —
+  // the tool appears to do nothing at all. Padding guarantees the ring.
+  const margin = Math.max(4, Math.ceil(feather) + 4);
+  const left = Math.max(0, Math.floor(selectionBounds.x) - margin);
+  const top = Math.max(0, Math.floor(selectionBounds.y) - margin);
+  const right = Math.min(canvasWidth, Math.ceil(selectionBounds.x + selectionBounds.width) + margin);
+  const bottom = Math.min(canvasHeight, Math.ceil(selectionBounds.y + selectionBounds.height) + margin);
+  const regionWidth = right - left, regionHeight = bottom - top;
+  if (regionWidth <= 0 || regionHeight <= 0) return;
+
+  const localMask = new Uint8ClampedArray(regionWidth * regionHeight);
+  for (let y = 0; y < regionHeight; y += 1) for (let x = 0; x < regionWidth; x += 1) {
+    const canvasX = left + x, canvasY = top + y;
+    if (canvasX >= 0 && canvasX < canvasWidth && canvasY >= 0 && canvasY < canvasHeight) localMask[y * regionWidth + x] = selectionMask[canvasY * canvasWidth + canvasX]!;
   }
 
   let effectiveMask: Uint8ClampedArray<ArrayBufferLike> = localMask;
-  if (feather > 0) {
-    effectiveMask = featherMask(
-      localMask,
-      selectionBounds.width,
-      selectionBounds.height,
-      feather
-    );
-  }
+  if (feather > 0) effectiveMask = featherMask(localMask, regionWidth, regionHeight, feather);
 
   createPatchRegion(
     pixels,
     canvasWidth,
     canvasHeight,
     effectiveMask,
-    selectionBounds.width,
-    selectionBounds.height,
-    selectionBounds.x,
-    selectionBounds.y,
+    regionWidth,
+    regionHeight,
+    left,
+    top,
     sourceOffsetX,
     sourceOffsetY,
     opacity,

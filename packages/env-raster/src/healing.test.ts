@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cloneDab, cloneStrokeSegment, createPatchRegion, solveHealMembrane, spotHealApply, spotHealSourceMap } from "./index";
+import { cloneDab, cloneStrokeSegment, createPatchRegion, createRectangleSelection, patchFromSelection, solveHealMembrane, spotHealApply, spotHealSourceMap } from "./index";
 
 const W = 64, H = 64;
 
@@ -198,6 +198,24 @@ describe("patch tool", () => {
     // Without the membrane the patch drops that brighter tone in as a disc.
     expect(worstError(pixels, 32, 32, 0, 5)).toBeLessThanOrEqual(4);
     expect(worstError(pixels, 32, 32, 6.5, 8)).toBeLessThanOrEqual(2);
+  });
+
+  it("repairs a rectangular selection, which fills its own bounds", () => {
+    const pixels = canvas();
+    addBlemish(pixels, 32, 32, 6);
+    const selection = createRectangleSelection(W, H, 24, 24, 41, 41);
+
+    patchFromSelection(pixels, W, H, selection.mask, selection.bounds, 18, 12, 1, "source", 0);
+
+    // The membrane needs cells outside the selection to hold its boundary. A
+    // rectangle fills its bounds exactly, so without padding the solver has
+    // nothing to solve against and the patch writes the destination back over
+    // itself — the tool looks like it does nothing.
+    let red = 0;
+    for (let index = 0; index < pixels.length; index += 4) if (pixels[index]! > 150 && pixels[index + 1]! < 60) red += 1;
+    expect(red).toBe(0);
+    expect(worstError(pixels, 32, 32, 0, 5)).toBeLessThanOrEqual(4);
+    expect(worstError(pixels, 32, 32, 9.5, 11)).toBeLessThanOrEqual(3);
   });
 
   it("ignores a source that falls outside the canvas", () => {
