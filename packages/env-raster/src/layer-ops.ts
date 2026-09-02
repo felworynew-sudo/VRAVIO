@@ -1,5 +1,6 @@
 import { createRasterGroup, createRasterLayer, makeLayerOrderKey } from "./document";
 import { appendLayer, flattenRasterLayers, isLayerEffectivelyVisible, rasterLayerDescendantIds } from "./layer-tree";
+import { layerDocumentPixels, setLayerPixels } from "./layer-bounds";
 import { compositeRasterRegion } from "./render";
 import type { PixelSelection, RasterDocumentState, RasterLayer } from "./types";
 
@@ -79,7 +80,7 @@ export function mergeLayerDown(state: RasterDocumentState, layerId: string): Ras
   };
   const merged = compositeRasterRegion(pair, { x: 0, y: 0, width: state.width, height: state.height });
 
-  lower.pixels = merged;
+  setLayerPixels(lower, merged, state.width, state.height);
   lower.kind = "pixel";
   lower.opacity = 1;
   lower.fillOpacity = 1;
@@ -106,7 +107,7 @@ export function mergeVisibleLayers(state: RasterDocumentState): RasterLayer | nu
   const lowest = visible[0]!;
   const removed = new Set(visible.slice(1).flatMap((layer) => [layer.id, ...rasterLayerDescendantIds(state.layers, layer.id)]));
 
-  lowest.pixels = merged;
+  setLayerPixels(lowest, merged, state.width, state.height);
   lowest.kind = "pixel";
   lowest.opacity = 1;
   lowest.fillOpacity = 1;
@@ -136,7 +137,7 @@ export function stampVisibleLayers(state: RasterDocumentState): RasterLayer | nu
   const anyVisible = flattenRasterLayers(state.layers).some((layer) => layer.kind !== "group" && isLayerEffectivelyVisible(layer, state.layers));
   if (!anyVisible) return null;
   const stamp = createRasterLayer(state.width, state.height, "Merged (Объединённое)");
-  stamp.pixels = compositeRasterRegion(state, { x: 0, y: 0, width: state.width, height: state.height });
+  setLayerPixels(stamp, compositeRasterRegion(state, { x: 0, y: 0, width: state.width, height: state.height }), state.width, state.height);
   appendLayer(state, stamp);
   state.activeLayerId = stamp.id;
   return stamp;
@@ -244,20 +245,24 @@ export function layerFromSelection(
   if (!selection) return cut ? null : duplicateLayer(state, layerId);
 
   const lifted = createRasterLayer(state.width, state.height, cut ? "Layer via Cut (Слой вырезанием)" : "Layer via Copy (Слой копированием)");
-  const taken = cut ? source.pixels.slice() : null;
+  // The selection is in canvas coordinates and the layer is stored at the size
+  // of its content, so both sides are worked in canvas space and trimmed after.
+  const sourcePixels = layerDocumentPixels(source, state.width, state.height);
+  const taken = cut ? sourcePixels.slice() : null;
   for (let index = 0; index < selection.mask.length; index += 1) {
     const coverage = selection.mask[index]! / 255;
     if (coverage <= 0) continue;
     const at = index * 4;
-    lifted.pixels[at] = source.pixels[at]!;
-    lifted.pixels[at + 1] = source.pixels[at + 1]!;
-    lifted.pixels[at + 2] = source.pixels[at + 2]!;
-    lifted.pixels[at + 3] = Math.round(source.pixels[at + 3]! * coverage);
+    lifted.pixels[at] = sourcePixels[at]!;
+    lifted.pixels[at + 1] = sourcePixels[at + 1]!;
+    lifted.pixels[at + 2] = sourcePixels[at + 2]!;
+    lifted.pixels[at + 3] = Math.round(sourcePixels[at + 3]! * coverage);
     // A partially selected pixel is shared: what the copy takes is what the
     // original loses, so a feathered edge stays continuous across the two.
-    if (taken) taken[at + 3] = Math.round(source.pixels[at + 3]! * (1 - coverage));
+    if (taken) taken[at + 3] = Math.round(sourcePixels[at + 3]! * (1 - coverage));
   }
-  if (taken) source.pixels = taken;
+  if (taken) setLayerPixels(source, taken, state.width, state.height);
+  setLayerPixels(lifted, lifted.pixels, state.width, state.height);
 
   lifted.parentId = source.parentId ?? null;
   state.layers.push(lifted);

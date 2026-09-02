@@ -3,7 +3,7 @@ import {
   appendLayer, createRasterDocument, createRasterGroup, createRasterLayer, createRasterLayerMask,
   createRectangleSelection, duplicateLayer, groupLayers, layerFromSelection, mergeLayerDown,
   mergeVisibleLayers, moveLayerInStack, placeLayer, rasterLayerRows, stampVisibleLayers, ungroupLayer,
-  dropPositionInRow, dropTargetForRow, toggleLayerLink, linkedLayers,
+  dropPositionInRow, dropTargetForRow, toggleLayerLink, linkedLayers, layerDocumentPixels,
 } from "./index";
 import type { RasterDocumentState, RasterLayer } from "./types";
 
@@ -297,6 +297,9 @@ describe("reordering", () => {
 
 describe("layer via copy and cut", () => {
   const selected = () => createRectangleSelection(W, H, 0, 0, 8, 16);
+  // Layers are stored at the size of their content, so what these assertions
+  // are about — where the pixels sit on the canvas — is read in canvas space.
+  const canvas = (layer: RasterLayer) => layerDocumentPixels(layer, W, H);
 
   it("lifts the selected pixels onto a new layer above", () => {
     const state = doc();
@@ -305,10 +308,10 @@ describe("layer via copy and cut", () => {
     const lifted = layerFromSelection(state, source.id, selected())!;
 
     expect(names(state)).toEqual(["Layer via Copy (Слой копированием)", "Source"]);
-    expect(lifted.pixels[3]).toBe(255);
+    expect(canvas(lifted)[3]).toBe(255);
     // Outside the selection the new layer holds nothing.
-    expect(lifted.pixels[(0 * W + 12) * 4 + 3]).toBe(0);
-    expect(source.pixels[3]).toBe(255);
+    expect(canvas(lifted)[(0 * W + 12) * 4 + 3]).toBe(0);
+    expect(canvas(source)[3]).toBe(255);
   });
 
   it("clears what it took when cutting", () => {
@@ -317,10 +320,10 @@ describe("layer via copy and cut", () => {
 
     const lifted = layerFromSelection(state, source.id, selected(), true)!;
 
-    expect(lifted.pixels[3]).toBe(255);
-    expect(source.pixels[3]).toBe(0);
+    expect(canvas(lifted)[3]).toBe(255);
+    expect(canvas(source)[3]).toBe(0);
     // Untouched outside the selection.
-    expect(source.pixels[(0 * W + 12) * 4 + 3]).toBe(255);
+    expect(canvas(source)[(0 * W + 12) * 4 + 3]).toBe(255);
   });
 
   it("splits a partially selected pixel between the two", () => {
@@ -330,11 +333,12 @@ describe("layer via copy and cut", () => {
 
     const lifted = layerFromSelection(state, source.id, soft, true)!;
 
-    for (let index = 3; index < source.pixels.length; index += 4) {
+    const liftedCanvas = canvas(lifted), sourceCanvas = canvas(source);
+    for (let index = 3; index < liftedCanvas.length; index += 4) {
       // A feathered edge has to stay continuous across the pair: what one takes
       // is exactly what the other loses.
-      expect(lifted.pixels[index]! + source.pixels[index]!).toBeGreaterThanOrEqual(254);
-      expect(lifted.pixels[index]! + source.pixels[index]!).toBeLessThanOrEqual(256);
+      expect(liftedCanvas[index]! + sourceCanvas[index]!).toBeGreaterThanOrEqual(254);
+      expect(liftedCanvas[index]! + sourceCanvas[index]!).toBeLessThanOrEqual(256);
     }
   });
 

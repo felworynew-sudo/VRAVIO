@@ -1,3 +1,4 @@
+import { layerDocumentPixels } from "./layer-bounds";
 import { selectionBounds } from "./selection";
 import type { PixelSelection, RasterDocumentState, RasterRect } from "./types";
 
@@ -172,12 +173,15 @@ export function cropRasterDocument(state: RasterDocumentState, crop: RasterRect)
   const right = Math.max(left + 1, Math.min(state.width, Math.ceil(crop.x + crop.width))), bottom = Math.max(top + 1, Math.min(state.height, Math.ceil(crop.y + crop.height)));
   const width = right - left, height = bottom - top;
   const layers = state.layers.map((layer) => {
+    // Read in canvas space: a layer is stored at the size of its content, so
+    // its own buffer cannot be indexed by the document's stride.
+    const canvas = layerDocumentPixels(layer, state.width, state.height);
     const pixels = new Uint8ClampedArray(width * height * 4);
     for (let y = 0; y < height; y += 1) {
       const source = ((top + y) * state.width + left) * 4;
-      pixels.set(layer.pixels.subarray(source, source + width * 4), y * width * 4);
+      pixels.set(canvas.subarray(source, source + width * 4), y * width * 4);
     }
-    return { ...layer, width, height, pixels };
+    return { ...layer, bounds: { x: 0, y: 0, width, height }, width, height, pixels };
   });
   let selection: PixelSelection | null = null;
   if (state.selection) {

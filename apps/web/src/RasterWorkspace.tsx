@@ -156,8 +156,17 @@ function zoomAroundClient(workspace: HTMLDivElement, viewport: DocumentViewport,
   return { zoom, panX: x - (x - viewport.panX) * ratio, panY: y - (y - viewport.panY) * ratio, mode: "custom" };
 }
 
+/**
+ * The document with the active layer showing a canvas-sized working buffer.
+ *
+ * The bounds have to move with the buffer. A layer is stored at the size of its
+ * content and read with its own stride, so handing it a canvas-sized buffer
+ * while leaving the old rectangle in place makes every row read from the wrong
+ * offset — the picture comes out as diagonal streaks.
+ */
 function withActiveLayerPixels(state: RasterDocumentState, pixels: Uint8ClampedArray): RasterDocumentState {
-  return { ...state, layers: state.layers.map((layer) => layer.id === state.activeLayerId ? { ...layer, pixels } : layer) };
+  const bounds = { x: 0, y: 0, width: state.width, height: state.height };
+  return { ...state, layers: state.layers.map((layer) => layer.id === state.activeLayerId ? { ...layer, pixels, bounds, width: state.width, height: state.height } : layer) };
 }
 
 function maskToRgba(mask: Uint8ClampedArray): Uint8ClampedArray {

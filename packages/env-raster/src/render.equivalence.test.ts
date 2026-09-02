@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createAdjustmentLayer, createRasterDocument, createRasterLayer, createRasterLayerMask } from "./document";
+import { setLayerPixels } from "./layer-bounds";
 import { appendLayer } from "./layer-tree";
 import { compositeRasterRegion } from "./render";
 import type { RasterBlendMode, RasterDocumentState } from "./types";
@@ -188,5 +189,42 @@ describe("compositing a large region in pieces", () => {
     // An off-grid region has to come back at its own size, not rounded to the
     // subdivision.
     expect(compositeRasterRegion(state, { x: 7, y: 9, width: 590, height: 580 }).length).toBe(590 * 580 * 4);
+  });
+});
+
+describe("a layer is read with its own stride", () => {
+  it("draws the same picture whether a layer is trimmed or canvas-sized", () => {
+    const trimmed = createRasterDocument(48, 48);
+    const canvasSized = createRasterDocument(48, 48);
+    for (const state of [trimmed, canvasSized]) {
+      const layer = createRasterLayer(48, 48, "Block");
+      for (let y = 12; y < 30; y += 1) for (let x = 8; x < 26; x += 1) {
+        const at = (y * 48 + x) * 4;
+        layer.pixels[at] = 220; layer.pixels[at + 1] = 60; layer.pixels[at + 2] = 90; layer.pixels[at + 3] = 255;
+      }
+      if (state === trimmed) setLayerPixels(layer, layer.pixels, 48, 48);
+      appendLayer(state, layer);
+    }
+
+    // The regression this exists for: a canvas-sized buffer left on a layer
+    // whose bounds still describe a smaller rectangle is read a row at a time
+    // from the wrong offset, and the picture comes out as diagonal streaks.
+    expect([...compositeRasterRegion(trimmed, { x: 0, y: 0, width: 48, height: 48 })])
+      .toEqual([...compositeRasterRegion(canvasSized, { x: 0, y: 0, width: 48, height: 48 })]);
+  });
+
+  it("keeps bounds and buffer in step when a working buffer is swapped in", () => {
+    const state = createRasterDocument(32, 32);
+    const layer = createRasterLayer(32, 32, "Block");
+    for (let index = 3; index < layer.pixels.length; index += 4) layer.pixels[index] = 255;
+    setLayerPixels(layer, layer.pixels, 32, 32);
+    appendLayer(state, layer);
+
+    // Whatever a caller substitutes, the two have to describe the same buffer.
+    for (const item of state.layers) {
+      expect(item.pixels.length).toBe(item.bounds.width * item.bounds.height * 4);
+      expect(item.width).toBe(item.bounds.width);
+      expect(item.height).toBe(item.bounds.height);
+    }
   });
 });
