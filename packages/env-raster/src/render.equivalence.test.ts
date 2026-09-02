@@ -141,3 +141,52 @@ describe("composite output is stable", () => {
     }
   });
 });
+
+describe("compositing a large region in pieces", () => {
+  const LARGE = 600;
+
+  const largeScene = (): RasterDocumentState => {
+    const state = createRasterDocument(LARGE, LARGE);
+    fillPattern(state.layers[0]!.pixels, 3);
+    for (let index = 0; index < 4; index += 1) {
+      const layer = createRasterLayer(LARGE, LARGE, `Patch ${index}`);
+      // Content in one corner each, so most layers miss most pieces — the case
+      // subdividing exists to exploit.
+      const originX = (index % 2) * 300, originY = Math.floor(index / 2) * 300;
+      for (let y = originY; y < originY + 260; y += 1) for (let x = originX; x < originX + 260; x += 1) {
+        const at = (y * LARGE + x) * 4;
+        layer.pixels[at] = 40 * index; layer.pixels[at + 1] = 200 - 30 * index; layer.pixels[at + 2] = 90;
+        layer.pixels[at + 3] = 120 + index * 20;
+      }
+      layer.blendMode = (["multiply", "screen", "overlay", "normal"] as const)[index]!;
+      layer.opacity = 0.8;
+      appendLayer(state, layer);
+    }
+    return state;
+  };
+
+  it("matches the same pixels composited tile by tile", () => {
+    const state = largeScene();
+    const whole = compositeRasterRegion(state, { x: 0, y: 0, width: LARGE, height: LARGE });
+
+    // Tiles go through the direct path, since each is well under the threshold.
+    for (let top = 0; top < LARGE; top += 256) {
+      for (let left = 0; left < LARGE; left += 256) {
+        const width = Math.min(256, LARGE - left), height = Math.min(256, LARGE - top);
+        const tile = compositeRasterRegion(state, { x: left, y: top, width, height });
+        for (let row = 0; row < height; row += 1) {
+          const from = ((top + row) * LARGE + left) * 4;
+          expect([...tile.slice(row * width * 4, (row + 1) * width * 4)]).toEqual([...whole.slice(from, from + width * 4)]);
+        }
+      }
+    }
+  });
+
+  it("returns a buffer of the size it was asked for", () => {
+    const state = largeScene();
+
+    // An off-grid region has to come back at its own size, not rounded to the
+    // subdivision.
+    expect(compositeRasterRegion(state, { x: 7, y: 9, width: 590, height: 580 }).length).toBe(590 * 580 * 4);
+  });
+});

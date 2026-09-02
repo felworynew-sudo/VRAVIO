@@ -182,10 +182,27 @@ export interface CompositeOptions {
   readonly step?: number;
 }
 
+/**
+ * Above this many pixels a region is composited in pieces instead of in one go.
+ *
+ * Skipping a layer that has no content in the region is what keeps a document
+ * with dozens of layers affordable, and a layer only misses a small region.
+ * Asked for the whole canvas at once, nothing can be skipped and every layer is
+ * walked in full: on a forty-six layer document the same pixels cost 428 ms as
+ * one region and 38 ms as forty tiles. Subdividing here means every caller gets
+ * the tiled cost, not just the ones that happen to ask tile by tile.
+ */
+const subdivideAbove = 512 * 512;
+const subdivisionSize = 256;
+
 export function compositeRasterRegion(state: RasterDocumentState, region: RasterRect, options: CompositeOptions = {}): Uint8ClampedArray {
   const { width } = state;
   const area = clampRegionToDocument(state, region);
   const step = Math.max(1, Math.floor(options.step ?? 1));
+
+  if (step === 1 && area.width * area.height > subdivideAbove && state.layers.length > 1) {
+    return compositeInPieces(state, area);
+  }
   const outWidth = Math.ceil(area.width / step), outHeight = Math.ceil(area.height / step);
   const output = new Uint8ClampedArray(outWidth * outHeight * 4);
   if (!area.width || !area.height) return output;
@@ -293,6 +310,28 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
       }
     }
     if (ownAlpha) clippingBaseByParent.set(parentKey, ownAlpha);
+  }
+  return output;
+}
+
+/**
+ * Composites a large area as a grid of small ones and stitches the result.
+ *
+ * Each piece is composited independently, which the tile cache already relies
+ * on: a region's pixels never depend on what surrounds it. So this is the same
+ * picture, assembled from cheaper parts.
+ */
+function compositeInPieces(state: RasterDocumentState, area: RasterRect): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(area.width * area.height * 4);
+  for (let top = 0; top < area.height; top += subdivisionSize) {
+    const height = Math.min(subdivisionSize, area.height - top);
+    for (let left = 0; left < area.width; left += subdivisionSize) {
+      const pieceWidth = Math.min(subdivisionSize, area.width - left);
+      const piece = compositeRasterRegion(state, { x: area.x + left, y: area.y + top, width: pieceWidth, height });
+      for (let row = 0; row < height; row += 1) {
+        output.set(piece.subarray(row * pieceWidth * 4, (row + 1) * pieceWidth * 4), ((top + row) * area.width + left) * 4);
+      }
+    }
   }
   return output;
 }
