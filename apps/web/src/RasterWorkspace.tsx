@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import {
-  activeRasterLayer, appendLayer, clampRegionToDocument, combineSelections, compositeRasterDocument, compositeRasterRegion, createContiguousColorSelection, drawShape, DirtyRegion, RasterTileCache, type ShapeKind, createEllipseSelection, createPolygonSelection, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
+  activeRasterLayer, appendLayer, clampRegionToDocument, pickLayerAt, combineSelections, compositeRasterDocument, compositeRasterRegion, createContiguousColorSelection, drawShape, DirtyRegion, RasterTileCache, type ShapeKind, createEllipseSelection, createPolygonSelection, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
   isRasterDocumentState, parseHexColor, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectionOutlinePath, toHexColor,
   translateLayerPixels, translateSelection, type PixelSelection, type Point, type RasterDocumentState, type RasterGuide, type RasterLayer, type RasterRect, type RasterTextData, type SelectionCombineMode,
   cloneDab, cloneStrokeSegment,
@@ -270,6 +270,8 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const language = useShellStore((shell) => shell.language);
   const activeToolId = useShellStore((state) => state.activeToolByDocument[document.id]);
   const toolOptions = useShellStore((state) => state.toolOptions);
+  const setSelectedLayers = useShellStore((shell) => shell.setSelectedLayers);
+  const selectedLayers = useShellStore((shell) => shell.selectedLayerIdsByDocument[document.id]) ?? [];
   const foregroundColor = useShellStore((shell) => shell.foregroundColor);
   const editingMaskLayerId = useShellStore((shell) => shell.editingMaskLayerIdByDocument[document.id] ?? null);
   const maskForegroundIsWhite = useShellStore((shell) => shell.maskForegroundIsWhiteByDocument[document.id] ?? false);
@@ -735,6 +737,28 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     const workspace = workspaceRef.current;
     if (!workspace) return;
     const point = pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent);
+
+    // Auto-Select: clicking something picks the layer it belongs to, instead of
+    // moving whatever the panel happens to have highlighted. Photoshop puts this
+    // on the Move tool and lets the platform modifier turn it on for one click
+    // when the option is off, so a deliberate move of the selected layer is
+    // still possible over the top of something else.
+    if (activeToolId === "raster.move" && !pendingTransformRef.current) {
+      const options = toolOptions["raster.move"] ?? {};
+      const wanted = options.autoSelect !== false;
+      const overridden = event.metaKey || event.ctrlKey;
+      if (wanted !== overridden) {
+        const hit = pickLayerAt(state, point.x, point.y, { target: options.autoSelectTarget === "group" ? "group" : "layer" });
+        if (hit && hit.id !== state.activeLayerId) {
+          kernel.documents.update<RasterDocumentState>(document.id, (current) => { current.activeLayerId = hit.id; });
+          setSelectedLayers(document.id, event.shiftKey ? [...selectedLayers.filter((id) => id !== hit.id), hit.id] : [hit.id]);
+          // The rest of this handler reads the layer that was active on entry, so
+          // the gesture starts on the next event rather than on a stale layer.
+          return;
+        }
+      }
+    }
+
     const layer = activeRasterLayer(state);
     const maskTarget = editingMaskLayer?.id === state.activeLayerId ? editingMaskLayer : null;
     const paintTargetId = maskTarget?.id ?? layer.id;

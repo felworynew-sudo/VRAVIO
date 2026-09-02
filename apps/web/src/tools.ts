@@ -27,7 +27,7 @@ const brushTipOptions: readonly ToolOption[] = [size,
 ];
 
 export const tools: readonly ToolDefinition[] = [
-  { id: "raster.move", kind: "raster", icon: "↖", iconFile: "КУРСОР.svg", label: "Move Tool (Перемещение)", shortcut: "V", options: [{ id: "autoSelect", label: "Auto-select (Автовыбор)", type: "boolean", defaultValue: true }, { id: "showTransform", label: "Transform controls (Элементы трансформации)", type: "boolean", defaultValue: true }] },
+  { id: "raster.move", kind: "raster", icon: "↖", iconFile: "КУРСОР.svg", label: "Move Tool (Перемещение)", shortcut: "V", options: [{ id: "autoSelect", label: "Auto-select (Автовыбор)", type: "boolean", defaultValue: true }, { id: "autoSelectTarget", label: "", type: "select", defaultValue: "layer", values: [{ value: "layer", label: "Layer (Слой)" }, { value: "group", label: "Group (Группа)" }] }, { id: "showTransform", label: "Transform controls (Элементы трансформации)", type: "boolean", defaultValue: true }] },
   { id: "raster.hand", kind: "raster", icon: "✋", iconFile: "РУКА.svg", label: "Hand Tool (Рука)", shortcut: "H", options: [] },
   { id: "raster.rotateView", kind: "raster", icon: "↻", iconFile: "ВРАЩЕНИЕ ВИДА.svg", label: "Rotate View Tool (Вращение вида)", shortcut: "R", options: [] },
   { id: "raster.zoom", kind: "raster", icon: "⌕", iconFile: "ЛУПА.svg", label: "Zoom Tool (Масштаб)", shortcut: "Z", options: [{ id: "dragZoom", label: "Scrubby zoom (Масштабирование перетаскиванием)", type: "boolean", defaultValue: true }] },

@@ -60,3 +60,57 @@ export function effectiveLayerOpacity(layer: RasterLayer, layers: RasterLayer[])
   }
   return opacity;
 }
+
+export interface PickLayerOptions {
+  /**
+   * Coverage a layer needs at the point to be picked, 0..1.
+   *
+   * Antialiased edges fade out over a pixel or two, and picking at the first
+   * hint of alpha means a click near an outline grabs the shape rather than
+   * what is visible behind it. Half opacity is where Photoshop draws the line.
+   */
+  readonly threshold?: number;
+  /** "group" returns the outermost group the hit layer sits in, as Photoshop's Auto-Select does. */
+  readonly target?: "layer" | "group";
+}
+
+/**
+ * The layer a click at this point should select.
+ *
+ * This is what the Move tool's Auto-Select does: the topmost thing actually
+ * visible under the pointer, rather than whatever happened to be selected in
+ * the panel. Groups and adjustment layers are never the answer for a "layer"
+ * pick — a group has no pixels of its own, and an adjustment covers the whole
+ * canvas, so picking it would make everything under it unreachable.
+ */
+export function pickLayerAt(
+  state: RasterDocumentState, x: number, y: number, options: PickLayerOptions = {},
+): RasterLayer | null {
+  const column = Math.floor(x), row = Math.floor(y);
+  if (column < 0 || row < 0 || column >= state.width || row >= state.height) return null;
+  const threshold = options.threshold ?? 0.5;
+  const index = row * state.width + column;
+
+  for (const layer of [...flattenRasterLayers(state.layers)].reverse()) {
+    if (layer.kind === "group" || layer.kind === "adjustment" || layer.adjustment) continue;
+    if (!isLayerEffectivelyVisible(layer, state.layers)) continue;
+
+    const mask = layer.mask?.enabled ? layer.mask : null;
+    const maskAlpha = mask ? ((mask.inverted ? 255 - mask.pixels[index]! : mask.pixels[index]!) / 255) * mask.density : 1;
+    const coverage = (layer.pixels[index * 4 + 3]! / 255) * maskAlpha * effectiveLayerOpacity(layer, state.layers) * (layer.fillOpacity ?? 1);
+    if (coverage < threshold) continue;
+
+    if (options.target !== "group") return layer;
+    // Auto-Select: Group moves the whole group as a unit, so the answer is the
+    // outermost group the hit layer belongs to, not its immediate parent.
+    let outermost: RasterLayer | null = null;
+    for (let parentId = layer.parentId; parentId; ) {
+      const parent: RasterLayer | undefined = state.layers.find((item) => item.id === parentId);
+      if (!parent) break;
+      outermost = parent;
+      parentId = parent.parentId;
+    }
+    return outermost ?? layer;
+  }
+  return null;
+}
