@@ -8,6 +8,7 @@ import {
   dodgeBurnDab, dodgeBurnStrokeSegment, type DodgeBurnRange,
   spotHealDab, spotHealStrokeSegment, spotHealApply,
   patchFromSelection,
+  RASTER_ASSET_MIME, decodeRasterAsset, encodeRasterAsset, isRasterAsset,
 } from "@vravio/env-raster";
 import { createBufferRevisionOperation, type AssetId, type VravioDocument } from "@vravio/kernel";
 import { kernel } from "./kernel";
@@ -17,8 +18,20 @@ import { identityTextTransform, multiplyTextTransform, renderTextLayerPixels, te
 import { localized } from "./i18n";
 
 /** Asset storage takes plain bytes; a clamped view is not one. */
-const toBytes = (pixels: Uint8ClampedArray): Uint8Array =>
-  new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
+/**
+ * A layer buffer in the form assets hold it.
+ *
+ * The same container the round-trip uses, so a layer's asset means the same
+ * thing whether a brush stroke wrote it or another environment did — and
+ * handing that asset to an editor that never saw this document is enough,
+ * because the bytes carry their own dimensions.
+ */
+const toBytes = (pixels: Uint8ClampedArray, width: number, height: number): Uint8Array =>
+  encodeRasterAsset(pixels, width, height);
+
+/** Layer bytes out of an asset, tolerating buffers stored before the container existed. */
+const fromBytes = (bytes: Uint8Array): Uint8ClampedArray =>
+  isRasterAsset(bytes) ? decodeRasterAsset(bytes).pixels : new Uint8ClampedArray(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
 
 /** Tools that mutate a layer's pixel buffer directly. A non-"pixel" layer (text, and later 3D) must be
  * rasterized into a plain pixel layer before any of these can run — otherwise the tool overwrites baked
@@ -476,7 +489,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     const history = kernel.historyByDocument.get(document.id);
     if (!history) throw new Error(`History missing for ${document.id}`);
     const assign = (pixels: Uint8Array | Uint8ClampedArray): void => {
-      const buffer = pixels instanceof Uint8ClampedArray ? pixels : new Uint8ClampedArray(pixels.buffer.slice(pixels.byteOffset, pixels.byteOffset + pixels.byteLength));
+      const buffer = pixels instanceof Uint8ClampedArray ? pixels : fromBytes(pixels);
       kernel.documents.update<RasterDocumentState>(document.id, (current) => { const layer = current.layers.find((item) => item.id === layerId); if (!layer) return; if (target === "mask" && layer.mask) layer.mask.pixels = rgbaToMask(buffer); else layer.pixels = buffer.slice(); });
     };
 
@@ -498,7 +511,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
           return;
         }
         const previousRev = kernel.assets.mustGet(assetId).head;
-        const nextRev = await kernel.assets.commitRevision(assetId, toBytes(after), "raster", label);
+        const nextRev = await kernel.assets.commitRevision(assetId, toBytes(after, state.width, state.height), "raster", label);
         await history.record(createBufferRevisionOperation({ assets: kernel.assets, assetId, label, producedBy: "raster", apply: assign }, previousRev, nextRev));
       });
     await commitQueue.current;
@@ -518,7 +531,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     const existing = layer[key];
     if (existing && kernel.assets.has(existing)) return existing as AssetId;
 
-    const assetId = await kernel.assets.importAsset(toBytes(before), { kind: "image", name: `${layer.name}.${target}.raw`, mime: "application/octet-stream" });
+    const assetId = await kernel.assets.importAsset(toBytes(before, state.width, state.height), { kind: "image", name: `${layer.name}.${target}.vraster`, mime: RASTER_ASSET_MIME });
     kernel.documents.update<RasterDocumentState>(document.id, (current) => {
       const target_ = current.layers.find((item) => item.id === layerId);
       if (target_) target_[key] = assetId;

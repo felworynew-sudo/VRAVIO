@@ -24,3 +24,5 @@ export * from "./retouch";
 export * from "./liquify";
 export { canvasBlendModes, planComposite } from "./composite-plan";
 export type { CompositeBackend, CompositePlan, PixelDepth } from "./composite-plan";
+export * from "./raster-asset";
+export * from "./environment";

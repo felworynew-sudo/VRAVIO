@@ -76,6 +76,10 @@ importers:
         version: 4.1.11(vite@8.2.2)
 
   packages/env-raster:
+    dependencies:
+      '@vravio/kernel':
+        specifier: workspace:*
+        version: link:../kernel
     devDependencies:
       typescript:
         specifier: 7.0.2

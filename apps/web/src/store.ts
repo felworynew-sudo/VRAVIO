@@ -100,6 +100,8 @@ interface ShellState {
   preferences: ShellPreferences;
   openDocument(kind: EnvironmentKind, options?: NewDocumentOptions): void;
   adoptRestoredDocuments(documentIds: readonly string[]): void;
+  /** Give a tab to a document the kernel created, such as a round-trip child. */
+  adoptDocument(id: string): void;
   requestNewDocument(kind: EnvironmentKind): void;
   cancelNewDocument(): void;
   activateDocument(id: string): void;
@@ -167,6 +169,20 @@ export const useShellStore = create<ShellState>((set) => ({
     }
     const ids = documentIds.filter((id) => kernel.documents.has(id));
     return { documentIds: [...ids], activeDocumentId: ids.at(-1) ?? null, mruOrder: [...ids].reverse(), viewports, activeToolByDocument };
+  }),
+  adoptDocument: (id) => set((state) => {
+    if (state.documentIds.includes(id)) return { activeDocumentId: id, mruOrder: [id, ...state.mruOrder.filter((item) => item !== id)] };
+    const document = kernel.documents.get(id);
+    if (!document) return state;
+    kernel.historyByDocument.set(id, createHistory(state.preferences.memoryBudgetMb));
+    const tool = defaultTool(document.kind);
+    return {
+      documentIds: [...state.documentIds, id],
+      activeDocumentId: id,
+      mruOrder: [id, ...state.mruOrder],
+      viewports: { ...state.viewports, [id]: { ...defaultViewport } },
+      activeToolByDocument: tool ? { ...state.activeToolByDocument, [id]: tool } : state.activeToolByDocument,
+    };
   }),
   requestNewDocument: (newDocumentKind) => set({ newDocumentKind }),
   cancelNewDocument: () => set({ newDocumentKind: null }),
