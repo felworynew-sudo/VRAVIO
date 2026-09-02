@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import {
-  activeRasterLayer, appendLayer, clampRegionToDocument, pickLayerAt, combineSelections, compositeRasterDocument, compositeRasterRegion, createContiguousColorSelection, drawShape, DirtyRegion, RasterTileCache, type ShapeKind, createEllipseSelection, createPolygonSelection, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
+  activeRasterLayer, appendLayer, clampRegionToDocument, layerOpaqueBounds, marqueeCorners, marqueeRect, pickLayerAt, combineSelections, compositeRasterDocument, compositeRasterRegion, createContiguousColorSelection, drawShape, DirtyRegion, RasterTileCache, type ShapeKind, createEllipseSelection, createPolygonSelection, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
   isRasterDocumentState, parseHexColor, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectionOutlinePath, toHexColor,
   translateLayerPixels, translateSelection, type PixelSelection, type Point, type RasterDocumentState, type RasterGuide, type RasterLayer, type RasterRect, type RasterTextData, type SelectionCombineMode,
   cloneDab, cloneStrokeSegment,
@@ -193,11 +193,14 @@ function stateDeltaBytes(before: RasterDocumentState, after: RasterDocumentState
   return bytes;
 }
 
-function alphaBounds(pixels: Uint8ClampedArray, width: number, height: number): RasterRect | null {
-  let left = width, top = height, right = 0, bottom = 0;
-  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) if (pixels[(y * width + x) * 4 + 3]) { left = Math.min(left, x); top = Math.min(top, y); right = Math.max(right, x + 1); bottom = Math.max(bottom, y + 1); }
-  return right > left && bottom > top ? { x: left, y: top, width: right - left, height: bottom - top } : null;
-}
+/**
+ * Where a layer actually has pixels.
+ *
+ * Shares the compositor's answer rather than scanning again: it reads four bytes
+ * at a time and remembers the result against the buffer, and this is asked the
+ * same question about the same buffers all through a gesture.
+ */
+const alphaBounds = layerOpaqueBounds;
 
 interface PendingTextTransform { original: RasterTextData; initialBounds: RasterRect; targetBounds: RasterRect }
 
@@ -229,7 +232,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const textTransformCanvasRef = useRef<HTMLCanvasElement>(null);
   const brushCursorRef = useRef<SVGGElement>(null);
   const gesture = useRef<{ before: Uint8ClampedArray; working: Uint8ClampedArray; curveStart: Point; pending: Point; pointerId: number; frame: number | null; dirty?: RasterRect | null; strokeBounds?: RasterRect | null; target: "pixels" | "mask"; layerId: string; sourceOffsetX?: number; sourceOffsetY?: number; sourcePixels?: Uint8ClampedArray } | null>(null);
-  const selectionGesture = useRef<{ kind: "rectangle" | "ellipse" | "lasso"; from: Point; current: Point; points: Point[]; pointerId: number } | null>(null);
+  const selectionGesture = useRef<{ kind: "rectangle" | "ellipse" | "lasso"; from: Point; current: Point; points: Point[]; pointerId: number; mode: SelectionCombineMode; spaceAnchor: Point | null } | null>(null);
   const documentGesture = useRef<
     | { kind: "move" | "crop"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean }
     | { kind: "scale"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; handleX: -1 | 0 | 1; handleY: -1 | 0 | 1; dx: number; dy: number; text?: PendingTextTransform }
@@ -272,6 +275,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const activeToolId = useShellStore((state) => state.activeToolByDocument[document.id]);
   const toolOptions = useShellStore((state) => state.toolOptions);
   const setSelectedLayers = useShellStore((shell) => shell.setSelectedLayers);
+  const selectionEdgesHidden = useShellStore((shell) => shell.selectionEdgesHidden);
   const selectedLayers = useShellStore((shell) => shell.selectedLayerIdsByDocument[document.id]) ?? [];
   const foregroundColor = useShellStore((shell) => shell.foregroundColor);
   const editingMaskLayerId = useShellStore((shell) => shell.editingMaskLayerIdByDocument[document.id] ?? null);
@@ -648,6 +652,15 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     const after = cloneRasterState(pending.before);
     const layer = after.layers.find((item) => item.id === pending.layerId);
     if (layer) {
+      // Say what moved. Without this the repaint has no region to work from and
+      // recomposites the whole document, which on a layered file is most of the
+      // pause between letting go and seeing the result.
+      const sourceLayer = pending.before.layers.find((item) => item.id === pending.layerId);
+      const wasThere = sourceLayer ? alphaBounds(sourceLayer.pixels, state.width, state.height) : null;
+      const isThere = alphaBounds(pending.pixels, state.width, state.height);
+      if (wasThere) documentDirty.current.add(wasThere);
+      if (isThere) documentDirty.current.add(isThere);
+      if (!wasThere && !isThere) documentDirty.current.addEverything();
       layer.pixels = pending.pixels.slice();
     }
     after.selection = pending.selection ? { mask: pending.selection.mask.slice(), bounds: { ...pending.selection.bounds } } : null;
@@ -749,6 +762,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     // on the Move tool and lets the platform modifier turn it on for one click
     // when the option is off, so a deliberate move of the selected layer is
     // still possible over the top of something else.
+    let autoSelected: RasterLayer | null = null;
     if (activeToolId === "raster.move" && !pendingTransformRef.current) {
       const options = toolOptions["raster.move"] ?? {};
       const wanted = options.autoSelect !== false;
@@ -758,14 +772,17 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         if (hit && hit.id !== state.activeLayerId) {
           kernel.documents.update<RasterDocumentState>(document.id, (current) => { current.activeLayerId = hit.id; });
           setSelectedLayers(document.id, event.shiftKey ? [...selectedLayers.filter((id) => id !== hit.id), hit.id] : [hit.id]);
-          // The rest of this handler reads the layer that was active on entry, so
-          // the gesture starts on the next event rather than on a stale layer.
-          return;
+          // Picking and dragging are one gesture, so the rest of this handler runs
+          // against the layer just picked rather than waiting for React to
+          // re-render with it. The snapshots below have to agree, or the move
+          // would be recorded against whichever layer was selected before.
+          autoSelected = hit;
         }
       }
     }
+    const gestureState = autoSelected ? { ...state, activeLayerId: autoSelected.id } : state;
 
-    const layer = activeRasterLayer(state);
+    const layer = autoSelected ?? activeRasterLayer(state);
     const maskTarget = editingMaskLayer?.id === state.activeLayerId ? editingMaskLayer : null;
     const paintTargetId = maskTarget?.id ?? layer.id;
     const brushTargetKey = maskTarget ? `mask:${maskTarget.id}` : layer.id;
@@ -784,6 +801,14 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       if (handle) {
         canvas.setPointerCapture(event.pointerId);
         documentGesture.current = { kind: "scale", from: point, current: point, pointerId: event.pointerId, before: pendingTransform.before, basePixels: pendingTransform.text ? pendingTransform.pixels : pendingTransform.pixels.slice(), baseSelection: pendingTransform.selection ? { mask: pendingTransform.selection.mask.slice(), bounds: { ...pendingTransform.selection.bounds } } : null, sourceBounds: { ...bounds }, handleX: handle[0], handleY: handle[1], dx: pendingTransform.dx, dy: pendingTransform.dy, ...(pendingTransform.text ? { text: pendingTransform.text } : {}) };
+        return;
+      }
+      // Clicking away from the frame accepts the transform, the way it does in
+      // Photoshop. Only Escape and the bar's cross reject it. Without this the
+      // frame stayed behind after the click and the next gesture was applied on
+      // top of a transform that had never been committed.
+      if (point.x < bounds.x || point.y < bounds.y || point.x > bounds.x + bounds.width || point.y > bounds.y + bounds.height) {
+        finishPendingTransform(true);
         return;
       }
     }
@@ -878,7 +903,13 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     if (activeToolId === "raster.marquee" || activeToolId === "raster.ellipseMarquee" || activeToolId === "raster.lasso") {
       canvas.setPointerCapture(event.pointerId);
       const kind = activeToolId === "raster.lasso" ? "lasso" : activeToolId === "raster.ellipseMarquee" ? "ellipse" : "rectangle";
-      selectionGesture.current = { kind, from: point, current: point, points: [point], pointerId: event.pointerId };
+      // Photoshop reads Shift and Alt at the moment the drag begins to decide how
+      // the new selection combines with the old one. The same keys pressed later,
+      // mid-drag, mean something else entirely — square, and from-centre — so the
+      // mode has to be captured here rather than looked up when the drag ends.
+      const marqueeOptions = toolOptions[activeToolId] ?? {};
+      const mode = (event.shiftKey && event.altKey ? "intersect" : event.shiftKey ? "add" : event.altKey ? "subtract" : String(marqueeOptions.mode ?? "replace")) as SelectionCombineMode;
+      selectionGesture.current = { kind, from: point, current: point, points: [point], pointerId: event.pointerId, mode, spaceAnchor: null };
       setSelectionDraft({ x: point.x, y: point.y, width: 0, height: 0 });
       setLassoDraft(kind === "lasso" ? [point] : []);
       return;
@@ -904,7 +935,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         pendingTransformRef.current = pending; setTransformPreview(pending); announceTransform(pending);
         createdTextTransform = true;
       }
-      documentGesture.current = { kind: activeToolId === "raster.crop" ? "crop" : "move", from: point, current: point, pointerId: event.pointerId, before: pending?.before ?? cloneRasterState(state), startDx: pending?.dx ?? 0, startDy: pending?.dy ?? 0, basePixels: pending ? (pending.text ? pending.pixels : pending.pixels.slice()) : layer.pixels.slice(), baseSelection: pending?.selection ? { mask: pending.selection.mask.slice(), bounds: { ...pending.selection.bounds } } : effectiveSelection ? { mask: effectiveSelection.mask.slice(), bounds: { ...effectiveSelection.bounds } } : null, rotation: pending?.rotation ?? 0, ...(pending?.text ? { text: pending.text } : {}), ...(createdTextTransform ? { createdTextTransform: true } : {}) };
+      documentGesture.current = { kind: activeToolId === "raster.crop" ? "crop" : "move", from: point, current: point, pointerId: event.pointerId, before: pending?.before ?? cloneRasterState(gestureState), startDx: pending?.dx ?? 0, startDy: pending?.dy ?? 0, basePixels: pending ? (pending.text ? pending.pixels : pending.pixels.slice()) : layer.pixels.slice(), baseSelection: pending?.selection ? { mask: pending.selection.mask.slice(), bounds: { ...pending.selection.bounds } } : effectiveSelection ? { mask: effectiveSelection.mask.slice(), bounds: { ...effectiveSelection.bounds } } : null, rotation: pending?.rotation ?? 0, ...(pending?.text ? { text: pending.text } : {}), ...(createdTextTransform ? { createdTextTransform: true } : {}) };
       setSelectionDraft(activeToolId === "raster.crop" ? { x: point.x, y: point.y, width: 0, height: 0 } : null);
       return;
     }
@@ -958,9 +989,19 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       const workspace = workspaceRef.current;
       if (!workspace) return;
       const point = pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent);
-      selecting.current = point;
-      if (selecting.kind === "lasso") { selecting.points.push(point); setLassoDraft([...selecting.points]); }
-      setSelectionDraft({ x: Math.min(selecting.from.x, point.x), y: Math.min(selecting.from.y, point.y), width: Math.abs(point.x - selecting.from.x), height: Math.abs(point.y - selecting.from.y) });
+      // Holding space mid-drag slides the whole marquee instead of resizing it,
+      // which is the only way to correct a start point without beginning again.
+      if (spaceHeld) {
+        const anchor = selecting.spaceAnchor ?? point;
+        selecting.from = { x: selecting.from.x + (point.x - anchor.x), y: selecting.from.y + (point.y - anchor.y) };
+        selecting.current = { x: selecting.current.x + (point.x - anchor.x), y: selecting.current.y + (point.y - anchor.y) };
+        selecting.spaceAnchor = point;
+      } else {
+        selecting.spaceAnchor = null;
+        selecting.current = point;
+      }
+      if (selecting.kind === "lasso") { selecting.points.push(selecting.current); setLassoDraft([...selecting.points]); }
+      else setSelectionDraft(marqueeRect(selecting.from.x, selecting.from.y, selecting.current.x, selecting.current.y, { square: event.shiftKey, fromCentre: event.altKey }));
       return;
     }
     const shaping = shapeGesture.current;
@@ -1083,12 +1124,14 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       const optionId = selecting.kind === "lasso" ? "raster.lasso" : selecting.kind === "ellipse" ? "raster.ellipseMarquee" : "raster.marquee";
       const options = toolOptions[optionId] ?? {};
       const feather = Number(options.feather ?? 0);
+      const corners = marqueeCorners(selecting.from.x, selecting.from.y, selecting.current.x, selecting.current.y, { square: event.shiftKey, fromCentre: event.altKey });
       const incoming = selecting.kind === "lasso"
         ? createPolygonSelection(state.width, state.height, selecting.points, feather)
         : selecting.kind === "ellipse"
-          ? createEllipseSelection(state.width, state.height, selecting.from.x, selecting.from.y, selecting.current.x, selecting.current.y, feather)
-          : createRectangleSelection(state.width, state.height, selecting.from.x, selecting.from.y, selecting.current.x, selecting.current.y, feather);
-      const mode = (event.shiftKey && event.altKey ? "intersect" : event.shiftKey ? "add" : event.altKey ? "subtract" : String(options.mode ?? "replace")) as SelectionCombineMode;
+          ? createEllipseSelection(state.width, state.height, corners.fromX, corners.fromY, corners.toX, corners.toY, feather)
+          : createRectangleSelection(state.width, state.height, corners.fromX, corners.fromY, corners.toX, corners.toY, feather);
+      const mode = selecting.mode;
+      void options;
       const opaqueIncoming = restrictSelectionToAlpha(incoming, activeRasterLayer(state).pixels, state.width, state.height);
       const combined = opaqueIncoming ? combineSelections(state.selection, opaqueIncoming, state.width, state.height, mode) : mode === "replace" ? null : state.selection;
       void commitSelection(state.selection, combined);
@@ -1214,7 +1257,9 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const draftKind = selectionGesture.current?.kind;
   const displayedSelection = transformPreview?.selection ?? state.selection;
   const transformBounds = transformPreview ? (transformPreview.text?.targetBounds ?? displayedSelection?.bounds ?? alphaBounds(transformPreview.pixels, state.width, state.height)) : null;
-  const committedSelectionPath = displayedSelection ? selectionOutlinePath(displayedSelection.mask, state.width, state.height) : "";
+  // Cmd/Ctrl+H hides the marching ants without dropping the selection, so an
+  // edge can be judged without the animation crawling over it.
+  const committedSelectionPath = displayedSelection && !selectionEdgesHidden ? selectionOutlinePath(displayedSelection.mask, state.width, state.height) : "";
   const brushLike = activeToolId === "raster.brush" || activeToolId === "raster.pencil" || activeToolId === "raster.highlighter" || activeToolId === "raster.eraser" || activeToolId === "raster.clone" || activeToolId === "raster.spotHeal" || activeToolId === "raster.blur" || activeToolId === "raster.smudge" || activeToolId === "raster.dodge" || activeToolId === "raster.burn";
   const brushOptions = toolOptions[activeToolId ?? ""] ?? {};
   const tipAngle = Number(brushOptions.angle ?? 0), tipRoundness = Number(brushOptions.roundness ?? 100);

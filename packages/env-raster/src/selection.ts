@@ -158,3 +158,90 @@ export function invertPixelSelection(current: PixelSelection | null, width: numb
   const bounds = selectionBounds(mask, width, height);
   return bounds.width && bounds.height ? { mask, bounds } : null;
 }
+
+/**
+ * Softens a selection's edge by a radius, the way Select > Modify > Feather does.
+ *
+ * A box blur run twice approximates a Gaussian closely enough for an edge that
+ * is about to be used as an alpha, and costs two linear passes instead of a
+ * quadratic kernel — which matters because this runs over the whole document.
+ */
+export function featherSelection(
+  selection: PixelSelection | null, width: number, height: number, radius: number,
+): PixelSelection | null {
+  if (!selection) return null;
+  const size = Math.max(0, Math.round(radius));
+  if (size === 0) return { mask: selection.mask.slice(), bounds: { ...selection.bounds } };
+
+  let mask: Uint8ClampedArray = selection.mask.slice();
+  for (let pass = 0; pass < 2; pass += 1) {
+    mask = blurAxis(mask, width, height, size, true);
+    mask = blurAxis(mask, width, height, size, false);
+  }
+  const bounds = selectionBounds(mask, width, height);
+  return bounds.width && bounds.height ? { mask, bounds } : null;
+}
+
+/** One separable box-blur pass, along rows or columns. */
+function blurAxis(mask: Uint8ClampedArray, width: number, height: number, radius: number, horizontal: boolean): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(mask.length);
+  const outer = horizontal ? height : width, inner = horizontal ? width : height;
+  const at = (major: number, minor: number) => (horizontal ? major * width + minor : minor * width + major);
+  for (let major = 0; major < outer; major += 1) {
+    let sum = 0;
+    // Prime the window with the clamped left edge, then slide it.
+    for (let offset = -radius; offset <= radius; offset += 1) sum += mask[at(major, Math.max(0, Math.min(inner - 1, offset)))]!;
+    const span = radius * 2 + 1;
+    for (let minor = 0; minor < inner; minor += 1) {
+      output[at(major, minor)] = Math.round(sum / span);
+      const leaving = Math.max(0, Math.min(inner - 1, minor - radius));
+      const entering = Math.max(0, Math.min(inner - 1, minor + radius + 1));
+      sum += mask[at(major, entering)]! - mask[at(major, leaving)]!;
+    }
+  }
+  return output;
+}
+
+export interface MarqueeOptions {
+  /** Shift held during the drag: a square, or a circle for the ellipse. */
+  readonly square?: boolean;
+  /** Alt/Option held during the drag: the start point becomes the centre. */
+  readonly fromCentre?: boolean;
+}
+
+/**
+ * The corners a marquee drag describes, once its modifiers are applied.
+ *
+ * Photoshop reads Shift and Alt twice, and means different things by them. Held
+ * before the drag starts they choose how the new selection combines with the
+ * old one; held during the drag they constrain the shape and move its origin to
+ * the centre. This is the second reading — the geometry — and it is separated
+ * out because the two are easy to conflate and impossible to test together.
+ */
+export function marqueeCorners(
+  fromX: number, fromY: number, toX: number, toY: number, options: MarqueeOptions = {},
+): { fromX: number; fromY: number; toX: number; toY: number } {
+  let dx = toX - fromX, dy = toY - fromY;
+  if (options.square) {
+    // The larger extent wins, so the shape follows the pointer rather than
+    // collapsing to whichever axis moved least.
+    const extent = Math.max(Math.abs(dx), Math.abs(dy));
+    dx = extent * (dx < 0 ? -1 : 1);
+    dy = extent * (dy < 0 ? -1 : 1);
+  }
+  if (options.fromCentre) return { fromX: fromX - dx, fromY: fromY - dy, toX: fromX + dx, toY: fromY + dy };
+  return { fromX, fromY, toX: fromX + dx, toY: fromY + dy };
+}
+
+/** The same corners as a normalized rectangle, for drawing the preview. */
+export function marqueeRect(
+  fromX: number, fromY: number, toX: number, toY: number, options: MarqueeOptions = {},
+): RasterRect {
+  const corners = marqueeCorners(fromX, fromY, toX, toY, options);
+  return {
+    x: Math.min(corners.fromX, corners.toX),
+    y: Math.min(corners.fromY, corners.toY),
+    width: Math.abs(corners.toX - corners.fromX),
+    height: Math.abs(corners.toY - corners.fromY),
+  };
+}

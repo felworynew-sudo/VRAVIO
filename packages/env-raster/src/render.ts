@@ -121,7 +121,7 @@ function blendNonSeparable(
  */
 const opaqueBounds = new WeakMap<Uint8ClampedArray, RasterRect | null>();
 
-function layerOpaqueBounds(pixels: Uint8ClampedArray, width: number, height: number): RasterRect | null {
+export function layerOpaqueBounds(pixels: Uint8ClampedArray, width: number, height: number): RasterRect | null {
   const cached = opaqueBounds.get(pixels);
   if (cached !== undefined) return cached;
 

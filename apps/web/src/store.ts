@@ -93,6 +93,8 @@ interface ShellState {
   backgroundColor: string;
   toolOptions: Record<string, Record<string, string | number | boolean>>;
   paletteOpen: boolean;
+  /** Marching ants hidden with Cmd/Ctrl+H; the selection itself is untouched. */
+  selectionEdgesHidden: boolean;
   settingsOpen: boolean;
   newDocumentKind: EnvironmentKind | null;
   theme: Theme;
@@ -118,6 +120,7 @@ interface ShellState {
   swapColors(): void;
   resetColors(): void;
   setPaletteOpen(open: boolean): void;
+  toggleSelectionEdges(): void;
   setSettingsOpen(open: boolean): void;
   setTheme(theme: Theme): void;
   setLanguage(language: Language): void;
@@ -143,7 +146,7 @@ const createHistory = (memoryBudgetMb: number) => {
 };
 
 export const useShellStore = create<ShellState>((set) => ({
-  documentIds: [], activeDocumentId: null, mruOrder: [], activeToolByDocument: {}, selectedLayerIdsByDocument: {}, editingMaskLayerIdByDocument: {}, maskForegroundIsWhiteByDocument: {}, viewports: {}, foregroundColor: "#000000", backgroundColor: "#ffffff", toolOptions: {}, paletteOpen: false, settingsOpen: false, newDocumentKind: null,
+  documentIds: [], activeDocumentId: null, mruOrder: [], activeToolByDocument: {}, selectedLayerIdsByDocument: {}, editingMaskLayerIdByDocument: {}, maskForegroundIsWhiteByDocument: {}, viewports: {}, foregroundColor: "#000000", backgroundColor: "#ffffff", toolOptions: {}, paletteOpen: false, selectionEdgesHidden: false, settingsOpen: false, newDocumentKind: null,
   theme: readPreference("vravio.theme", ["dark", "light", "contrast"] as const, "dark"),
   language: readPreference("vravio.language", ["en", "ru", "uk", "es", "de", "ja", "zh"] as const, "ru"),
   preferences: readPreferences(),
@@ -208,6 +211,7 @@ export const useShellStore = create<ShellState>((set) => ({
   swapMaskColors: (documentId) => set((state) => ({ maskForegroundIsWhiteByDocument: { ...state.maskForegroundIsWhiteByDocument, [documentId]: !state.maskForegroundIsWhiteByDocument[documentId] } })),
   setToolOption: (toolId, optionId, value) => set((state) => ({ toolOptions: { ...state.toolOptions, [toolId]: { ...(state.toolOptions[toolId] ?? {}), [optionId]: value } } })),
   setViewport: (documentId, patch) => set((state) => ({ viewports: { ...state.viewports, [documentId]: { ...(state.viewports[documentId] ?? defaultViewport), ...patch } } })),
+  toggleSelectionEdges: () => set((state) => ({ selectionEdgesHidden: !state.selectionEdgesHidden })),
   setForegroundColor: (foregroundColor) => set({ foregroundColor }),
   setBackgroundColor: (backgroundColor) => set({ backgroundColor }),
   swapColors: () => set((state) => ({ foregroundColor: state.backgroundColor, backgroundColor: state.foregroundColor })),
