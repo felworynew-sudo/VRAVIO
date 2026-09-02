@@ -1,4 +1,4 @@
-import { AssetStore, AutosaveManager, CommandRegistry, DocumentSnapshotStore, DocumentStore, EnvironmentRegistry, GPUContext, HistoryManager, KeymapManager, ResilientStorageAdapter, RoundTripManager } from "@vravio/kernel";
+import { AssetStore, AutosaveManager, CommandRegistry, DocumentSnapshotStore, DocumentStore, EnvironmentRegistry, GPUContext, HistoryManager, KeymapManager, ModelStore, ResilientStorageAdapter, RoundTripManager } from "@vravio/kernel";
 import { RasterEnvironment } from "@vravio/env-raster";
 import { createWebPlatform } from "./webPlatform";
 
@@ -27,7 +27,8 @@ const roundtrip = new RoundTripManager({
 });
 
 const gpu = new GPUContext();
-const platform = createWebPlatform(gpu);
+const models = new ModelStore({ cache: null });
+const platform = createWebPlatform(gpu, models);
 const autosave = new AutosaveManager(documentsStore, new DocumentSnapshotStore(sessionStorage));
 const sessionReady = autosave.restore().finally(() => autosave.start());
 
@@ -41,6 +42,7 @@ export const kernel = {
   assetsReady,
   gpu,
   platform,
+  models,
   gpuReady: gpu.initialize(),
   autosave,
   sessionReady,

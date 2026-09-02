@@ -1,5 +1,6 @@
 import type { GPUContext, RenderBackend } from "./gpu-context";
-import type { MLBackend } from "./model-store";
+import type { LoadModelOptions, MLBackend, ModelSpec } from "./model-store";
+import type { MLSession } from "./ml";
 
 export type PlatformKind = "web" | "desktop";
 
@@ -34,6 +35,14 @@ export interface MLPort {
   readonly supportsLocalModels: boolean;
   /** The accelerator inference will actually run on, once probed. */
   backend(): MLBackend;
+  /**
+   * Fetches the weights if they are not cached and prepares a session.
+   *
+   * Consent and download progress belong to `LoadModelOptions`, because a user
+   * asked to wait for tens of megabytes deserves to have been asked first and
+   * to be able to change their mind.
+   */
+  load(spec: ModelSpec, options?: LoadModelOptions): Promise<MLSession>;
 }
 
 export interface PlatformCapabilities {

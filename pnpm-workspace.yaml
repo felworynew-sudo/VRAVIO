@@ -2,4 +2,8 @@ packages:
   - "apps/*"
   - "packages/*"
 allowBuilds:
-  core-js: set this to true or false
+  core-js: false
+  # A transitive dependency of onnxruntime-web. Its postinstall only regenerates
+  # bundled descriptors; the runtime loads fine without it, and declining keeps
+  # an arbitrary install-time script out of the build.
+  protobufjs: false

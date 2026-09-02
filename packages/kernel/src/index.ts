@@ -8,6 +8,7 @@ export * from "./event-bus";
 export * from "./gpu-context";
 export * from "./history-manager";
 export * from "./keymap-manager";
+export * from "./ml";
 export * from "./model-store";
 export * from "./platform";
 export * from "./roundtrip-manager";

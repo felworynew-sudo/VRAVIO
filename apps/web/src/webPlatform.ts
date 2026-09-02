@@ -1,5 +1,6 @@
 import type { CodecPort, FileSystemPort, FontPort, GPUContext, MLPort, OpenFileOptions, Platform, PlatformCapabilities, PlatformFile, SaveFileOptions, SaveFileResult } from "@vravio/kernel";
-import { OpfsStorageAdapter } from "@vravio/kernel";
+import { OpfsStorageAdapter, type ModelStore } from "@vravio/kernel";
+import { createOnnxRuntime } from "./onnxRuntime";
 
 interface BrowserFileHandle {
   getFile(): Promise<File>;
@@ -67,7 +68,7 @@ class WebFonts implements FontPort {
   }
 }
 
-export function createWebPlatform(gpu: GPUContext): Platform {
+export function createWebPlatform(gpu: GPUContext, models: ModelStore): Platform {
   const capabilities: PlatformCapabilities = {
     persistentFileHandles: Boolean(browserWindow.showOpenFilePicker && browserWindow.showSaveFilePicker),
     opfs: OpfsStorageAdapter.isSupported(),
@@ -76,11 +77,6 @@ export function createWebPlatform(gpu: GPUContext): Platform {
     nativeFfmpeg: false,
     nativeThreads: false,
   };
-  const ml: MLPort = {
-    backends: gpu.available.length ? gpu.available : ["wasm"],
-    supportsLocalModels: true,
-    // Inference follows the render ladder, with WebNN preferred when the browser exposes it.
-    backend: () => ("ml" in navigator ? "webnn" : gpu.active ?? gpu.available[0] ?? "wasm"),
-  };
+  const ml: MLPort = createOnnxRuntime({ gpu, models });
   return { kind: "web", fs: new WebFileSystem(), codecs: new WebCodecs(), fonts: new WebFonts(), ml, gpu, capabilities };
 }

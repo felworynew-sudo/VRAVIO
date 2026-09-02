@@ -26,3 +26,5 @@ export { canvasBlendModes, planComposite } from "./composite-plan";
 export type { CompositeBackend, CompositePlan, PixelDepth } from "./composite-plan";
 export * from "./raster-asset";
 export * from "./environment";
+export * from "./ml-tensor";
+export * from "./ml-inference";
