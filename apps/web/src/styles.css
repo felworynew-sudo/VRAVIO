@@ -285,3 +285,8 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
   margin:14px 0 0 14px; width:22px; height:22px; border-radius:4px;
   box-shadow:0 0 0 1px rgb(255 255 255 / .85), 0 0 0 2px rgb(0 0 0 / .55);
 }
+
+/* Adjustment menu and layer-kind glyphs. */
+.adjustment-menu button { display:flex; align-items:center; gap:8px; text-align:left; width:100%; }
+.adjustment-menu button img { flex:0 0 auto; opacity:.9; }
+.layer-kind-icon { position:absolute; left:2px; bottom:1px; opacity:.9; filter:drop-shadow(0 0 1px rgb(0 0 0 / .8)); }
