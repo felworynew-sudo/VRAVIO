@@ -67,6 +67,15 @@ export interface RasterLayer {
   clipping?: boolean;
   mask?: RasterLayerMask;
   smartSource?: RasterSmartSource;
+  /**
+   * Asset whose revisions are the undo history of this buffer.
+   *
+   * Keeping the bytes in the asset store rather than inside history steps is
+   * what makes deep undo affordable: a step holds two revision numbers instead
+   * of two copies of the layer.
+   */
+  pixelAssetId?: string;
+  maskAssetId?: string;
 }
 
 export interface RasterRect { x: number; y: number; width: number; height: number }

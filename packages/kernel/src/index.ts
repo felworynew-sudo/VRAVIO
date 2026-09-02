@@ -12,3 +12,5 @@ export * from "./platform";
 export * from "./storage-adapter";
 export * from "./types";
 export * from "./worker-pool";
+export { createBufferRevisionOperation } from "./buffer-revisions";
+export type { BufferRevisionOptions } from "./buffer-revisions";

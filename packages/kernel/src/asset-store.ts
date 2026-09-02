@@ -183,6 +183,27 @@ export class AssetStore {
     return true;
   }
 
+  /**
+   * Drops every revision no longer reachable, keeping only each asset's head.
+   *
+   * Undo history is what makes an older revision reachable, and history lives
+   * only as long as the session. After a reload the revisions behind the head
+   * have nothing pointing at them and nothing that will ever collect them, so a
+   * layer edited across a few sessions accumulates its whole past in storage.
+   * Call this once at startup, before any history exists — calling it later
+   * would collect the very revisions the open timeline is holding.
+   */
+  async collectUnreachableRevisions(): Promise<number> {
+    await this.initialize();
+    let collected = 0;
+    for (const record of [...this.#records.values()]) {
+      for (const revision of [...record.revisions]) {
+        if (revision.rev !== record.head && (await this.dropRevision(record.id, revision.rev))) collected += 1;
+      }
+    }
+    return collected;
+  }
+
   async retain(id: AssetId): Promise<number> { const record = this.mustGet(id); record.refCount += 1; await this.#persist(); return record.refCount; }
   async release(id: AssetId): Promise<number> { const record = this.mustGet(id); record.refCount = Math.max(0, record.refCount - 1); await this.#persist(); return record.refCount; }
   get(id: AssetId | string): AssetRecord | undefined { return this.#records.get(id as AssetId); }

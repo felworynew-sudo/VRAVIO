@@ -152,16 +152,22 @@ export class HistoryManager {
     const removed: HistoryEntry[] = [];
     const pressure = this.#heapPressure();
     // Under heap pressure shed down to half the current weight instead of
-    // waiting for a budget that may never be reached.
-    let relief = pressure !== null && pressure > heapPressureLimit ? this.memoryBytes / 2 : 0;
+    // waiting for a budget that may never be reached. The target is measured
+    // against the live total rather than counted down as entries leave: a step
+    // that keeps its buffers in storage weighs nothing on the heap, so a
+    // countdown would never be satisfied and would drain the whole timeline.
+    const heapTarget =
+      pressure !== null && pressure > heapPressureLimit ? this.memoryBytes / 2 : Number.POSITIVE_INFINITY;
 
     while (
       this.#undoStack.length > 1 &&
-      (this.#undoStack.length > this.#limit || this.memoryBytes > this.#memoryLimitBytes || this.storageBytes > this.#storageLimitBytes || relief > 0)
+      (this.#undoStack.length > this.#limit ||
+        this.memoryBytes > this.#memoryLimitBytes ||
+        this.storageBytes > this.#storageLimitBytes ||
+        this.memoryBytes > heapTarget)
     ) {
       const entry = this.#undoStack.shift();
       if (!entry) break;
-      relief -= estimate(entry.operation, "memoryEstimate");
       removed.push(entry);
     }
     await this.#freeEntries(removed, "evicted");

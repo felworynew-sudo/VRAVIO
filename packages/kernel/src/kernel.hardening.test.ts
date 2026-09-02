@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AssetStore, EventBus, HistoryManager, MemoryStorageAdapter, type AssetId, type ReversibleOperation } from "./index";
+import { AssetStore, EventBus, HistoryManager, MemoryStorageAdapter, createBufferRevisionOperation, type AssetId, type ReversibleOperation } from "./index";
 
 describe("EventBus robustness", () => {
   it("keeps delivering after a listener throws", () => {
@@ -88,6 +88,23 @@ describe("AssetStore revision collection", () => {
     expect(await assets.dropRevision(id, 0)).toBe(false);
   });
 
+  it("collects everything behind the head when history cannot reach it", async () => {
+    const { assets, id } = await store();
+    for (const value of ["v1", "v2", "v3"]) await assets.commitRevision(id, bytes(value), "raster");
+
+    // Undo history is what made revisions 0..2 reachable, and it does not
+    // survive a reload; without this sweep a layer keeps its whole past.
+    expect(await assets.collectUnreachableRevisions()).toBe(3);
+    expect(assets.mustGet(id).revisions.map((revision) => revision.rev)).toEqual([3]);
+    expect(await assets.read(id)).not.toBeNull();
+  });
+
+  it("collects nothing when every asset is already at its only revision", async () => {
+    const { assets } = await store();
+
+    expect(await assets.collectUnreachableRevisions()).toBe(0);
+  });
+
   it("ignores unknown assets and revisions", async () => {
     const { assets, id } = await store();
 
@@ -139,6 +156,37 @@ describe("HistoryManager release reasons", () => {
     expect(freed.every((entry) => entry.endsWith(":evicted"))).toBe(true);
   });
 
+  it("does not drain the timeline when steps weigh nothing on the heap", async () => {
+    const freed: string[] = [];
+    const weightless = (label: string): ReversibleOperation => ({
+      label, memoryEstimate: 0, storageEstimate: 8_000_000,
+      redo: () => {}, undo: () => {}, free: (reason) => { freed.push(`${label}:${reason}`); },
+    });
+    const history = new HistoryManager({ limit: 1000, heapPressure: () => 0.95 });
+
+    for (const label of ["a", "b", "c", "d"]) await history.execute(weightless(label));
+
+    // Revision-backed steps hold their buffers in storage. Shedding them frees
+    // no heap at all, so heap pressure must not be able to consume the timeline.
+    expect(history.undoCount).toBe(4);
+    expect(freed).toEqual([]);
+  });
+
+  it("bounds the timeline by the storage budget once steps stop costing heap", async () => {
+    const freed: string[] = [];
+    const stored = (label: string): ReversibleOperation => ({
+      label, memoryEstimate: 0, storageEstimate: 100,
+      redo: () => {}, undo: () => {}, free: (reason) => { freed.push(`${label}:${reason}`); },
+    });
+    const history = new HistoryManager({ limit: 1000, storageLimitBytes: 250 });
+
+    for (const label of ["a", "b", "c", "d", "e"]) await history.execute(stored(label));
+
+    expect(history.storageBytes).toBeLessThanOrEqual(250);
+    expect(history.undoCount).toBe(2);
+    expect(freed).toEqual(["a:evicted", "b:evicted", "c:evicted"]);
+  });
+
   it("keeps every step while the heap is roomy", async () => {
     const freed: string[] = [];
     const history = new HistoryManager({ limit: 1000, heapPressure: () => 0.1 });
@@ -157,5 +205,104 @@ describe("HistoryManager release reasons", () => {
     await history.execute(step("z", freed));
 
     expect(freed).toEqual(["x:evicted", "y:evicted"]);
+  });
+});
+
+describe("buffer revisions instead of buffer snapshots", () => {
+  const layerBytes = (fill: number, size = 64) => new Uint8Array(size).fill(fill);
+
+  const setup = async () => {
+    const assets = new AssetStore(new MemoryStorageAdapter());
+    await assets.initialize();
+    const assetId = await assets.importAsset(layerBytes(1), { kind: "image", name: "layer.raw", mime: "application/octet-stream" });
+    const shown: Uint8Array[] = [];
+    return { assets, assetId, shown };
+  };
+
+  const commit = async (
+    assets: AssetStore,
+    assetId: AssetId,
+    shown: Uint8Array[],
+    bytes: Uint8Array,
+  ) => {
+    const previousRev = assets.mustGet(assetId).head;
+    const nextRev = await assets.commitRevision(assetId, bytes, "raster");
+    return createBufferRevisionOperation(
+      { assets, assetId, label: "Brush", producedBy: "raster", apply: (value) => shown.push(value) },
+      previousRev,
+      nextRev,
+    );
+  };
+
+  it("holds revision numbers rather than the buffers themselves", async () => {
+    const { assets, assetId, shown } = await setup();
+
+    const operation = await commit(assets, assetId, shown, layerBytes(2));
+
+    // A snapshot pair of a 1920x1080 layer is 16 MB per step; here the heap
+    // cost of a step is nothing and the bytes sit in storage.
+    expect(operation.memoryEstimate).toBe(0);
+    expect(operation.storageEstimate).toBe(64);
+  });
+
+  it("undo and redo move the head and hand back the right bytes", async () => {
+    const { assets, assetId, shown } = await setup();
+    const history = new HistoryManager({ limit: 10 });
+    const operation = await commit(assets, assetId, shown, layerBytes(2));
+
+    await history.execute(operation);
+    expect(assets.mustGet(assetId).head).toBe(1);
+    expect(shown.at(-1)?.[0]).toBe(2);
+
+    await history.undo();
+    expect(assets.mustGet(assetId).head).toBe(0);
+    expect(shown.at(-1)?.[0]).toBe(1);
+
+    await history.redo();
+    expect(assets.mustGet(assetId).head).toBe(1);
+    expect(shown.at(-1)?.[0]).toBe(2);
+  });
+
+  it("a discarded redo branch collects its own result", async () => {
+    const { assets, assetId, shown } = await setup();
+    const history = new HistoryManager({ limit: 10 });
+
+    await history.execute(await commit(assets, assetId, shown, layerBytes(2)));
+    await history.undo();
+    await history.execute(await commit(assets, assetId, shown, layerBytes(3)));
+
+    const revisions = assets.mustGet(assetId).revisions.map((revision) => revision.rev);
+    // Revision 1 is unreachable now; revision 0 still backs the undo of the new step.
+    expect(revisions).toContain(0);
+    expect(revisions).not.toContain(1);
+    expect(await history.undo()).toBe(true);
+    expect(shown.at(-1)?.[0]).toBe(1);
+  });
+
+  it("an evicted step collects the state before it, never the one in view", async () => {
+    const { assets, assetId, shown } = await setup();
+    const history = new HistoryManager({ limit: 1 });
+
+    await history.execute(await commit(assets, assetId, shown, layerBytes(2)));
+    await history.execute(await commit(assets, assetId, shown, layerBytes(3)));
+
+    const revisions = assets.mustGet(assetId).revisions.map((revision) => revision.rev);
+    expect(revisions).not.toContain(0);
+    expect(assets.mustGet(assetId).head).toBe(2);
+    // The document still has bytes to draw after the collection.
+    expect(await assets.read(assetId)).not.toBeNull();
+  });
+
+  it("many strokes cost storage, not heap", async () => {
+    const { assets, assetId, shown } = await setup();
+    const history = new HistoryManager({ limit: 100 });
+
+    for (let step = 2; step < 22; step += 1) {
+      await history.execute(await commit(assets, assetId, shown, layerBytes(step)));
+    }
+
+    expect(history.undoCount).toBe(20);
+    expect(history.memoryBytes).toBe(0);
+    expect(history.storageBytes).toBeGreaterThan(0);
   });
 });

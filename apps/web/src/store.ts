@@ -130,7 +130,15 @@ const names: Record<EnvironmentKind, string> = {
   audio: "Audio session (Аудиосессия)",
   video: "Video project (Видеопроект)",
 };
-const createHistory = (memoryBudgetMb: number) => new HistoryManager({ memoryLimitBytes: Math.max(64, memoryBudgetMb) * 1024 * 1024 });
+// Pixel steps keep their buffers as asset revisions, so they weigh nothing on
+// the heap and the memory budget alone would never bound undo depth: two
+// hundred strokes on a 1920x1080 layer are 1.6 GB of scratch storage. The
+// budget the user set is what the application may spend on derived state, so
+// it caps both places that state can sit.
+const createHistory = (memoryBudgetMb: number) => {
+  const bytes = Math.max(64, memoryBudgetMb) * 1024 * 1024;
+  return new HistoryManager({ memoryLimitBytes: bytes, storageLimitBytes: bytes });
+};
 
 export const useShellStore = create<ShellState>((set) => ({
   documentIds: [], activeDocumentId: null, mruOrder: [], activeToolByDocument: {}, selectedLayerIdsByDocument: {}, editingMaskLayerIdByDocument: {}, maskForegroundIsWhiteByDocument: {}, viewports: {}, foregroundColor: "#000000", backgroundColor: "#ffffff", toolOptions: {}, paletteOpen: false, settingsOpen: false, newDocumentKind: null,
@@ -194,7 +202,7 @@ export const useShellStore = create<ShellState>((set) => ({
   setLanguage: (language) => { savePreference("vravio.language", language); set({ language }); },
   updatePreferences: (patch) => set((state) => {
     const preferences = { ...state.preferences, ...patch };
-    if (patch.memoryBudgetMb !== undefined) for (const history of kernel.historyByDocument.values()) void history.setBudgets(Math.max(64, patch.memoryBudgetMb) * 1024 * 1024);
+    if (patch.memoryBudgetMb !== undefined) { const bytes = Math.max(64, patch.memoryBudgetMb) * 1024 * 1024; for (const history of kernel.historyByDocument.values()) void history.setBudgets(bytes, bytes); }
     if (patch.renderer !== undefined) {
       const requested = patch.renderer === "canvas2d" ? "cpu" : patch.renderer === "auto" ? kernel.gpu.available[0] : patch.renderer;
       if (requested) kernel.gpu.select(requested, "settings");

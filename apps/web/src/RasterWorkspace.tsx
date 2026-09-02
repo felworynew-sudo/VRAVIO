@@ -9,12 +9,16 @@ import {
   spotHealDab, spotHealStrokeSegment, spotHealApply,
   patchFromSelection,
 } from "@vravio/env-raster";
-import type { VravioDocument } from "@vravio/kernel";
+import { createBufferRevisionOperation, type AssetId, type VravioDocument } from "@vravio/kernel";
 import { kernel } from "./kernel";
 import { defaultViewport, useShellStore, type DocumentViewport } from "./store";
 import { diagnostic } from "./diagnostics";
 import { identityTextTransform, multiplyTextTransform, renderTextLayerPixels, textBoundsTransform, textFontString } from "./textRender";
 import { localized } from "./i18n";
+
+/** Asset storage takes plain bytes; a clamped view is not one. */
+const toBytes = (pixels: Uint8ClampedArray): Uint8Array =>
+  new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
 
 /** Tools that mutate a layer's pixel buffer directly. A non-"pixel" layer (text, and later 3D) must be
  * rasterized into a plain pixel layer before any of these can run — otherwise the tool overwrites baked
@@ -429,12 +433,54 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     current.pending = point;
   };
 
+  /**
+   * Records a destructive pixel edit.
+   *
+   * The buffers go to the asset store and the history step keeps two revision
+   * numbers. Holding the before and after buffers inside the step instead would
+   * cost 16 MB per stroke on a 1920x1080 layer, and the memory budget would
+   * start dropping undo depth after a dozen strokes.
+   */
   const commitPixels = async (before: Uint8ClampedArray, after: Uint8ClampedArray, label: string, target: "pixels" | "mask" = "pixels", layerId = state.activeLayerId, bounds?: RasterRect | null) => {
     if (bounds) documentDirty.current.add(bounds);
     const history = kernel.historyByDocument.get(document.id);
     if (!history) throw new Error(`History missing for ${document.id}`);
-    const assign = (pixels: Uint8ClampedArray): void => { kernel.documents.update<RasterDocumentState>(document.id, (current) => { const layer = current.layers.find((item) => item.id === layerId); if (!layer) return; if (target === "mask" && layer.mask) layer.mask.pixels = rgbaToMask(pixels); else layer.pixels = pixels.slice(); }); };
-    await history.execute({ label, memoryEstimate: before.byteLength + after.byteLength, redo: () => assign(after), undo: () => assign(before) });
+    const assign = (pixels: Uint8Array | Uint8ClampedArray): void => {
+      const buffer = pixels instanceof Uint8ClampedArray ? pixels : new Uint8ClampedArray(pixels.buffer.slice(pixels.byteOffset, pixels.byteOffset + pixels.byteLength));
+      kernel.documents.update<RasterDocumentState>(document.id, (current) => { const layer = current.layers.find((item) => item.id === layerId); if (!layer) return; if (target === "mask" && layer.mask) layer.mask.pixels = rgbaToMask(buffer); else layer.pixels = buffer.slice(); });
+    };
+
+    const assetId = await ensureBufferAsset(layerId, target, before, label);
+    if (!assetId) {
+      // No asset store available: fall back to buffer snapshots so the edit is
+      // still reversible, just at the old memory cost.
+      await history.execute({ label, memoryEstimate: before.byteLength + after.byteLength, redo: () => assign(after), undo: () => assign(before) });
+      return;
+    }
+
+    const previousRev = kernel.assets.mustGet(assetId).head;
+    const nextRev = await kernel.assets.commitRevision(assetId, toBytes(after), "raster", label);
+    await history.execute(createBufferRevisionOperation({ assets: kernel.assets, assetId, label, producedBy: "raster", apply: assign }, previousRev, nextRev));
+  };
+
+  /** Binds a layer buffer to an asset on first edit, seeding it with the pre-edit bytes. */
+  const ensureBufferAsset = async (layerId: string, target: "pixels" | "mask", before: Uint8ClampedArray, label: string): Promise<AssetId | null> => {
+    await kernel.assetsReady;
+    const layer = state.layers.find((item) => item.id === layerId);
+    if (!layer) return null;
+
+    const key = target === "mask" ? "maskAssetId" : "pixelAssetId";
+    const existing = layer[key];
+    if (existing && kernel.assets.has(existing)) return existing as AssetId;
+
+    const assetId = await kernel.assets.importAsset(toBytes(before), { kind: "image", name: `${layer.name}.${target}.raw`, mime: "application/octet-stream" });
+    kernel.documents.update<RasterDocumentState>(document.id, (current) => {
+      const target_ = current.layers.find((item) => item.id === layerId);
+      if (target_) target_[key] = assetId;
+    });
+    kernel.documents.addAssetRef(document.id, assetId);
+    void label;
+    return assetId;
   };
 
   const commitDocumentState = async (before: RasterDocumentState, after: RasterDocumentState, label: string) => {
