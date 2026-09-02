@@ -1,16 +1,22 @@
-import { AssetStore, CommandRegistry, DocumentStore, GPUContext, HistoryManager, KeymapManager, MemoryStorageAdapter, OpfsStorageAdapter } from "@vravio/kernel";
+import { AssetStore, AutosaveManager, CommandRegistry, DocumentSnapshotStore, DocumentStore, GPUContext, HistoryManager, KeymapManager, MemoryStorageAdapter, OpfsStorageAdapter } from "@vravio/kernel";
 
 const assetStorage = OpfsStorageAdapter.isSupported() ? new OpfsStorageAdapter("vravio-assets") : new MemoryStorageAdapter();
+const sessionStorage = OpfsStorageAdapter.isSupported() ? new OpfsStorageAdapter("vravio-session") : new MemoryStorageAdapter();
 const assets = new AssetStore(assetStorage);
 const gpu = new GPUContext();
+const documents = new DocumentStore();
+const autosave = new AutosaveManager(documents, new DocumentSnapshotStore(sessionStorage));
+const sessionReady = autosave.restore().finally(() => autosave.start());
 
 export const kernel = {
-  documents: new DocumentStore(),
+  documents,
   commands: new CommandRegistry(),
   keymap: new KeymapManager(),
   assets,
   assetsReady: assets.initialize(),
   gpu,
   gpuReady: gpu.initialize(),
+  autosave,
+  sessionReady,
   historyByDocument: new Map<string, HistoryManager>(),
 };

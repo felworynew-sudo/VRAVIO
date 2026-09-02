@@ -96,6 +96,7 @@ interface ShellState {
   language: Language;
   preferences: ShellPreferences;
   openDocument(kind: EnvironmentKind, options?: NewDocumentOptions): void;
+  adoptRestoredDocuments(documentIds: readonly string[]): void;
   requestNewDocument(kind: EnvironmentKind): void;
   cancelNewDocument(): void;
   activateDocument(id: string): void;
@@ -137,6 +138,20 @@ export const useShellStore = create<ShellState>((set) => ({
     kernel.historyByDocument.set(document.id, new HistoryManager());
     const tool = defaultTool(kind);
     return { documentIds: [...state.documentIds, document.id], activeDocumentId: document.id, mruOrder: [document.id, ...state.mruOrder], newDocumentKind: null, viewports: { ...state.viewports, [document.id]: { ...defaultViewport } }, activeToolByDocument: tool ? { ...state.activeToolByDocument, [document.id]: tool } : state.activeToolByDocument };
+  }),
+  adoptRestoredDocuments: (documentIds) => set((state) => {
+    if (!documentIds.length) return state;
+    const viewports = { ...state.viewports }, activeToolByDocument = { ...state.activeToolByDocument };
+    for (const id of documentIds) {
+      const document = kernel.documents.get(id);
+      if (!document) continue;
+      kernel.historyByDocument.set(id, new HistoryManager());
+      viewports[id] = { ...defaultViewport };
+      const tool = defaultTool(document.kind);
+      if (tool) activeToolByDocument[id] = tool;
+    }
+    const ids = documentIds.filter((id) => kernel.documents.has(id));
+    return { documentIds: [...ids], activeDocumentId: ids.at(-1) ?? null, mruOrder: [...ids].reverse(), viewports, activeToolByDocument };
   }),
   requestNewDocument: (newDocumentKind) => set({ newDocumentKind }),
   cancelNewDocument: () => set({ newDocumentKind: null }),

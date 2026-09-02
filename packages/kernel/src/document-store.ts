@@ -34,6 +34,17 @@ export class DocumentStore {
     return this.#documents.get(id) as VravioDocument<TState> | undefined;
   }
 
+  has(id: string): boolean { return this.#documents.has(id); }
+
+  restore<TState>(snapshot: VravioDocument<TState>): VravioDocument<TState> {
+    if (this.#documents.has(snapshot.id)) throw new Error(`Document already exists: ${snapshot.id}`);
+    const document: VravioDocument<TState> = { ...snapshot, assetRefs: new Set(snapshot.assetRefs) };
+    this.#documents.set(document.id, document);
+    this.#version += 1;
+    this.#events.emit("opened", { id: document.id });
+    return document;
+  }
+
   list(): readonly VravioDocument[] {
     return [...this.#documents.values()];
   }

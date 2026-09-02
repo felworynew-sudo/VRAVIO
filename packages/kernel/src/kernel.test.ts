@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AssetStore, CommandRegistry, DocumentStore, GPUContext, HistoryManager, KeymapManager, MemoryStorageAdapter, WorkerPool, type AssetId, type WorkerTaskClient } from "./index";
+import { AssetStore, AutosaveManager, CommandRegistry, DocumentSnapshotStore, DocumentStore, GPUContext, HistoryManager, KeymapManager, MemoryStorageAdapter, WorkerPool, type AssetId, type WorkerTaskClient } from "./index";
 
 describe("DocumentStore", () => {
   it("increments revisions without storing document state in a UI store", () => {
@@ -164,5 +164,40 @@ describe("GPUContext", () => {
     const context = new GPUContext([{ backend: "webgpu", available: () => { throw new Error("driver"); } }]);
     await expect(context.initialize()).resolves.toBe("cpu");
     expect(context.degrade("already-lowest")).toBe("cpu");
+  });
+});
+
+describe("DocumentSnapshotStore", () => {
+  it("stores typed arrays as separate binary entries and restores Sets", async () => {
+    const adapter = new MemoryStorageAdapter();
+    const snapshots = new DocumentSnapshotStore(adapter);
+    const documents = new DocumentStore();
+    const assetId = "asset:pixels" as AssetId;
+    const document = documents.create("raster", "Recovered", { pixels: new Uint8ClampedArray([1, 2, 3, 255]), mask: new Uint8Array([255]), tags: new Set(["draft"]) }, { assetRefs: [assetId] });
+    documents.update<typeof document.state>(document.id, (state) => { state.pixels[0] = 9; });
+    await snapshots.saveSession(documents.list());
+    expect((await adapter.list("autosave/")).some((key) => key.endsWith("binary-0.bin"))).toBe(true);
+
+    const [restored] = await snapshots.loadSession();
+    const state = restored?.state as typeof document.state;
+    expect(state.pixels).toBeInstanceOf(Uint8ClampedArray);
+    expect([...state.pixels]).toEqual([9, 2, 3, 255]);
+    expect(state.mask).toBeInstanceOf(Uint8Array);
+    expect(state.tags).toBeInstanceOf(Set);
+    expect(restored?.assetRefs.has(assetId)).toBe(true);
+  });
+
+  it("restores a complete document session through AutosaveManager", async () => {
+    const adapter = new MemoryStorageAdapter();
+    const sourceDocuments = new DocumentStore();
+    const source = sourceDocuments.create("vector", "Session", { nodes: [1, 2] });
+    const writer = new AutosaveManager(sourceDocuments, new DocumentSnapshotStore(adapter), { delayMs: 1 });
+    await writer.flush();
+
+    const targetDocuments = new DocumentStore();
+    const reader = new AutosaveManager(targetDocuments, new DocumentSnapshotStore(adapter));
+    const restored = await reader.restore();
+    expect(restored.map((document) => document.id)).toEqual([source.id]);
+    expect(targetDocuments.get<{ nodes: number[] }>(source.id)?.state.nodes).toEqual([1, 2]);
   });
 });
