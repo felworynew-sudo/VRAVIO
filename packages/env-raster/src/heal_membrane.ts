@@ -3,6 +3,11 @@ const OMEGA = 111411;
 const COARSEST_SWEEPS = 400;
 const LEVEL_SWEEPS = 32;
 const COARSEST_CELLS = 64;
+// Offsets are Int16, so a converged value stays inside this range; the clamp is
+// there for the overshoot over-relaxation can produce on the way, which must
+// not be allowed to wrap the Int32 accumulator.
+const MAX_VALUE = 32767 * FIXED_ONE;
+const MIN_VALUE = -32768 * FIXED_ONE;
 
 interface Level {
   width: number;
@@ -28,7 +33,15 @@ function sweep(level: Level): void {
         if (neighbors === 0) continue;
         const average = sum / neighbors;
         const current = value[base]!;
-        value[base] = (current + ((OMEGA * (average - current)) >> 16)) | 0;
+        // The relaxation is deliberately over-corrected (OMEGA is 1.7 in 16.16
+        // fixed point), but the correction cannot be scaled with a shift: `>>`
+        // coerces its left side to Int32, and OMEGA times a residual overflows
+        // that as soon as the residual passes 0.3 of an offset unit. Every real
+        // residual is far larger, so the shift wrapped and the solve returned
+        // nothing but noise. Dividing keeps the arithmetic in float64, where
+        // the product has room.
+        const relaxed = current + OMEGA * (average - current) / FIXED_ONE;
+        value[base] = relaxed < MIN_VALUE ? MIN_VALUE : relaxed > MAX_VALUE ? MAX_VALUE : relaxed | 0;
       }
     }
   }

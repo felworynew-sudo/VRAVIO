@@ -27,11 +27,14 @@ export function createPatchRegion(
   const offsets = new Int16Array(regionWidth * regionHeight * 3);
 
   for (let ly = 0; ly < regionHeight; ly++) {
+    // Offsets are gathered across the whole region rectangle: the cells the
+    // selection leaves out carry the Dirichlet data that makes the patch meet
+    // its surroundings without a seam. Gathering them only inside the selection
+    // left the boundary at zero, and a membrane with zero boundary is zero.
     for (let lx = 0; lx < regionWidth; lx++) {
-      if (regionMask[ly * regionWidth + lx] === 0) continue;
-
       const destX = regionOriginX + lx;
       const destY = regionOriginY + ly;
+      if (destX < 0 || destX >= canvasWidth || destY < 0 || destY >= canvasHeight) continue;
 
       let srcX: number;
       let srcY: number;
@@ -58,7 +61,7 @@ export function createPatchRegion(
       offsets[i] = sourcePixels[destIdx]! - sourcePixels[srcIdx]!;
       offsets[i + 1] = sourcePixels[destIdx + 1]! - sourcePixels[srcIdx + 1]!;
       offsets[i + 2] = sourcePixels[destIdx + 2]! - sourcePixels[srcIdx + 2]!;
-      interior[ly * regionWidth + lx] = 1;
+      interior[ly * regionWidth + lx] = regionMask[ly * regionWidth + lx] === 0 ? 0 : 1;
     }
   }
 

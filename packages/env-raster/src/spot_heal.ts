@@ -224,11 +224,18 @@ function applySpotHealToRegion(
   const offsets = new Int16Array(maskWidth * maskHeight * 3);
   const interior = new Uint8Array(maskWidth * maskHeight);
 
+  // The membrane is solved over the whole mask rectangle, not just the covered
+  // part. The cells the mask leaves out are the boundary, and their offset is
+  // what makes the heal seamless: `destination - source` there means the solved
+  // field meets the untouched pixels exactly at the seam. Filling them in only
+  // for covered cells left the boundary at zero, whose harmonic extension is
+  // zero everywhere, so the membrane contributed nothing and the tool behaved
+  // as a soft-edged clone stamp.
   for (let ly = 0; ly < maskHeight; ly++) {
     for (let lx = 0; lx < maskWidth; lx++) {
-      if (mask[ly * maskWidth + lx] === 0) continue;
       const x = maskOriginX + lx;
       const y = maskOriginY + ly;
+      if (x < 0 || x >= width || y < 0 || y >= height) continue;
       // mapSource takes and returns document-space coordinates
       const [sx, sy] = mapSource(sourceMap, x, y);
       if (sx < 0 || sx >= width || sy < 0 || sy >= height) continue;
@@ -239,7 +246,7 @@ function applySpotHealToRegion(
       offsets[i] = pixels[destIdx]! - pixels[srcIdx]!;
       offsets[i + 1] = pixels[destIdx + 1]! - pixels[srcIdx + 1]!;
       offsets[i + 2] = pixels[destIdx + 2]! - pixels[srcIdx + 2]!;
-      interior[ly * maskWidth + lx] = 1;
+      interior[ly * maskWidth + lx] = mask[ly * maskWidth + lx] === 0 ? 0 : 1;
     }
   }
 
