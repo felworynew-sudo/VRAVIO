@@ -205,3 +205,9 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .layer-row[data-drop="below"]::after { bottom: -1px; }
 .layer-row[data-drop="into"] { outline: 2px solid var(--accent, #6f8cff); outline-offset: -2px; }
 .layer-actions [data-role="trash"][data-armed] { background: color-mix(in srgb, #d9534f 55%, transparent); }
+
+/* The lock row, as Photoshop arranges it above the layer list. */
+.layer-locks { display:flex; align-items:center; gap:4px; padding:5px 8px; font-size:11px; color:var(--muted); }
+.layer-locks button { padding:3px; border-radius:3px; line-height:0; }
+.layer-locks button img { width:14px; height:14px; }
+.layer-locks button.active { background:color-mix(in srgb, var(--accent,#6f8cff) 40%, transparent); }

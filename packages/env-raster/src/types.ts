@@ -53,7 +53,22 @@ export interface RasterLayer {
   opacity: number;
   fillOpacity: number;
   blendMode: RasterBlendMode;
+  /** Lock All: nothing about the layer can be changed. */
   locked: boolean;
+  /**
+   * Photoshop's other three locks, each narrower than the last.
+   *
+   * Transparency keeps paint inside what the layer already covers; pixels stops
+   * painting altogether while still allowing a move; position pins it in place
+   * while still allowing paint. They are separate because they answer different
+   * questions, and Lock All is not simply all three at once — it also stops
+   * renaming, restyling and deletion.
+   */
+  lockTransparent?: boolean;
+  lockPixels?: boolean;
+  lockPosition?: boolean;
+  /** Panel colour marker, as Photoshop's layer context menu sets. */
+  colorLabel?: "none" | "red" | "orange" | "yellow" | "green" | "blue" | "violet" | "grey";
   kind: RasterLayerKind;
   adjustment?: RasterAdjustment;
   text?: RasterTextData;

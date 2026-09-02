@@ -2,14 +2,42 @@ import { selectionBounds } from "./selection";
 import type { PixelSelection, RasterDocumentState, RasterRect } from "./types";
 
 export function translateLayerPixels(pixels: Uint8ClampedArray, width: number, height: number, dx: number, dy: number, selection: PixelSelection | null = null): Uint8ClampedArray {
-  const offsetX = Math.round(dx), offsetY = Math.round(dy), output = pixels.slice();
-  const selectionAlpha = (index: number) => selection ? selection.mask[index]! / 255 : 1;
-  for (let index = 0; index < width * height; index += 1) {
+  const offsetX = Math.round(dx), offsetY = Math.round(dy);
+
+  // Moving a whole layer is a block copy, not a composite. With no selection
+  // every pixel is taken and every pixel is cleared behind it, so the general
+  // path below erases the image and then blends it back over emptiness — two
+  // per-pixel passes over the document to express a memmove. That was 134 ms a
+  // frame while dragging, which is the pause between moving the mouse and the
+  // layer following.
+  if (!selection) {
+    const output = new Uint8ClampedArray(pixels.length);
+    const from = Math.max(0, -offsetX), to = Math.min(width, width - offsetX);
+    if (to > from) {
+      for (let y = 0; y < height; y += 1) {
+        const targetY = y + offsetY;
+        if (targetY < 0 || targetY >= height) continue;
+        const sourceStart = (y * width + from) * 4;
+        output.set(pixels.subarray(sourceStart, sourceStart + (to - from) * 4), (targetY * width + from + offsetX) * 4);
+      }
+    }
+    return output;
+  }
+
+  const output = pixels.slice();
+  const selectionAlpha = (index: number) => selection.mask[index]! / 255;
+  // Only the selected area is taken and only it is cleared, so both passes stay
+  // inside its bounds instead of walking the document twice.
+  const left = Math.max(0, Math.floor(selection.bounds.x)), top = Math.max(0, Math.floor(selection.bounds.y));
+  const right = Math.min(width, Math.ceil(selection.bounds.x + selection.bounds.width));
+  const bottom = Math.min(height, Math.ceil(selection.bounds.y + selection.bounds.height));
+  for (let y = top; y < bottom; y += 1) for (let x = left; x < right; x += 1) {
+    const index = y * width + x;
     const selected = selectionAlpha(index); if (selected <= 0) continue;
     const pixel = index * 4, remaining = 1 - selected;
     output[pixel] = Math.round(output[pixel]! * remaining); output[pixel + 1] = Math.round(output[pixel + 1]! * remaining); output[pixel + 2] = Math.round(output[pixel + 2]! * remaining); output[pixel + 3] = Math.round(output[pixel + 3]! * remaining);
   }
-  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+  for (let y = top; y < bottom; y += 1) for (let x = left; x < right; x += 1) {
     const sourcePixel = y * width + x;
     const maskAlpha = selectionAlpha(sourcePixel); if (maskAlpha <= 0) continue;
     const targetX = x + offsetX, targetY = y + offsetY;

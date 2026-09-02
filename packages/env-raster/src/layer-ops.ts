@@ -307,3 +307,30 @@ export function dropPositionInRow(offsetY: number, height: number, isGroup: bool
   if (isGroup) return ratio < 0.3 ? "above" : ratio > 0.7 ? "below" : "into";
   return ratio < 0.5 ? "above" : "below";
 }
+
+/** What a lock forbids, asked as the tools ask it. */
+export type LayerAction = "paint" | "move" | "erase" | "restyle" | "delete";
+
+/**
+ * Whether a layer will accept this kind of edit.
+ *
+ * Photoshop's four locks overlap but are not nested: locking pixels still lets
+ * a layer move, locking position still lets it be painted, and Lock All is more
+ * than the other three together because it also stops renaming and deletion.
+ * Transparency is not represented here — it does not forbid painting, it
+ * confines it, which is the brush's business rather than this one's.
+ */
+export function layerAccepts(layer: RasterLayer, action: LayerAction): boolean {
+  if (layer.locked) return false;
+  if ((action === "paint" || action === "erase") && layer.lockPixels) return false;
+  if (action === "move" && layer.lockPosition) return false;
+  return true;
+}
+
+/** Why an edit was refused, for the message the user sees. */
+export function layerLockReason(layer: RasterLayer, action: LayerAction): string | null {
+  if (layer.locked) return "Layer is fully locked (Слой полностью закреплён)";
+  if ((action === "paint" || action === "erase") && layer.lockPixels) return "Layer pixels are locked (Пиксели слоя закреплены)";
+  if (action === "move" && layer.lockPosition) return "Layer position is locked (Положение слоя закреплено)";
+  return null;
+}

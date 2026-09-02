@@ -245,3 +245,28 @@ export function marqueeRect(
     height: Math.abs(corners.toY - corners.fromY),
   };
 }
+
+/**
+ * The mask a brush should honour, given the selection and the layer's locks.
+ *
+ * Lock Transparency does not forbid painting, it confines it to what the layer
+ * already covers — which is the same shape of restriction a selection is, so it
+ * folds into the same mask rather than needing its own path through every tool.
+ * Returns undefined when nothing restricts the brush, so the tools keep their
+ * fast unmasked path.
+ */
+export function paintMask(
+  selection: PixelSelection | null,
+  pixels: Uint8ClampedArray,
+  width: number,
+  height: number,
+  lockTransparent: boolean,
+): Uint8ClampedArray | undefined {
+  if (!lockTransparent) return selection?.mask;
+  const mask = new Uint8ClampedArray(width * height);
+  for (let index = 0; index < mask.length; index += 1) {
+    const alpha = pixels[index * 4 + 3]!;
+    mask[index] = selection ? Math.round((selection.mask[index]! * alpha) / 255) : alpha;
+  }
+  return mask;
+}
