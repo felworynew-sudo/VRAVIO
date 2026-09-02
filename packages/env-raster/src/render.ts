@@ -61,16 +61,22 @@ function blendRgb(mode: string, source: [number, number, number], destination: [
 
 export function compositeRasterDocument(state: RasterDocumentState): Uint8ClampedArray {
   const output = new Uint8ClampedArray(state.width * state.height * 4);
+  const clippingBaseByParent = new Map<string, Uint8ClampedArray>();
   for (const layer of flattenRasterLayers(state.layers)) {
+    const parentKey = layer.parentId ?? "root";
     const effectiveOpacity = effectiveLayerOpacity(layer, state.layers);
-    if (layer.kind === "group" || !isLayerEffectivelyVisible(layer, state.layers) || effectiveOpacity <= 0) continue;
+    if (layer.kind === "group" || !isLayerEffectivelyVisible(layer, state.layers) || effectiveOpacity <= 0) {
+      if (layer.kind !== "group" && !layer.clipping) clippingBaseByParent.delete(parentKey);
+      continue;
+    }
     if (layer.kind === "adjustment" && layer.adjustment) {
-      const before = layer.mask?.enabled ? output.slice() : null;
+      const clippingBase = layer.clipping ? clippingBaseByParent.get(parentKey) : undefined;
+      const before = layer.mask?.enabled || clippingBase ? output.slice() : null;
       applyAdjustment(output, layer.adjustment, effectiveOpacity);
-      if (before && layer.mask) for (let index = 0; index < output.length; index += 4) {
+      if (before) for (let index = 0; index < output.length; index += 4) {
         const maskIndex = index / 4;
-        const sample = layer.mask.inverted ? 255 - layer.mask.pixels[maskIndex]! : layer.mask.pixels[maskIndex]!;
-        const amount = sample / 255 * layer.mask.density;
+        const sample = layer.mask?.enabled ? (layer.mask.inverted ? 255 - layer.mask.pixels[maskIndex]! : layer.mask.pixels[maskIndex]!) : 255;
+        const amount = sample / 255 * (layer.mask?.density ?? 1) * (clippingBase ? clippingBase[maskIndex]! / 255 : 1);
         output[index] = Math.round(before[index]! + (output[index]! - before[index]!) * amount);
         output[index + 1] = Math.round(before[index + 1]! + (output[index + 1]! - before[index + 1]!) * amount);
         output[index + 2] = Math.round(before[index + 2]! + (output[index + 2]! - before[index + 2]!) * amount);
@@ -79,10 +85,15 @@ export function compositeRasterDocument(state: RasterDocumentState): Uint8Clampe
       continue;
     }
     const renderedLayer = renderLayerEffects(layer, state.width, state.height);
+    const clippingBase = layer.clipping ? clippingBaseByParent.get(parentKey) : undefined;
+    const ownAlpha = layer.clipping ? null : new Uint8ClampedArray(state.width * state.height);
     for (let index = 0; index < output.length; index += 4) {
       const maskIndex = index / 4;
       const maskAlpha = layer.mask?.enabled ? ((layer.mask.inverted ? 255 - layer.mask.pixels[maskIndex]! : layer.mask.pixels[maskIndex]!) / 255) * layer.mask.density : 1;
-      const sourceAlpha = (renderedLayer[index + 3]! / 255) * effectiveOpacity * (layer.fillOpacity ?? 1) * maskAlpha;
+      const baseAlpha = clippingBase ? clippingBase[maskIndex]! / 255 : layer.clipping ? 0 : 1;
+      const rawAlpha = (renderedLayer[index + 3]! / 255) * maskAlpha;
+      if (ownAlpha) ownAlpha[maskIndex] = Math.round(rawAlpha * 255);
+      const sourceAlpha = rawAlpha * baseAlpha * effectiveOpacity * (layer.fillOpacity ?? 1);
       if (sourceAlpha <= 0) continue;
       const destinationAlpha = output[index + 3]! / 255;
       const alpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha);
@@ -92,6 +103,7 @@ export function compositeRasterDocument(state: RasterDocumentState): Uint8Clampe
       output[index + 2] = Math.round(clamp01((blended[2] * sourceAlpha + output[index + 2]! * destinationAlpha * (1 - sourceAlpha)) / alpha / 255) * 255);
       output[index + 3] = Math.round(alpha * 255);
     }
+    if (ownAlpha) clippingBaseByParent.set(parentKey, ownAlpha);
   }
   return output;
 }

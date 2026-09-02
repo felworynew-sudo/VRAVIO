@@ -24,7 +24,8 @@ export function rasterLayerRows(layers: RasterLayer[]): RasterLayerRow[] {
 export function appendLayer(state: RasterDocumentState, layer: RasterLayer, parentId: string | null = null): RasterLayer {
   const peers = state.layers.filter((item) => item.parentId === parentId);
   layer.parentId = parentId;
-  layer.orderKey = makeLayerOrderKey(peers.length);
+  const nextOrder = peers.reduce((maximum, peer) => Math.max(maximum, Number.parseInt(peer.orderKey, 36) || 0), -1) + 1;
+  layer.orderKey = makeLayerOrderKey(nextOrder);
   state.layers.push(layer);
   return layer;
 }

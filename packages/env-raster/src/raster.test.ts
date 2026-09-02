@@ -125,6 +125,16 @@ describe("layer rendering", () => {
     appendLayer(document, adjustment);
     expect([...compositeRasterDocument(document)]).toEqual([239, 223, 207, 255, 16, 32, 48, 255]);
   });
+
+  it("clips a layer to the alpha of the preceding base layer", () => {
+    const document = createRasterDocument(2, 1);
+    const base = document.layers[0]!; base.pixels.set([0, 0, 255, 255, 0, 0, 0, 0]);
+    const clipped = createRasterLayer(2, 1); clipped.pixels.set([255, 0, 0, 255, 255, 0, 0, 255]); clipped.clipping = true;
+    appendLayer(document, clipped);
+    expect([...compositeRasterDocument(document)]).toEqual([255, 0, 0, 255, 0, 0, 0, 0]);
+    base.visible = false;
+    expect([...compositeRasterDocument(document)]).toEqual([0, 0, 0, 0, 0, 0, 0, 0]);
+  });
 });
 
 describe("flood fill", () => {
