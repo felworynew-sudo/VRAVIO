@@ -5,7 +5,7 @@ import { environmentMeta } from "./environment";
 import { useShellStore } from "./store";
 import { useDocuments } from "./useDocuments";
 import { RasterWorkspace } from "./RasterWorkspace";
-import { appendLayer, appendRasterGroup, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, isRasterDocumentState, rasterLayerDescendantIds, rasterLayerRows, type RasterAdjustment, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerMask, builtInLuts, parseCubeLut } from "@vravio/env-raster";
+import { appendLayer, appendRasterGroup, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, isRasterDocumentState, rasterLayerDescendantIds, rasterLayerRows, dropPositionInRow, dropTargetForRow, placeLayer, type RasterAdjustment, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerMask, builtInLuts, parseCubeLut } from "@vravio/env-raster";
 import { kernel } from "./kernel";
 import { EnvironmentIcon } from "./EnvironmentIcon";
 import { localized, text } from "./i18n";
@@ -192,6 +192,11 @@ function LayersPanel() {
   const language = useShellStore((state) => state.language);
   const [styleLayerId, setStyleLayerId] = useState<string | null>(null);
   const [showAdjustments, setShowAdjustments] = useState(false);
+  const [draggingLayerId, setDraggingLayerId] = useState<string | null>(null);
+  const [dropHint, setDropHint] = useState<{ overId: string; position: "above" | "into" | "below" } | null>(null);
+  // The drop handler runs from a window listener, outside this render's closure.
+  const dropHintRef = useRef(dropHint);
+  dropHintRef.current = dropHint;
   const selectedLayerIds = useShellStore((state) => (activeDocumentId ? state.selectedLayerIdsByDocument[activeDocumentId] : undefined) ?? EMPTY_LAYER_SELECTION);
   const setSelectedLayers = useShellStore((state) => state.setSelectedLayers);
   const editingMaskLayerId = useShellStore((state) => activeDocumentId ? state.editingMaskLayerIdByDocument[activeDocumentId] ?? null : null);
@@ -225,6 +230,68 @@ function LayersPanel() {
     const toggleExpanded = (id: string) => kernel.documents.update<RasterDocumentState>(active.id, (current) => { const layer = current.layers.find((item) => item.id === id); if (layer?.kind === "group") layer.expanded = layer.expanded === false; });
     const addMask = () => { let targetId: string | null = null; kernel.documents.update<RasterDocumentState>(active.id, (current) => { const layer = current.layers.find((item) => item.id === current.activeLayerId); if (layer && layer.kind !== "group" && !layer.mask) { layer.mask = createRasterLayerMask(current.width, current.height); targetId = layer.id; } }); if (targetId) setEditingMask(active.id, targetId); };
     const toggleClipping = () => kernel.documents.update<RasterDocumentState>(active.id, (current) => { const layer = current.layers.find((item) => item.id === current.activeLayerId); if (layer && layer.kind !== "group") layer.clipping = !layer.clipping; });
+    /**
+     * Dragging a row.
+     *
+     * Held in a ref rather than state: the pointer moves at the refresh rate,
+     * and only the insertion line has to re-render as it goes.
+     */
+    const beginRowDrag = (layerId: string) => (event: React.PointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0) return;
+      const list = event.currentTarget.closest(".layer-list");
+      if (!list) return;
+      const startY = event.clientY;
+      let dragging = false;
+
+      const rowUnder = (clientY: number) => {
+        for (const element of list.querySelectorAll<HTMLElement>(".layer-row")) {
+          const box = element.getBoundingClientRect();
+          if (clientY >= box.top && clientY <= box.bottom) return { element, box };
+        }
+        return null;
+      };
+      const overTrash = (clientX: number, clientY: number) => {
+        const trash = window.document.querySelector<HTMLElement>(".layer-actions [data-role=\"trash\"]");
+        if (!trash) return false;
+        const box = trash.getBoundingClientRect();
+        return clientX >= box.left && clientX <= box.right && clientY >= box.top && clientY <= box.bottom;
+      };
+
+      const move = (native: PointerEvent) => {
+        // A few pixels of slop, so a click that wobbles is still a click.
+        if (!dragging && Math.abs(native.clientY - startY) < 4) return;
+        dragging = true;
+        setDraggingLayerId(layerId);
+        if (overTrash(native.clientX, native.clientY)) { setDropHint({ overId: "trash", position: "into" }); return; }
+        const under = rowUnder(native.clientY);
+        if (!under?.element.dataset.layerId) { setDropHint(null); return; }
+        const overId = under.element.dataset.layerId;
+        const isGroup = under.element.dataset.group === "true";
+        setDropHint({ overId, position: dropPositionInRow(native.clientY - under.box.top, under.box.height, isGroup) });
+      };
+
+      const finish = (native: PointerEvent) => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", finish);
+        window.removeEventListener("pointercancel", finish);
+        const hint = dropHintRef.current;
+        setDraggingLayerId(null);
+        setDropHint(null);
+        if (!dragging || !hint) return;
+        if (hint.overId === "trash") { selectLayer(layerId); deleteLayer(); return; }
+        if (hint.overId === layerId) return;
+        void native;
+        kernel.documents.update<RasterDocumentState>(active.id, (current) => {
+          const target = dropTargetForRow(current, hint.overId, hint.position);
+          if (target) placeLayer(current, layerId, target.parentId, target.index);
+        });
+      };
+
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", finish);
+      window.addEventListener("pointercancel", finish);
+    };
+
     const activeLayer = state.layers.find((layer) => layer.id === state.activeLayerId) ?? state.layers[0];
     if (!activeLayer) return <div className="dock-panel-body"><div className="empty-row">{text(language, "No layers", "Нет слоёв")}</div></div>;
     const updateActive = (patch: Partial<RasterLayer>) => kernel.documents.update<RasterDocumentState>(active.id, (current) => { const layer = current.layers.find((item) => item.id === current.activeLayerId); if (layer) Object.assign(layer, patch); });
@@ -232,8 +299,8 @@ function LayersPanel() {
     const styleLayer = state.layers.find((layer) => layer.id === styleLayerId);
     return <div className="dock-panel-body layers-panel">
       <div className="layer-controls"><select value={activeLayer.blendMode} onChange={(event) => updateActive({ blendMode: event.target.value as RasterBlendMode })}>{blendModes.map((mode) => <option key={mode} value={mode}>{mode}</option>)}</select><div className="layer-controls-row"><label><span>{text(language, "Opacity", "Непрозр.")}</span><input type="number" min="0" max="100" value={Math.round(activeLayer.opacity * 100)} onChange={(event) => updateActive({ opacity: Math.max(0, Math.min(1, event.target.valueAsNumber / 100)) })}/><i>%</i></label><label><span>{text(language, "Fill", "Заливка")}</span><input type="number" min="0" max="100" value={Math.round((activeLayer.fillOpacity ?? 1) * 100)} onChange={(event) => updateActive({ fillOpacity: Math.max(0, Math.min(1, event.target.valueAsNumber / 100)) })}/><i>%</i></label></div></div>
-      <div className="layer-list">{rasterLayerRows(state.layers).map(({ layer, depth }) => <div className={[layer.id === state.activeLayerId ? "active" : "", selectedLayerIds.includes(layer.id) ? "selected" : "", layer.kind === "group" ? "group" : "", "layer-row"].filter(Boolean).join(" ")} style={{ "--layer-depth": depth } as CSSProperties} key={layer.id}><button onClick={() => toggleVisible(layer.id)} aria-label={text(language, "Toggle visibility", "Переключить видимость")}><img src={layer.visible ? "/ГЛАЗ ОТКРЫТ.svg" : "/ГЛАЗ ЗАКРЫТ.svg"} alt=""/></button><button onClick={(event) => clickLayer(layer.id, event)} onDoubleClick={() => { selectLayer(layer.id); if (layer.kind !== "group") setStyleLayerId(layer.id); }}><span className="layer-hierarchy-space"/>{layer.kind === "group" && <span className="layer-disclosure" onClick={(event) => { event.stopPropagation(); toggleExpanded(layer.id); }}>{layer.expanded === false ? "▸" : "▾"}</span>}<LayerThumbnail layer={layer} active={layer.id === state.activeLayerId && editingMaskLayerId !== layer.id} onActivate={() => { selectLayer(layer.id); setEditingMask(active.id, null); setSelectedLayers(active.id, [layer.id]); }}/>{layer.mask && <LayerMaskThumbnail mask={layer.mask} width={state.width} height={state.height} active={editingMaskLayerId === layer.id} onActivate={() => { selectLayer(layer.id); setEditingMask(active.id, layer.id); setSelectedLayers(active.id, [layer.id]); }}/>}<span className="layer-row-text"><b>{localized(layer.name, language)}</b><small>{layer.kind === "group" ? (layer.groupMode === "isolated" ? "isolated" : "pass through") : `${layer.blendMode} · ${Math.round(layer.opacity * 100)}%`}</small></span></button></div>)}</div>
-      <div className="layer-actions adjustment-actions">{showAdjustments && <div className="adjustment-menu">{adjustmentLabels.map(([kind, name]) => <button key={kind} onClick={() => addAdjustment(kind, name)}>{name}</button>)}</div>}<button onClick={() => setShowAdjustments((value) => !value)} title={text(language, "New adjustment layer", "Новый корректирующий слой")}><img src="/КОРРЕКТИРУЮЩИЙ СЛОЙ.svg" alt=""/></button><button className={activeLayer.clipping ? "active" : ""} onClick={toggleClipping} disabled={activeLayer.kind === "group"} title={text(language, "Create clipping mask", "Создать обтравочную маску")}><img src="/ОБТРАВОЧНАЯ МАСКА.svg" alt=""/></button><button onClick={addMask} disabled={activeLayer.kind === "group" || Boolean(activeLayer.mask)} title={text(language, "Add layer mask", "Добавить маску слоя")}><img src="/МАСКА СЛОЯ.svg" alt=""/></button><button onClick={addGroup} title={text(language, "New group", "Новая группа")}><img src="/ГРУППА.svg" alt=""/></button><button onClick={addLayer} title={text(language, "New layer", "Новый слой")}><img src="/НОВЫЙ СЛОЙ.svg" alt=""/></button><button onClick={deleteLayer} title={text(language, "Delete layer", "Удалить слой")}><img src="/КОРЗИНА.svg" alt=""/></button></div>
+      <div className="layer-list">{rasterLayerRows(state.layers).map(({ layer, depth }) => <div className={[layer.id === state.activeLayerId ? "active" : "", selectedLayerIds.includes(layer.id) ? "selected" : "", layer.kind === "group" ? "group" : "", draggingLayerId === layer.id ? "dragging" : "", "layer-row"].filter(Boolean).join(" ")} style={{ "--layer-depth": depth } as CSSProperties} key={layer.id} data-layer-id={layer.id} data-group={layer.kind === "group"} data-drop={dropHint?.overId === layer.id ? dropHint.position : undefined} onPointerDown={beginRowDrag(layer.id)}><button onClick={() => toggleVisible(layer.id)} aria-label={text(language, "Toggle visibility", "Переключить видимость")}><img src={layer.visible ? "/ГЛАЗ ОТКРЫТ.svg" : "/ГЛАЗ ЗАКРЫТ.svg"} alt=""/></button><button onClick={(event) => clickLayer(layer.id, event)} onDoubleClick={() => { selectLayer(layer.id); if (layer.kind !== "group") setStyleLayerId(layer.id); }}><span className="layer-hierarchy-space"/>{layer.kind === "group" && <span className="layer-disclosure" onClick={(event) => { event.stopPropagation(); toggleExpanded(layer.id); }}>{layer.expanded === false ? "▸" : "▾"}</span>}<LayerThumbnail layer={layer} active={layer.id === state.activeLayerId && editingMaskLayerId !== layer.id} onActivate={() => { selectLayer(layer.id); setEditingMask(active.id, null); setSelectedLayers(active.id, [layer.id]); }}/>{layer.mask && <LayerMaskThumbnail mask={layer.mask} width={state.width} height={state.height} active={editingMaskLayerId === layer.id} onActivate={() => { selectLayer(layer.id); setEditingMask(active.id, layer.id); setSelectedLayers(active.id, [layer.id]); }}/>}<span className="layer-row-text"><b>{localized(layer.name, language)}</b><small>{layer.kind === "group" ? (layer.groupMode === "isolated" ? "isolated" : "pass through") : `${layer.blendMode} · ${Math.round(layer.opacity * 100)}%`}</small></span></button></div>)}</div>
+      <div className="layer-actions adjustment-actions">{showAdjustments && <div className="adjustment-menu">{adjustmentLabels.map(([kind, name]) => <button key={kind} onClick={() => addAdjustment(kind, name)}>{name}</button>)}</div>}<button onClick={() => setShowAdjustments((value) => !value)} title={text(language, "New adjustment layer", "Новый корректирующий слой")}><img src="/КОРРЕКТИРУЮЩИЙ СЛОЙ.svg" alt=""/></button><button className={activeLayer.clipping ? "active" : ""} onClick={toggleClipping} disabled={activeLayer.kind === "group"} title={text(language, "Create clipping mask", "Создать обтравочную маску")}><img src="/ОБТРАВОЧНАЯ МАСКА.svg" alt=""/></button><button onClick={addMask} disabled={activeLayer.kind === "group" || Boolean(activeLayer.mask)} title={text(language, "Add layer mask", "Добавить маску слоя")}><img src="/МАСКА СЛОЯ.svg" alt=""/></button><button onClick={addGroup} title={text(language, "New group", "Новая группа")}><img src="/ГРУППА.svg" alt=""/></button><button onClick={addLayer} title={text(language, "New layer", "Новый слой")}><img src="/НОВЫЙ СЛОЙ.svg" alt=""/></button><button data-role="trash" data-armed={dropHint?.overId === "trash" || undefined} onClick={deleteLayer} title={text(language, "Delete layer (drop a layer here)", "Удалить слой (можно перетащить сюда)")}><img src="/КОРЗИНА.svg" alt=""/></button></div>
       {styleLayer && <LayerStyleDialog layer={styleLayer} onClose={() => setStyleLayerId(null)} onApply={(patch) => kernel.documents.update<RasterDocumentState>(active.id, (current) => { const target = current.layers.find((layer) => layer.id === styleLayer.id); if (target) Object.assign(target, patch); })}/>} 
     </div>;
   }

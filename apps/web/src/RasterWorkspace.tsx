@@ -112,6 +112,22 @@ export function strokePressure(event: { pointerType: string; pressure: number; b
   return event.buttons === 0 ? 0.05 : 0.5;
 }
 
+/**
+ * Which way the space bar zooms, given the modifiers held with it.
+ *
+ * Photoshop makes space plus the platform key a temporary Zoom In, and zooms
+ * out with Option and space on macOS or Ctrl+Alt and space on Windows. Both
+ * spellings of "out" are accepted rather than sniffing the platform, since they
+ * do not collide with anything else here. Space alone stays the Hand tool.
+ *
+ * On macOS the system claims Cmd+Space for Spotlight, and it wins; zooming out
+ * with Option is unaffected.
+ */
+export function spaceZoomFrom(event: { metaKey: boolean; ctrlKey: boolean; altKey: boolean }): "in" | "out" | null {
+  if (event.altKey) return "out";
+  return event.metaKey || event.ctrlKey ? "in" : null;
+}
+
 function pointFromNativeEvent(workspace: HTMLDivElement, viewport: DocumentViewport, width: number, height: number, event: PointerEvent): Point {
   const rect = workspace.getBoundingClientRect();
   const dx = event.clientX - rect.left - rect.width / 2 - viewport.panX;
@@ -266,6 +282,10 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const [transformPreview, setTransformPreview] = useState<PendingPixelTransform | null>(null);
   const [brushPopup, setBrushPopup] = useState<{ left: number; top: number; detailed: boolean } | null>(null);
   const [spaceHeld, setSpaceHeld] = useState(false);
+  /** "in" or "out" while space and a modifier turn the pointer into a zoom tool. */
+  const [spaceZoom, setSpaceZoom] = useState<"in" | "out" | null>(null);
+  /** Space's own state, so a modifier pressed after it can be read without a re-render. */
+  const spaceDown = useRef(false);
   const [navigating, setNavigating] = useState(false);
   const [preciseCursor, setPreciseCursor] = useState(false);
   const [workspaceSize, setWorkspaceSize] = useState({ width: 0, height: 0 });
@@ -376,9 +396,18 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       const target = event.target as HTMLElement | null;
       const editing = target?.tagName === "INPUT" || target?.tagName === "SELECT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
       if (event.code === "Space" && !editing) { event.preventDefault(); setSpaceHeld(true); }
+      // Photoshop turns the space bar into a zoom tool when a modifier joins it:
+      // the platform key zooms in, adding Alt zooms out. Tracked as a separate
+      // flag because the modifier can be pressed and released while space stays
+      // down, and the pointer has to follow it either way.
+      if (event.code === "Space" && !editing) spaceDown.current = true;
+      if (!editing && spaceDown.current) setSpaceZoom(spaceZoomFrom(event));
       if (event.code === "CapsLock" && !editing) { event.preventDefault(); setPreciseCursor((current) => !current); }
     };
-    const keyUp = (event: KeyboardEvent) => { if (event.code === "Space") setSpaceHeld(false); };
+    const keyUp = (event: KeyboardEvent) => {
+      if (event.code === "Space") { spaceDown.current = false; setSpaceHeld(false); setSpaceZoom(null); }
+      else if (spaceDown.current) setSpaceZoom(spaceZoomFrom(event));
+    };
     window.addEventListener("keydown", keyDown);
     window.addEventListener("keyup", keyUp);
     return () => { window.removeEventListener("keydown", keyDown); window.removeEventListener("keyup", keyUp); };
@@ -1197,15 +1226,16 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const selectionRect = selectionDraft;
   const stageStyle = { width: state.width, height: state.height, transform: `translate(-50%, -50%) translate(${viewport.panX}px, ${viewport.panY}px) rotate(${viewport.rotation}deg) scale(${viewport.zoom})` } as CSSProperties;
   const beginNavigation = (event: React.PointerEvent<HTMLDivElement>) => {
-    const temporaryHand = spaceHeld || event.button === 1;
-    const kind = temporaryHand || activeToolId === "raster.hand" ? "pan" : activeToolId === "raster.rotateView" ? "rotate" : activeToolId === "raster.zoom" ? "zoom" : null;
+    const temporaryHand = (spaceHeld && !spaceZoom) || event.button === 1;
+    const kind = spaceZoom ? "zoom" : temporaryHand || activeToolId === "raster.hand" ? "pan" : activeToolId === "raster.rotateView" ? "rotate" : activeToolId === "raster.zoom" ? "zoom" : null;
     if (!kind) return;
     event.preventDefault(); event.stopPropagation();
     const scrubbyZoom = Boolean(toolOptions["raster.zoom"]?.dragZoom ?? useShellStore.getState().preferences.dragZoom);
-    if (kind === "zoom" && !scrubbyZoom) {
+    if (kind === "zoom" && (spaceZoom || !scrubbyZoom)) {
       const workspace = workspaceRef.current;
       if (workspace) {
-        const zoom = clampZoom(viewport.zoom * (event.altKey ? 0.8 : 1.25));
+        const out = spaceZoom === "out" || (!spaceZoom && event.altKey);
+        const zoom = clampZoom(viewport.zoom * (out ? 0.8 : 1.25));
         setViewport(document.id, zoomAroundClient(workspace, viewport, zoom, event.clientX, event.clientY));
       }
       return;
@@ -1247,7 +1277,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   };
   const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
     event.preventDefault();
-    if (event.ctrlKey || event.metaKey) {
+    if (event.ctrlKey || event.metaKey || event.altKey) {
       const workspace = workspaceRef.current;
       if (!workspace) return;
       const zoom = clampZoom(viewport.zoom * Math.exp(-event.deltaY * 0.002));

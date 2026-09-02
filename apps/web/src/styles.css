@@ -190,3 +190,18 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
   overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
 }
+
+/* Layer rows: dragging to reorder and to the bin ------------------------- */
+.layer-row { position: relative; }
+.layer-row.dragging { opacity: .45; }
+/* The insertion line sits in the gap, so it reads as "between" rather than
+   "on top of", which is the whole question a drop is asking. */
+.layer-row[data-drop="above"]::before,
+.layer-row[data-drop="below"]::after {
+  content: ""; position: absolute; left: 0; right: 0; height: 2px;
+  background: var(--accent, #6f8cff); pointer-events: none; z-index: 2;
+}
+.layer-row[data-drop="above"]::before { top: -1px; }
+.layer-row[data-drop="below"]::after { bottom: -1px; }
+.layer-row[data-drop="into"] { outline: 2px solid var(--accent, #6f8cff); outline-offset: -2px; }
+.layer-actions [data-role="trash"][data-armed] { background: color-mix(in srgb, #d9534f 55%, transparent); }

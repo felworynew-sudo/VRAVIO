@@ -216,9 +216,16 @@ export function placeLayer(state: RasterDocumentState, layerId: string, parentId
   // A group cannot be dropped inside itself, or the tree stops being a tree.
   if (parentId && (parentId === layerId || rasterLayerDescendantIds(state.layers, layerId).includes(parentId))) return false;
 
+  // `index` names a place in the list as it stands, with the dragged layer still
+  // in it. Taking the layer out first shifts everything above it down by one, so
+  // a drag upward would land a place short without this.
+  const before = siblingsOf(state, parentId);
+  const wasAt = before.findIndex((item) => item.id === layerId);
+  const peers = before.filter((item) => item.id !== layerId);
+  const shifted = wasAt >= 0 && wasAt < index ? index - 1 : index;
+  const at = Math.max(0, Math.min(shifted, peers.length));
+
   layer.parentId = parentId;
-  const peers = siblingsOf(state, parentId).filter((item) => item.id !== layerId);
-  const at = Math.max(0, Math.min(index, peers.length));
   reorderSiblings([...peers.slice(0, at), layer, ...peers.slice(at)]);
   return true;
 }
@@ -259,4 +266,44 @@ export function layerFromSelection(
   reorderSiblings([...peers.slice(0, at + 1), lifted, ...peers.slice(at + 1)]);
   state.activeLayerId = lifted.id;
   return lifted;
+}
+
+export interface DropTarget {
+  readonly parentId: string | null;
+  readonly index: number;
+}
+
+/**
+ * Where a row dropped on another row should land.
+ *
+ * The panel lists layers topmost first while the tree stores them bottom-up, so
+ * "above" in the panel is a higher index in the parent. `position` is where the
+ * pointer sits over the target row: its top third inserts above, its bottom
+ * third below, and the middle of a group row drops inside it — which is the only
+ * way to put something into a collapsed group by dragging.
+ */
+export function dropTargetForRow(
+  state: RasterDocumentState, overId: string, position: "above" | "into" | "below",
+): DropTarget | null {
+  const over = state.layers.find((layer) => layer.id === overId);
+  if (!over) return null;
+  if (position === "into") {
+    if (over.kind !== "group") return null;
+    return { parentId: over.id, index: state.layers.filter((layer) => layer.parentId === over.id).length };
+  }
+  const parentId = over.parentId ?? null;
+  const peers = state.layers
+    .filter((layer) => layer.parentId === parentId)
+    .sort((a, b) => a.orderKey.localeCompare(b.orderKey));
+  const at = peers.findIndex((layer) => layer.id === overId);
+  if (at < 0) return null;
+  return { parentId, index: position === "above" ? at + 1 : at };
+}
+
+/** Which third of a row the pointer is in, for {@link dropTargetForRow}. */
+export function dropPositionInRow(offsetY: number, height: number, isGroup: boolean): "above" | "into" | "below" {
+  if (height <= 0) return "above";
+  const ratio = Math.max(0, Math.min(1, offsetY / height));
+  if (isGroup) return ratio < 0.3 ? "above" : ratio > 0.7 ? "below" : "into";
+  return ratio < 0.5 ? "above" : "below";
 }

@@ -3,6 +3,7 @@ import {
   appendLayer, createRasterDocument, createRasterGroup, createRasterLayer, createRasterLayerMask,
   createRectangleSelection, duplicateLayer, groupLayers, layerFromSelection, mergeLayerDown,
   mergeVisibleLayers, moveLayerInStack, placeLayer, rasterLayerRows, stampVisibleLayers, ungroupLayer,
+  dropPositionInRow, dropTargetForRow,
 } from "./index";
 import type { RasterDocumentState, RasterLayer } from "./types";
 
@@ -352,5 +353,71 @@ describe("layer via copy and cut", () => {
     const source = add(state, "Source");
 
     expect(layerFromSelection(state, source.id, null, true)).toBeNull();
+  });
+});
+
+describe("dropping a dragged row", () => {
+  const stack = () => {
+    const state = doc();
+    add(state, "A"); add(state, "B"); add(state, "C");
+    return state;
+  };
+
+  it("reads which third of a row the pointer is over", () => {
+    expect(dropPositionInRow(2, 30, false)).toBe("above");
+    expect(dropPositionInRow(25, 30, false)).toBe("below");
+    // A group has a middle band, which is the only way to drop into a
+    // collapsed one by dragging.
+    expect(dropPositionInRow(15, 30, true)).toBe("into");
+    expect(dropPositionInRow(2, 30, true)).toBe("above");
+    expect(dropPositionInRow(28, 30, true)).toBe("below");
+  });
+
+  it("survives a row with no height", () => {
+    expect(dropPositionInRow(0, 0, false)).toBe("above");
+  });
+
+  it("turns a drop above a row into the place just over it", () => {
+    const state = stack();
+    const b = state.layers.find((layer) => layer.name === "B")!;
+    const a = state.layers.find((layer) => layer.name === "A")!;
+
+    // The panel lists layers topmost first while the tree stores them bottom-up,
+    // so "above B" is a higher index than B.
+    placeLayer(state, a.id, ...Object.values(dropTargetForRow(state, b.id, "above")!) as [string | null, number]);
+    expect(names(state)).toEqual(["C", "A", "B"]);
+  });
+
+  it("turns a drop below a row into the place just under it", () => {
+    const state = stack();
+    const c = state.layers.find((layer) => layer.name === "C")!;
+    const a = state.layers.find((layer) => layer.name === "A")!;
+
+    const target = dropTargetForRow(state, c.id, "below")!;
+    placeLayer(state, a.id, target.parentId, target.index);
+    expect(names(state)).toEqual(["C", "A", "B"]);
+  });
+
+  it("drops into a group", () => {
+    const state = doc();
+    const group = createRasterGroup(W, H, "Group");
+    appendLayer(state, group);
+    const loose = add(state, "Loose");
+
+    const target = dropTargetForRow(state, group.id, "into")!;
+    placeLayer(state, loose.id, target.parentId, target.index);
+
+    expect(loose.parentId).toBe(group.id);
+  });
+
+  it("refuses to drop into something that is not a group", () => {
+    const state = stack();
+    const b = state.layers.find((layer) => layer.name === "B")!;
+
+    expect(dropTargetForRow(state, b.id, "into")).toBeNull();
+  });
+
+  it("reports nothing for a row that is gone", () => {
+    expect(dropTargetForRow(stack(), "missing", "above")).toBeNull();
   });
 });
