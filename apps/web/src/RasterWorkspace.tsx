@@ -276,6 +276,9 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const tipDragMode = useRef<"angle" | "roundness" | null>(null);
   const sourcePointRef = useRef<{ x: number; y: number } | null>(null);
   const cloneOffsetRef = useRef<{ x: number; y: number } | null>(null);
+  /** Where the clone is reading from right now, in document space, for the overlay. */
+  const [cloneSourceView, setCloneSourceView] = useState<{ x: number; y: number } | null>(null);
+  const cloneSourceCanvasRef = useRef<HTMLCanvasElement>(null);
   const lastBrushPointRef = useRef<{ toolId: string; layerId: string; point: Point } | null>(null);
   const textCancelRef = useRef(false);
   const spotHealMaskRef = useRef<{ mask: Uint8ClampedArray; originX: number; originY: number; width: number; height: number; before: Uint8ClampedArray } | null>(null);
@@ -1356,6 +1359,51 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     const point = pointFromNativeEvent(workspaceRef.current, viewport, state.width, state.height, event.nativeEvent);
     brushCursorRef.current.setAttribute("transform", `translate(${point.x} ${point.y}) rotate(${tipAngle})`);
     brushCursorRef.current.style.opacity = "1";
+    if (activeToolId === "raster.clone") {
+      updateCloneSourceView(point);
+      const preview = cloneSourceCanvasRef.current, workspace = workspaceRef.current;
+      if (preview && workspace) {
+        const rect = workspace.getBoundingClientRect();
+        preview.style.transform = `translate(${event.clientX - rect.left}px, ${event.clientY - rect.top}px) translate(-50%, -50%)`;
+      }
+    }
+  };
+
+  /**
+   * Shows where the clone stamp is reading from, and what it is about to lay down.
+   *
+   * Without it the tool is guesswork: the source is invisible, so the only way
+   * to find out what a stroke will produce is to make it and undo. Photoshop
+   * answers both questions on the canvas — a crosshair at the source, and the
+   * sampled area previewed inside the brush tip.
+   */
+  const updateCloneSourceView = (point: Point) => {
+    const anchor = sourcePointRef.current;
+    if (!anchor) { setCloneSourceView(null); return; }
+    const offset = cloneOffsetRef.current ?? { x: anchor.x - point.x, y: anchor.y - point.y };
+    const source = { x: point.x + offset.x, y: point.y + offset.y };
+    setCloneSourceView(source);
+
+    const preview = cloneSourceCanvasRef.current;
+    if (!preview) return;
+    const size = Math.max(2, Math.round(Number(toolOptions["raster.clone"]?.size ?? 24)));
+    if (preview.width !== size) { preview.width = size; preview.height = size; }
+    const context = preview.getContext("2d");
+    const layer = state.layers.find((item) => item.id === state.activeLayerId);
+    if (!context || !layer) return;
+    context.clearRect(0, 0, size, size);
+    // Read straight out of the layer buffer: the sample is what the tool will
+    // actually copy, not what the composite happens to show over it.
+    const image = context.createImageData(size, size);
+    const half = size / 2;
+    for (let y = 0; y < size; y += 1) for (let x = 0; x < size; x += 1) {
+      const sourceX = Math.round(source.x - half + x), sourceY = Math.round(source.y - half + y);
+      if (sourceX < 0 || sourceY < 0 || sourceX >= state.width || sourceY >= state.height) continue;
+      const from = (sourceY * state.width + sourceX) * 4, to = (y * size + x) * 4;
+      image.data[to] = layer.pixels[from]!; image.data[to + 1] = layer.pixels[from + 1]!;
+      image.data[to + 2] = layer.pixels[from + 2]!; image.data[to + 3] = layer.pixels[from + 3]!;
+    }
+    context.putImageData(image, 0, 0);
   };
   const guidePointer = (event: React.PointerEvent<HTMLDivElement>, orientation: RasterGuide["orientation"], finish = false) => {
     const workspace = workspaceRef.current; if (!workspace) return;
@@ -1374,13 +1422,34 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const guides = state.guides ?? [];
   return <div ref={workspaceRef} className="raster-workspace" data-active-tool={activeToolId} data-pixel-zoom={viewport.zoom >= 1 || undefined} data-space-held={spaceHeld || undefined} data-navigating={navigating || undefined} onPointerDownCapture={beginNavigation} onPointerMoveCapture={moveNavigation} onPointerUpCapture={endNavigation} onPointerCancelCapture={endNavigation} onWheel={handleWheel}>
     <div className="raster-stage" style={stageStyle}>
-      <canvas ref={canvasRef} className={brushLike ? "brush-cursor-canvas" : ""} width={state.width} height={state.height} onPointerEnter={updateBrushCursor} onPointerLeave={() => { if (brushCursorRef.current) brushCursorRef.current.style.opacity = "0"; }} onPointerDown={handlePointerDown} onPointerMove={(event) => { updateBrushCursor(event); handlePointerMove(event); }} onPointerUp={finishGesture} onPointerCancel={finishGesture} onContextMenu={(event) => { event.preventDefault(); if (!brushLike) return; const rect = workspaceRef.current?.getBoundingClientRect(); if (rect) setBrushPopup({ left: Math.min(event.clientX - rect.left, rect.width - 300), top: Math.min(event.clientY - rect.top, rect.height - 430), detailed: false }); }} />
+      <canvas ref={canvasRef} className={brushLike ? "brush-cursor-canvas" : ""} width={state.width} height={state.height} onPointerEnter={updateBrushCursor} onPointerLeave={() => { if (brushCursorRef.current) brushCursorRef.current.style.opacity = "0"; setCloneSourceView(null); }} onPointerDown={handlePointerDown} onPointerMove={(event) => { updateBrushCursor(event); handlePointerMove(event); }} onPointerUp={finishGesture} onPointerCancel={finishGesture} onContextMenu={(event) => { event.preventDefault(); if (!brushLike) return; const rect = workspaceRef.current?.getBoundingClientRect(); if (rect) setBrushPopup({ left: Math.min(event.clientX - rect.left, rect.width - 300), top: Math.min(event.clientY - rect.top, rect.height - 430), detailed: false }); }} />
       {transformPreview?.text && <canvas
         ref={textTransformCanvasRef}
         className="text-transform-preview"
         style={{ left: transformPreview.text.targetBounds.x, top: transformPreview.text.targetBounds.y, width: transformPreview.text.targetBounds.width, height: transformPreview.text.targetBounds.height, transform: `rotate(${transformPreview.rotation}deg)` }}
       />}
       {preferences.showGuides && <svg className="guide-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">{[...guides, ...(guideDraft ? [guideDraft] : [])].map((guide, index) => guide.orientation === "vertical" ? <line key={`${guide.orientation}-${index}`} x1={guide.position} y1="0" x2={guide.position} y2={state.height}/> : <line key={`${guide.orientation}-${index}`} x1="0" y1={guide.position} x2={state.width} y2={guide.position}/>)}</svg>}
+      {activeToolId === "raster.clone" && (
+        <>
+          {/* The sample, shown inside the tip: what the next dab will lay down,
+              clipped to a circle so it reads as the brush rather than a swatch. */}
+          <canvas ref={cloneSourceCanvasRef} className="clone-source-preview" width={2} height={2} aria-hidden="true"
+            style={cloneSourceView ? {
+              opacity: 1,
+              width: `${Number(toolOptions["raster.clone"]?.size ?? 24) * viewport.zoom}px`,
+              height: `${Number(toolOptions["raster.clone"]?.size ?? 24) * viewport.zoom}px`,
+            } : { opacity: 0 }}/>
+          {cloneSourceView && <svg className="clone-source-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">
+            {/* The crosshair marks where the reading is coming from. Alt-clicking
+                sets it; before that there is nothing to point at. */}
+            <g transform={`translate(${cloneSourceView.x} ${cloneSourceView.y})`}>
+              <circle className="cursor-dark" r={Number(toolOptions["raster.clone"]?.size ?? 24) / 2} fill="none"/>
+              <path className="cursor-dark" d={`M${-9 / viewport.zoom} 0H${9 / viewport.zoom}M0 ${-9 / viewport.zoom}V${9 / viewport.zoom}`}/>
+              <path className="cursor-light" d={`M${-8 / viewport.zoom} 0H${8 / viewport.zoom}M0 ${-8 / viewport.zoom}V${8 / viewport.zoom}`}/>
+            </g>
+          </svg>}
+        </>
+      )}
       {brushLike && <svg className="brush-cursor-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><g ref={brushCursorRef} style={{ opacity: 0 }}>{preciseCursor ? <><path className="cursor-dark" d={`M${-7 / viewport.zoom} 0H${7 / viewport.zoom}M0 ${-7 / viewport.zoom}V${7 / viewport.zoom}`}/><path className="cursor-light" d={`M${-6 / viewport.zoom} 0H${6 / viewport.zoom}M0 ${-6 / viewport.zoom}V${6 / viewport.zoom}`}/></> : <><ellipse className="cursor-dark" rx={Number(brushOptions.size ?? 24) / 2} ry={Number(brushOptions.size ?? 24) * tipRoundness / 200}/><ellipse className="cursor-light" rx={Number(brushOptions.size ?? 24) / 2} ry={Number(brushOptions.size ?? 24) * tipRoundness / 200}/></>}</g></svg>}
       {selectionRect && selectionRect.width > 0 && selectionRect.height > 0 && <svg className="selection-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">
         {draftKind === "lasso" ? <polyline points={lassoDraft.map((point) => `${point.x},${point.y}`).join(" ")} /> : draftKind === "ellipse" ? <ellipse cx={selectionRect.x + selectionRect.width / 2} cy={selectionRect.y + selectionRect.height / 2} rx={selectionRect.width / 2} ry={selectionRect.height / 2} /> : <rect x={selectionRect.x} y={selectionRect.y} width={selectionRect.width} height={selectionRect.height} />}
