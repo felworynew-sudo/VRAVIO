@@ -304,6 +304,12 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const eyedropperRef = useRef<{ pointerId: number; source: Uint8ClampedArray; sample: number; loupe: boolean } | null>(null);
   const [eyedropperView, setEyedropperView] = useState<{ x: number; y: number; screenX: number; screenY: number; color: string; loupe: boolean } | null>(null);
   const loupeCanvasRef = useRef<HTMLCanvasElement>(null);
+  /** Dragging the marquee itself, with a selection tool, leaving pixels alone. */
+  const marqueeDragRef = useRef<{ pointerId: number; from: Point; base: PixelSelection } | null>(null);
+  const [marqueePreview, setMarqueePreview] = useState<PixelSelection | null>(null);
+  // The drag ends in the same tick the last move arrives, before React has
+  // re-rendered, so the handler cannot read the preview out of state.
+  const marqueePreviewRef = useRef<PixelSelection | null>(null);
   /** Space's own state, so a modifier pressed after it can be read without a re-render. */
   const spaceDown = useRef(false);
   const [navigating, setNavigating] = useState(false);
@@ -1000,6 +1006,17 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       return;
     }
     if (activeToolId === "raster.marquee" || activeToolId === "raster.ellipseMarquee" || activeToolId === "raster.lasso") {
+      // Dragging from inside an existing selection moves the marquee itself,
+      // leaving the pixels alone — the Move tool is what moves those. Without
+      // this a selection can only ever be redrawn, never adjusted.
+      const inside = state.selection && !event.shiftKey && !event.altKey
+        && point.x >= 0 && point.y >= 0 && point.x < state.width && point.y < state.height
+        && state.selection.mask[Math.floor(point.y) * state.width + Math.floor(point.x)]! > 0;
+      if (inside && state.selection) {
+        canvas.setPointerCapture(event.pointerId);
+        marqueeDragRef.current = { pointerId: event.pointerId, from: point, base: state.selection };
+        return;
+      }
       canvas.setPointerCapture(event.pointerId);
       const kind = activeToolId === "raster.lasso" ? "lasso" : activeToolId === "raster.ellipseMarquee" ? "ellipse" : "rectangle";
       // Photoshop reads Shift and Alt at the moment the drag begins to decide how
@@ -1080,6 +1097,16 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    const marqueeDrag = marqueeDragRef.current;
+    if (marqueeDrag && marqueeDrag.pointerId === event.pointerId) {
+      const workspace = workspaceRef.current;
+      if (!workspace) return;
+      const point = pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent);
+      const moved = translateSelection(marqueeDrag.base, state.width, state.height, point.x - marqueeDrag.from.x, point.y - marqueeDrag.from.y);
+      marqueePreviewRef.current = moved;
+      setMarqueePreview(moved);
+      return;
+    }
     if (eyedropperRef.current?.pointerId === event.pointerId) {
       const workspace = workspaceRef.current;
       if (workspace) sampleEyedropper(pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent), event);
@@ -1181,6 +1208,15 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
 
   const finishGesture = (event: React.PointerEvent<HTMLCanvasElement>) => {
     setPatchOffset(null);
+    const marqueeDrag = marqueeDragRef.current;
+    if (marqueeDrag && marqueeDrag.pointerId === event.pointerId) {
+      marqueeDragRef.current = null;
+      const moved = marqueePreviewRef.current;
+      marqueePreviewRef.current = null;
+      setMarqueePreview(null);
+      if (moved) void commitSelection(marqueeDrag.base, moved, "Move Selection (Перемещение выделения)");
+      return;
+    }
     if (eyedropperRef.current?.pointerId === event.pointerId) {
       // The loupe belongs to the press, as it does in Figma: it appears on the
       // way down and is gone on the way up, so it never sits over the work.
@@ -1259,8 +1295,11 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
           : createRectangleSelection(state.width, state.height, corners.fromX, corners.fromY, corners.toX, corners.toY, feather);
       const mode = selecting.mode;
       void options;
-      const opaqueIncoming = restrictSelectionToAlpha(incoming, activeRasterLayer(state).pixels, state.width, state.height);
-      const combined = opaqueIncoming ? combineSelections(state.selection, opaqueIncoming, state.width, state.height, mode) : mode === "replace" ? null : state.selection;
+      // A selection is a region of the canvas, not of the layer: selecting empty
+      // space is how anything gets painted into it. Confining it to opaque
+      // pixels belongs at the moment something is moved or transformed, where
+      // there has to be content to move, and that is where it happens.
+      const combined = combineSelections(state.selection, incoming, state.width, state.height, mode);
       void commitSelection(state.selection, combined);
       return;
     }
@@ -1388,7 +1427,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     } else setViewport(document.id, { panX: viewport.panX - (event.shiftKey ? event.deltaY : event.deltaX), panY: viewport.panY - (event.shiftKey ? 0 : event.deltaY), mode: "custom" });
   };
   const draftKind = selectionGesture.current?.kind;
-  const displayedSelection = transformPreview?.selection ?? state.selection;
+  const displayedSelection = marqueePreview ?? transformPreview?.selection ?? state.selection;
   const transformBounds = transformPreview ? (transformPreview.text?.targetBounds ?? displayedSelection?.bounds ?? alphaBounds(transformPreview.pixels, state.width, state.height)) : null;
   // Cmd/Ctrl+H hides the marching ants without dropping the selection, so an
   // edge can be judged without the animation crawling over it.
