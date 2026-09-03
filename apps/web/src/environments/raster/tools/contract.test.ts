@@ -40,6 +40,7 @@ interface Effects {
   readonly foreground: string[];
   readonly hiddenLayerPreviews: (string | null)[];
   readonly activeLayerSets: string[];
+  viewportResets: number;
   readonly maskForegroundWhite: boolean[];
   readonly captured: number[];
   /** Every state the tool passed through, not only the one it ended on. */
@@ -154,7 +155,7 @@ function drive(
 ): { effects: Effects; document: RasterDocumentState; untouched: RasterDocumentState } {
   const document = documentFixture();
   const untouched = documentFixture();
-  const effects: Effects = { commits: [], selectionCommits: [], documentCommits: [], foreground: [], hiddenLayerPreviews: [], activeLayerSets: [], maskForegroundWhite: [], captured: [], stateHistory: [], previews: [], state: tool.createState(), lastStrokePoint: null, cloneSource: null, cloneOffset: null, spotHealPreviews: [] };
+  const effects: Effects = { commits: [], selectionCommits: [], documentCommits: [], foreground: [], hiddenLayerPreviews: [], activeLayerSets: [], viewportResets: 0, maskForegroundWhite: [], captured: [], stateHistory: [], previews: [], state: tool.createState(), lastStrokePoint: null, cloneSource: null, cloneOffset: null, spotHealPreviews: [] };
 
   const context: ToolContext<unknown> = {
     documentId: "test-document",
@@ -188,6 +189,7 @@ function drive(
     schedulePreview: (pixels, target, layerId, dirty) => { effects.previews.push({ pixels, target, layerId, dirty: dirty ?? null }); },
     previewWithLayerHidden: (layerId) => { effects.hiddenLayerPreviews.push(layerId); },
     setActiveLayer: (layerId) => { effects.activeLayerSets.push(layerId); },
+    resetViewportToFit: () => { effects.viewportResets += 1; },
     foregroundColor: "#101317",
     setForegroundColor: (color) => { effects.foreground.push(color); },
     setMaskForegroundWhite: (white) => { effects.maskForegroundWhite.push(white); },

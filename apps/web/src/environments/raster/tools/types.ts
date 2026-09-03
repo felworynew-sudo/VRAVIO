@@ -196,6 +196,12 @@ export interface ToolContext<TState> {
    */
   commitDocument(before: RasterDocumentState, after: RasterDocumentState, label: string, bounds?: RasterRect | null): Promise<void>;
 
+  /** Re-centres the viewport on the whole canvas at a fit-to-window zoom —
+   * what a crop needs immediately after it changes the canvas's own size,
+   * or the old pan/zoom would be framing a canvas that no longer exists
+   * where it used to. */
+  resetViewportToFit(): void;
+
   /**
    * Makes `layerId` the active layer, without a history step — the same
    * "clicking a layer selects it" that has never itself been undoable.
