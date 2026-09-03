@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import {
   activeRasterLayer, appendLayer, clampRegionToDocument, copyHealedRegion, layerAccepts, layerLockReason, layerOpaqueBounds, paintMask, marqueeCorners, pickLayerAt, combineSelections, compositeRasterDocument, compositeRasterRegion, drawShape, DirtyRegion, RasterTileCache, type ShapeKind, createEllipseSelection, createPolygonSelection, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
   accumulateUniquePixelBytes, changedRenderRegion, confineToSelection, visitPixelBuffers, layerDocumentPixels, mipForZoom, setLayerPixels, isRasterDocumentState, layerRenderSignatures, liftSelection, parseHexColor, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectionOutlinePath, stampFloating, toHexColor,
-  translateLayerPixels, translateSelection, quadLayerPixels, quadSelection, selectionBounds, type FloatingPixels, type LayerRenderSignature, type PixelSelection, type Point, type RasterDocumentState, type RasterGuide, type RasterLayer, type RasterRect, type RasterTextData, type SelectionCombineMode,
+  translateLayerPixels, translateSelection, quadLayerPixels, quadSelection, selectionBounds, unionRect, type FloatingPixels, type LayerRenderSignature, type PixelSelection, type Point, type RasterDocumentState, type RasterGuide, type RasterLayer, type RasterRect, type RasterTextData, type SelectionCombineMode,
   cloneDab, cloneStrokeSegment,
   blurDab, blurStrokeSegment, smudgeStrokeSegment,
   dodgeBurnDab, dodgeBurnStrokeSegment, type DodgeBurnRange,
@@ -83,13 +83,6 @@ function cropPixels(pixels: Uint8ClampedArray, width: number, region: RasterRect
     output.set(pixels.subarray(start, start + region.width * 4), row * region.width * 4);
   }
   return output;
-}
-
-function unionDirty(current: RasterRect | null, x0: number, y0: number, x1: number, y1: number, pad: number): RasterRect {
-  const left = Math.min(x0, x1) - pad, top = Math.min(y0, y1) - pad, right = Math.max(x0, x1) + pad, bottom = Math.max(y0, y1) + pad;
-  if (!current) return { x: left, y: top, width: right - left, height: bottom - top };
-  const nextLeft = Math.min(current.x, left), nextTop = Math.min(current.y, top);
-  return { x: nextLeft, y: nextTop, width: Math.max(current.x + current.width, right) - nextLeft, height: Math.max(current.y + current.height, bottom) - nextTop };
 }
 
 const shapeLayerNames: Record<string, string> = {
@@ -801,11 +794,11 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     // Union every point the segment could have touched, padded by the brush radius (plus a
     // margin for the neighbourhood-sampling tools) so the repaint never clips the stroke.
     const pad = Number(options.size ?? 24) / 2 + 2;
-    current.dirty = unionDirty(current.dirty ?? null, current.curveStart.x, current.curveStart.y, current.pending.x, current.pending.y, pad);
-    current.dirty = unionDirty(current.dirty, point.x, point.y, end.x, end.y, pad);
+    current.dirty = unionRect(current.dirty ?? null, current.curveStart.x, current.curveStart.y, current.pending.x, current.pending.y, pad);
+    current.dirty = unionRect(current.dirty, point.x, point.y, end.x, end.y, pad);
     // `dirty` is consumed every frame; `strokeBounds` survives so the commit can tell the tile
     // cache exactly what the finished stroke changed.
-    current.strokeBounds = unionDirty(current.strokeBounds ?? null, current.dirty.x, current.dirty.y, current.dirty.x + current.dirty.width, current.dirty.y + current.dirty.height, 0);
+    current.strokeBounds = unionRect(current.strokeBounds ?? null, current.dirty.x, current.dirty.y, current.dirty.x + current.dirty.width, current.dirty.y + current.dirty.height, 0);
     current.curveStart = end;
     current.pending = point;
   };
@@ -1070,20 +1063,25 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   // tools cannot leave a half-finished gesture running.
   const [toolStates, setToolStates] = useState<Record<string, unknown>>({});
   const toolStatesRef = useRef(toolStates);
+  // A catalogue tool's own RAF-coalesced preview writer — decoupled from the
+  // legacy `gesture` ref, which stays exclusively for the not-yet-ported
+  // tonal tools, so the two paths cannot interfere with each other.
+  const previewFrameRef = useRef<{ frame: number | null; dirty: RasterRect | null; working: Uint8ClampedArray; target: "pixels" | "mask"; layerId: string } | null>(null);
   toolStatesRef.current = toolStates;
+
+  const toolPointerFromNative = (native: PointerEvent, workspace: HTMLDivElement, rect: DOMRect): ToolPointer => ({
+    point: pointFromNativeEvent(workspace, viewport, state.width, state.height, native),
+    screenX: native.clientX - rect.left,
+    screenY: native.clientY - rect.top,
+    pointerId: native.pointerId,
+    shiftKey: native.shiftKey, altKey: native.altKey, ctrlKey: native.ctrlKey, metaKey: native.metaKey,
+    button: native.button, pressure: native.pressure,
+  });
 
   const toolPointerFrom = (event: React.PointerEvent<HTMLCanvasElement>): ToolPointer | null => {
     const workspace = workspaceRef.current;
     if (!workspace) return null;
-    const rect = workspace.getBoundingClientRect();
-    return {
-      point: pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent),
-      screenX: event.clientX - rect.left,
-      screenY: event.clientY - rect.top,
-      pointerId: event.pointerId,
-      shiftKey: event.shiftKey, altKey: event.altKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey,
-      button: event.button, pressure: event.pressure,
-    };
+    return toolPointerFromNative(event.nativeEvent, workspace, workspace.getBoundingClientRect());
   };
 
   const toolContextFor = (toolId: string, canvas: HTMLCanvasElement | null): ToolContext<unknown> => {
@@ -1116,9 +1114,39 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       paintColor,
       paintMask: brushMask,
       targetPixels: () => (maskTarget?.mask ? maskToRgba(maskTarget.mask.pixels) : (activeLayer ? canvasPixels(activeLayer) : new Uint8ClampedArray(state.width * state.height * 4)).slice()),
-      commit: (before, after, label, target = paintTarget.kind, layerId = paintTarget.layerId) => commitPixels(before, after, label, target, layerId),
+      schedulePreview: (pixels, target, layerId, dirty) => {
+        let current = previewFrameRef.current;
+        if (!current || current.target !== target || current.layerId !== layerId) {
+          current = { frame: null, dirty: null, working: pixels, target, layerId };
+          previewFrameRef.current = current;
+        } else {
+          current.working = pixels;
+        }
+        if (dirty) current.dirty = current.dirty ? unionRect(current.dirty, dirty.x, dirty.y, dirty.x + dirty.width, dirty.y + dirty.height, 0) : dirty;
+        if (current.frame !== null) return;
+        const entry = current;
+        entry.frame = requestAnimationFrame(() => {
+          entry.frame = null;
+          const region = entry.dirty;
+          entry.dirty = null;
+          // Matches scheduleWorkingRender's own dispatch exactly, quirk
+          // included: a dirty region always takes the pixels-only fast path
+          // regardless of target, because renderWorkingRegion (unlike
+          // renderWorking) has no mask-compositing branch. A masked stroke's
+          // live preview is briefly the pixel-layer composite until the
+          // gesture ends and the real commit repaints correctly — a
+          // pre-existing cosmetic quirk of the path this reuses, not
+          // something this port introduces or should quietly diverge from.
+          if (region && entry.target === "pixels") renderWorkingRegion(entry.working, region);
+          else renderWorking(entry.working, entry.target, entry.layerId);
+        });
+      },
+      commit: (before, after, label, target = paintTarget.kind, layerId = paintTarget.layerId, bounds = null) => commitPixels(before, after, label, target, layerId, bounds),
       commitSelection: (before, after, label) => commitSelection(before, after, label),
       setForegroundColor,
+      setMaskForegroundWhite: (white) => setMaskForegroundWhite(document.id, white),
+      lastStrokePoint: lastBrushPointRef.current,
+      setLastStrokePoint: (next) => { lastBrushPointRef.current = next; },
     };
   };
 
@@ -1139,11 +1167,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     const canvas = event.currentTarget;
     const workspace = workspaceRef.current;
     if (!workspace) return;
-
-    if (catalogueTool?.onPointerDown) {
-      const pointer = toolPointerFrom(event);
-      if (pointer) { catalogueTool.onPointerDown(toolContextFor(catalogueTool.id, canvas), pointer); return; }
-    }
 
     const point = pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent);
 
@@ -1176,6 +1199,21 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     const maskTarget = editingMaskLayer?.id === state.activeLayerId ? editingMaskLayer : null;
     const paintTargetId = maskTarget?.id ?? layer.id;
     const brushTargetKey = maskTarget ? `mask:${maskTarget.id}` : layer.id;
+
+    if (catalogueTool?.onPointerDown) {
+      // Same gate RASTER_ONLY_TOOLS enforced for the switch below: a tool
+      // that needs real pixels to write into is not allowed to write into a
+      // text or adjustment layer's cached preview — that would desync it
+      // from the data it is actually drawn from silently. Editing a mask is
+      // always pixels regardless of the layer's own kind, which is why
+      // maskTarget exempts it.
+      if (!maskTarget && catalogueTool.requiresRasterized && layer.kind !== "pixel") {
+        setRasterizeConfirm({ layerId: layer.id, layerName: layer.name });
+        return;
+      }
+      const pointer = toolPointerFrom(event);
+      if (pointer) { catalogueTool.onPointerDown(toolContextFor(catalogueTool.id, canvas), pointer); return; }
+    }
     const pendingTransform = pendingTransformRef.current;
     if (pendingTransform) {
       const bounds = pendingTransform.text?.targetBounds ?? pendingTransform.selection?.bounds ?? alphaBounds(pendingTransform.pixels, state.width, state.height), tolerance = 11 / viewport.zoom;
@@ -1324,7 +1362,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       gesture.current = { before: canvasPixels(layer).slice(), working: canvasPixels(layer).slice(), curveStart: point, pending: point, pointerId: event.pointerId, frame: null, target: "pixels", layerId: layer.id };
       return;
     }
-    const paintingTool = activeToolId === "raster.brush" || activeToolId === "raster.pencil" || activeToolId === "raster.highlighter" || activeToolId === "raster.eraser" || activeToolId === "raster.blur" || activeToolId === "raster.smudge" || activeToolId === "raster.dodge" || activeToolId === "raster.burn";
+    const paintingTool = activeToolId === "raster.blur" || activeToolId === "raster.smudge" || activeToolId === "raster.dodge" || activeToolId === "raster.burn";
     if (event.altKey && paintingTool) { if (maskTarget?.mask) { const sample = maskTarget.mask.pixels[Math.max(0, Math.min(maskTarget.mask.pixels.length - 1, Math.floor(point.y) * state.width + Math.floor(point.x)))] ?? 0; setMaskForegroundWhite(document.id, sample >= 128); } else setForegroundColor(toHexColor(sampleAverage(compositeRasterDocument(state), state.width, state.height, point.x, point.y, 1))); return; }
     if (activeToolId === "raster.text") {
       const hit = [...state.layers].reverse().find((item) => { if (item.kind !== "text" || !item.text) return false; const lines = item.text.value.split("\n"), width = item.text.boxWidth ?? Math.max(...lines.map((line) => line.length), 1) * item.text.fontSize * .65, height = item.text.boxHeight ?? lines.length * item.text.fontSize * item.text.lineHeight; const left = item.text.path ? Math.min(item.text.path.start.x, item.text.path.end.x, item.text.path.control.x) : item.text.x, top = item.text.path ? Math.min(item.text.path.start.y, item.text.path.end.y, item.text.path.control.y) - item.text.fontSize : item.text.y; return point.x >= left && point.x <= left + Math.max(width, item.text.path ? Math.abs(item.text.path.end.x - item.text.path.start.x) : 0) && point.y >= top && point.y <= top + Math.max(height, item.text.fontSize * 2); });
@@ -1378,31 +1416,44 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       return;
     }
     if (layer.locked) return;
-    if (activeToolId !== "raster.brush" && activeToolId !== "raster.eraser" && activeToolId !== "raster.pencil" && activeToolId !== "raster.highlighter" && activeToolId !== "raster.blur" && activeToolId !== "raster.smudge" && activeToolId !== "raster.dodge" && activeToolId !== "raster.burn") return;
+    if (activeToolId !== "raster.blur" && activeToolId !== "raster.smudge" && activeToolId !== "raster.dodge" && activeToolId !== "raster.burn") return;
     canvas.setPointerCapture(event.pointerId);
-    if (maskTarget && (activeToolId === "raster.blur" || activeToolId === "raster.smudge" || activeToolId === "raster.dodge" || activeToolId === "raster.burn")) return;
-    const before = maskTarget?.mask ? maskToRgba(maskTarget.mask.pixels) : canvasPixels(layer).slice(), working = before.slice();
+    // These four never touch a mask — there is nothing tonal to adjust in a
+    // black-and-white threshold buffer.
+    if (maskTarget) return;
+    const before = canvasPixels(layer).slice(), working = before.slice();
     const options = toolOptions[activeToolId] ?? {};
-    const opacity = Number(options.opacity ?? 100) / 100 * Number(options.flow ?? 100) / 100;
     const previous = lastBrushPointRef.current, shiftFrom = event.shiftKey && previous?.toolId === activeToolId && previous.layerId === brushTargetKey ? previous.point : null;
     if (shiftFrom) {
       if (activeToolId === "raster.blur") blurStrokeSegment(working, before, state.width, state.height, shiftFrom, point, Number(options.size ?? 24), Number(options.strength ?? 50) / 100, brushMask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
       else if (activeToolId === "raster.smudge") smudgeStrokeSegment(working, before, state.width, state.height, shiftFrom, point, Number(options.size ?? 24), Number(options.strength ?? 50) / 100, brushMask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
-      else if (activeToolId === "raster.dodge" || activeToolId === "raster.burn") dodgeBurnStrokeSegment(working, state.width, state.height, shiftFrom, point, Number(options.size ?? 24), Number(options.exposure ?? 50) / 100, activeToolId === "raster.dodge" ? "dodge" : "burn", (options.range as DodgeBurnRange) ?? "midtones", brushMask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
-      else { const control = { x: (shiftFrom.x + point.x) / 2, y: (shiftFrom.y + point.y) / 2, pressure: 1 }; drawQuadraticStrokeSegment(working, state.width, state.height, shiftFrom, control, point, Number(options.size ?? 24), parseHexColor(maskTarget && activeToolId === "raster.eraser" ? "#ffffff" : paintColor), opacity, !maskTarget && activeToolId === "raster.eraser", brushMask, activeToolId === "raster.pencil" ? 1 : Number(options.hardness ?? 82) / 100, Number(options.spacing ?? 12) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), options.pressureSize !== false, options.pressureOpacity === true); }
-      lastBrushPointRef.current = { toolId: activeToolId, layerId: brushTargetKey, point }; renderWorking(working, maskTarget ? "mask" : "pixels", paintTargetId); void commitPixels(before, working, maskTarget ? "Paint Layer Mask (Рисование по маске слоя)" : "Straight Brush Line (Прямая линия кисти)", maskTarget ? "mask" : "pixels", paintTargetId); return;
+      else dodgeBurnStrokeSegment(working, state.width, state.height, shiftFrom, point, Number(options.size ?? 24), Number(options.exposure ?? 50) / 100, activeToolId === "raster.dodge" ? "dodge" : "burn", (options.range as DodgeBurnRange) ?? "midtones", brushMask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
+      lastBrushPointRef.current = { toolId: activeToolId, layerId: brushTargetKey, point }; renderWorking(working, "pixels", paintTargetId); void commitPixels(before, working, "Straight Brush Line (Прямая линия кисти)", "pixels", paintTargetId); return;
     }
     if (activeToolId === "raster.blur") blurDab(working, before, state.width, state.height, point, Number(options.size ?? 24), Number(options.strength ?? 50) / 100, brushMask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
     else if (activeToolId === "raster.dodge" || activeToolId === "raster.burn") dodgeBurnDab(working, state.width, state.height, point, Number(options.size ?? 24), Number(options.exposure ?? 50) / 100, activeToolId === "raster.dodge" ? "dodge" : "burn", (options.range as DodgeBurnRange) ?? "midtones", brushMask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
-    else if (activeToolId !== "raster.smudge") drawDab(working, state.width, state.height, point, Number(options.size ?? 24), parseHexColor(maskTarget && activeToolId === "raster.eraser" ? "#ffffff" : paintColor), opacity, !maskTarget && activeToolId === "raster.eraser", activeToolId === "raster.pencil" ? 1 : Number(options.hardness ?? 82) / 100, brushMask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), options.pressureSize !== false, options.pressureOpacity === true);
-    gesture.current = { before, working, curveStart: point, pending: point, pointerId: event.pointerId, frame: null, target: maskTarget ? "mask" : "pixels", layerId: paintTargetId, sourcePixels: before };
-    renderWorking(working, maskTarget ? "mask" : "pixels", paintTargetId);
+    gesture.current = { before, working, curveStart: point, pending: point, pointerId: event.pointerId, frame: null, target: "pixels", layerId: paintTargetId, sourcePixels: before };
+    renderWorking(working, "pixels", paintTargetId);
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
     if (catalogueTool?.onPointerMove) {
-      const pointer = toolPointerFrom(event);
-      if (pointer) { catalogueTool.onPointerMove(toolContextFor(catalogueTool.id, event.currentTarget), pointer); return; }
+      const workspace = workspaceRef.current;
+      if (workspace) {
+        const rect = workspace.getBoundingClientRect();
+        const context = toolContextFor(catalogueTool.id, event.currentTarget);
+        // Coalesced samples, not just the one event React handed over: a
+        // fast stroke can move the pointer several pixels between the
+        // browser's own paint frames, and using only the latest sample is
+        // what RASTER-PAINT-002 already found leaves gaps in a fast stroke.
+        // The context is built once and reused across all of them — its
+        // closures do not depend on which sample is current, only `pointer`
+        // does, and toolContextFor is not free to call per sample.
+        for (const native of event.nativeEvent.getCoalescedEvents?.() ?? [event.nativeEvent]) {
+          catalogueTool.onPointerMove(context, toolPointerFromNative(native, workspace, rect));
+        }
+      }
+      return;
     }
     const textDrawing = textGesture.current;
     if (textDrawing && textDrawing.pointerId === event.pointerId) {
@@ -1655,13 +1706,11 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       current.working.set(current.before);
       setPatchOffset({ x: patchOffsetX, y: patchOffsetY });
       patchFromSelection(current.working, state.width, state.height, brushMask ?? null, state.selection?.bounds ?? { x: 0, y: 0, width: state.width, height: state.height }, patchOffsetX, patchOffsetY, Number(options.opacity ?? 100) / 100, (options.mode as "source" | "destination") ?? "source", Number(options.feather ?? 0));
-    } else if (activeToolId !== "raster.blur" && activeToolId !== "raster.smudge" && activeToolId !== "raster.dodge" && activeToolId !== "raster.burn") {
-      drawQuadraticStrokeSegment(current.working, state.width, state.height, current.curveStart, current.pending, current.pending, Number(options.size ?? 24), parseHexColor(current.target === "mask" && activeToolId === "raster.eraser" ? "#ffffff" : paintColor), opacity, current.target === "pixels" && activeToolId === "raster.eraser", brushMask, activeToolId === "raster.pencil" ? 1 : Number(options.hardness ?? 82) / 100, Number(options.spacing ?? 12) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), options.pressureSize !== false, options.pressureOpacity === true);
     }
     if (current.frame !== null) cancelAnimationFrame(current.frame);
     gesture.current = null;
     if (activeToolId && activeToolId !== "raster.patch") lastBrushPointRef.current = { toolId: activeToolId, layerId: current.target === "mask" ? `mask:${current.layerId}` : current.layerId, point: current.pending };
-    const label = activeToolId === "raster.eraser" ? "Eraser (Ластик)" : activeToolId === "raster.pencil" ? "Pencil (Карандаш)" : activeToolId === "raster.highlighter" ? "Highlighter (Выделитель)" : activeToolId === "raster.clone" ? "Clone (Штамп)" : activeToolId === "raster.patch" ? "Patch (Заплатка)" : activeToolId === "raster.blur" ? "Blur (Размытие)" : activeToolId === "raster.smudge" ? "Smudge (Палец)" : activeToolId === "raster.dodge" ? "Dodge (Осветлитель)" : activeToolId === "raster.burn" ? "Burn (Затемнитель)" : "Brush Stroke (Мазок кисти)";
+    const label = activeToolId === "raster.clone" ? "Clone (Штамп)" : activeToolId === "raster.patch" ? "Patch (Заплатка)" : activeToolId === "raster.blur" ? "Blur (Размытие)" : activeToolId === "raster.smudge" ? "Smudge (Палец)" : activeToolId === "raster.dodge" ? "Dodge (Осветлитель)" : "Burn (Затемнитель)";
     void commitPixels(current.before, current.working, current.target === "mask" ? "Paint Layer Mask (Рисование по маске слоя)" : label, current.target, current.layerId, current.strokeBounds ?? null);
   };
 

@@ -24,6 +24,10 @@ import type { RasterToolDefinition } from "../types";
 
 const fill: RasterToolDefinition<null> = {
   id: "raster.fill",
+  // Was in RASTER_ONLY_TOOLS before this moved here — filling a text or
+  // adjustment layer needs a real pixel buffer to flood-fill, not the
+  // cached preview those kinds carry.
+  requiresRasterized: true,
   createState: () => null,
 
   onPointerDown(context, pointer) {

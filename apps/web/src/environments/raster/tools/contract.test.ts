@@ -27,13 +27,22 @@ import type { RasterToolDefinition, ToolContext, ToolPointer } from "./types";
 
 /** Everything a tool did during a driven gesture. */
 interface Effects {
-  readonly commits: { before: Uint8ClampedArray; after: Uint8ClampedArray; label: string; target: string; layerId: string }[];
+  readonly commits: { before: Uint8ClampedArray; after: Uint8ClampedArray; label: string; target: string; layerId: string; bounds: unknown }[];
   readonly selectionCommits: { before: PixelSelection | null; after: PixelSelection | null; label: string }[];
+  /** Every preview paint a stroke tool asked for, recorded synchronously —
+   * the real bridge coalesces these to one canvas write per animation
+   * frame, which is a rendering-performance detail this harness has no DOM
+   * to observe and does not need to: what matters here is that a tool
+   * previews *something* sane on every point it processes, not how often
+   * the real browser actually paints it. */
+  readonly previews: { pixels: Uint8ClampedArray; target: string; layerId: string; dirty: unknown }[];
   readonly foreground: string[];
+  readonly maskForegroundWhite: boolean[];
   readonly captured: number[];
   /** Every state the tool passed through, not only the one it ended on. */
   readonly stateHistory: unknown[];
   state: unknown;
+  lastStrokePoint: { toolId: string; layerId: string; point: { x: number; y: number } } | null;
 }
 
 /**
@@ -132,7 +141,7 @@ function drive(
 ): { effects: Effects; document: RasterDocumentState; untouched: RasterDocumentState } {
   const document = documentFixture();
   const untouched = documentFixture();
-  const effects: Effects = { commits: [], selectionCommits: [], foreground: [], captured: [], stateHistory: [], state: tool.createState() };
+  const effects: Effects = { commits: [], selectionCommits: [], foreground: [], maskForegroundWhite: [], captured: [], stateHistory: [], previews: [], state: tool.createState(), lastStrokePoint: null };
 
   const context: ToolContext<unknown> = {
     documentId: "test-document",
@@ -160,9 +169,13 @@ function drive(
     paintColor: "#101317",
     paintMask,
     targetPixels: () => materialise(document.layers.find((item) => item.id === document.activeLayerId)!, document),
-    commit: async (before, after, label, target = "pixels", layerId = document.activeLayerId) => { effects.commits.push({ before, after, label, target, layerId }); },
+    commit: async (before, after, label, target = "pixels", layerId = document.activeLayerId, bounds = null) => { effects.commits.push({ before, after, label, target, layerId, bounds }); },
     commitSelection: async (before, after, label) => { effects.selectionCommits.push({ before, after, label }); },
+    schedulePreview: (pixels, target, layerId, dirty) => { effects.previews.push({ pixels, target, layerId, dirty: dirty ?? null }); },
     setForegroundColor: (color) => { effects.foreground.push(color); },
+    setMaskForegroundWhite: (white) => { effects.maskForegroundWhite.push(white); },
+    get lastStrokePoint() { return effects.lastStrokePoint; },
+    setLastStrokePoint: (next) => { effects.lastStrokePoint = next; },
   };
 
   gesture(context, effects);

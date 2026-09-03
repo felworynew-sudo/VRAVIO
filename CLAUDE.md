@@ -184,7 +184,12 @@ npx pnpm -r test --run
 ## 8. Технические особенности окружения
 
 - `pnpm` глобально не установлен — вызывать через `npx pnpm`.
-- Дев-сервер: `npx pnpm --filter @vravio/web dev --port 5300`.
+- Дев-сервер: `npx pnpm --filter @vravio/web dev --port 5300`. Для превью в
+  браузере через `preview_start`/`.claude/launch.json` конфиг лежит по
+  `/Users/dionis/.claude/launch.json` (не в корне репозитория) и запускает
+  команду через `sh -c` с явным `cd` в `~/vravio-new` — `runtimeExecutable`
+  выполняется не из корня репозитория, голый `npx pnpm ...` не находит
+  workspace.
 - В браузере доступен `globalThis.vravio` — ядро целиком: `documents`,
   `assets`, `historyByDocument`, `commands`, `keymap`. Это лучший способ
   проверить состояние документа, не кликая по интерфейсу.

@@ -25,6 +25,22 @@ export function opaqueBoundsOf(pixels: Uint8ClampedArray, width: number, height:
 }
 
 /**
+ * Grows `current` to also cover the (x0,y0)-(x1,y1) segment, padded by
+ * `pad` in every direction.
+ *
+ * The dirty-region accumulator every stroke tool needs: a dab only touches
+ * pixels within its own radius of the point it was placed at, so the pad is
+ * normally half the brush size — enough margin that a repaint cropped to
+ * this rect never clips the stroke it is supposed to show.
+ */
+export function unionRect(current: RasterRect | null, x0: number, y0: number, x1: number, y1: number, pad: number): RasterRect {
+  const left = Math.min(x0, x1) - pad, top = Math.min(y0, y1) - pad, right = Math.max(x0, x1) + pad, bottom = Math.max(y0, y1) + pad;
+  if (!current) return { x: left, y: top, width: right - left, height: bottom - top };
+  const nextLeft = Math.min(current.x, left), nextTop = Math.min(current.y, top);
+  return { x: nextLeft, y: nextTop, width: Math.max(current.x + current.width, right) - nextLeft, height: Math.max(current.y + current.height, bottom) - nextTop };
+}
+
+/**
  * The layer's pixels laid out across the whole document.
  *
  * The bridge for everything that still thinks in canvas coordinates — filters,

@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import type { PixelSelection, Point, RasterDocumentState, RasterLayer } from "@vravio/env-raster";
+import type { PixelSelection, Point, RasterDocumentState, RasterLayer, RasterRect } from "@vravio/env-raster";
 import type { DocumentViewport } from "../../../store";
 
 /**
@@ -101,6 +101,24 @@ export interface ToolContext<TState> {
   targetPixels(): Uint8ClampedArray;
 
   /**
+   * Draws in-progress pixel work straight to the canvas, without going
+   * through React.
+   *
+   * A dragged stroke can produce hundreds of pointer-move frames a second;
+   * routing each one through `setState` would re-render the whole tree per
+   * frame, undoing the exact optimisation this project already paid for
+   * (RASTER-PAINT-002 — compositing dropped from 428ms to 14ms by working
+   * outside React's render cycle, see CLAUDE.md's rule on abstraction by
+   * layer). Calls coalesce to one paint per animation frame, and — the same
+   * trade the existing render path already makes — a call with `dirty`
+   * repaints only that region while one without repaints the frame in full;
+   * pass `dirty` on every dab a stroke tool already tracks the bounds of.
+   * Nothing needs to call this again once a gesture ends — `commit`
+   * repaints from the committed state itself.
+   */
+  schedulePreview(pixels: Uint8ClampedArray, target: PaintTarget["kind"], layerId: string, dirty?: RasterRect | null): void;
+
+  /**
    * The single mask every painting tool is confined to, combining the
    * selection with "lock transparent pixels" into one.
    *
@@ -125,8 +143,15 @@ export interface ToolContext<TState> {
    * right for every painting tool ported so far; a tool commits to a
    * different layer only when it names one, the way Auto-Select's
    * click-to-pick-a-different-layer will need to.
+   *
+   * `bounds`, when given, is what actually changed — the same dirty-region
+   * hint `commitPixels` always took, feeding the tile cache CLAUDE.md's §5
+   * traces to a measured 428ms→38ms. A one-shot tool has no reason to pass
+   * it (the whole layer *is* what changed); a dragged stroke does, or every
+   * commit forces a full-canvas recomposite regardless of how small the
+   * stroke actually was.
    */
-  commit(before: Uint8ClampedArray, after: Uint8ClampedArray, label: string, target?: PaintTarget["kind"], layerId?: string): Promise<void>;
+  commit(before: Uint8ClampedArray, after: Uint8ClampedArray, label: string, target?: PaintTarget["kind"], layerId?: string, bounds?: RasterRect | null): Promise<void>;
 
   /**
    * The only way a tool changes what is selected.
@@ -141,11 +166,45 @@ export interface ToolContext<TState> {
   commitSelection(before: PixelSelection | null, after: PixelSelection | null, label: string): Promise<void>;
 
   setForegroundColor(color: string): void;
+
+  /**
+   * Sets which side of black/white the mask brush paints in — Alt-click's
+   * other half: sampling a mask reads not a colour but which side of the
+   * threshold the pixel already sits on, and setting *that* is what the
+   * next stroke needs, not a hex value `setForegroundColor` has no use for
+   * while a mask is being edited (`paintColor` already reads this, not the
+   * foreground swatch, whenever a mask is the paint target).
+   */
+  setMaskForegroundWhite(white: boolean): void;
+
+  /**
+   * Where the last stroke ended, for Shift-click's "draw a straight line
+   * from here" — Photoshop's behaviour for every brush-like tool, and one
+   * that has to survive both across gestures (click, release, Shift-click
+   * elsewhere) and across switching to a *different* brush-like tool and
+   * back, which is why this lives at the host rather than in any one tool's
+   * own `state`: state is reset by `onDeactivate` on every tool switch,
+   * this deliberately is not. `layerId` is `mask:<id>` when the point was
+   * laid down while editing that layer's mask, matching `paintTarget`'s own
+   * `mask:`-free `layerId` plus `kind` split kept apart here only because
+   * this needs a single comparable key, not a pair.
+   */
+  readonly lastStrokePoint: { readonly toolId: string; readonly layerId: string; readonly point: Point } | null;
+  setLastStrokePoint(next: { toolId: string; layerId: string; point: Point } | null): void;
 }
 
 export interface RasterToolDefinition<TState = unknown> {
   /** Matches the id in `tools.ts`, which still owns the descriptive fields. */
   readonly id: string;
+  /**
+   * True for a tool that edits real pixels and cannot work against a layer
+   * that has none yet — text and adjustment layers are described by data,
+   * not a pixel buffer, and only carry a cached preview of one. Replaces
+   * the old `RASTER_ONLY_TOOLS` set: the workspace checks this before
+   * calling `onPointerDown` and offers to rasterize the layer instead of
+   * calling the tool against a buffer that is about to be thrown away.
+   */
+  readonly requiresRasterized?: boolean;
   /** Fresh state for this tool, held by the workspace and passed back in. */
   createState(): TState;
 
