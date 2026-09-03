@@ -119,6 +119,22 @@ export interface ToolContext<TState> {
   schedulePreview(pixels: Uint8ClampedArray, target: PaintTarget["kind"], layerId: string, dirty?: RasterRect | null): void;
 
   /**
+   * Recomposites the document straight to the canvas with one layer
+   * suppressed, or (`null`) repaints the ordinary composite — outside React,
+   * like `schedulePreview`, for the same reason.
+   *
+   * What editing an existing text layer needs: the live edit shows as an
+   * HTML `<textarea>` overlay (see `text.tsx`'s `Overlay`), not as rendered
+   * pixels, so the layer's own rasterised pixels have to stay out of the
+   * way underneath it or the two would visibly double up. Nothing else
+   * about the document changes while this is in effect — no history step,
+   * no `commit` — it is purely what the canvas shows until the edit ends
+   * one way or the other and either a real commit repaints it correctly or
+   * `null` puts the ordinary composite back.
+   */
+  previewWithLayerHidden(layerId: string | null): void;
+
+  /**
    * The single mask every painting tool is confined to, combining the
    * selection with "lock transparent pixels" into one.
    *
@@ -179,6 +195,23 @@ export interface ToolContext<TState> {
    * there.
    */
   commitDocument(before: RasterDocumentState, after: RasterDocumentState, label: string, bounds?: RasterRect | null): Promise<void>;
+
+  /**
+   * Makes `layerId` the active layer, without a history step — the same
+   * "clicking a layer selects it" that has never itself been undoable.
+   * `commit`/`commitDocument` set `activeLayerId` too, but only as a side
+   * effect of an edit that already needed a step of its own; this is for a
+   * tool whose gesture selects a *different* layer without editing one, the
+   * way clicking an existing text layer with the type tool does before any
+   * typing has happened yet to commit.
+   */
+  setActiveLayer(layerId: string): void;
+
+  /** The foreground swatch, unconditionally — unlike `paintColor`, never
+   * swapped for black/white because some *other* layer's mask happens to be
+   * in edit mode right now. Text always types in the real foreground
+   * colour; masks are not a thing a text layer has. */
+  readonly foregroundColor: string;
 
   setForegroundColor(color: string): void;
 
@@ -251,8 +284,17 @@ export interface RasterToolDefinition<TState = unknown> {
    * follow `shapeKind` (rectangle vs ellipse vs line draw differently) even
    * though which shape that is was never part of the drag's own state, only
    * of the panel next to the canvas.
+   *
+   * `context` is the same context object every hook above gets — added for
+   * `raster.text`, whose overlay is not just a shape drawn over the canvas
+   * but a live `<textarea>` that has to call `setState`/`commitDocument`
+   * itself as the user types and commits, the same as any gesture handler
+   * would. `state`/`document`/`options` stay as their own props rather than
+   * folding into `context` alone: every Overlay before this one destructures
+   * them directly, and `context.state`/`context.document`/`context.options`
+   * would be the identical values under a different spelling.
    */
-  readonly Overlay?: (props: { state: TState; document: RasterDocumentState; options: Readonly<Record<string, string | number | boolean>> }) => ReactNode;
+  readonly Overlay?: (props: { state: TState; document: RasterDocumentState; options: Readonly<Record<string, string | number | boolean>>; context: ToolContext<TState> }) => ReactNode;
 }
 
 export interface RasterToolModule<TState = unknown> {

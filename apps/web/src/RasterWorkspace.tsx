@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
-  activeRasterLayer, appendLayer, clampRegionToDocument, cloneRasterState, copyHealedRegion, layerAccepts, layerLockReason, layerOpaqueBounds, paintMask, marqueeCorners, pickLayerAt, combineSelections, compositeRasterDocument, compositeRasterRegion, DirtyRegion, RasterTileCache, createEllipseSelection, createPolygonSelection, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
+  activeRasterLayer, appendLayer, clampRegionToDocument, cloneRasterState, copyHealedRegion, layerAccepts, layerLockReason, layerOpaqueBounds, paintMask, marqueeCorners, pickLayerAt, combineSelections, compositeRasterDocument, compositeRasterRegion, DirtyRegion, RasterTileCache, createEllipseSelection, createPolygonSelection, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
   accumulateUniquePixelBytes, changedRenderRegion, confineToSelection, visitPixelBuffers, layerDocumentPixels, mipForZoom, setLayerPixels, isRasterDocumentState, layerRenderSignatures, liftSelection, parseHexColor, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, scaleLayerPixels, scaleSelection, selectionOutlinePath, stampFloating,
   translateLayerPixels, translateSelection, quadLayerPixels, quadSelection, selectionBounds, unionRect, type FloatingPixels, type LayerRenderSignature, type PixelSelection, type Point, type RasterDocumentState, type RasterGuide, type RasterLayer, type RasterRect, type RasterTextData, type SelectionCombineMode,
   cloneDab, cloneStrokeSegment,
@@ -14,7 +14,7 @@ import { importModelAsLayer } from "./scene3d-commands";
 import { rasterToolById } from "./environments/raster/tools/registry";
 import type { PaintTarget, ToolContext, ToolPointer } from "./environments/raster/tools/types";
 import { defaultViewport, useShellStore, type DocumentViewport } from "./store";
-import { beginBusy, withBusy } from "./busy";
+import { beginBusy } from "./busy";
 import { diagnostic } from "./diagnostics";
 import { identityTextTransform, multiplyTextTransform, renderTextLayerPixels, textBoundsTransform, textFontString } from "./textRender";
 import { localized, text } from "./i18n";
@@ -346,17 +346,6 @@ function meshSelection(selection: PixelSelection | null, width: number, height: 
   return bounds.width && bounds.height ? { mask, bounds } : null;
 }
 
-interface TextDraft {
-  point: Point;
-  value: string;
-  layerId?: string;
-  mode: "point" | "area" | "path" | "dynamic";
-  boxWidth?: number;
-  boxHeight?: number;
-  path?: { start: Point; control: Point; end: Point; flip?: boolean };
-  dynamicPreset?: "circle" | "arch" | "bow";
-}
-
 export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const workspaceRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -394,17 +383,13 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const [cloneSourceView, setCloneSourceView] = useState<{ x: number; y: number } | null>(null);
   const cloneSourceCanvasRef = useRef<HTMLCanvasElement>(null);
   const lastBrushPointRef = useRef<{ toolId: string; layerId: string; point: Point } | null>(null);
-  const textCancelRef = useRef(false);
   const spotHealMaskRef = useRef<{ mask: Uint8ClampedArray; originX: number; originY: number; width: number; height: number; before: Uint8ClampedArray } | null>(null);
   const [selectionDraft, setSelectionDraft] = useState<RasterRect | null>(null);
-  const textGesture = useRef<{ from: Point; current: Point; pointerId: number; mode: string } | null>(null);
-  const [textFrameDraft, setTextFrameDraft] = useState<RasterRect | null>(null);
   const tiles = useRef(new RasterTileCache({ tileSize: 256 }));
   const documentDirty = useRef(new DirtyRegion());
   /** What the visible canvas currently holds, so idle renders repaint nothing. */
   const painted = useRef<{ canvas: HTMLCanvasElement | null; revision: number; signatures?: readonly LayerRenderSignature[]; mip?: number }>({ canvas: null, revision: -1 });
   const [lassoDraft, setLassoDraft] = useState<Point[]>([]);
-  const [textDraft, setTextDraft] = useState<TextDraft | null>(null);
   const [transformPreview, setTransformPreview] = useState<PendingPixelTransform | null>(null);
   const [brushPopup, setBrushPopup] = useState<{ left: number; top: number; detailed: boolean } | null>(null);
   const [spaceHeld, setSpaceHeld] = useState(false);
@@ -979,36 +964,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     await history.execute({ label, memoryEstimate: (before?.mask.byteLength ?? 0) + (after?.mask.byteLength ?? 0), redo: () => assign(after), undo: () => assign(before) });
   };
 
-  const commitText = () => {
-    textCancelRef.current = false;
-    if (!textDraft?.value) { setTextDraft(null); return; }
-    const before = cloneRasterState(state);
-    const existing = textDraft.layerId ? state.layers.find((item) => item.id === textDraft.layerId) : null;
-    const layer: RasterLayer = existing ? { ...existing, pixels: existing.pixels.slice(), ...(existing.text ? { text: { ...existing.text } } : {}) } : createRasterLayer(state.width, state.height, textDraft.value.slice(0, 28));
-    const options = toolOptions["raster.text"] ?? {};
-    const fontSize = existing?.text?.fontSize ?? Number(options.fontSize ?? 48), fontFamily = existing?.text?.fontFamily ?? String(options.fontFamily ?? "Arial");
-    const textX = existing?.text?.x ?? textDraft.point.x, textY = existing?.text?.y ?? textDraft.point.y, lineHeight = existing?.text?.lineHeight ?? 1.2, letterSpacing = existing?.text?.letterSpacing ?? 0, align = existing?.text?.align ?? "left", color = existing?.text?.color ?? foregroundColor;
-    const bold = existing?.text?.bold ?? false, italic = existing?.text?.italic ?? false, underline = existing?.text?.underline ?? false;
-    const boxWidth = existing?.text?.boxWidth ?? textDraft.boxWidth, boxHeight = existing?.text?.boxHeight ?? textDraft.boxHeight, path = existing?.text?.path ?? textDraft.path, dynamicPreset = existing?.text?.dynamicPreset ?? textDraft.dynamicPreset;
-    const textData = { value: textDraft.value, x: textX, y: textY, fontFamily, fontSize, lineHeight, letterSpacing, align, color, bold, italic, underline, mode: existing?.text?.mode ?? textDraft.mode, ...(boxWidth !== undefined ? { boxWidth } : {}), ...(boxHeight !== undefined ? { boxHeight } : {}), ...(path ? { path } : {}), ...(dynamicPreset ? { dynamicPreset } : {}) };
-    layer.text = textData;
-    // Rasterising type paints the whole document surface and then scans it for
-    // the glyph bounds; on a large canvas that is long enough to look stuck.
-    setLayerPixels(layer, withBusy("Rasterising type (Растеризация текста)", () => renderTextLayerPixels(textData, state.width, state.height)), state.width, state.height);
-    layer.kind = "text";
-    layer.name = textDraft.value.slice(0, 28) || layer.name;
-    const after = cloneRasterState(state); const index = after.layers.findIndex((item) => item.id === layer.id); if (index >= 0) after.layers[index] = layer; else after.layers.push(layer); after.activeLayerId = layer.id;
-    setTextDraft(null);
-    void commitDocumentState(before, after, "Type Layer (Текстовый слой)");
-  };
-
-  const cancelText = () => {
-    textCancelRef.current = true;
-    setTextDraft(null);
-    const canvas = canvasRef.current;
-    if (canvas) putPixels(canvas, compositeRasterDocument(state), state.width, state.height);
-  };
-
   /**
    * The bridge to the tool catalogue (stage 3 of docs/migration-plan.md).
    *
@@ -1105,7 +1060,13 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       commit: (before, after, label, target = paintTarget.kind, layerId = paintTarget.layerId, bounds = null) => commitPixels(before, after, label, target, layerId, bounds),
       commitSelection: (before, after, label) => commitSelection(before, after, label),
       commitDocument: (before, after, label, bounds) => { if (bounds) documentDirty.current.add(bounds); return commitDocumentState(before, after, label); },
+      setActiveLayer: (layerId) => kernel.documents.update<RasterDocumentState>(document.id, (current) => { current.activeLayerId = layerId; }),
+      foregroundColor,
       setForegroundColor,
+      previewWithLayerHidden: (layerId) => {
+        if (!canvas) return;
+        putPixels(canvas, layerId ? compositeRasterDocument({ ...state, layers: state.layers.map((item) => item.id === layerId ? { ...item, visible: false } : item) }) : compositeRasterDocument(state), state.width, state.height);
+      },
       setMaskForegroundWhite: (white) => setMaskForegroundWhite(document.id, white),
       lastStrokePoint: lastBrushPointRef.current,
       setLastStrokePoint: (next) => { lastBrushPointRef.current = next; },
@@ -1324,21 +1285,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       gesture.current = { before: canvasPixels(layer).slice(), working: canvasPixels(layer).slice(), curveStart: point, pending: point, pointerId: event.pointerId, frame: null, target: "pixels", layerId: layer.id };
       return;
     }
-    if (activeToolId === "raster.text") {
-      const hit = [...state.layers].reverse().find((item) => { if (item.kind !== "text" || !item.text) return false; const lines = item.text.value.split("\n"), width = item.text.boxWidth ?? Math.max(...lines.map((line) => line.length), 1) * item.text.fontSize * .65, height = item.text.boxHeight ?? lines.length * item.text.fontSize * item.text.lineHeight; const left = item.text.path ? Math.min(item.text.path.start.x, item.text.path.end.x, item.text.path.control.x) : item.text.x, top = item.text.path ? Math.min(item.text.path.start.y, item.text.path.end.y, item.text.path.control.y) - item.text.fontSize : item.text.y; return point.x >= left && point.x <= left + Math.max(width, item.text.path ? Math.abs(item.text.path.end.x - item.text.path.start.x) : 0) && point.y >= top && point.y <= top + Math.max(height, item.text.fontSize * 2); });
-      if (hit?.text) kernel.documents.update<RasterDocumentState>(document.id, (current) => { current.activeLayerId = hit.id; });
-      if (hit?.text) {
-        textCancelRef.current = false;
-        setTextDraft({ point: { x: hit.text.x, y: hit.text.y }, value: hit.text.value, layerId: hit.id, mode: hit.text.mode ?? (hit.text.boxWidth ? "area" : "point"), ...(hit.text.boxWidth !== undefined ? { boxWidth: hit.text.boxWidth } : {}), ...(hit.text.boxHeight !== undefined ? { boxHeight: hit.text.boxHeight } : {}), ...(hit.text.path ? { path: hit.text.path } : {}), ...(hit.text.dynamicPreset ? { dynamicPreset: hit.text.dynamicPreset } : {}) });
-        putPixels(canvas, compositeRasterDocument({ ...state, layers: state.layers.map((item) => item.id === hit.id ? { ...item, visible: false } : item) }), state.width, state.height);
-        return;
-      }
-      const mode = String(toolOptions["raster.text"]?.textMode ?? "auto");
-      canvas.setPointerCapture(event.pointerId);
-      textGesture.current = { from: point, current: point, pointerId: event.pointerId, mode };
-      setTextFrameDraft({ x: point.x, y: point.y, width: 0, height: 0 });
-      return;
-    }
     if (activeToolId === "raster.crop" || activeToolId === "raster.move") {
       const effectiveSelection = activeToolId === "raster.move" && state.selection ? restrictSelectionToAlpha(state.selection, canvasPixels(layer), state.width, state.height) : null;
       if (activeToolId === "raster.move" && state.selection && !effectiveSelection) { diagnostic("info", "move", "Move ignored: selection contains no opaque pixels", { documentId: document.id, layerId: layer.id }); return; }
@@ -1387,14 +1333,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
           catalogueTool.onPointerMove(context, toolPointerFromNative(native, workspace, rect));
         }
       }
-      return;
-    }
-    const textDrawing = textGesture.current;
-    if (textDrawing && textDrawing.pointerId === event.pointerId) {
-      const workspace = workspaceRef.current; if (!workspace) return;
-      const point = pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent);
-      textDrawing.current = point;
-      setTextFrameDraft({ x: Math.min(textDrawing.from.x, point.x), y: Math.min(textDrawing.from.y, point.y), width: Math.abs(point.x - textDrawing.from.x), height: Math.abs(point.y - textDrawing.from.y) });
       return;
     }
     // raster.patch's own fallback still uses this directly (see its
@@ -1486,22 +1424,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       if (pointer) { catalogueTool.onGestureEnd(toolContextFor(catalogueTool.id, event.currentTarget), pointer); return; }
     }
     setPatchOffset(null);
-    const textDrawing = textGesture.current;
-    if (textDrawing && textDrawing.pointerId === event.pointerId) {
-      textGesture.current = null; setTextFrameDraft(null);
-      const distance = Math.hypot(textDrawing.current.x - textDrawing.from.x, textDrawing.current.y - textDrawing.from.y);
-      const end = distance >= 4 ? textDrawing.current : { x: Math.min(state.width, textDrawing.from.x + 240), y: textDrawing.from.y };
-      const width = Math.max(24, Math.abs(end.x - textDrawing.from.x)), height = Math.max(24, Math.abs(end.y - textDrawing.from.y));
-      if (textDrawing.mode === "auto") {
-        setTextDraft({ point: textDrawing.from, value: "", mode: distance >= 4 ? "area" : "point", ...(distance >= 4 ? { boxWidth: width, boxHeight: height } : {}) });
-      } else {
-        const dynamic = textDrawing.mode.startsWith("dynamic"), preset = textDrawing.mode === "dynamicCircle" ? "circle" : textDrawing.mode === "dynamicBow" ? "bow" : "arch";
-        const middle = { x: (textDrawing.from.x + end.x) / 2, y: (textDrawing.from.y + end.y) / 2 };
-        const control = preset === "bow" ? { x: middle.x, y: middle.y + Math.max(30, width * .22) } : preset === "circle" ? { x: middle.x, y: middle.y - Math.max(60, width * .65) } : { x: middle.x, y: middle.y - Math.max(30, width * .28) };
-        setTextDraft({ point: textDrawing.from, value: "", mode: dynamic ? "dynamic" : "path", boxWidth: width, boxHeight: Math.max(height, width * .5), path: { start: textDrawing.from, control, end }, ...(dynamic ? { dynamicPreset: preset as "circle" | "arch" | "bow" } : {}) });
-      }
-      return;
-    }
     const selecting = selectionGesture.current;
     if (selecting && selecting.pointerId === event.pointerId) {
       selectionGesture.current = null;
@@ -1860,7 +1782,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       />}
       {preferences.showGuides && <svg className="guide-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">{[...guides, ...(guideDraft ? [guideDraft] : [])].map((guide, index) => guide.orientation === "vertical" ? <line key={`${guide.orientation}-${index}`} x1={guide.position} y1="0" x2={guide.position} y2={state.height}/> : <line key={`${guide.orientation}-${index}`} x1="0" y1={guide.position} x2={state.width} y2={guide.position}/>)}</svg>}
       {/* Whatever the active catalogue tool draws over the canvas. */}
-      {catalogueTool?.Overlay && <catalogueTool.Overlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>}/>}
+      {catalogueTool?.Overlay && <catalogueTool.Overlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>} context={toolContextFor(catalogueTool.id, canvasRef.current)}/>}
       {activeToolId === "raster.patch" && patchOffset && committedSelectionPath && (
         <svg className="patch-source-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">
           {/* Where the patch is reading from. The destination keeps its own
@@ -1883,20 +1805,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         {transformPreview.mesh.map((anchor, index) => <rect className="transform-handle" key={index} x={anchor.x - 4 / viewport.zoom} y={anchor.y - 4 / viewport.zoom} width={8 / viewport.zoom} height={8 / viewport.zoom}/>)}
       </svg>}
       {transformPreview && !transformPreview.corners && !transformPreview.mesh && transformBounds && <svg className="transform-controls" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><rect x={transformBounds.x} y={transformBounds.y} width={transformBounds.width} height={transformBounds.height}/><line className="transform-rotation-stem" x1={transformBounds.x + transformBounds.width / 2} y1={transformBounds.y} x2={transformBounds.x + transformBounds.width / 2} y2={transformBounds.y - 27 / viewport.zoom}/><circle className="transform-rotation-handle" cx={transformBounds.x + transformBounds.width / 2} cy={transformBounds.y - 27 / viewport.zoom} r={5 / viewport.zoom}/>{([[0,0],[.5,0],[1,0],[0,.5],[1,.5],[0,1],[.5,1],[1,1]] as [number, number][]).map(([x,y], index) => <rect className="transform-handle" key={index} x={transformBounds.x + transformBounds.width * x - 4 / viewport.zoom} y={transformBounds.y + transformBounds.height * y - 4 / viewport.zoom} width={8 / viewport.zoom} height={8 / viewport.zoom}/>)}</svg>}
-      {textFrameDraft && <svg className="text-frame-draft" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><rect x={textFrameDraft.x} y={textFrameDraft.y} width={textFrameDraft.width} height={textFrameDraft.height}/></svg>}
-      {textDraft && (() => {
-        const existingLayer = textDraft.layerId ? state.layers.find((item) => item.id === textDraft.layerId) : null;
-        const draftOptions = toolOptions["raster.text"] ?? {};
-        const draftFont = existingLayer?.text?.fontFamily ?? String(draftOptions.fontFamily ?? "Arial");
-        const draftSize = existingLayer?.text?.fontSize ?? Number(draftOptions.fontSize ?? 48);
-        const draftColor = existingLayer?.text?.color ?? foregroundColor;
-        const draftAlign = existingLayer?.text?.align ?? "left";
-        const draftLineHeight = existingLayer?.text?.lineHeight ?? 1.2;
-        const anchorX = textDraft.path ? Math.min(textDraft.path.start.x, textDraft.path.end.x) : textDraft.point.x;
-        const anchorY = textDraft.path ? Math.min(textDraft.path.start.y, textDraft.path.end.y, textDraft.path.control.y) - draftSize : textDraft.point.y;
-        const wysiwyg: CSSProperties = { left: anchorX, top: anchorY, width: textDraft.mode === "point" ? Math.max(160, Math.min(520, state.width - anchorX)) : Math.max(24, textDraft.boxWidth ?? 240), minHeight: textDraft.mode === "area" ? Math.max(24, textDraft.boxHeight ?? 96) : draftSize * draftLineHeight * 1.5, fontFamily: draftFont, fontSize: draftSize, color: draftColor, textAlign: draftAlign as CSSProperties["textAlign"], lineHeight: draftLineHeight, fontWeight: existingLayer?.text?.bold ? 700 : 400, fontStyle: existingLayer?.text?.italic ? "italic" : "normal", textDecoration: existingLayer?.text?.underline ? "underline" : "none" };
-        return <><textarea className="canvas-text-entry" data-text-mode={textDraft.mode} autoFocus spellCheck={false} style={wysiwyg} value={textDraft.value} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => setTextDraft({ ...textDraft, value: event.target.value })} onBlur={() => { if (textCancelRef.current) textCancelRef.current = false; else commitText(); }} onKeyDown={(event) => { event.stopPropagation(); if (event.key === "Escape") { event.preventDefault(); cancelText(); } if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); commitText(); } }} placeholder="Type (Введите текст)"/>{textDraft.path && <svg className="text-path-guide" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><path d={`M ${textDraft.path.start.x} ${textDraft.path.start.y} Q ${textDraft.path.control.x} ${textDraft.path.control.y} ${textDraft.path.end.x} ${textDraft.path.end.y}`}/></svg>}</>;
-      })()}
     </div>
     {/*
       Cursors live outside .raster-stage on purpose: that element carries the zoom's CSS scale

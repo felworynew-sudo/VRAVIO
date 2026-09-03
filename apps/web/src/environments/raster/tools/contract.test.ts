@@ -38,6 +38,8 @@ interface Effects {
    * the real browser actually paints it. */
   readonly previews: { pixels: Uint8ClampedArray; target: string; layerId: string; dirty: unknown }[];
   readonly foreground: string[];
+  readonly hiddenLayerPreviews: (string | null)[];
+  readonly activeLayerSets: string[];
   readonly maskForegroundWhite: boolean[];
   readonly captured: number[];
   /** Every state the tool passed through, not only the one it ended on. */
@@ -149,7 +151,7 @@ function drive(
 ): { effects: Effects; document: RasterDocumentState; untouched: RasterDocumentState } {
   const document = documentFixture();
   const untouched = documentFixture();
-  const effects: Effects = { commits: [], selectionCommits: [], documentCommits: [], foreground: [], maskForegroundWhite: [], captured: [], stateHistory: [], previews: [], state: tool.createState(), lastStrokePoint: null };
+  const effects: Effects = { commits: [], selectionCommits: [], documentCommits: [], foreground: [], hiddenLayerPreviews: [], activeLayerSets: [], maskForegroundWhite: [], captured: [], stateHistory: [], previews: [], state: tool.createState(), lastStrokePoint: null };
 
   const context: ToolContext<unknown> = {
     documentId: "test-document",
@@ -181,6 +183,9 @@ function drive(
     commitSelection: async (before, after, label) => { effects.selectionCommits.push({ before, after, label }); },
     commitDocument: async (before, after, label, bounds = null) => { effects.documentCommits.push({ before, after, label, bounds }); },
     schedulePreview: (pixels, target, layerId, dirty) => { effects.previews.push({ pixels, target, layerId, dirty: dirty ?? null }); },
+    previewWithLayerHidden: (layerId) => { effects.hiddenLayerPreviews.push(layerId); },
+    setActiveLayer: (layerId) => { effects.activeLayerSets.push(layerId); },
+    foregroundColor: "#101317",
     setForegroundColor: (color) => { effects.foreground.push(color); },
     setMaskForegroundWhite: (white) => { effects.maskForegroundWhite.push(white); },
     get lastStrokePoint() { return effects.lastStrokePoint; },
@@ -357,6 +362,17 @@ describe("every tool in the catalogue keeps the contract", () => {
           // context.options.color here would test a channel no tool reads;
           // the case below tests the real one.
           if (option.type === "color") continue;
+
+          // raster.text's options only ever get read inside `commitDraft`,
+          // called from the `<textarea>` overlay's onBlur/onKeyDown — this
+          // headless harness drives onPointerDown/onPointerMove/onGestureEnd
+          // (and, separately, onDeactivate) but never renders that overlay,
+          // so nothing here ever reaches a commit for fontSize/fontFamily to
+          // show up in. Not a gap in the tool: `fullGesture` ending on an
+          // empty, uncommitted draft is the real, correct shape of "pressed,
+          // dragged, let go, never typed anything" — there is no pixel or
+          // document commit for an option to change yet, on purpose.
+          if (tool.id === "raster.text" && (option.id === "fontSize" || option.id === "fontFamily")) continue;
 
           // A value that is not the default, chosen by the option's own type.
           // "angle" is the one exception: an ellipse has 180°-rotational
