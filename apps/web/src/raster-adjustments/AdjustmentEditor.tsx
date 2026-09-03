@@ -1,14 +1,25 @@
 import type { RasterAdjustment } from "@vravio/env-raster";
+import { Checkbox } from "../ui/atoms/Checkbox";
+import { SliderWithNumber } from "../ui/molecules/SliderWithNumber";
 import { builtInLuts, parseCubeLut } from "@vravio/env-raster";
 import { localized, text } from "../i18n";
 import { diagnostic } from "../diagnostics";
 import type { AdjustmentEditorProps } from "./types";
 
+/**
+ * The adjustment dialogs' slider row, now the shared molecule underneath.
+ *
+ * The name and props are kept so the thirty-odd call sites below do not
+ * change, but the two hand-rolled inputs this used to render are gone: the
+ * options bar and these dialogs had grown separate implementations of the
+ * same row, and the one that stayed is the one with the wheel, the scrubby
+ * drag, modifier-scaled steps and Escape.
+ */
 function NumberSlider({ label, value, min, max, step = 1, onChange }: { label: string; value: number; min: number; max: number; step?: number; onChange(value: number): void }) {
-  return <label className="adjustment-field"><span>{label}</span><input type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(event.target.valueAsNumber)}/><input type="number" min={min} max={max} step={step} value={value} onChange={(event) => onChange(event.target.valueAsNumber)}/></label>;
+  return <SliderWithNumber className="adjustment-field" label={label} value={value} spec={{ min, max, step }} onChange={onChange} />;
 }
 
-function Check({ label, checked, onChange }: { label: string; checked: boolean; onChange(value: boolean): void }) { return <label className="adjustment-check"><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)}/><span>{label}</span></label>; }
+function Check({ label, checked, onChange }: { label: string; checked: boolean; onChange(value: boolean): void }) { return <Checkbox className="adjustment-check" label={label} checked={checked} onChange={onChange} />; }
 
 function Histogram({ values }: { values?: readonly number[] | undefined }) {
   const bins = values?.length ? values : Array.from({ length: 64 }, (_, index) => Math.sin(index / 63 * Math.PI) ** 2);
