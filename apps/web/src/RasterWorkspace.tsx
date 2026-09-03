@@ -871,7 +871,12 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
           return;
         }
         const previousRev = kernel.assets.mustGet(assetId).head;
-        const nextRev = await kernel.assets.commitRevision(assetId, toBytes(after, state.width, state.height), "raster", label);
+        // The confined buffer, not the raw one: this revision is what redo and
+        // any later reload restore from, so committing the unconfined edit here
+        // would show the selection honoured and then quietly undo that on the
+        // first redo. Every current tool masks as it paints, which is why the
+        // two agree today; the guarantee above is for the one that does not.
+        const nextRev = await kernel.assets.commitRevision(assetId, toBytes(confined, state.width, state.height), "raster", label);
         await history.record(createBufferRevisionOperation({ assets: kernel.assets, assetId, label, producedBy: "raster", apply: assign }, previousRev, nextRev));
       });
     await commitQueue.current;
