@@ -122,6 +122,12 @@ const eyedropper: RasterToolDefinition<EyedropperState> = {
     context.setState({ gesture: null, view: null });
   },
 
+  onDeactivate(context) {
+    // Switching tool mid-press would otherwise leave the loupe in this
+    // tool's state, to be drawn again the moment the tool is picked back up.
+    if (context.state.gesture || context.state.view) context.setState({ gesture: null, view: null });
+  },
+
   Overlay({ state, document }) {
     const view = state.view;
     if (!view) return null;

@@ -1115,6 +1115,18 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     };
   };
 
+  // Tool state is kept per id and outlives a switch, so the tool being left
+  // has to be told to let go of it. Without this, changing tool mid-press
+  // strands the gesture and picking the tool back up draws it again.
+  const previousToolRef = useRef(activeToolId);
+  useEffect(() => {
+    const previous = previousToolRef.current;
+    previousToolRef.current = activeToolId;
+    if (previous === activeToolId || !previous) return;
+    const leaving = rasterToolById.get(previous);
+    leaving?.onDeactivate?.(toolContextFor(previous, null));
+  });
+
   const handlePointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     if (event.button === 2) return;
     const canvas = event.currentTarget;

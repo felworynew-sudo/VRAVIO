@@ -92,6 +92,18 @@ export interface RasterToolDefinition<TState = unknown> {
   onGestureEnd?(context: ToolContext<TState>, pointer: ToolPointer): void;
 
   /**
+   * Called when the tool stops being the active one.
+   *
+   * Required of any tool that keeps state, because state is held per tool id
+   * and outlives the tool being switched away from: without this, changing
+   * tool in the middle of a gesture strands whatever was in progress, and
+   * coming back to the tool renders it again as though the pointer were
+   * still down. The contract test enforces that a tool ends up back at
+   * `createState()` after this runs.
+   */
+  onDeactivate?(context: ToolContext<TState>): void;
+
+  /**
    * Anything the tool draws over the canvas.
    *
    * A component rather than an imperative handle, because what it draws is a
