@@ -1,10 +1,26 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <circle cx="50" cy="50" r="34" fill="none" stroke="#fff" stroke-width="7" opacity=".5"/>
-  <g stroke="#fff" stroke-width="8" stroke-linecap="round">
-    <path d="M28,28 L40,40"/><path d="M28,28 L28,42"/><path d="M28,28 L42,28"/>
-    <path d="M72,28 L60,40"/><path d="M72,28 L72,42"/><path d="M72,28 L58,28"/>
-    <path d="M28,72 L40,60"/><path d="M28,72 L28,58"/><path d="M28,72 L42,72"/>
-    <path d="M72,72 L60,60"/><path d="M72,72 L72,58"/><path d="M72,72 L58,72"/>
+<svg id="_Слой_1" data-name="Слой_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 100 100">
+  <!-- Generator: Adobe Illustrator 30.0.0, SVG Export Plug-In . SVG Version: 2.1.1 Build 123)  -->
+  <defs>
+    <style>
+      .st0 {
+        fill: none;
+        isolation: isolate;
+        opacity: .5;
+        stroke: #fff;
+        stroke-width: 7.9px;
+      }
+
+      .st1 {
+        fill: #fff;
+      }
+    </style>
+  </defs>
+  <circle class="st0" cx="50" cy="50" r="38.6"/>
+  <g>
+    <polygon class="st1" points="57 44.3 56.9 44.3 57.1 43.5 59.6 21.2 68.7 21.2 68.7 26.2 79.9 15 84.5 23.2 75.1 32.6 83.4 32.6 80 41.7 57.7 44.2 57 44.4 57 44.3"/>
+    <polygon class="st1" points="43.2 55.6 43.3 55.6 43.1 56.4 40.4 78.8 31.3 78.8 31.3 73.8 20.1 85 15.5 76.8 24.9 67.4 16.6 67.4 20 58.3 42.5 55.7 43.2 55.5 43.2 55.6"/>
+    <polygon class="st1" points="43.1 43.6 43.3 44.3 43.2 44.3 43.2 44.4 42.5 44.2 20 41.7 16.6 32.6 24.9 32.6 15.5 23.2 20.1 15 31.3 26.2 31.3 21.2 40.4 21.2 43.1 43.6"/>
+    <polygon class="st1" points="75.1 67.4 84.5 76.8 79.9 85 68.7 73.8 68.7 78.8 59.6 78.8 57.1 56.4 56.9 55.6 57 55.6 57 55.5 57.8 55.7 80 58.3 83.4 67.4 75.1 67.4"/>
   </g>
 </svg>
