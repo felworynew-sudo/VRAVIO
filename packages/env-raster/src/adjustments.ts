@@ -31,7 +31,7 @@ export function buildCurveLut(points: Array<{ x: number; y: number }>): Uint8Cla
   return lut;
 }
 
-function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
+export function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
   const red = r / 255, green = g / 255, blue = b / 255, max = Math.max(red, green, blue), min = Math.min(red, green, blue), light = (max + min) / 2;
   if (max === min) return [0, 0, light];
   const delta = max - min, saturation = light > .5 ? delta / (2 - max - min) : delta / (max + min);
@@ -39,7 +39,7 @@ function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
   return [hue, saturation, light];
 }
 
-function hslToRgb(h: number, s: number, l: number): [number, number, number] {
+export function hslToRgb(h: number, s: number, l: number): [number, number, number] {
   if (!s) return [l * 255, l * 255, l * 255];
   const q = l < .5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
   const channel = (offset: number) => { let t = h + offset; if (t < 0) t += 1; if (t > 1) t -= 1; return (t < 1 / 6 ? p + (q - p) * 6 * t : t < .5 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p) * 255; };

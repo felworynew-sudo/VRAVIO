@@ -18,6 +18,92 @@ loop over existing data — not a new `if`/`case` arm bolted onto a switch that 
 has fifteen. If you catch yourself writing the sixteenth arm, that's the signal to turn
 the switch into a lookup instead.
 
+## Environment-scoped catalogs: panels, tools, presets
+
+VRAVIO is one shell over four environments (raster/vector/audio/video, more later). The
+rule that keeps them from turning into copy-pasted forks of each other: **a catalog is
+environment-scoped and lives in its own files; a component is shared and branches
+internally on document kind.** Getting these backwards is the single easiest way to
+regress "vector shows raster's adjustment menu" or "audio has no panels at all."
+
+### Panel catalogs — one directory per environment, same three files
+
+`raster-core-panels/` and `vector-core-panels/` are siblings, and every environment that
+gets its own panel set (audio/video, when built) is a third sibling with the identical
+shape:
+
+- `types.ts` — the `<Env>CorePanelDefinition`/`<Env>CorePanelModule` types and
+  `corePanelTitle` helper. Copy from an existing one; the shape doesn't change per
+  environment.
+- `registry.ts` — `import.meta.glob<T>("./definitions/*.ts", { eager: true })` over
+  `definitions/*.ts`, exporting `<env>CorePanels` and `<env>CorePanelById`. A new panel
+  *for that environment* is a new file under its own `definitions/`, matched
+  automatically — never a new `if` arm in a switch.
+- `runtime.ts` — its own `STORAGE_KEY`, `PANEL_REQUEST_EVENT`, `PANEL_CHANGED_EVENT`, and
+  the read/persist/request functions. Environment-scoped storage keys are what let a
+  user's raster layout and vector layout differ and both survive reload independently.
+
+What each environment's `definitions/` directory *contains* is where they genuinely
+differ, and that's the point: vector's directory has no `assets`/`navigator`/`effects`
+panel definitions because vector has no use for them, and that absence is real — nothing
+elsewhere has to remember to hide them.
+
+`DockLayout.tsx` wires a new environment's catalog into the shell the same way vector's
+was wired onto raster's pattern: import its `registry`/`runtime` exports (aliasing the
+event/function names, e.g. `PANEL_REQUEST_EVENT as VECTOR_PANEL_REQUEST_EVENT`), add its
+branch to the panel-request-event listener, and add its `persist*(...)` call alongside
+the others in `onDidLayoutChange`. `App.tsx`'s Window menu picks the right catalog with
+one ternary keyed on `active?.kind` — extend the ternary, don't duplicate the menu.
+
+### Panel *components* are shared, not duplicated
+
+The panel a user sees for "Properties" or "Layers" is **one component**, registered
+under the same id (`inspector`, `layers`, `history`, `color`, ...) in every catalog that
+offers it. `InspectorPanel` in `DockLayout.tsx` is the reference: it checks
+`isRasterDocumentState(document.state)` first, `isVectorDocumentState(document.state)`
+second, and renders the shape appropriate to whichever is true. A raster-only concept
+(adjustment-layer editing, layer effects) is a branch *inside* that shared component,
+gated on document kind — never a second `VectorInspectorPanel` component copy-pasted
+from the raster one with the raster-only parts stripped out by hand. If a genuinely
+raster-only or vector-only panel doesn't make sense to share at all (there is no vector
+equivalent of Channels), it simply isn't registered in the other environment's catalog —
+that's what keeps it invisible there, not a runtime `disabled` check.
+
+### The tool catalog
+
+`tools.ts` is one flat array covering every environment, each entry carrying a `kind`
+field (`"raster" | "vector" | "audio" | "video"`). Every UI surface that lists tools —
+the toolbar, the options bar, shortcut registration — filters that one array by
+`tool.kind === active.kind` rather than importing a separate per-environment tool list.
+Adding a tool is one new array entry with the right `kind`, in the file every other tool
+already lives in. If two environments need the literal same tool (a shared selection or
+transform behavior), it is **one tool definition reused across the environments that
+apply it**, not two definitions that happen to look alike today and drift apart the
+first time one of them gets a bug fix the other doesn't.
+
+### New Document presets follow the same rule
+
+`NewDocumentDialog.tsx`'s preset list is one array; each preset carries a
+`documentKind` field, and the dialog filters presets, categories and even which input
+fields render (`Color mode`/`Pixel aspect` only for `documentKind === "raster"`,
+`Background` for `"raster" | "video"`, etc.) by that field. A new environment's presets
+are new entries in the same array with their own `documentKind`, not a parallel preset
+list.
+
+### Environments never call each other
+
+An environment (`RasterEnvironment`, `VectorEnvironment`, ...) implements the
+`Environment` interface from `packages/kernel/src/environment.ts` and is registered once
+in `kernel.ts`. The only channel between two environments is the kernel's
+`RoundTripManager`, moving an *asset reference* — never pixels or shape data directly —
+from one document to another (see `VectorShape`'s `image` kind, which holds a
+`pixelAssetId`, not a copy of the picture). Adding a new environment means implementing
+that interface; it never means importing raster code into vector's package or vice
+versa. `packages/env-vector` depending on `@vravio/env-raster` only for the raster asset
+byte format (`encodeRasterAsset`/`decodeRasterAsset` — the shared, environment-agnostic
+"what a picture asset's bytes look like" contract) is the one sanctioned exception, and
+even that stays one-directional.
+
 ## Commands and keyboard shortcuts
 
 `kernel.commands` (`CommandRegistry`) and `kernel.keymap` (`KeymapManager`) are the only
