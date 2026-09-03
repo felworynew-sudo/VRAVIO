@@ -239,6 +239,37 @@ export interface ToolContext<TState> {
    */
   readonly lastStrokePoint: { readonly toolId: string; readonly layerId: string; readonly point: Point } | null;
   setLastStrokePoint(next: { toolId: string; layerId: string; point: Point } | null): void;
+
+  /**
+   * Where the clone stamp reads from, and the running offset between that
+   * source and whatever point is being painted.
+   *
+   * Host-level for two reasons `lastStrokePoint` doesn't have to justify on
+   * its own: the crosshair-and-swatch cursor that shows the source lives in
+   * the workspace chrome, outside any tool's `Overlay`, and reads these
+   * directly on every pointer move regardless of which tool is even active;
+   * and "registered" alignment means the offset from one stroke carries into
+   * the next, deliberately surviving past a single gesture the way a tool's
+   * own `state` does not.
+   */
+  readonly cloneSource: Point | null;
+  setCloneSource(point: Point | null): void;
+  readonly cloneOffset: Point | null;
+  setCloneOffset(offset: Point | null): void;
+
+  /**
+   * Tints the canvas wherever the spot-healing brush has marked so far, over
+   * whatever `schedulePreview` most recently painted — straight to the
+   * canvas, outside React, like `schedulePreview`/`previewWithLayerHidden`.
+   *
+   * Spot healing accumulates a *mask* of where to heal as the gesture drags
+   * (the repair itself only runs once, on release, over the whole marked
+   * area at once — healing each dab in isolation would seam at the
+   * overlaps) — this is the only way to show the user what has been marked
+   * before that repair happens, and it is a tint over the existing picture,
+   * not a buffer `schedulePreview`'s pixels-for-a-layer shape can express.
+   */
+  previewSpotHealMask(mask: Uint8ClampedArray, originX: number, originY: number, width: number, height: number): void;
 }
 
 export interface RasterToolDefinition<TState = unknown> {

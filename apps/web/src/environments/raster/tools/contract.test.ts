@@ -46,6 +46,9 @@ interface Effects {
   readonly stateHistory: unknown[];
   state: unknown;
   lastStrokePoint: { toolId: string; layerId: string; point: { x: number; y: number } } | null;
+  cloneSource: { x: number; y: number } | null;
+  cloneOffset: { x: number; y: number } | null;
+  readonly spotHealPreviews: { mask: Uint8ClampedArray; originX: number; originY: number; width: number; height: number }[];
 }
 
 /**
@@ -151,7 +154,7 @@ function drive(
 ): { effects: Effects; document: RasterDocumentState; untouched: RasterDocumentState } {
   const document = documentFixture();
   const untouched = documentFixture();
-  const effects: Effects = { commits: [], selectionCommits: [], documentCommits: [], foreground: [], hiddenLayerPreviews: [], activeLayerSets: [], maskForegroundWhite: [], captured: [], stateHistory: [], previews: [], state: tool.createState(), lastStrokePoint: null };
+  const effects: Effects = { commits: [], selectionCommits: [], documentCommits: [], foreground: [], hiddenLayerPreviews: [], activeLayerSets: [], maskForegroundWhite: [], captured: [], stateHistory: [], previews: [], state: tool.createState(), lastStrokePoint: null, cloneSource: null, cloneOffset: null, spotHealPreviews: [] };
 
   const context: ToolContext<unknown> = {
     documentId: "test-document",
@@ -190,10 +193,26 @@ function drive(
     setMaskForegroundWhite: (white) => { effects.maskForegroundWhite.push(white); },
     get lastStrokePoint() { return effects.lastStrokePoint; },
     setLastStrokePoint: (next) => { effects.lastStrokePoint = next; },
+    get cloneSource() { return effects.cloneSource; },
+    setCloneSource: (point) => { effects.cloneSource = point; },
+    get cloneOffset() { return effects.cloneOffset; },
+    setCloneOffset: (offset) => { effects.cloneOffset = offset; },
+    previewSpotHealMask: (mask, originX, originY, width, height) => { effects.spotHealPreviews.push({ mask, originX, originY, width, height }); },
   };
 
   gesture(context, effects);
   return { effects, document, untouched };
+}
+
+/** A 16x16 block, matching what `patchTestMask()` fills below — shared so
+ * the injected selection and the injected `paintMask` agree on where the
+ * region actually is; `patchFromSelection`'s `selectionMask` and
+ * `selectionBounds` are two separate parameters that both have to describe
+ * the same place, or `feather` has nothing at the edge to soften. */
+function patchTestMask(): Uint8ClampedArray {
+  const mask = new Uint8ClampedArray(64 * 48);
+  for (let y = 4; y < 20; y += 1) for (let x = 4; x < 20; x += 1) mask[y * 64 + x] = 255;
+  return mask;
 }
 
 /**
@@ -204,6 +223,22 @@ function drive(
  * only demonstrate that where there is something to read across.
  */
 const fullGesture = (context: ToolContext<unknown>, tool: RasterToolDefinition<unknown>) => {
+  // raster.clone cannot paint at all until a source point exists — Alt-click
+  // is not a modifier on the paint gesture the way it is for other tools,
+  // it is a separate, prerequisite gesture of its own. Doing it here is
+  // exercising the tool the way it is actually used, not a special case for
+  // the sake of the test: a fullGesture that skipped it would drive every
+  // check in this file against a no-op.
+  if (tool.id === "raster.clone") tool.onPointerDown?.(context, { ...pointerAt(4, 4), altKey: true });
+  // raster.patch's actual drag-and-blend behaviour — what "mode"/"feather"
+  // affect — only runs once a selection already exists; with none, every
+  // gesture takes the "draw one for me first" fallback instead (see
+  // patch.tsx). A document with no selection is the fixture's honest
+  // default, so the selection is injected here rather than changing the
+  // fixture for every other tool's test too.
+  if (tool.id === "raster.patch" && !context.selection) {
+    (context as { selection: PixelSelection | null }).selection = { mask: patchTestMask(), bounds: { x: 4, y: 4, width: 16, height: 16 } };
+  }
   tool.onPointerDown?.(context, pointerAt(10, 10));
   // Two intermediate points, not one: a tool that accumulates a *path*
   // (lasso) rather than recomputing purely from its start and current point
@@ -333,7 +368,22 @@ describe("every tool in the catalogue keeps the contract", () => {
 
       it("has no option that leaves the result unchanged", () => {
         const descriptorOptions = descriptor?.options ?? [];
-        const baseline = drive(tool, options, (context) => fullGesture(context, tool));
+        // raster.patch reads `patchFromSelection`'s own region from
+        // `ctx.paintMask`, which returns early on `null` — unlike a brush,
+        // where `undefined` means "nothing restricts this" and the tool
+        // supplies its own unrestricted path, patch has no such fallback:
+        // the mask *is* what tells it where to patch at all. In real use
+        // `paintMask` always exists once a selection does; this harness's
+        // `paintMask` is a separate, independent parameter, so it has to be
+        // supplied here or every patch gesture is silently a no-op.
+        // Matches the selection `fullGesture` injects for this tool exactly
+        // (bounds 4,4..20,20) — a uniformly-255 mask would give `feather`
+        // nothing to feather against: `featherMask` softens pixels near a
+        // zero neighbour, and there is no zero anywhere near the region it
+        // actually looks at if the mask never drops to zero in the first
+        // place.
+        const mask = tool.id === "raster.patch" ? patchTestMask() : undefined;
+        const baseline = drive(tool, options, (context) => fullGesture(context, tool), mask);
         // Every state the tool passed through, not just the one it ended on:
         // a tool that clears its state when the gesture finishes — as the
         // eyedropper does, so the loupe does not outlive the press — would
@@ -374,6 +424,25 @@ describe("every tool in the catalogue keeps the contract", () => {
           // document commit for an option to change yet, on purpose.
           if (tool.id === "raster.text" && (option.id === "fontSize" || option.id === "fontFamily")) continue;
 
+          // raster.clone's "alignMode" only ever distinguishes itself across
+          // two separate gestures ("registered" reuses the first gesture's
+          // offset on the next one, "none" recomputes) — on the very first
+          // gesture with no prior offset, both branches of `!offset ||
+          // alignMode === "none"` are true for the same reason, so they
+          // compute the identical offset. A single fullGesture structurally
+          // cannot show the difference, no matter how the fixture is tuned.
+          if (tool.id === "raster.clone" && option.id === "alignMode") continue;
+
+          // raster.spotHeal's "spacing" only has anything to space: the
+          // Shift-click straight-line path (`spotHealStrokeSegment`, which
+          // genuinely steps dabs apart) — not the plain drag path, which
+          // stamps one dab per pointer sample the bridge already coalesced,
+          // with no stepping of its own for a spacing to widen or narrow.
+          // `fullGesture` never holds Shift, so this option has nothing to
+          // move for it to show up in, structurally, the same shape as
+          // `raster.clone`'s `alignMode` above.
+          if (tool.id === "raster.spotHeal" && option.id === "spacing") continue;
+
           // A value that is not the default, chosen by the option's own type.
           // "angle" is the one exception: an ellipse has 180°-rotational
           // symmetry, so max (180, for a -180..180 range) maps it onto
@@ -395,8 +464,8 @@ describe("every tool in the catalogue keeps the contract", () => {
           // of it: pin roundness away from that symmetric point for this one
           // comparison, on both sides, so only angle actually varies.
           const pin = option.id === "angle" && descriptorOptions.some((candidate) => candidate.id === "roundness") ? { roundness: 60 } : null;
-          const base = pin ? drive(tool, { ...options, ...pin }, (context) => fullGesture(context, tool)) : baseline;
-          const variant = drive(tool, { ...options, ...pin, [option.id]: changed }, (context) => fullGesture(context, tool));
+          const base = pin ? drive(tool, { ...options, ...pin }, (context) => fullGesture(context, tool), mask) : baseline;
+          const variant = drive(tool, { ...options, ...pin, [option.id]: changed }, (context) => fullGesture(context, tool), mask);
 
           // The rule the project already committed to: if a tool has a
           // setting, the setting affects the tool. A checkbox that changes

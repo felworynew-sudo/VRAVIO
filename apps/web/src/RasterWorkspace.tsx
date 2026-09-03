@@ -1,11 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
-  activeRasterLayer, appendLayer, clampRegionToDocument, cloneRasterState, copyHealedRegion, layerAccepts, layerLockReason, layerOpaqueBounds, paintMask, marqueeCorners, pickLayerAt, combineSelections, compositeRasterDocument, compositeRasterRegion, DirtyRegion, RasterTileCache, createEllipseSelection, createPolygonSelection, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
-  accumulateUniquePixelBytes, changedRenderRegion, confineToSelection, visitPixelBuffers, layerDocumentPixels, mipForZoom, setLayerPixels, isRasterDocumentState, layerRenderSignatures, liftSelection, parseHexColor, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, scaleLayerPixels, scaleSelection, selectionOutlinePath, stampFloating,
+  activeRasterLayer, appendLayer, clampRegionToDocument, cloneRasterState, layerAccepts, layerLockReason, layerOpaqueBounds, paintMask, pickLayerAt, compositeRasterDocument, compositeRasterRegion, DirtyRegion, RasterTileCache, cropRasterDocument, floodFill,
+  accumulateUniquePixelBytes, changedRenderRegion, confineToSelection, visitPixelBuffers, layerDocumentPixels, mipForZoom, setLayerPixels, isRasterDocumentState, layerRenderSignatures, liftSelection, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, scaleLayerPixels, scaleSelection, selectionOutlinePath, stampFloating,
   translateLayerPixels, translateSelection, quadLayerPixels, quadSelection, selectionBounds, unionRect, type FloatingPixels, type LayerRenderSignature, type PixelSelection, type Point, type RasterDocumentState, type RasterGuide, type RasterLayer, type RasterRect, type RasterTextData, type SelectionCombineMode,
-  cloneDab, cloneStrokeSegment,
-  spotHealDab, spotHealStrokeSegment, spotHealApply,
-  patchFromSelection,
   RASTER_ASSET_MIME, decodeRasterAsset, encodeRasterAsset, isRasterAsset,
 } from "@vravio/env-raster";
 import { createBufferRevisionOperation, type AssetId, type VravioDocument } from "@vravio/kernel";
@@ -351,8 +348,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textTransformCanvasRef = useRef<HTMLCanvasElement>(null);
   const brushCursorRef = useRef<HTMLDivElement>(null);
-  const gesture = useRef<{ before: Uint8ClampedArray; working: Uint8ClampedArray; curveStart: Point; pending: Point; pointerId: number; frame: number | null; dirty?: RasterRect | null; strokeBounds?: RasterRect | null; target: "pixels" | "mask"; layerId: string; sourceOffsetX?: number; sourceOffsetY?: number; sourcePixels?: Uint8ClampedArray } | null>(null);
-  const selectionGesture = useRef<{ kind: "rectangle" | "ellipse" | "lasso"; from: Point; current: Point; points: Point[]; pointerId: number; mode: SelectionCombineMode; spaceAnchor: Point | null } | null>(null);
   const documentGesture = useRef<
     | { kind: "move" | "crop"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean; /** basePixels is the transform's original, so offsets are the running total. */ fromOrigin?: boolean; /** Content lifted off the layer once; moving places it, never re-cuts. */ float?: FloatingPixels }
     | { kind: "scale"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; handleX: -1 | 0 | 1; handleY: -1 | 0 | 1; dx: number; dy: number; text?: PendingTextTransform }
@@ -383,23 +378,16 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const [cloneSourceView, setCloneSourceView] = useState<{ x: number; y: number } | null>(null);
   const cloneSourceCanvasRef = useRef<HTMLCanvasElement>(null);
   const lastBrushPointRef = useRef<{ toolId: string; layerId: string; point: Point } | null>(null);
-  const spotHealMaskRef = useRef<{ mask: Uint8ClampedArray; originX: number; originY: number; width: number; height: number; before: Uint8ClampedArray } | null>(null);
   const [selectionDraft, setSelectionDraft] = useState<RasterRect | null>(null);
   const tiles = useRef(new RasterTileCache({ tileSize: 256 }));
   const documentDirty = useRef(new DirtyRegion());
   /** What the visible canvas currently holds, so idle renders repaint nothing. */
   const painted = useRef<{ canvas: HTMLCanvasElement | null; revision: number; signatures?: readonly LayerRenderSignature[]; mip?: number }>({ canvas: null, revision: -1 });
-  const [lassoDraft, setLassoDraft] = useState<Point[]>([]);
   const [transformPreview, setTransformPreview] = useState<PendingPixelTransform | null>(null);
   const [brushPopup, setBrushPopup] = useState<{ left: number; top: number; detailed: boolean } | null>(null);
   const [spaceHeld, setSpaceHeld] = useState(false);
   /** "in" or "out" while space and a modifier turn the pointer into a zoom tool. */
   const [spaceZoom, setSpaceZoom] = useState<"in" | "out" | null>(null);
-  /** How far the patch has been dragged, for the outline that shows where it reads. */
-  const [patchOffset, setPatchOffset] = useState<{ x: number; y: number } | null>(null);
-  /** Dragging the marquee itself, with a selection tool, leaving pixels alone. */
-  // The drag ends in the same tick the last move arrives, before React has
-  // re-rendered, so the handler cannot read the preview out of state.
   /** Space's own state, so a modifier pressed after it can be read without a re-render. */
   const spaceDown = useRef(false);
   const [navigating, setNavigating] = useState(false);
@@ -520,8 +508,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     if (canvas) putPixels(canvas, compositeRasterDocument({ ...state, layers: state.layers.map((item) => item.id === transformPreview.layerId ? { ...item, visible: false } : item) }), state.width, state.height);
   }, [state, transformPreview?.layerId, transformPreview?.text?.initialBounds, transformPreview?.text?.original]);
 
-  useEffect(() => () => { const current = gesture.current; if (current?.frame != null) cancelAnimationFrame(current.frame); }, []);
-
   useEffect(() => {
     const workspace = workspaceRef.current;
     if (!workspace || viewport.mode !== "fit") return;
@@ -585,7 +571,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     return () => window.removeEventListener("vravio-guides-clear", clear);
   }, [document.id]);
 
-  const renderWorking = (pixels: Uint8ClampedArray, target: "pixels" | "mask" = gesture.current?.target ?? "pixels", layerId = gesture.current?.layerId ?? state.activeLayerId) => {
+  const renderWorking = (pixels: Uint8ClampedArray, target: "pixels" | "mask" = "pixels", layerId = state.activeLayerId) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     if (target === "mask") { putPixels(canvas, compositeRasterDocument(withLayerMaskPixels(state, layerId, pixels)), state.width, state.height); return; }
@@ -607,17 +593,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     const layer = activeRasterLayer(state);
     const direct = state.layers.length === 1 && layer.visible && layer.opacity === 1 && layer.blendMode === "normal";
     putRegionPixels(canvas, direct ? cropPixels(pixels, state.width, region) : compositeRasterRegion(withActiveLayerPixels(state, pixels), region), region);
-  };
-
-  const scheduleWorkingRender = (current: NonNullable<typeof gesture.current>) => {
-    if (current.frame !== null) return;
-    current.frame = requestAnimationFrame(() => {
-      current.frame = null;
-      if (gesture.current !== current) return;
-      const dirty = current.dirty;
-      current.dirty = null;
-      if (dirty) renderWorkingRegion(current.working, dirty); else renderWorking(current.working);
-    });
   };
 
   const applyTransformFrame = (transforming: NonNullable<typeof documentGesture.current>) => {
@@ -710,7 +685,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    renderWorking(gesture.current?.working ?? canvasPixels(activeRasterLayer(state)));
+    renderWorking(canvasPixels(activeRasterLayer(state)));
     const imageData = ctx.getImageData(0, 0, state.width, state.height);
     const px = imageData.data;
     for (let y = 0; y < maskH; y++) {
@@ -725,28 +700,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       }
     }
     ctx.putImageData(imageData, 0, 0);
-  };
-
-  const appendBrushPoint = (current: NonNullable<typeof gesture.current>, point: Point) => {
-    if (Math.hypot(point.x - current.pending.x, point.y - current.pending.y) < 0.05) return;
-    const end = { x: (current.pending.x + point.x) / 2, y: (current.pending.y + point.y) / 2, pressure: ((current.pending.pressure ?? 1) + (point.pressure ?? 1)) / 2 };
-    const options = toolOptions[activeToolId ?? ""] ?? {};
-    const opacity = Number(options.opacity ?? 100) / 100 * Number(options.flow ?? 100) / 100;
-    if (activeToolId === "raster.clone") {
-      cloneStrokeSegment(current.working, state.width, state.height, current.curveStart, current.pending, current.sourceOffsetX ?? 0, current.sourceOffsetY ?? 0, Number(options.size ?? 24), opacity, brushMask, Number(options.hardness ?? 82) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), true, false, current.sourcePixels, Number(options.spacing ?? 12) / 100);
-    } else {
-      drawQuadraticStrokeSegment(current.working, state.width, state.height, current.curveStart, current.pending, end, Number(options.size ?? 24), parseHexColor(current.target === "mask" && activeToolId === "raster.eraser" ? "#ffffff" : paintColor), opacity, current.target === "pixels" && activeToolId === "raster.eraser", brushMask, activeToolId === "raster.pencil" ? 1 : Number(options.hardness ?? 82) / 100, Number(options.spacing ?? 12) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), options.pressureSize !== false, options.pressureOpacity === true);
-    }
-    // Union every point the segment could have touched, padded by the brush radius (plus a
-    // margin for the neighbourhood-sampling tools) so the repaint never clips the stroke.
-    const pad = Number(options.size ?? 24) / 2 + 2;
-    current.dirty = unionRect(current.dirty ?? null, current.curveStart.x, current.curveStart.y, current.pending.x, current.pending.y, pad);
-    current.dirty = unionRect(current.dirty, point.x, point.y, end.x, end.y, pad);
-    // `dirty` is consumed every frame; `strokeBounds` survives so the commit can tell the tile
-    // cache exactly what the finished stroke changed.
-    current.strokeBounds = unionRect(current.strokeBounds ?? null, current.dirty.x, current.dirty.y, current.dirty.x + current.dirty.width, current.dirty.y + current.dirty.height, 0);
-    current.curveStart = end;
-    current.pending = point;
   };
 
   /**
@@ -1070,6 +1023,11 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       setMaskForegroundWhite: (white) => setMaskForegroundWhite(document.id, white),
       lastStrokePoint: lastBrushPointRef.current,
       setLastStrokePoint: (next) => { lastBrushPointRef.current = next; },
+      cloneSource: sourcePointRef.current,
+      setCloneSource: (point) => { sourcePointRef.current = point; },
+      cloneOffset: cloneOffsetRef.current,
+      setCloneOffset: (offset) => { cloneOffsetRef.current = offset; },
+      previewSpotHealMask: (mask, originX, originY, width, height) => renderSpotHealOverlay(mask, originX, originY, width, height),
     };
   };
 
@@ -1205,86 +1163,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       setRasterizeConfirm({ layerId: layer.id, layerName: layer.name });
       return;
     }
-    if (activeToolId === "raster.clone") {
-      if (maskTarget) return;
-      if (event.altKey) {
-        sourcePointRef.current = { x: point.x, y: point.y };
-        cloneOffsetRef.current = null;
-        return;
-      }
-      if (!sourcePointRef.current) return;
-      canvas.setPointerCapture(event.pointerId);
-      const before = canvasPixels(layer).slice();
-      const working = canvasPixels(layer).slice();
-      const options = toolOptions[activeToolId] ?? {};
-      const opacity = Number(options.opacity ?? 100) / 100;
-      const previous = lastBrushPointRef.current, shiftFrom = event.shiftKey && previous?.toolId === activeToolId && previous.layerId === layer.id ? previous.point : null;
-      const alignMode = String(options.alignMode ?? "registered");
-      if (!cloneOffsetRef.current || alignMode === "none") cloneOffsetRef.current = { x: sourcePointRef.current.x - point.x, y: sourcePointRef.current.y - point.y };
-      const sourceOffsetX = cloneOffsetRef.current.x, sourceOffsetY = cloneOffsetRef.current.y;
-      if (shiftFrom) {
-        cloneStrokeSegment(working, state.width, state.height, shiftFrom, point, sourceOffsetX, sourceOffsetY, Number(options.size ?? 24), opacity, brushMask, Number(options.hardness ?? 82) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), true, false, before, Number(options.spacing ?? 12) / 100);
-        lastBrushPointRef.current = { toolId: activeToolId, layerId: layer.id, point }; renderWorking(working); void commitPixels(before, working, "Clone Line (Линия штампа)"); return;
-      }
-      cloneDab(working, state.width, state.height, point.x + sourceOffsetX, point.y + sourceOffsetY, point.x, point.y, Number(options.size ?? 24), opacity, Number(options.hardness ?? 82) / 100, brushMask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), true, false, before);
-      gesture.current = { before, working, curveStart: point, pending: point, pointerId: event.pointerId, frame: null, target: "pixels", layerId: layer.id, sourceOffsetX, sourceOffsetY, sourcePixels: before };
-      renderWorking(working);
-      return;
-    }
-    if (activeToolId === "raster.spotHeal") {
-      if (maskTarget) return;
-      // Sampling all layers reads the picture as it looks, not as this one layer
-      // holds it — which is the whole point when the blemish is on a layer above.
-      const healSource = (toolOptions[activeToolId]?.sampleAllLayers === true) ? compositeRasterDocument(state) : null;
-      canvas.setPointerCapture(event.pointerId);
-      const before = canvasPixels(layer).slice();
-      const options = toolOptions[activeToolId] ?? {};
-      const size = Number(options.size ?? 24);
-      const radius = Math.ceil(size / 2) + 8;
-      const originX = Math.max(0, Math.floor(point.x) - radius);
-      const originY = Math.max(0, Math.floor(point.y) - radius);
-      const originX2 = Math.min(state.width, Math.ceil(point.x) + radius);
-      const originY2 = Math.min(state.height, Math.ceil(point.y) + radius);
-      const maskW = originX2 - originX;
-      const maskH = originY2 - originY;
-      const mask = new Uint8ClampedArray(maskW * maskH);
-      const previous = lastBrushPointRef.current, shiftFrom = event.shiftKey && previous?.toolId === activeToolId && previous.layerId === layer.id ? previous.point : null;
-      if (shiftFrom) {
-        const lineOriginX = Math.max(0, Math.floor(Math.min(shiftFrom.x, point.x)) - radius), lineOriginY = Math.max(0, Math.floor(Math.min(shiftFrom.y, point.y)) - radius), lineRight = Math.min(state.width, Math.ceil(Math.max(shiftFrom.x, point.x)) + radius), lineBottom = Math.min(state.height, Math.ceil(Math.max(shiftFrom.y, point.y)) + radius), lineWidth = lineRight - lineOriginX, lineHeight = lineBottom - lineOriginY, lineMask = new Uint8ClampedArray(lineWidth * lineHeight);
-        spotHealStrokeSegment(lineMask, lineOriginX, lineOriginY, lineWidth, lineHeight, shiftFrom.x, shiftFrom.y, point.x, point.y, size, Number(options.hardness ?? 82) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
-        const working = before.slice();
-        if (healSource) {
-          // Computed on the composite, written back only where the mask covers:
-          // the repair belongs to this layer, the rest of the picture does not.
-          const healed = healSource.slice();
-          spotHealApply(healed, state.width, state.height, lineMask, lineOriginX, lineOriginY, lineWidth, lineHeight, Number(options.opacity ?? 100) / 100);
-          copyHealedRegion(working, healed, lineMask, lineOriginX, lineOriginY, lineWidth, lineHeight, state.width, state.height);
-        } else spotHealApply(working, state.width, state.height, lineMask, lineOriginX, lineOriginY, lineWidth, lineHeight, Number(options.opacity ?? 100) / 100);
-        lastBrushPointRef.current = { toolId: activeToolId, layerId: layer.id, point }; renderWorking(working); void commitPixels(before, working, "Spot Healing Line (Линия восстановления)"); return;
-      }
-      spotHealDab(mask, originX, originY, maskW, maskH, point.x, point.y, size, Number(options.hardness ?? 82) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
-      spotHealMaskRef.current = { mask, originX, originY, width: maskW, height: maskH, before };
-      gesture.current = { before, working: before.slice(), curveStart: point, pending: point, pointerId: event.pointerId, frame: null, target: "pixels", layerId: layer.id };
-      renderSpotHealOverlay(mask, originX, originY, maskW, maskH);
-      return;
-    }
-    if (activeToolId === "raster.patch") {
-      if (maskTarget) return;
-      // Photoshop's Patch draws its own selection when there is none, then
-      // patches when you drag inside it. Doing nothing silently — which is what
-      // this did — leaves no way to discover that a selection was needed.
-      if (!state.selection) {
-        canvas.setPointerCapture(event.pointerId);
-        selectionGesture.current = { kind: "lasso", from: point, current: point, points: [point], pointerId: event.pointerId, mode: "replace", spaceAnchor: null };
-        setSelectionDraft({ x: point.x, y: point.y, width: 0, height: 0 });
-        setLassoDraft([point]);
-        return;
-      }
-      canvas.setPointerCapture(event.pointerId);
-      setPatchOffset({ x: 0, y: 0 });
-      gesture.current = { before: canvasPixels(layer).slice(), working: canvasPixels(layer).slice(), curveStart: point, pending: point, pointerId: event.pointerId, frame: null, target: "pixels", layerId: layer.id };
-      return;
-    }
     if (activeToolId === "raster.crop" || activeToolId === "raster.move") {
       const effectiveSelection = activeToolId === "raster.move" && state.selection ? restrictSelectionToAlpha(state.selection, canvasPixels(layer), state.width, state.height) : null;
       if (activeToolId === "raster.move" && state.selection && !effectiveSelection) { diagnostic("info", "move", "Move ignored: selection contains no opaque pixels", { documentId: document.id, layerId: layer.id }); return; }
@@ -1335,32 +1213,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       }
       return;
     }
-    // raster.patch's own fallback still uses this directly (see its
-    // onPointerDown branch below): it draws a lasso selection when the
-    // document has none, before patch tool can patch. Otherwise
-    // selectionGesture stays unused now that marquee/ellipseMarquee/lasso
-    // route through the tool catalogue and never reach this code.
-    const selecting = selectionGesture.current;
-    if (selecting && selecting.pointerId === event.pointerId) {
-      const workspace = workspaceRef.current;
-      if (!workspace) return;
-      const point = pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent);
-      if (spaceHeld) {
-        const anchor = selecting.spaceAnchor ?? point;
-        selecting.from = { x: selecting.from.x + (point.x - anchor.x), y: selecting.from.y + (point.y - anchor.y) };
-        selecting.current = { x: selecting.current.x + (point.x - anchor.x), y: selecting.current.y + (point.y - anchor.y) };
-        selecting.spaceAnchor = point;
-      } else {
-        selecting.spaceAnchor = null;
-        selecting.current = point;
-      }
-      selecting.points.push(selecting.current);
-      setLassoDraft([...selecting.points]);
-      const xs = selecting.points.map((item) => item.x), ys = selecting.points.map((item) => item.y);
-      const left = Math.min(...xs), top = Math.min(...ys);
-      setSelectionDraft({ x: left, y: top, width: Math.max(1, Math.max(...xs) - left), height: Math.max(1, Math.max(...ys) - top) });
-      return;
-    }
     const transforming = documentGesture.current;
     if (transforming && transforming.pointerId === event.pointerId) {
       const workspace = workspaceRef.current;
@@ -1375,89 +1227,12 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       scheduleTransformFrame(transforming);
       return;
     }
-    const current = gesture.current;
-    if (!current || current.pointerId !== event.pointerId) return;
-    const workspace = workspaceRef.current;
-    if (!workspace) return;
-    if (activeToolId === "raster.spotHeal" && spotHealMaskRef.current) {
-      const maskData = spotHealMaskRef.current;
-      const options = toolOptions[activeToolId] ?? {};
-      const size = Number(options.size ?? 24);
-      const radius = Math.ceil(size / 2) + 8;
-      for (const sample of event.nativeEvent.getCoalescedEvents?.() ?? [event.nativeEvent]) {
-        const p = pointFromNativeEvent(workspace, viewport, state.width, state.height, sample);
-        const newLeft = Math.max(0, Math.floor(p.x) - radius);
-        const newTop = Math.max(0, Math.floor(p.y) - radius);
-        const newRight = Math.min(state.width, Math.ceil(p.x) + radius);
-        const newBottom = Math.min(state.height, Math.ceil(p.y) + radius);
-        if (newLeft < maskData.originX || newTop < maskData.originY || newRight > maskData.originX + maskData.width || newBottom > maskData.originY + maskData.height) {
-          const expandedOriginX = Math.min(maskData.originX, newLeft);
-          const expandedOriginY = Math.min(maskData.originY, newTop);
-          const expandedW = Math.max(maskData.originX + maskData.width, newRight) - expandedOriginX;
-          const expandedH = Math.max(maskData.originY + maskData.height, newBottom) - expandedOriginY;
-          const expanded = new Uint8ClampedArray(expandedW * expandedH);
-          for (let y = 0; y < maskData.height; y++) {
-            for (let x = 0; x < maskData.width; x++) {
-              const m = maskData.mask[y * maskData.width + x]!;
-              if (m > 0) expanded[(y + maskData.originY - expandedOriginY) * expandedW + (x + maskData.originX - expandedOriginX)] = m;
-            }
-          }
-          maskData.mask = expanded;
-          maskData.originX = expandedOriginX;
-          maskData.originY = expandedOriginY;
-          maskData.width = expandedW;
-          maskData.height = expandedH;
-        }
-        spotHealDab(maskData.mask, maskData.originX, maskData.originY, maskData.width, maskData.height, p.x, p.y, size, Number(options.hardness ?? 82) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
-      }
-      renderSpotHealOverlay(maskData.mask, maskData.originX, maskData.originY, maskData.width, maskData.height);
-      return;
-    }
-    const samples = event.nativeEvent.getCoalescedEvents?.() ?? [event.nativeEvent];
-    for (const sample of samples) appendBrushPoint(current, pointFromNativeEvent(workspace, viewport, state.width, state.height, sample));
-    scheduleWorkingRender(current);
   };
 
   const finishGesture = (event: React.PointerEvent<HTMLCanvasElement>) => {
     if (catalogueTool?.onGestureEnd) {
       const pointer = toolPointerFrom(event);
       if (pointer) { catalogueTool.onGestureEnd(toolContextFor(catalogueTool.id, event.currentTarget), pointer); return; }
-    }
-    setPatchOffset(null);
-    const selecting = selectionGesture.current;
-    if (selecting && selecting.pointerId === event.pointerId) {
-      selectionGesture.current = null;
-      setSelectionDraft(null);
-      setLassoDraft([]);
-      const optionId = selecting.kind === "lasso" ? "raster.lasso" : selecting.kind === "ellipse" ? "raster.ellipseMarquee" : "raster.marquee";
-      const options = toolOptions[optionId] ?? {};
-      const feather = Number(options.feather ?? 0);
-
-      // A click that never became a drag deselects, as it does in Photoshop.
-      // Taken literally it described a one-pixel marquee, which is never what
-      // anyone wanted and left a selection nothing else would work outside of.
-      const travelled = selecting.kind === "lasso"
-        ? Math.max(...selecting.points.map((item) => Math.hypot(item.x - selecting.from.x, item.y - selecting.from.y)), 0)
-        : Math.hypot(selecting.current.x - selecting.from.x, selecting.current.y - selecting.from.y);
-      if (travelled < 2) {
-        if (state.selection) void commitSelection(state.selection, null, "Deselect (Снять выделение)");
-        return;
-      }
-      const corners = marqueeCorners(selecting.from.x, selecting.from.y, selecting.current.x, selecting.current.y, { square: event.shiftKey, fromCentre: event.altKey });
-      const incoming = selecting.kind === "lasso"
-        ? createPolygonSelection(state.width, state.height, selecting.points, feather)
-        : selecting.kind === "ellipse"
-          ? createEllipseSelection(state.width, state.height, corners.fromX, corners.fromY, corners.toX, corners.toY, feather)
-          : createRectangleSelection(state.width, state.height, corners.fromX, corners.fromY, corners.toX, corners.toY, feather);
-      const mode = selecting.mode;
-      void options;
-      // A selection is a region of the canvas, not of the layer: selecting empty
-      // space is how anything gets painted into it. Confining it to opaque
-      // pixels belongs at the moment something is moved or transformed, where
-      // there has to be content to move, and that is where it happens.
-      const combined = combineSelections(state.selection, incoming, state.width, state.height, mode);
-      void commitSelection(state.selection, combined);
-      return;
     }
     const transforming = documentGesture.current;
     if (transforming && transforming.pointerId === event.pointerId) {
@@ -1490,45 +1265,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       }
       return;
     }
-    const current = gesture.current;
-    if (!current || current.pointerId !== event.pointerId) return;
-    const workspace = workspaceRef.current;
-    if (!workspace) return;
-    const options = toolOptions[activeToolId ?? ""] ?? {};
-    const opacity = Number(options.opacity ?? 100) / 100 * Number(options.flow ?? 100) / 100;
-    if (activeToolId === "raster.spotHeal" && spotHealMaskRef.current) {
-      const maskData = spotHealMaskRef.current;
-      const working = maskData.before.slice();
-      if (toolOptions[activeToolId]?.sampleAllLayers === true) {
-        const healed = compositeRasterDocument(state);
-        spotHealApply(healed, state.width, state.height, maskData.mask, maskData.originX, maskData.originY, maskData.width, maskData.height, Number(options.opacity ?? 100) / 100);
-        copyHealedRegion(working, healed, maskData.mask, maskData.originX, maskData.originY, maskData.width, maskData.height, state.width, state.height);
-      } else spotHealApply(working, state.width, state.height, maskData.mask, maskData.originX, maskData.originY, maskData.width, maskData.height, Number(options.opacity ?? 100) / 100);
-      spotHealMaskRef.current = null;
-      if (current.frame !== null) cancelAnimationFrame(current.frame);
-      gesture.current = null;
-      lastBrushPointRef.current = { toolId: activeToolId, layerId: activeRasterLayer(state).id, point: pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent) };
-      void commitPixels(maskData.before, working, "Spot Healing (Точечное восстановление)");
-      return;
-    }
-    appendBrushPoint(current, pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent));
-    if (activeToolId === "raster.clone") {
-      cloneStrokeSegment(current.working, state.width, state.height, current.curveStart, current.pending, current.sourceOffsetX ?? 0, current.sourceOffsetY ?? 0, Number(options.size ?? 24), opacity, brushMask, Number(options.hardness ?? 82) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), true, false, current.sourcePixels, Number(options.spacing ?? 12) / 100);
-    } else if (activeToolId === "raster.patch") {
-      const patchOffsetX = current.pending.x - current.curveStart.x;
-      const patchOffsetY = current.pending.y - current.curveStart.y;
-      // Each frame patches the original, not the previous frame's result. Left
-      // to accumulate, dragging a patch a hundred pixels applied it a hundred
-      // times and the area turned to mush.
-      current.working.set(current.before);
-      setPatchOffset({ x: patchOffsetX, y: patchOffsetY });
-      patchFromSelection(current.working, state.width, state.height, brushMask ?? null, state.selection?.bounds ?? { x: 0, y: 0, width: state.width, height: state.height }, patchOffsetX, patchOffsetY, Number(options.opacity ?? 100) / 100, (options.mode as "source" | "destination") ?? "source", Number(options.feather ?? 0));
-    }
-    if (current.frame !== null) cancelAnimationFrame(current.frame);
-    gesture.current = null;
-    if (activeToolId && activeToolId !== "raster.patch") lastBrushPointRef.current = { toolId: activeToolId, layerId: current.target === "mask" ? `mask:${current.layerId}` : current.layerId, point: current.pending };
-    const label = activeToolId === "raster.clone" ? "Clone (Штамп)" : "Patch (Заплатка)";
-    void commitPixels(current.before, current.working, current.target === "mask" ? "Paint Layer Mask (Рисование по маске слоя)" : label, current.target, current.layerId, current.strokeBounds ?? null);
   };
 
   const selectionRect = selectionDraft;
@@ -1592,7 +1328,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       setViewport(document.id, zoomAroundClient(workspace, viewport, zoom, event.clientX, event.clientY));
     } else setViewport(document.id, { panX: viewport.panX - (event.shiftKey ? event.deltaY : event.deltaX), panY: viewport.panY - (event.shiftKey ? 0 : event.deltaY), mode: "custom" });
   };
-  const draftKind = selectionGesture.current?.kind;
   // A drag-in-progress preview from the catalogue's marquee/ellipse/lasso
   // tools (moving an existing selection), read out of tool state the same
   // way their own Overlay is — this used to be a piece of RasterWorkspace's
@@ -1783,16 +1518,11 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       {preferences.showGuides && <svg className="guide-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">{[...guides, ...(guideDraft ? [guideDraft] : [])].map((guide, index) => guide.orientation === "vertical" ? <line key={`${guide.orientation}-${index}`} x1={guide.position} y1="0" x2={guide.position} y2={state.height}/> : <line key={`${guide.orientation}-${index}`} x1="0" y1={guide.position} x2={state.width} y2={guide.position}/>)}</svg>}
       {/* Whatever the active catalogue tool draws over the canvas. */}
       {catalogueTool?.Overlay && <catalogueTool.Overlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>} context={toolContextFor(catalogueTool.id, canvasRef.current)}/>}
-      {activeToolId === "raster.patch" && patchOffset && committedSelectionPath && (
-        <svg className="patch-source-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">
-          {/* Where the patch is reading from. The destination keeps its own
-              marching ants, so the pair shows both halves of the operation at
-              once — otherwise a drag looks like it is moving the selection. */}
-          <path className="patch-source-path" d={committedSelectionPath} transform={`translate(${patchOffset.x} ${patchOffset.y})`}/>
-        </svg>
-      )}
+      {/* raster.crop is the only tool left drawing through selectionDraft —
+          marquee/ellipseMarquee/lasso/patch each draw their own preview
+          through their own catalogue Overlay now. */}
       {selectionRect && selectionRect.width > 0 && selectionRect.height > 0 && <svg className="selection-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">
-        {draftKind === "lasso" ? <polyline points={lassoDraft.map((point) => `${point.x},${point.y}`).join(" ")} /> : draftKind === "ellipse" ? <ellipse cx={selectionRect.x + selectionRect.width / 2} cy={selectionRect.y + selectionRect.height / 2} rx={selectionRect.width / 2} ry={selectionRect.height / 2} /> : <rect x={selectionRect.x} y={selectionRect.y} width={selectionRect.width} height={selectionRect.height} />}
+        <rect x={selectionRect.x} y={selectionRect.y} width={selectionRect.width} height={selectionRect.height}/>
       </svg>}
       {!selectionDraft && committedSelectionPath && <svg className="selection-overlay committed-selection" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><path className="selection-soft-edge" d={committedSelectionPath} /><path className="selection-hard-edge" d={committedSelectionPath} /></svg>}
       {transformPreview && transformPreview.corners && <svg className="transform-controls" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">

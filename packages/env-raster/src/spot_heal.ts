@@ -364,10 +364,13 @@ export function spotHealStrokeSegment(
   size: number,
   hardness = 0.82,
   roundness = 1,
-  angleDegrees = 0
+  angleDegrees = 0,
+  /** Gap between dabs as a fraction of the tip, the same units the brush and
+   * clone stroke's own spacing use. */
+  spacing = 0.18
 ): void {
   const distance = Math.hypot(toX - fromX, toY - fromY);
-  const steps = Math.max(1, Math.ceil(distance / Math.max(1, size * 0.18)));
+  const steps = Math.max(1, Math.ceil(distance / Math.max(1, size * Math.max(0.01, spacing))));
   for (let step = 0; step <= steps; step++) {
     const t = step / steps;
     const x = fromX + (toX - fromX) * t;
