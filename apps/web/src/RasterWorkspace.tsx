@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
-  activeRasterLayer, appendLayer, clampRegionToDocument, copyHealedRegion, layerAccepts, layerLockReason, layerOpaqueBounds, paintMask, marqueeCorners, marqueeRect, pickLayerAt, combineSelections, compositeRasterDocument, compositeRasterRegion, createContiguousColorSelection, drawShape, DirtyRegion, RasterTileCache, type ShapeKind, createEllipseSelection, createPolygonSelection, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
+  activeRasterLayer, appendLayer, clampRegionToDocument, copyHealedRegion, layerAccepts, layerLockReason, layerOpaqueBounds, paintMask, marqueeCorners, pickLayerAt, combineSelections, compositeRasterDocument, compositeRasterRegion, drawShape, DirtyRegion, RasterTileCache, type ShapeKind, createEllipseSelection, createPolygonSelection, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
   accumulateUniquePixelBytes, changedRenderRegion, confineToSelection, visitPixelBuffers, layerDocumentPixels, mipForZoom, setLayerPixels, isRasterDocumentState, layerRenderSignatures, liftSelection, parseHexColor, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectionOutlinePath, stampFloating, toHexColor,
   translateLayerPixels, translateSelection, quadLayerPixels, quadSelection, selectionBounds, type FloatingPixels, type LayerRenderSignature, type PixelSelection, type Point, type RasterDocumentState, type RasterGuide, type RasterLayer, type RasterRect, type RasterTextData, type SelectionCombineMode,
   cloneDab, cloneStrokeSegment,
@@ -453,11 +453,8 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   /** How far the patch has been dragged, for the outline that shows where it reads. */
   const [patchOffset, setPatchOffset] = useState<{ x: number; y: number } | null>(null);
   /** Dragging the marquee itself, with a selection tool, leaving pixels alone. */
-  const marqueeDragRef = useRef<{ pointerId: number; from: Point; base: PixelSelection } | null>(null);
-  const [marqueePreview, setMarqueePreview] = useState<PixelSelection | null>(null);
   // The drag ends in the same tick the last move arrives, before React has
   // re-rendered, so the handler cannot read the preview out of state.
-  const marqueePreviewRef = useRef<PixelSelection | null>(null);
   /** Space's own state, so a modifier pressed after it can be read without a re-render. */
   const spaceDown = useRef(false);
   const [navigating, setNavigating] = useState(false);
@@ -1106,6 +1103,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       options: (toolOptions[toolId] ?? {}) as Readonly<Record<string, string | number | boolean>>,
       activeLayer,
       selection: state.selection,
+      spaceHeld,
       state: current,
       setState: (next) => {
         toolStatesRef.current = { ...toolStatesRef.current, [toolId]: next };
@@ -1119,6 +1117,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       paintMask: brushMask,
       targetPixels: () => (maskTarget?.mask ? maskToRgba(maskTarget.mask.pixels) : (activeLayer ? canvasPixels(activeLayer) : new Uint8ClampedArray(state.width * state.height * 4)).slice()),
       commit: (before, after, label, target = paintTarget.kind, layerId = paintTarget.layerId) => commitPixels(before, after, label, target, layerId),
+      commitSelection: (before, after, label) => commitSelection(before, after, label),
       setForegroundColor,
     };
   };
@@ -1349,39 +1348,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       setShapeDraft({ x: point.x, y: point.y, width: 0, height: 0 });
       return;
     }
-    if (activeToolId === "raster.marquee" || activeToolId === "raster.ellipseMarquee" || activeToolId === "raster.lasso") {
-      // Dragging from inside an existing selection moves the marquee itself,
-      // leaving the pixels alone — the Move tool is what moves those. Without
-      // this a selection can only ever be redrawn, never adjusted.
-      const inside = state.selection && !event.shiftKey && !event.altKey
-        && point.x >= 0 && point.y >= 0 && point.x < state.width && point.y < state.height
-        && state.selection.mask[Math.floor(point.y) * state.width + Math.floor(point.x)]! > 0;
-      if (inside && state.selection) {
-        canvas.setPointerCapture(event.pointerId);
-        marqueeDragRef.current = { pointerId: event.pointerId, from: point, base: state.selection };
-        return;
-      }
-      canvas.setPointerCapture(event.pointerId);
-      const kind = activeToolId === "raster.lasso" ? "lasso" : activeToolId === "raster.ellipseMarquee" ? "ellipse" : "rectangle";
-      // Photoshop reads Shift and Alt at the moment the drag begins to decide how
-      // the new selection combines with the old one. The same keys pressed later,
-      // mid-drag, mean something else entirely — square, and from-centre — so the
-      // mode has to be captured here rather than looked up when the drag ends.
-      const marqueeOptions = toolOptions[activeToolId] ?? {};
-      const mode = (event.shiftKey && event.altKey ? "intersect" : event.shiftKey ? "add" : event.altKey ? "subtract" : String(marqueeOptions.mode ?? "replace")) as SelectionCombineMode;
-      selectionGesture.current = { kind, from: point, current: point, points: [point], pointerId: event.pointerId, mode, spaceAnchor: null };
-      setSelectionDraft({ x: point.x, y: point.y, width: 0, height: 0 });
-      setLassoDraft(kind === "lasso" ? [point] : []);
-      return;
-    }
-    if (activeToolId === "raster.magicWand") {
-      const options = toolOptions[activeToolId] ?? {};
-      const source = options.allLayers === false ? canvasPixels(layer) : compositeRasterDocument(state);
-      const incoming = restrictSelectionToAlpha(createContiguousColorSelection(source, state.width, state.height, point.x, point.y, Number(options.tolerance ?? 32)), source, state.width, state.height);
-      const mode = (event.shiftKey && event.altKey ? "intersect" : event.shiftKey ? "add" : event.altKey ? "subtract" : "replace") as SelectionCombineMode;
-      void commitSelection(state.selection, incoming ? combineSelections(state.selection, incoming, state.width, state.height, mode) : mode === "replace" ? null : state.selection);
-      return;
-    }
     if (activeToolId === "raster.crop" || activeToolId === "raster.move") {
       const effectiveSelection = activeToolId === "raster.move" && state.selection ? restrictSelectionToAlpha(state.selection, canvasPixels(layer), state.width, state.height) : null;
       if (activeToolId === "raster.move" && state.selection && !effectiveSelection) { diagnostic("info", "move", "Move ignored: selection contains no opaque pixels", { documentId: document.id, layerId: layer.id }); return; }
@@ -1438,16 +1404,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       const pointer = toolPointerFrom(event);
       if (pointer) { catalogueTool.onPointerMove(toolContextFor(catalogueTool.id, event.currentTarget), pointer); return; }
     }
-    const marqueeDrag = marqueeDragRef.current;
-    if (marqueeDrag && marqueeDrag.pointerId === event.pointerId) {
-      const workspace = workspaceRef.current;
-      if (!workspace) return;
-      const point = pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent);
-      const moved = translateSelection(marqueeDrag.base, state.width, state.height, point.x - marqueeDrag.from.x, point.y - marqueeDrag.from.y);
-      marqueePreviewRef.current = moved;
-      setMarqueePreview(moved);
-      return;
-    }
     const textDrawing = textGesture.current;
     if (textDrawing && textDrawing.pointerId === event.pointerId) {
       const workspace = workspaceRef.current; if (!workspace) return;
@@ -1456,13 +1412,16 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       setTextFrameDraft({ x: Math.min(textDrawing.from.x, point.x), y: Math.min(textDrawing.from.y, point.y), width: Math.abs(point.x - textDrawing.from.x), height: Math.abs(point.y - textDrawing.from.y) });
       return;
     }
+    // raster.patch's own fallback still uses this directly (see its
+    // onPointerDown branch below): it draws a lasso selection when the
+    // document has none, before patch tool can patch. Otherwise
+    // selectionGesture stays unused now that marquee/ellipseMarquee/lasso
+    // route through the tool catalogue and never reach this code.
     const selecting = selectionGesture.current;
     if (selecting && selecting.pointerId === event.pointerId) {
       const workspace = workspaceRef.current;
       if (!workspace) return;
       const point = pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent);
-      // Holding space mid-drag slides the whole marquee instead of resizing it,
-      // which is the only way to correct a start point without beginning again.
       if (spaceHeld) {
         const anchor = selecting.spaceAnchor ?? point;
         selecting.from = { x: selecting.from.x + (point.x - anchor.x), y: selecting.from.y + (point.y - anchor.y) };
@@ -1472,16 +1431,11 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         selecting.spaceAnchor = null;
         selecting.current = point;
       }
-      if (selecting.kind === "lasso") {
-        selecting.points.push(selecting.current);
-        setLassoDraft([...selecting.points]);
-        // The overlay only draws where the draft rectangle has extent, so the
-        // lasso has to report the box its path has covered. Without it the path
-        // was invisible until the mouse came up and the shape was already made.
-        const xs = selecting.points.map((item) => item.x), ys = selecting.points.map((item) => item.y);
-        const left = Math.min(...xs), top = Math.min(...ys);
-        setSelectionDraft({ x: left, y: top, width: Math.max(1, Math.max(...xs) - left), height: Math.max(1, Math.max(...ys) - top) });
-      } else setSelectionDraft(marqueeRect(selecting.from.x, selecting.from.y, selecting.current.x, selecting.current.y, { square: event.shiftKey, fromCentre: event.altKey }));
+      selecting.points.push(selecting.current);
+      setLassoDraft([...selecting.points]);
+      const xs = selecting.points.map((item) => item.x), ys = selecting.points.map((item) => item.y);
+      const left = Math.min(...xs), top = Math.min(...ys);
+      setSelectionDraft({ x: left, y: top, width: Math.max(1, Math.max(...xs) - left), height: Math.max(1, Math.max(...ys) - top) });
       return;
     }
     const shaping = shapeGesture.current;
@@ -1556,15 +1510,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       if (pointer) { catalogueTool.onGestureEnd(toolContextFor(catalogueTool.id, event.currentTarget), pointer); return; }
     }
     setPatchOffset(null);
-    const marqueeDrag = marqueeDragRef.current;
-    if (marqueeDrag && marqueeDrag.pointerId === event.pointerId) {
-      marqueeDragRef.current = null;
-      const moved = marqueePreviewRef.current;
-      marqueePreviewRef.current = null;
-      setMarqueePreview(null);
-      if (moved) void commitSelection(marqueeDrag.base, moved, "Move Selection (Перемещение выделения)");
-      return;
-    }
     const textDrawing = textGesture.current;
     if (textDrawing && textDrawing.pointerId === event.pointerId) {
       textGesture.current = null; setTextFrameDraft(null);
@@ -1782,7 +1727,17 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     } else setViewport(document.id, { panX: viewport.panX - (event.shiftKey ? event.deltaY : event.deltaX), panY: viewport.panY - (event.shiftKey ? 0 : event.deltaY), mode: "custom" });
   };
   const draftKind = selectionGesture.current?.kind;
-  const displayedSelection = marqueePreview ?? transformPreview?.selection ?? state.selection;
+  // A drag-in-progress preview from the catalogue's marquee/ellipse/lasso
+  // tools (moving an existing selection), read out of tool state the same
+  // way their own Overlay is — this used to be a piece of RasterWorkspace's
+  // own state (`marqueePreview`) written directly by the pointer handlers;
+  // now that those three tools own that gesture, the preview lives in their
+  // state instead, and the host just reads it to keep drawing marching ants
+  // during the drag rather than duplicating that rendering per tool.
+  const catalogueMarqueePreview = activeToolId
+    ? (toolStates[activeToolId] as { drag?: { preview: PixelSelection | null } } | undefined)?.drag?.preview ?? null
+    : null;
+  const displayedSelection = catalogueMarqueePreview ?? transformPreview?.selection ?? state.selection;
   // The Move tool's "Transform controls" checkbox: with it off there is no frame
   // and no handles, which is how Photoshop lets you drag without the furniture.
   const showTransformControls = toolOptions["raster.move"]?.showTransform !== false;

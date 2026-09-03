@@ -61,6 +61,18 @@ export interface ToolContext<TState> {
   readonly options: Readonly<Record<string, string | number | boolean>>;
   readonly activeLayer: RasterLayer | null;
   readonly selection: PixelSelection | null;
+  /**
+   * Whether the space bar is down right now.
+   *
+   * Not a pointer modifier — it can change mid-gesture, independent of any
+   * pointer event, which is exactly what lets holding Space slide a marquee
+   * already being dragged instead of resizing it. Space is also the
+   * navigation system's own temporary-pan key, handled by a separate
+   * capture-phase listener on the workspace element that runs before a
+   * gesture reaches a tool at all — this field is for a tool that wants to
+   * react to Space *during* a gesture it already owns.
+   */
+  readonly spaceHeld: boolean;
 
   /** The tool's own state for the gesture in progress. */
   readonly state: TState;
@@ -115,6 +127,18 @@ export interface ToolContext<TState> {
    * click-to-pick-a-different-layer will need to.
    */
   commit(before: Uint8ClampedArray, after: Uint8ClampedArray, label: string, target?: PaintTarget["kind"], layerId?: string): Promise<void>;
+
+  /**
+   * The only way a tool changes what is selected.
+   *
+   * A thin wrapper over the workspace's `commitSelection`: clones both
+   * sides, records one history step. Selections are cheap enough (one byte
+   * per pixel, no asset revision) that this does not need `commit`'s
+   * machinery — a document-sized pixel buffer and a selection mask are
+   * different orders of cost, which is why this is its own member rather
+   * than `commit` overloaded to take either.
+   */
+  commitSelection(before: PixelSelection | null, after: PixelSelection | null, label: string): Promise<void>;
 
   setForegroundColor(color: string): void;
 }

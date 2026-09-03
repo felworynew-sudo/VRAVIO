@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendLayer, createRasterDocument, createRasterLayer, setLayerPixels, type RasterDocumentState } from "@vravio/env-raster";
+import { appendLayer, createRasterDocument, createRasterLayer, setLayerPixels, type PixelSelection, type RasterDocumentState } from "@vravio/env-raster";
 import { rasterTools } from "./registry";
 import { toolById } from "../../../tools";
 import type { RasterToolDefinition, ToolContext, ToolPointer } from "./types";
@@ -28,6 +28,7 @@ import type { RasterToolDefinition, ToolContext, ToolPointer } from "./types";
 /** Everything a tool did during a driven gesture. */
 interface Effects {
   readonly commits: { before: Uint8ClampedArray; after: Uint8ClampedArray; label: string; target: string; layerId: string }[];
+  readonly selectionCommits: { before: PixelSelection | null; after: PixelSelection | null; label: string }[];
   readonly foreground: string[];
   readonly captured: number[];
   /** Every state the tool passed through, not only the one it ended on. */
@@ -131,7 +132,7 @@ function drive(
 ): { effects: Effects; document: RasterDocumentState; untouched: RasterDocumentState } {
   const document = documentFixture();
   const untouched = documentFixture();
-  const effects: Effects = { commits: [], foreground: [], captured: [], stateHistory: [], state: tool.createState() };
+  const effects: Effects = { commits: [], selectionCommits: [], foreground: [], captured: [], stateHistory: [], state: tool.createState() };
 
   const context: ToolContext<unknown> = {
     documentId: "test-document",
@@ -140,6 +141,7 @@ function drive(
     options,
     activeLayer: document.layers.find((layer) => layer.id === document.activeLayerId) ?? null,
     selection: document.selection,
+    spaceHeld: false,
     get state() { return effects.state; },
     setState: (next) => { effects.state = next; effects.stateHistory.push(next); },
     capturePointer: (pointerId) => { effects.captured.push(pointerId); },
@@ -159,6 +161,7 @@ function drive(
     paintMask,
     targetPixels: () => materialise(document.layers.find((item) => item.id === document.activeLayerId)!, document),
     commit: async (before, after, label, target = "pixels", layerId = document.activeLayerId) => { effects.commits.push({ before, after, label, target, layerId }); },
+    commitSelection: async (before, after, label) => { effects.selectionCommits.push({ before, after, label }); },
     setForegroundColor: (color) => { effects.foreground.push(color); },
   };
 
@@ -175,13 +178,26 @@ function drive(
  */
 const fullGesture = (context: ToolContext<unknown>, tool: RasterToolDefinition<unknown>) => {
   tool.onPointerDown?.(context, pointerAt(10, 10));
+  // Two intermediate points, not one: a tool that accumulates a *path*
+  // (lasso) rather than recomputing purely from its start and current point
+  // (rectangle, ellipse) needs at least three points to describe a shape
+  // with any area at all — two points is a degenerate line, and feathering
+  // a line has nothing to soften regardless of the radius, which is not a
+  // property of the tool, only of a gesture too thin to test it with.
+  tool.onPointerMove?.(context, pointerAt(28, 10));
   tool.onPointerMove?.(context, pointerAt(32, 24));
   tool.onGestureEnd?.(context, pointerAt(32, 24));
 };
 
 /** Compares two documents by the only thing a tool could have changed. */
 function pixelsOf(state: RasterDocumentState): string {
-  return state.layers.map((layer) => `${layer.id.length}:${layer.bounds.x},${layer.bounds.y},${layer.bounds.width},${layer.bounds.height}:${layer.pixels.join(",")}`).join("|");
+  const layers = state.layers.map((layer) => `${layer.id.length}:${layer.bounds.x},${layer.bounds.y},${layer.bounds.width},${layer.bounds.height}:${layer.pixels.join(",")}`).join("|");
+  // Selection tools write state.selection, not pixels — a tool that reaches
+  // in and sets it directly, bypassing commitSelection, has to be caught the
+  // same way a direct pixel write is, or "cannot escape commitSelection"
+  // would be nothing more than a comment.
+  const selection = state.selection ? `${state.selection.bounds.x},${state.selection.bounds.y},${state.selection.bounds.width},${state.selection.bounds.height}:${state.selection.mask.join(",")}` : "none";
+  return `${layers}#${selection}`;
 }
 
 describe("every tool in the catalogue keeps the contract", () => {
@@ -224,6 +240,18 @@ describe("every tool in the catalogue keeps the contract", () => {
           expect(commit.after.length).toBe(commit.before.length);
           expect(commit.before.length, `${tool.id} committed a buffer that is neither document- nor layer-sized`)
             .toBeOneOf([documentSized, layer.pixels.length]);
+        }
+
+        for (const commit of effects.selectionCommits) {
+          expect(commit.label.trim().length, `${tool.id} committed a selection with an empty label`).toBeGreaterThan(0);
+          // Same two-sided-undo requirement as a pixel commit, but a
+          // selection's "before" and "after" are frequently structurally
+          // equal by value (a rectangle redrawn over the same rectangle) even
+          // though history keeps them as separately cloned objects — so this
+          // checks they are not literally the same reference, not that their
+          // content differs, which a pixel commit can assert but a selection
+          // commit legitimately might not.
+          if (commit.before && commit.after) expect(commit.before).not.toBe(commit.after);
         }
       });
 
@@ -282,6 +310,7 @@ describe("every tool in the catalogue keeps the contract", () => {
             foreground: result.effects.foreground,
             states: result.effects.stateHistory,
             commits: result.effects.commits.map((commit) => ({ label: commit.label, after: commit.after })),
+            selectionCommits: result.effects.selectionCommits,
           }));
 
         for (const option of descriptorOptions) {
