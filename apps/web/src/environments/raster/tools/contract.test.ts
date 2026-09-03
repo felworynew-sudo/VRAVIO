@@ -29,6 +29,7 @@ import type { RasterToolDefinition, ToolContext, ToolPointer } from "./types";
 interface Effects {
   readonly commits: { before: Uint8ClampedArray; after: Uint8ClampedArray; label: string; target: string; layerId: string; bounds: unknown }[];
   readonly selectionCommits: { before: PixelSelection | null; after: PixelSelection | null; label: string }[];
+  readonly documentCommits: { before: RasterDocumentState; after: RasterDocumentState; label: string; bounds: unknown }[];
   /** Every preview paint a stroke tool asked for, recorded synchronously —
    * the real bridge coalesces these to one canvas write per animation
    * frame, which is a rendering-performance detail this harness has no DOM
@@ -148,7 +149,7 @@ function drive(
 ): { effects: Effects; document: RasterDocumentState; untouched: RasterDocumentState } {
   const document = documentFixture();
   const untouched = documentFixture();
-  const effects: Effects = { commits: [], selectionCommits: [], foreground: [], maskForegroundWhite: [], captured: [], stateHistory: [], previews: [], state: tool.createState(), lastStrokePoint: null };
+  const effects: Effects = { commits: [], selectionCommits: [], documentCommits: [], foreground: [], maskForegroundWhite: [], captured: [], stateHistory: [], previews: [], state: tool.createState(), lastStrokePoint: null };
 
   const context: ToolContext<unknown> = {
     documentId: "test-document",
@@ -178,6 +179,7 @@ function drive(
     targetPixels: () => materialise(document.layers.find((item) => item.id === document.activeLayerId)!, document),
     commit: async (before, after, label, target = "pixels", layerId = document.activeLayerId, bounds = null) => { effects.commits.push({ before, after, label, target, layerId, bounds }); },
     commitSelection: async (before, after, label) => { effects.selectionCommits.push({ before, after, label }); },
+    commitDocument: async (before, after, label, bounds = null) => { effects.documentCommits.push({ before, after, label, bounds }); },
     schedulePreview: (pixels, target, layerId, dirty) => { effects.previews.push({ pixels, target, layerId, dirty: dirty ?? null }); },
     setForegroundColor: (color) => { effects.foreground.push(color); },
     setMaskForegroundWhite: (white) => { effects.maskForegroundWhite.push(white); },
@@ -273,6 +275,16 @@ describe("every tool in the catalogue keeps the contract", () => {
           // commit legitimately might not.
           if (commit.before && commit.after) expect(commit.before).not.toBe(commit.after);
         }
+
+        for (const commit of effects.documentCommits) {
+          expect(commit.label.trim().length, `${tool.id} committed a document state with an empty label`).toBeGreaterThan(0);
+          expect(commit.before, `${tool.id} committed the same document state as before and after`).not.toBe(commit.after);
+          // A structural edit is the one commit that is allowed to change
+          // layer count — that is the entire point of it — but it still has
+          // to actually change *something*, or it is not a structural edit
+          // at all, just a needless history step.
+          expect(commit.after, `${tool.id} committed a document state identical to before`).not.toEqual(commit.before);
+        }
       });
 
       it("cannot reach past commit to escape the selection", () => {
@@ -331,6 +343,7 @@ describe("every tool in the catalogue keeps the contract", () => {
             states: result.effects.stateHistory,
             commits: result.effects.commits.map((commit) => ({ label: commit.label, after: commit.after })),
             selectionCommits: result.effects.selectionCommits,
+            documentCommits: result.effects.documentCommits.map((commit) => ({ label: commit.label, after: commit.after })),
           }));
 
         for (const option of descriptorOptions) {

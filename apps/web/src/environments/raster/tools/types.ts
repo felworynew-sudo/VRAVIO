@@ -165,6 +165,21 @@ export interface ToolContext<TState> {
    */
   commitSelection(before: PixelSelection | null, after: PixelSelection | null, label: string): Promise<void>;
 
+  /**
+   * The only way a tool changes the document's own shape — adding, removing
+   * or replacing a layer wholesale, rather than the pixels inside one.
+   *
+   * Shape and text both create a brand-new layer (`appendLayer`) rather than
+   * writing into the active one, which `commit` has no way to express: it
+   * only ever replaces one layer's existing pixel buffer. This is the same
+   * whole-document history step `commitDocumentState` already gave
+   * rasterize-layer and every other structural edit in the old switch, not a
+   * new mechanism invented for these two — a tool takes it only when it is
+   * genuinely restructuring the document, not painting into what is already
+   * there.
+   */
+  commitDocument(before: RasterDocumentState, after: RasterDocumentState, label: string, bounds?: RasterRect | null): Promise<void>;
+
   setForegroundColor(color: string): void;
 
   /**
@@ -230,8 +245,14 @@ export interface RasterToolDefinition<TState = unknown> {
    * A component rather than an imperative handle, because what it draws is a
    * function of the tool's state and React already knows how to keep those
    * two in step. Sizes inside it are screen pixels.
+   *
+   * `options` is the same live options-bar snapshot `ToolContext.options`
+   * carries — added for `raster.shape`, whose live drag preview has to
+   * follow `shapeKind` (rectangle vs ellipse vs line draw differently) even
+   * though which shape that is was never part of the drag's own state, only
+   * of the panel next to the canvas.
    */
-  readonly Overlay?: (props: { state: TState; document: RasterDocumentState }) => ReactNode;
+  readonly Overlay?: (props: { state: TState; document: RasterDocumentState; options: Readonly<Record<string, string | number | boolean>> }) => ReactNode;
 }
 
 export interface RasterToolModule<TState = unknown> {

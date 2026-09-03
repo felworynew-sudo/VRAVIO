@@ -98,3 +98,28 @@ export function activeRasterLayer(state: RasterDocumentState): RasterLayer {
   if (!layer) throw new Error(`Active raster layer is missing: ${state.activeLayerId}`);
   return layer;
 }
+
+/**
+ * A document snapshot cheap enough to take on every structural edit — the
+ * `before`/`after` pair a whole-document history step commits.
+ *
+ * Shallow across the buffers that dominate a document's size (each layer's
+ * `pixels`, a mask's `pixels`) so two snapshots taken moments apart share
+ * memory rather than doubling it; deep only for the small mutable pieces a
+ * structural edit (add/remove/replace a layer, rasterize, crop) actually
+ * touches, so mutating one snapshot's layer object never bleeds into the
+ * other's.
+ */
+export function cloneRasterState(state: RasterDocumentState): RasterDocumentState {
+  return {
+    ...state,
+    layers: state.layers.map((layer) => ({
+      ...layer,
+      ...(layer.text ? { text: structuredClone(layer.text) } : {}),
+      ...(layer.adjustment ? { adjustment: structuredClone(layer.adjustment) } : {}),
+      ...(layer.mask ? { mask: { ...layer.mask } } : {}),
+    })),
+    selection: state.selection ? { mask: state.selection.mask, bounds: { ...state.selection.bounds } } : null,
+    guides: (state.guides ?? []).map((guide) => ({ ...guide })),
+  };
+}

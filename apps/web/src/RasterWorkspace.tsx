@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
-  activeRasterLayer, appendLayer, clampRegionToDocument, copyHealedRegion, layerAccepts, layerLockReason, layerOpaqueBounds, paintMask, marqueeCorners, pickLayerAt, combineSelections, compositeRasterDocument, compositeRasterRegion, drawShape, DirtyRegion, RasterTileCache, type ShapeKind, createEllipseSelection, createPolygonSelection, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
+  activeRasterLayer, appendLayer, clampRegionToDocument, cloneRasterState, copyHealedRegion, layerAccepts, layerLockReason, layerOpaqueBounds, paintMask, marqueeCorners, pickLayerAt, combineSelections, compositeRasterDocument, compositeRasterRegion, DirtyRegion, RasterTileCache, createEllipseSelection, createPolygonSelection, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
   accumulateUniquePixelBytes, changedRenderRegion, confineToSelection, visitPixelBuffers, layerDocumentPixels, mipForZoom, setLayerPixels, isRasterDocumentState, layerRenderSignatures, liftSelection, parseHexColor, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, scaleLayerPixels, scaleSelection, selectionOutlinePath, stampFloating,
   translateLayerPixels, translateSelection, quadLayerPixels, quadSelection, selectionBounds, unionRect, type FloatingPixels, type LayerRenderSignature, type PixelSelection, type Point, type RasterDocumentState, type RasterGuide, type RasterLayer, type RasterRect, type RasterTextData, type SelectionCombineMode,
   cloneDab, cloneStrokeSegment,
@@ -82,12 +82,6 @@ function cropPixels(pixels: Uint8ClampedArray, width: number, region: RasterRect
   }
   return output;
 }
-
-const shapeLayerNames: Record<string, string> = {
-  rectangle: "Rectangle (Прямоугольник)", roundedRectangle: "Rounded rectangle (Скруглённый прямоугольник)", ellipse: "Ellipse (Эллипс)",
-  line: "Line (Линия)", triangle: "Triangle (Треугольник)", polygon: "Polygon (Многоугольник)", star: "Star (Звезда)",
-};
-const shapeLayerName = (kind: string): string => shapeLayerNames[kind] ?? "Shape (Фигура)";
 
 function clampZoom(zoom: number): number {
   return Math.max(0.01, Math.min(64, zoom));
@@ -178,29 +172,6 @@ function rgbaToMask(pixels: Uint8ClampedArray): Uint8ClampedArray {
 
 function withLayerMaskPixels(state: RasterDocumentState, layerId: string, pixels: Uint8ClampedArray): RasterDocumentState {
   return { ...state, layers: state.layers.map((layer) => layer.id === layerId && layer.mask ? { ...layer, mask: { ...layer.mask, pixels: rgbaToMask(pixels) } } : layer) };
-}
-
-/**
- * Snapshots the document structure, sharing the pixel buffers with it.
- *
- * Every operation that takes a whole-document snapshot took two — the state
- * before and the state after — and copying the pixels of every layer into each
- * of them meant eighty megabytes of memcpy before a rectangle appeared, on the
- * thread that was supposed to be drawing it.
- *
- * The copies bought nothing. A layer's buffer, once it is in the document, is
- * never written in place: every path that edits pixels assigns a freshly
- * allocated buffer in its place, so a snapshot that holds the old reference
- * keeps seeing the old pixels for as long as it needs them. What does have to
- * be copied is the structure around them — the layer array, the layer objects,
- * the selection bounds — because those are mutated in place, and sharing them
- * would let an edit reach back into the history.
- *
- * If a future edit ever writes through `layer.pixels` instead of replacing it,
- * this stops being sound and undo starts returning the edited pixels.
- */
-function cloneRasterState(state: RasterDocumentState): RasterDocumentState {
-  return { ...state, layers: state.layers.map((layer) => ({ ...layer, ...(layer.text ? { text: structuredClone(layer.text) } : {}), ...(layer.adjustment ? { adjustment: structuredClone(layer.adjustment) } : {}), ...(layer.mask ? { mask: { ...layer.mask } } : {}) })), selection: state.selection ? { mask: state.selection.mask, bounds: { ...state.selection.bounds } } : null, guides: (state.guides ?? []).map((guide) => ({ ...guide })) };
 }
 
 /**
@@ -426,9 +397,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const textCancelRef = useRef(false);
   const spotHealMaskRef = useRef<{ mask: Uint8ClampedArray; originX: number; originY: number; width: number; height: number; before: Uint8ClampedArray } | null>(null);
   const [selectionDraft, setSelectionDraft] = useState<RasterRect | null>(null);
-  const shapeGesture = useRef<{ from: Point; current: Point; pointerId: number } | null>(null);
   const textGesture = useRef<{ from: Point; current: Point; pointerId: number; mode: string } | null>(null);
-  const [shapeDraft, setShapeDraft] = useState<RasterRect | null>(null);
   const [textFrameDraft, setTextFrameDraft] = useState<RasterRect | null>(null);
   const tiles = useRef(new RasterTileCache({ tileSize: 256 }));
   const documentDirty = useRef(new DirtyRegion());
@@ -1135,6 +1104,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       },
       commit: (before, after, label, target = paintTarget.kind, layerId = paintTarget.layerId, bounds = null) => commitPixels(before, after, label, target, layerId, bounds),
       commitSelection: (before, after, label) => commitSelection(before, after, label),
+      commitDocument: (before, after, label, bounds) => { if (bounds) documentDirty.current.add(bounds); return commitDocumentState(before, after, label); },
       setForegroundColor,
       setMaskForegroundWhite: (white) => setMaskForegroundWhite(document.id, white),
       lastStrokePoint: lastBrushPointRef.current,
@@ -1369,13 +1339,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       setTextFrameDraft({ x: point.x, y: point.y, width: 0, height: 0 });
       return;
     }
-    if (activeToolId === "raster.shape") {
-      if (layer.locked) return;
-      canvas.setPointerCapture(event.pointerId);
-      shapeGesture.current = { from: point, current: point, pointerId: event.pointerId };
-      setShapeDraft({ x: point.x, y: point.y, width: 0, height: 0 });
-      return;
-    }
     if (activeToolId === "raster.crop" || activeToolId === "raster.move") {
       const effectiveSelection = activeToolId === "raster.move" && state.selection ? restrictSelectionToAlpha(state.selection, canvasPixels(layer), state.width, state.height) : null;
       if (activeToolId === "raster.move" && state.selection && !effectiveSelection) { diagnostic("info", "move", "Move ignored: selection contains no opaque pixels", { documentId: document.id, layerId: layer.id }); return; }
@@ -1460,15 +1423,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       setSelectionDraft({ x: left, y: top, width: Math.max(1, Math.max(...xs) - left), height: Math.max(1, Math.max(...ys) - top) });
       return;
     }
-    const shaping = shapeGesture.current;
-    if (shaping && shaping.pointerId === event.pointerId) {
-      const workspace = workspaceRef.current;
-      if (!workspace) return;
-      const point = pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent);
-      shaping.current = point;
-      setShapeDraft({ x: shaping.from.x, y: shaping.from.y, width: point.x - shaping.from.x, height: point.y - shaping.from.y });
-      return;
-    }
     const transforming = documentGesture.current;
     if (transforming && transforming.pointerId === event.pointerId) {
       const workspace = workspaceRef.current;
@@ -1546,36 +1500,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         const control = preset === "bow" ? { x: middle.x, y: middle.y + Math.max(30, width * .22) } : preset === "circle" ? { x: middle.x, y: middle.y - Math.max(60, width * .65) } : { x: middle.x, y: middle.y - Math.max(30, width * .28) };
         setTextDraft({ point: textDrawing.from, value: "", mode: dynamic ? "dynamic" : "path", boxWidth: width, boxHeight: Math.max(height, width * .5), path: { start: textDrawing.from, control, end }, ...(dynamic ? { dynamicPreset: preset as "circle" | "arch" | "bow" } : {}) });
       }
-      return;
-    }
-    const shaping = shapeGesture.current;
-    if (shaping && shaping.pointerId === event.pointerId) {
-      shapeGesture.current = null;
-      setShapeDraft(null);
-      const rect = { x: shaping.from.x, y: shaping.from.y, width: shaping.current.x - shaping.from.x, height: shaping.current.y - shaping.from.y };
-      if (Math.abs(rect.width) < 1 && Math.abs(rect.height) < 1) return;
-      const options = toolOptions["raster.shape"] ?? {};
-      const mode = String(options.shapeMode ?? "fill");
-      const kind = String(options.shapeKind ?? "rectangle") as ShapeKind;
-      // Photoshop puts every shape on its own layer, which keeps them independently
-      // movable and restyleable instead of being flattened into whatever was selected.
-      const before = cloneRasterState(state), after = cloneRasterState(state);
-      const shapeLayer = createRasterLayer(state.width, state.height, shapeLayerName(kind));
-      drawShape(shapeLayer.pixels, state.width, state.height, {
-        kind,
-        rect,
-        cornerRadius: Number(options.cornerRadius ?? 16),
-        sides: Number(options.sides ?? 5),
-        strokeWidth: Number(options.strokeWidth ?? 4),
-        fill: mode === "stroke" ? null : parseHexColor(String(options.color ?? foregroundColor)),
-        stroke: mode === "fill" ? null : parseHexColor(String(options.strokeColor ?? "#ffffff")),
-      }, state.selection?.mask);
-      setLayerPixels(shapeLayer, shapeLayer.pixels, state.width, state.height);
-      appendLayer(after, shapeLayer);
-      after.activeLayerId = shapeLayer.id;
-      const strokePad = Number(options.strokeWidth ?? 4) + 2;
-      documentDirty.current.add({ x: Math.min(rect.x, rect.x + rect.width) - strokePad, y: Math.min(rect.y, rect.y + rect.height) - strokePad, width: Math.abs(rect.width) + strokePad * 2, height: Math.abs(rect.height) + strokePad * 2 });
-      void commitDocumentState(before, after, "Shape (Фигура)");
       return;
     }
     const selecting = selectionGesture.current;
@@ -1936,7 +1860,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       />}
       {preferences.showGuides && <svg className="guide-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">{[...guides, ...(guideDraft ? [guideDraft] : [])].map((guide, index) => guide.orientation === "vertical" ? <line key={`${guide.orientation}-${index}`} x1={guide.position} y1="0" x2={guide.position} y2={state.height}/> : <line key={`${guide.orientation}-${index}`} x1="0" y1={guide.position} x2={state.width} y2={guide.position}/>)}</svg>}
       {/* Whatever the active catalogue tool draws over the canvas. */}
-      {catalogueTool?.Overlay && <catalogueTool.Overlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state}/>}
+      {catalogueTool?.Overlay && <catalogueTool.Overlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>}/>}
       {activeToolId === "raster.patch" && patchOffset && committedSelectionPath && (
         <svg className="patch-source-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">
           {/* Where the patch is reading from. The destination keeps its own
@@ -1948,17 +1872,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       {selectionRect && selectionRect.width > 0 && selectionRect.height > 0 && <svg className="selection-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">
         {draftKind === "lasso" ? <polyline points={lassoDraft.map((point) => `${point.x},${point.y}`).join(" ")} /> : draftKind === "ellipse" ? <ellipse cx={selectionRect.x + selectionRect.width / 2} cy={selectionRect.y + selectionRect.height / 2} rx={selectionRect.width / 2} ry={selectionRect.height / 2} /> : <rect x={selectionRect.x} y={selectionRect.y} width={selectionRect.width} height={selectionRect.height} />}
       </svg>}
-      {shapeDraft && (Math.abs(shapeDraft.width) > 0 || Math.abs(shapeDraft.height) > 0) && (() => {
-        const box = { x: Math.min(shapeDraft.x, shapeDraft.x + shapeDraft.width), y: Math.min(shapeDraft.y, shapeDraft.y + shapeDraft.height), width: Math.abs(shapeDraft.width), height: Math.abs(shapeDraft.height) };
-        const kind = String(toolOptions["raster.shape"]?.shapeKind ?? "rectangle");
-        return <svg className="shape-draft" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">
-          {kind === "ellipse"
-            ? <ellipse cx={box.x + box.width / 2} cy={box.y + box.height / 2} rx={box.width / 2} ry={box.height / 2} />
-            : kind === "line"
-              ? <line x1={shapeDraft.x} y1={shapeDraft.y} x2={shapeDraft.x + shapeDraft.width} y2={shapeDraft.y + shapeDraft.height} />
-              : <rect x={box.x} y={box.y} width={box.width} height={box.height} rx={kind === "roundedRectangle" ? Number(toolOptions["raster.shape"]?.cornerRadius ?? 16) : 0} />}
-        </svg>;
-      })()}
       {!selectionDraft && committedSelectionPath && <svg className="selection-overlay committed-selection" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><path className="selection-soft-edge" d={committedSelectionPath} /><path className="selection-hard-edge" d={committedSelectionPath} /></svg>}
       {transformPreview && transformPreview.corners && <svg className="transform-controls" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">
         <polygon className="transform-quad-outline" points={transformPreview.corners.map((corner) => `${corner.x},${corner.y}`).join(" ")}/>
