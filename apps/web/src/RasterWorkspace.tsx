@@ -13,6 +13,8 @@ import {
 import { createBufferRevisionOperation, type AssetId, type VravioDocument } from "@vravio/kernel";
 import { kernel } from "./kernel";
 import { importModelAsLayer } from "./scene3d-commands";
+import { rasterToolById } from "./environments/raster/tools/registry";
+import type { ToolContext, ToolPointer } from "./environments/raster/tools/types";
 import { defaultViewport, useShellStore, type DocumentViewport } from "./store";
 import { beginBusy, withBusy } from "./busy";
 import { diagnostic } from "./diagnostics";
@@ -450,10 +452,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const [spaceZoom, setSpaceZoom] = useState<"in" | "out" | null>(null);
   /** How far the patch has been dragged, for the outline that shows where it reads. */
   const [patchOffset, setPatchOffset] = useState<{ x: number; y: number } | null>(null);
-  /** The eyedropper gesture in progress, with the image it is reading. */
-  const eyedropperRef = useRef<{ pointerId: number; source: Uint8ClampedArray; sample: number; loupe: boolean } | null>(null);
-  const [eyedropperView, setEyedropperView] = useState<{ x: number; y: number; screenX: number; screenY: number; color: string; loupe: boolean } | null>(null);
-  const loupeCanvasRef = useRef<HTMLCanvasElement>(null);
   /** Dragging the marquee itself, with a selection tool, leaving pixels alone. */
   const marqueeDragRef = useRef<{ pointerId: number; from: Point; base: PixelSelection } | null>(null);
   const [marqueePreview, setMarqueePreview] = useState<PixelSelection | null>(null);
@@ -1060,11 +1058,74 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     if (canvas) putPixels(canvas, compositeRasterDocument(state), state.width, state.height);
   };
 
+  /**
+   * The bridge to the tool catalogue (stage 3 of docs/migration-plan.md).
+   *
+   * A tool that has a file under `environments/raster/tools/definitions/`
+   * runs through its hooks and never reaches the switch below; everything
+   * else still goes through the switch, unchanged. Both paths stay live
+   * until the last tool has moved, because porting twenty-nine tools in one
+   * change is how a rewrite breaks an editor.
+   */
+  const catalogueTool = activeToolId ? rasterToolById.get(activeToolId) : undefined;
+  // One state slot per tool id. Held here rather than inside the tool so a
+  // tool file stays a plain object with no hooks of its own, and so switching
+  // tools cannot leave a half-finished gesture running.
+  const [toolStates, setToolStates] = useState<Record<string, unknown>>({});
+  const toolStatesRef = useRef(toolStates);
+  toolStatesRef.current = toolStates;
+
+  const toolPointerFrom = (event: React.PointerEvent<HTMLCanvasElement>): ToolPointer | null => {
+    const workspace = workspaceRef.current;
+    if (!workspace) return null;
+    const rect = workspace.getBoundingClientRect();
+    return {
+      point: pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent),
+      screenX: event.clientX - rect.left,
+      screenY: event.clientY - rect.top,
+      pointerId: event.pointerId,
+      shiftKey: event.shiftKey, altKey: event.altKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey,
+      button: event.button, pressure: event.pressure,
+    };
+  };
+
+  const toolContextFor = (toolId: string, canvas: HTMLCanvasElement | null): ToolContext<unknown> => {
+    const tool = rasterToolById.get(toolId);
+    const current = toolStatesRef.current[toolId] ?? tool?.createState();
+    return {
+      documentId: document.id,
+      document: state,
+      viewport,
+      options: (toolOptions[toolId] ?? {}) as Readonly<Record<string, string | number | boolean>>,
+      activeLayer: activeRasterLayer(state) ?? null,
+      selection: state.selection,
+      state: current,
+      setState: (next) => {
+        toolStatesRef.current = { ...toolStatesRef.current, [toolId]: next };
+        setToolStates(toolStatesRef.current);
+      },
+      capturePointer: (pointerId) => canvas?.setPointerCapture(pointerId),
+      layerPixels: () => {
+        const active = activeRasterLayer(state);
+        return active ? canvasPixels(active) : new Uint8ClampedArray(state.width * state.height * 4);
+      },
+      compositePixels: () => compositeRasterDocument(state),
+      commit: (before, after, label) => commitPixels(before, after, label),
+      setForegroundColor,
+    };
+  };
+
   const handlePointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     if (event.button === 2) return;
     const canvas = event.currentTarget;
     const workspace = workspaceRef.current;
     if (!workspace) return;
+
+    if (catalogueTool?.onPointerDown) {
+      const pointer = toolPointerFrom(event);
+      if (pointer) { catalogueTool.onPointerDown(toolContextFor(catalogueTool.id, canvas), pointer); return; }
+    }
+
     const point = pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent);
 
     // Auto-Select: clicking something picks the layer it belongs to, instead of
@@ -1331,20 +1392,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       return;
     }
     if (layer.locked) return;
-    if (activeToolId === "raster.eyedropper") {
-      canvas.setPointerCapture(event.pointerId);
-      // The sampled image is read once for the gesture. Compositing per pointer
-      // move would make the loupe lag behind the cursor it is meant to explain.
-      const options = toolOptions[activeToolId] ?? {};
-      eyedropperRef.current = {
-        pointerId: event.pointerId,
-        source: options.allLayers === false ? canvasPixels(layer) : compositeRasterDocument(state),
-        sample: options.sample === "point" || options.sample === undefined ? 1 : Number(options.sample),
-        loupe: options.loupe !== false,
-      };
-      sampleEyedropper(point, event);
-      return;
-    }
     if (activeToolId === "raster.fill") {
       const before = maskTarget?.mask ? maskToRgba(maskTarget.mask.pixels) : canvasPixels(layer).slice(), after = before.slice(), options = toolOptions[activeToolId] ?? {};
       const changed = floodFill(after, state.width, state.height, point.x, point.y, parseHexColor(paintColor), Number(options.tolerance ?? 32), brushMask);
@@ -1373,6 +1420,10 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (catalogueTool?.onPointerMove) {
+      const pointer = toolPointerFrom(event);
+      if (pointer) { catalogueTool.onPointerMove(toolContextFor(catalogueTool.id, event.currentTarget), pointer); return; }
+    }
     const marqueeDrag = marqueeDragRef.current;
     if (marqueeDrag && marqueeDrag.pointerId === event.pointerId) {
       const workspace = workspaceRef.current;
@@ -1381,11 +1432,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       const moved = translateSelection(marqueeDrag.base, state.width, state.height, point.x - marqueeDrag.from.x, point.y - marqueeDrag.from.y);
       marqueePreviewRef.current = moved;
       setMarqueePreview(moved);
-      return;
-    }
-    if (eyedropperRef.current?.pointerId === event.pointerId) {
-      const workspace = workspaceRef.current;
-      if (workspace) sampleEyedropper(pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent), event);
       return;
     }
     const textDrawing = textGesture.current;
@@ -1491,6 +1537,10 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   };
 
   const finishGesture = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (catalogueTool?.onGestureEnd) {
+      const pointer = toolPointerFrom(event);
+      if (pointer) { catalogueTool.onGestureEnd(toolContextFor(catalogueTool.id, event.currentTarget), pointer); return; }
+    }
     setPatchOffset(null);
     const marqueeDrag = marqueeDragRef.current;
     if (marqueeDrag && marqueeDrag.pointerId === event.pointerId) {
@@ -1500,12 +1550,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       setMarqueePreview(null);
       if (moved) void commitSelection(marqueeDrag.base, moved, "Move Selection (Перемещение выделения)");
       return;
-    }
-    if (eyedropperRef.current?.pointerId === event.pointerId) {
-      // The loupe belongs to the press, as it does in Figma: it appears on the
-      // way down and is gone on the way up, so it never sits over the work.
-      eyedropperRef.current = null;
-      setEyedropperView(null);
     }
     const textDrawing = textGesture.current;
     if (textDrawing && textDrawing.pointerId === event.pointerId) {
@@ -1799,52 +1843,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     if (tipDragMode.current === "angle") setToolOption(activeToolId, "angle", Math.round(Math.atan2(y, x) * 180 / Math.PI));
     else { const perpendicular = Math.abs(-Math.sin(tipRadians) * x + Math.cos(tipRadians) * y); setToolOption(activeToolId, "roundness", Math.max(5, Math.min(100, Math.round(perpendicular / 48 * 100)))); }
   };
-  /** How many document pixels the loupe shows across, and how big it is on screen. */
-  const loupeCells = 17, loupeSize = 128;
-
-  /**
-   * Reads the colour under the pointer and shows what was read.
-   *
-   * A single pixel is a hard thing to hit, and the colour that lands in the
-   * swatch is invisible until after the click. The loupe magnifies the
-   * neighbourhood so the target pixel can be seen before letting go, and rings
-   * itself in the colour it is about to take — the ring is the answer, the grid
-   * is the aim.
-   */
-  const sampleEyedropper = (point: Point, event: React.PointerEvent<HTMLCanvasElement>) => {
-    const gesture = eyedropperRef.current;
-    if (!gesture) return;
-    const color = toHexColor(sampleAverage(gesture.source, state.width, state.height, point.x, point.y, gesture.sample));
-    setForegroundColor(color);
-
-    const workspace = workspaceRef.current;
-    const rect = workspace?.getBoundingClientRect();
-    setEyedropperView({
-      x: point.x, y: point.y,
-      screenX: rect ? event.clientX - rect.left : 0,
-      screenY: rect ? event.clientY - rect.top : 0,
-      color, loupe: gesture.loupe,
-    });
-
-    if (!gesture.loupe) return;
-    const canvas = loupeCanvasRef.current;
-    const context = canvas?.getContext("2d");
-    if (!canvas || !context) return;
-    if (canvas.width !== loupeCells) { canvas.width = loupeCells; canvas.height = loupeCells; }
-    const image = context.createImageData(loupeCells, loupeCells);
-    const half = Math.floor(loupeCells / 2);
-    for (let y = 0; y < loupeCells; y += 1) for (let x = 0; x < loupeCells; x += 1) {
-      const sourceX = Math.round(point.x) - half + x, sourceY = Math.round(point.y) - half + y;
-      const to = (y * loupeCells + x) * 4;
-      if (sourceX < 0 || sourceY < 0 || sourceX >= state.width || sourceY >= state.height) continue;
-      const from = (sourceY * state.width + sourceX) * 4;
-      image.data[to] = gesture.source[from]!; image.data[to + 1] = gesture.source[from + 1]!;
-      image.data[to + 2] = gesture.source[from + 2]!; image.data[to + 3] = gesture.source[from + 3]!;
-    }
-    context.putImageData(image, 0, 0);
-
-  };
-
   const updateBrushCursor = (event: React.PointerEvent<HTMLCanvasElement>) => {
     if (!brushLike || !workspaceRef.current || !brushCursorRef.current) return;
     // Screen pixels, not document ones: the cursor is interface, drawn in a layer
@@ -1948,17 +1946,8 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         style={{ left: transformPreview.text.targetBounds.x, top: transformPreview.text.targetBounds.y, width: transformPreview.text.targetBounds.width, height: transformPreview.text.targetBounds.height, transform: `rotate(${transformPreview.rotation}deg)` }}
       />}
       {preferences.showGuides && <svg className="guide-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">{[...guides, ...(guideDraft ? [guideDraft] : [])].map((guide, index) => guide.orientation === "vertical" ? <line key={`${guide.orientation}-${index}`} x1={guide.position} y1="0" x2={guide.position} y2={state.height}/> : <line key={`${guide.orientation}-${index}`} x1="0" y1={guide.position} x2={state.width} y2={guide.position}/>)}</svg>}
-      {eyedropperView && (eyedropperView.loupe ? (
-        <div className="eyedropper-loupe" style={{ transform: `translate(${eyedropperView.screenX}px, ${eyedropperView.screenY}px) translate(-50%, -50%)`, borderColor: eyedropperView.color, width: `${loupeSize}px`, height: `${loupeSize}px` }} aria-hidden="true">
-          <canvas ref={loupeCanvasRef} width={loupeCells} height={loupeCells}/>
-          {/* The centre cell is the pixel that will be taken; the grid is only
-              there to make it countable. */}
-          <span className="eyedropper-loupe-cell" style={{ width: `${loupeSize / loupeCells}px`, height: `${loupeSize / loupeCells}px` }}/>
-          <span className="eyedropper-loupe-hex">{eyedropperView.color.toUpperCase()}</span>
-        </div>
-      ) : (
-        <span className="eyedropper-chip" style={{ transform: `translate(${eyedropperView.screenX}px, ${eyedropperView.screenY}px)`, background: eyedropperView.color }} aria-hidden="true"/>
-      ))}
+      {/* Whatever the active catalogue tool draws over the canvas. */}
+      {catalogueTool?.Overlay && <catalogueTool.Overlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state}/>}
       {activeToolId === "raster.patch" && patchOffset && committedSelectionPath && (
         <svg className="patch-source-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">
           {/* Where the patch is reading from. The destination keeps its own
