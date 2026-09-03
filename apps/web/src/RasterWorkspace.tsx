@@ -14,7 +14,7 @@ import { createBufferRevisionOperation, type AssetId, type VravioDocument } from
 import { kernel } from "./kernel";
 import { importModelAsLayer } from "./scene3d-commands";
 import { rasterToolById } from "./environments/raster/tools/registry";
-import type { ToolContext, ToolPointer } from "./environments/raster/tools/types";
+import type { PaintTarget, ToolContext, ToolPointer } from "./environments/raster/tools/types";
 import { defaultViewport, useShellStore, type DocumentViewport } from "./store";
 import { beginBusy, withBusy } from "./busy";
 import { diagnostic } from "./diagnostics";
@@ -1092,12 +1092,19 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const toolContextFor = (toolId: string, canvas: HTMLCanvasElement | null): ToolContext<unknown> => {
     const tool = rasterToolById.get(toolId);
     const current = toolStatesRef.current[toolId] ?? tool?.createState();
+    // Painting always targets either the active layer's own pixels or, while
+    // editing one, its mask — the same distinction commitPixels' own `target`
+    // parameter already carries. Resolved once here rather than by each tool,
+    // since it depends on the shell's editing-mask state, not on the tool.
+    const maskTarget = editingMaskLayer?.id === state.activeLayerId ? editingMaskLayer : null;
+    const activeLayer = activeRasterLayer(state) ?? null;
+    const paintTarget: PaintTarget = maskTarget ? { kind: "mask", layerId: maskTarget.id } : { kind: "pixels", layerId: activeLayer?.id ?? state.activeLayerId };
     return {
       documentId: document.id,
       document: state,
       viewport,
       options: (toolOptions[toolId] ?? {}) as Readonly<Record<string, string | number | boolean>>,
-      activeLayer: activeRasterLayer(state) ?? null,
+      activeLayer,
       selection: state.selection,
       state: current,
       setState: (next) => {
@@ -1105,12 +1112,13 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         setToolStates(toolStatesRef.current);
       },
       capturePointer: (pointerId) => canvas?.setPointerCapture(pointerId),
-      layerPixels: () => {
-        const active = activeRasterLayer(state);
-        return active ? canvasPixels(active) : new Uint8ClampedArray(state.width * state.height * 4);
-      },
+      layerPixels: () => (activeLayer ? canvasPixels(activeLayer) : new Uint8ClampedArray(state.width * state.height * 4)),
       compositePixels: () => compositeRasterDocument(state),
-      commit: (before, after, label) => commitPixels(before, after, label),
+      paintTarget,
+      paintColor,
+      paintMask: brushMask,
+      targetPixels: () => (maskTarget?.mask ? maskToRgba(maskTarget.mask.pixels) : (activeLayer ? canvasPixels(activeLayer) : new Uint8ClampedArray(state.width * state.height * 4)).slice()),
+      commit: (before, after, label, target = paintTarget.kind, layerId = paintTarget.layerId) => commitPixels(before, after, label, target, layerId),
       setForegroundColor,
     };
   };
@@ -1404,12 +1412,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       return;
     }
     if (layer.locked) return;
-    if (activeToolId === "raster.fill") {
-      const before = maskTarget?.mask ? maskToRgba(maskTarget.mask.pixels) : canvasPixels(layer).slice(), after = before.slice(), options = toolOptions[activeToolId] ?? {};
-      const changed = floodFill(after, state.width, state.height, point.x, point.y, parseHexColor(paintColor), Number(options.tolerance ?? 32), brushMask);
-      if (changed) void commitPixels(before, after, maskTarget ? "Fill Layer Mask (Заливка маски слоя)" : "Paint Bucket (Заливка)", maskTarget ? "mask" : "pixels", paintTargetId);
-      return;
-    }
     if (activeToolId !== "raster.brush" && activeToolId !== "raster.eraser" && activeToolId !== "raster.pencil" && activeToolId !== "raster.highlighter" && activeToolId !== "raster.blur" && activeToolId !== "raster.smudge" && activeToolId !== "raster.dodge" && activeToolId !== "raster.burn") return;
     canvas.setPointerCapture(event.pointerId);
     if (maskTarget && (activeToolId === "raster.blur" || activeToolId === "raster.smudge" || activeToolId === "raster.dodge" || activeToolId === "raster.burn")) return;

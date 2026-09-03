@@ -45,6 +45,14 @@ export interface ToolPointer {
   readonly pressure: number;
 }
 
+/** Where a painting tool's pixels go: the layer itself, or the mask it is
+ * editing. Resolved once by the host, since it depends on the shell's "which
+ * layer's mask is being edited" state, not on anything the tool knows. */
+export interface PaintTarget {
+  readonly kind: "pixels" | "mask";
+  readonly layerId: string;
+}
+
 export interface ToolContext<TState> {
   readonly documentId: string;
   readonly document: RasterDocumentState;
@@ -67,16 +75,46 @@ export interface ToolContext<TState> {
   compositePixels(): Uint8ClampedArray;
 
   /**
+   * Where painting goes right now, and the colour it goes in.
+   *
+   * `paintTarget` names the layer and whether it is the layer's own pixels or
+   * a mask it is editing — the same distinction `commit`'s `target` picks up.
+   * `paintColor` already accounts for that: editing a mask paints in black or
+   * white, never the foreground swatch. `targetPixels()` reads whichever of
+   * the two is live, as RGBA — a mask included, via the same encoding
+   * `commit` expects back.
+   */
+  readonly paintTarget: PaintTarget;
+  readonly paintColor: string;
+  targetPixels(): Uint8ClampedArray;
+
+  /**
+   * The single mask every painting tool is confined to, combining the
+   * selection with "lock transparent pixels" into one.
+   *
+   * This is the enforcement CLAUDE.md's "one door, not one checkpoint" rule
+   * calls for: a tool does not decide whether it may touch a pixel, it reads
+   * how much this says it may and stops there — `floodFill`, `drawDab` and
+   * every painting primitive in @vravio/env-raster take a mask exactly this
+   * shape for that reason. `commit` enforces the selection independently at
+   * the write end regardless, so a tool that ignored this mask would still
+   * be confined, just without the softened edge feathering implies.
+   */
+  /** Undefined means nothing restricts painting — the fast unrestricted
+   * path `paintMask()` itself takes, not a mask materialised to all-255. */
+  readonly paintMask: Uint8ClampedArray | undefined;
+
+  /**
    * The only way a tool puts pixels into the document.
    *
    * Routed to the workspace's existing `commitPixels`, so a tool gets the
    * selection rule, the history step and the asset revision without knowing
-   * any of them exist. Nothing ported so far writes pixels — the eyedropper
-   * reads — so this member is wired but unexercised until stage 5 moves a
-   * painting tool across, and it is the part of this contract with the least
-   * evidence behind it.
+   * any of them exist. `target`/`layerId` default to `paintTarget`, which is
+   * right for every painting tool ported so far; a tool commits to a
+   * different layer only when it names one, the way Auto-Select's
+   * click-to-pick-a-different-layer will need to.
    */
-  commit(before: Uint8ClampedArray, after: Uint8ClampedArray, label: string): Promise<void>;
+  commit(before: Uint8ClampedArray, after: Uint8ClampedArray, label: string, target?: PaintTarget["kind"], layerId?: string): Promise<void>;
 
   setForegroundColor(color: string): void;
 }

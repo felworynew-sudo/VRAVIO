@@ -27,7 +27,7 @@ import type { RasterToolDefinition, ToolContext, ToolPointer } from "./types";
 
 /** Everything a tool did during a driven gesture. */
 interface Effects {
-  readonly commits: { before: Uint8ClampedArray; after: Uint8ClampedArray; label: string }[];
+  readonly commits: { before: Uint8ClampedArray; after: Uint8ClampedArray; label: string; target: string; layerId: string }[];
   readonly foreground: string[];
   readonly captured: number[];
   /** Every state the tool passed through, not only the one it ended on. */
@@ -61,12 +61,21 @@ function documentFixture(): RasterDocumentState {
   const state = createRasterDocument(64, 48);
   const base = state.layers[0]!;
   const pixels = new Uint8ClampedArray(64 * 48 * 4);
-  // Two halves, so a tool whose behaviour depends on where it reads shows it.
+  // Two halves, so a tool whose behaviour depends on where it reads shows
+  // it — each shaded by distance from (10, 10), fullGesture's own press
+  // point, rather than left flat. floodFill compares every pixel against
+  // the *seed* pixel's colour (see fill.ts's `target`), so shading strictly
+  // by distance from that seed makes the diff from seed exactly equal to
+  // the distance — which is what makes a wider tolerance option provably
+  // reach further, rather than hoping an arbitrary pattern happens to. A
+  // uniform region would flood identically at every tolerance, since
+  // nothing in it would ever differ from the seed at all.
   for (let y = 0; y < 48; y += 1) for (let x = 0; x < 64; x += 1) {
     const index = (y * 64 + x) * 4;
     const left = x < 32;
-    pixels[index] = left ? 210 : 20; pixels[index + 1] = left ? 40 : 190;
-    pixels[index + 2] = left ? 50 : 70; pixels[index + 3] = 255;
+    const distanceFromSeed = Math.abs(x - 10) + Math.abs(y - 10);
+    pixels[index] = (left ? 210 : 20) + distanceFromSeed; pixels[index + 1] = (left ? 40 : 190) + distanceFromSeed;
+    pixels[index + 2] = (left ? 50 : 70) + distanceFromSeed; pixels[index + 3] = 255;
   }
   setLayerPixels(base, pixels, 64, 48);
 
@@ -103,10 +112,22 @@ function pointerAt(x: number, y: number, pointerId = 1): ToolPointer {
  * without going through commit" is detected, rather than by trusting the tool
  * to say so.
  */
+/** A layer's own pixels, materialised to document size — the same shape
+ * `layerPixels()`/`targetPixels()` hand a tool in the real workspace. */
+function materialise(layer: RasterDocumentState["layers"][number], document: RasterDocumentState): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(document.width * document.height * 4);
+  for (let y = 0; y < layer.bounds.height; y += 1) {
+    const from = y * layer.bounds.width * 4;
+    out.set(layer.pixels.subarray(from, from + layer.bounds.width * 4), ((layer.bounds.y + y) * document.width + layer.bounds.x) * 4);
+  }
+  return out;
+}
+
 function drive(
   tool: RasterToolDefinition<unknown>,
   options: Record<string, string | number | boolean>,
   gesture: (context: ToolContext<unknown>, effects: Effects) => void,
+  paintMask?: Uint8ClampedArray,
 ): { effects: Effects; document: RasterDocumentState; untouched: RasterDocumentState } {
   const document = documentFixture();
   const untouched = documentFixture();
@@ -122,15 +143,7 @@ function drive(
     get state() { return effects.state; },
     setState: (next) => { effects.state = next; effects.stateHistory.push(next); },
     capturePointer: (pointerId) => { effects.captured.push(pointerId); },
-    layerPixels: () => {
-      const layer = document.layers.find((item) => item.id === document.activeLayerId)!;
-      const out = new Uint8ClampedArray(document.width * document.height * 4);
-      for (let y = 0; y < layer.bounds.height; y += 1) {
-        const from = y * layer.bounds.width * 4;
-        out.set(layer.pixels.subarray(from, from + layer.bounds.width * 4), ((layer.bounds.y + y) * document.width + layer.bounds.x) * 4);
-      }
-      return out;
-    },
+    layerPixels: () => materialise(document.layers.find((item) => item.id === document.activeLayerId)!, document),
     compositePixels: () => {
       // Top layer is opaque, so the composite is simply the top layer.
       const top = document.layers[document.layers.length - 1]!;
@@ -141,7 +154,11 @@ function drive(
       }
       return out;
     },
-    commit: async (before, after, label) => { effects.commits.push({ before, after, label }); },
+    paintTarget: { kind: "pixels", layerId: document.activeLayerId },
+    paintColor: "#101317",
+    paintMask,
+    targetPixels: () => materialise(document.layers.find((item) => item.id === document.activeLayerId)!, document),
+    commit: async (before, after, label, target = "pixels", layerId = document.activeLayerId) => { effects.commits.push({ before, after, label, target, layerId }); },
     setForegroundColor: (color) => { effects.foreground.push(color); },
   };
 
@@ -220,6 +237,23 @@ describe("every tool in the catalogue keeps the contract", () => {
         expect(pixelsOf(document)).toBe(pixelsOf(untouched));
       });
 
+      it("does not commit painting outside an all-zero paintMask", () => {
+        // Unlike the selection rule above, nothing forces this one — the
+        // mock `commit` here does not call confineToSelection the way the
+        // real commitPixels does, so a tool that reads context.paintMask and
+        // a tool that quietly ignores it are otherwise indistinguishable:
+        // every other check in this file leaves paintMask undefined, and
+        // "ignoring undefined" and "correctly handling undefined" produce
+        // the same result. An all-zero mask — painting confined to nothing —
+        // is the one case with an unambiguous right answer: no pixel may
+        // change, whatever the tool does with it.
+        const blocked = new Uint8ClampedArray(64 * 48); // all zero: nothing may change
+        const { effects } = drive(tool, options, (context) => fullGesture(context, tool), blocked);
+        for (const commit of effects.commits) {
+          expect([...commit.after], `${tool.id} painted outside an all-zero paintMask`).toEqual([...commit.before]);
+        }
+      });
+
       it("returns to its initial state when it stops being the active tool", () => {
         const { effects } = drive(tool, options, (context) => {
           tool.onPointerDown?.(context, pointerAt(10, 10));
@@ -239,19 +273,33 @@ describe("every tool in the catalogue keeps the contract", () => {
         // a tool that clears its state when the gesture finishes — as the
         // eyedropper does, so the loupe does not outlive the press — would
         // otherwise look identical whatever its options said.
+        // Commit *content*, not just labels: fill's tolerance changes which
+        // pixels get painted while its commit label stays "Paint Bucket"
+        // either way, so a signature that only looked at labels would call
+        // that "unchanged" no matter what tolerance did.
         const signature = (result: ReturnType<typeof drive>) =>
           JSON.stringify(summarise({
             foreground: result.effects.foreground,
             states: result.effects.stateHistory,
-            commits: result.effects.commits.map((commit) => commit.label),
+            commits: result.effects.commits.map((commit) => ({ label: commit.label, after: commit.after })),
           }));
 
         for (const option of descriptorOptions) {
+          // A "color" option is not read from context.options at all — every
+          // painting tool's colour comes from context.paintColor, and the
+          // options bar keeps a "color" entry in sync with the global
+          // foreground swatch rather than storing it per tool (see App.tsx's
+          // OptionsBar wiring: the value shown is always
+          // effectiveForegroundColor, and onChange for "color" calls
+          // setForegroundColor, never setToolOption). Varying
+          // context.options.color here would test a channel no tool reads;
+          // the case below tests the real one.
+          if (option.type === "color") continue;
+
           // A value that is not the default, chosen by the option's own type.
           const changed = option.type === "boolean" ? !option.defaultValue
             : option.type === "select" ? option.values.find((value) => value.value !== option.defaultValue)?.value
-            : option.type === "number" ? (option.defaultValue === option.max ? option.min : option.max)
-            : "#123456";
+            : option.defaultValue === option.max ? option.min : option.max;
           if (changed === undefined) continue;
 
           const variant = drive(tool, { ...options, [option.id]: changed }, (context) => fullGesture(context, tool));
@@ -260,6 +308,14 @@ describe("every tool in the catalogue keeps the contract", () => {
           // setting, the setting affects the tool. A checkbox that changes
           // nothing is worse than an absent one.
           expect(signature(variant), `${tool.id}: option "${option.id}" changed nothing`).not.toBe(signature(baseline));
+        }
+
+        // The real colour channel: every tool with a "color" option paints
+        // in context.paintColor, so varying that — not the option — is what
+        // actually has to change the outcome.
+        if (descriptorOptions.some((option) => option.type === "color")) {
+          const recoloured = drive(tool, options, (context) => fullGesture({ ...context, paintColor: "#123456" }, tool));
+          expect(signature(recoloured), `${tool.id}: changing paintColor changed nothing`).not.toBe(signature(baseline));
         }
       });
     });
