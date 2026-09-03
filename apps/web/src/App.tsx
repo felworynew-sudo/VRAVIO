@@ -11,7 +11,7 @@ import { useDocuments } from "./useDocuments";
 import { activeCommandContext, ensureCommandsRegistered } from "./commands";
 import { kernel } from "./kernel";
 import { EnvironmentIcon } from "./EnvironmentIcon";
-import { localized, text } from "./i18n";
+import { localized, resolveLabel, text } from "./i18n";
 import { SettingsDialog } from "./SettingsDialog";
 import { NewDocumentDialog } from "./NewDocumentDialog";
 import { clearDiagnostics, diagnostic, readDiagnostics, type DiagnosticEntry } from "./diagnostics";
@@ -426,7 +426,7 @@ export function App() {
       </aside>}
       {active ? <DockLayout /> : <WelcomeScreen language={store.language} requestNewDocument={store.requestNewDocument} />}
     </main>
-    <footer className="status-bar"><span>{localized(active ? environmentMeta[active.kind].label : "Ready (Готово)", store.language)}</span><span>{active ? `${Math.round((store.viewports[active.id]?.zoom ?? 1) * 100)}% · ` : ""}sRGB · {renderBackend ?? "detecting"}</span></footer>
+    <footer className="status-bar"><span>{active ? resolveLabel(environmentMeta[active.kind].label, store.language) : text(store.language, "Ready", "Готово")}</span><span>{active ? `${Math.round((store.viewports[active.id]?.zoom ?? 1) * 100)}% · ` : ""}sRGB · {renderBackend ?? "detecting"}</span></footer>
     {store.preferences.showPerformanceOverlay && <PerformanceOverlay documentId={active?.id ?? null} />}
 
     {store.paletteOpen && <div className="dialog-backdrop" onMouseDown={() => store.setPaletteOpen(false)}>
@@ -502,9 +502,9 @@ function ToolPalette({ kind, language, activeToolId, openGroup, onOpenGroup, onS
     const groupId = group.map((tool) => tool.id).join("|");
     const selected = group.find((tool) => tool.id === activeToolId) ?? group[0]!;
     return <div className="tool-group" key={groupId}>
-      <button className={group.some((tool) => tool.id === activeToolId) ? "active" : ""} title={`${localized(selected.label, language)} [${selected.shortcut}]`} aria-label={localized(selected.label, language)} onClick={() => onSelect(selected.id)}><ToolGlyph tool={selected} /></button>
+      <button className={group.some((tool) => tool.id === activeToolId) ? "active" : ""} title={`${resolveLabel(selected.label, language)} [${selected.shortcut}]`} aria-label={resolveLabel(selected.label, language)} onClick={() => onSelect(selected.id)}><ToolGlyph tool={selected} /></button>
       {group.length > 1 && <button className="tool-group-arrow" aria-label={language === "ru" ? "Показать группу инструментов" : "Show tool group"} onClick={() => onOpenGroup(openGroup === groupId ? null : groupId)}>▾</button>}
-      {openGroup === groupId && <div className="tool-flyout">{group.map((tool) => <button key={tool.id} className={tool.id === activeToolId ? "active" : ""} onClick={() => onSelect(tool.id)}><ToolGlyph tool={tool} /><span>{localized(tool.label, language)}</span><kbd>{tool.shortcut}</kbd></button>)}</div>}
+      {openGroup === groupId && <div className="tool-flyout">{group.map((tool) => <button key={tool.id} className={tool.id === activeToolId ? "active" : ""} onClick={() => onSelect(tool.id)}><ToolGlyph tool={tool} /><span>{resolveLabel(tool.label, language)}</span><kbd>{tool.shortcut}</kbd></button>)}</div>}
     </div>;
   })}</>;
 }
@@ -520,7 +520,7 @@ function WelcomeScreen({ language, requestNewDocument }: { language: Language; r
       {(Object.entries(environmentMeta) as [keyof typeof environmentMeta, (typeof environmentMeta)[keyof typeof environmentMeta]][]).map(([kind, meta]) => <button key={kind} data-kind={kind} onClick={() => requestNewDocument(kind)}>
         <span className="environment-glow" aria-hidden="true"/>
         <EnvironmentIcon kind={kind} className="welcome-environment-icon" />
-        <strong>{localized(meta.label, language)}</strong>
+        <strong>{resolveLabel(meta.label, language)}</strong>
         <small>{language === "ru" ? meta.descriptionRu : meta.description}</small>
       </button>)}
     </div>
@@ -560,13 +560,13 @@ function AlignDistributeBar({ selectionCount, onAlign, onDistribute }: { selecti
 
 function OptionsBar({ language, tool, values, transform, onTransformCommit, onTransformCancel, onChange, alignSelectionCount, onAlign, onDistribute }: { language: Language; tool: ReturnType<typeof toolById>; values: Record<string, string | number | boolean>; transform: { active: boolean; x: number; y: number; width: number; height: number; rotation: number } | null; onTransformCommit(): void; onTransformCancel(): void; onChange(id: string, value: string | number | boolean): void; alignSelectionCount: number; onAlign(edge: AlignEdge): void; onDistribute(edge: AlignEdge): void }) {
   if (transform?.active) return <div className="options-bar transform-options"><strong>Free Transform (Свободная трансформация)</strong><label>X:<input value={Math.round(transform.x)} readOnly/></label><label>Y:<input value={Math.round(transform.y)} readOnly/></label><label>W:<input value={Math.round(transform.width)} readOnly/></label><label>H:<input value={Math.round(transform.height)} readOnly/></label><label>∠:<input value={`${Math.round(transform.rotation * 10) / 10}°`} readOnly/></label><button title="Cancel (Отмена)" onClick={onTransformCancel}>×</button><button className="commit" title="Commit (Подтвердить)" onClick={onTransformCommit}>✓</button></div>;
-  return <div className="options-bar"><strong>{localized(tool?.label ?? "Tool options (Параметры инструмента)", language)}</strong>{tool ? tool.options.map((option) => <OptionField key={option.id} language={language} option={option} value={values[option.id] ?? option.defaultValue} onChange={(value) => onChange(option.id, value)} />) : <span className="muted">{language === "ru" ? "Выберите или создайте документ" : "Select or create a document"}</span>}{tool?.id === "raster.move" && <AlignDistributeBar selectionCount={alignSelectionCount} onAlign={onAlign} onDistribute={onDistribute}/>}</div>;
+  return <div className="options-bar"><strong>{tool ? resolveLabel(tool.label, language) : text(language, "Tool options", "Параметры инструмента")}</strong>{tool ? tool.options.map((option) => <OptionField key={option.id} language={language} option={option} value={values[option.id] ?? option.defaultValue} onChange={(value) => onChange(option.id, value)} />) : <span className="muted">{language === "ru" ? "Выберите или создайте документ" : "Select or create a document"}</span>}{tool?.id === "raster.move" && <AlignDistributeBar selectionCount={alignSelectionCount} onAlign={onAlign} onDistribute={onDistribute}/>}</div>;
 }
 
 function OptionField({ language, option, value, onChange }: { language: Language; option: ToolOption; value: string | number | boolean; onChange(value: string | number | boolean): void }) {
-  const label = localized(option.label, language);
+  const label = resolveLabel(option.label, language);
   if (option.type === "boolean") return <label className="option-field check"><input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} />{label}</label>;
-  if (option.type === "select") return <label className="option-field">{label}<select value={String(value)} onChange={(event) => onChange(event.target.value)}>{option.values.map((item) => <option value={item.value} key={item.value}>{localized(item.label, language)}</option>)}</select></label>;
+  if (option.type === "select") return <label className="option-field">{label}<select value={String(value)} onChange={(event) => onChange(event.target.value)}>{option.values.map((item) => <option value={item.value} key={item.value}>{resolveLabel(item.label, language)}</option>)}</select></label>;
   if (option.type === "color") return <label className="option-field color-field">{label}<input type="color" value={String(value)} onChange={(event) => onChange(event.target.value)} /></label>;
   return <label className="option-field">{label}<span><input type="number" min={option.min} max={option.max} step={option.step} value={Number(value)} onChange={(event) => onChange(event.target.valueAsNumber)} />{option.unit}</span></label>;
 }

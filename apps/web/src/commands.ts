@@ -1,6 +1,7 @@
 import type { CommandContext, EnvironmentKind } from "@vravio/kernel";
 import { activeRasterLayer, groupLayers, layerDocumentPixels, layerFromSelection, mergeLayerDown, mergeVisibleLayers, moveLayerInStack, removeLayer, selectAllPixels, stampVisibleLayers, ungroupLayer, createRasterLayer, invertPixelSelection, isRasterDocumentState, restrictSelectionToAlpha, selectOpaquePixels, type PixelSelection, type RasterDocumentState, type RasterLayer } from "@vravio/env-raster";
 import { isVectorDocumentState, type VectorDocumentState } from "@vravio/env-vector";
+import { legacyBilingualLabel, resolveLabel, type LocalizedText } from "./i18n";
 import { kernel } from "./kernel";
 import { createScene3DExtrudeLayer, createScene3DTextLayer } from "./scene3d-commands";
 import { useShellStore } from "./store";
@@ -8,6 +9,28 @@ import { tools } from "./tools";
 import { applyShortcutOverrides, rememberDefaultShortcut } from "./shortcuts";
 
 let initialized = false;
+
+/**
+ * One constant per menu category, resolved through `legacyBilingualLabel` at
+ * each registration site.
+ *
+ * Commands register once at startup (`ensureCommandsRegistered`'s guard),
+ * not fresh on every render the way a `ToolDefinition` is read — so
+ * `Command.category`/`.label` stay the same concatenated-string shape
+ * `localized()` already parses, built here from structured data instead of
+ * re-typed by hand at every call site. See `legacyBilingualLabel`'s own
+ * comment in i18n.ts for why the kernel side of this isn't restructured yet.
+ */
+const CATEGORY_FILE: LocalizedText = { en: "File", ru: "Файл" };
+const CATEGORY_LAYER: LocalizedText = { en: "Layer", ru: "Слой" };
+const CATEGORY_EDIT: LocalizedText = { en: "Edit", ru: "Правка" };
+const CATEGORY_SELECT: LocalizedText = { en: "Select", ru: "Выделение" };
+const CATEGORY_VIEW: LocalizedText = { en: "View", ru: "Просмотр" };
+const CATEGORY_FILTER: LocalizedText = { en: "Filter", ru: "Фильтр" };
+const CATEGORY_IMAGE: LocalizedText = { en: "Image", ru: "Изображение" };
+const CATEGORY_3D: LocalizedText = { en: "3D", ru: "3D" };
+const CATEGORY_OBJECT: LocalizedText = { en: "Object", ru: "Объект" };
+const CATEGORY_TOOLS: LocalizedText = { en: "Tools", ru: "Инструменты" };
 
 /** The selection each document last had, so Reselect has something to restore. */
 const lastSelectionByDocument = new Map<string, PixelSelection>();
@@ -117,32 +140,32 @@ function snapshotLayers(state: RasterDocumentState): { layers: RasterLayer[]; ac
 export function ensureCommandsRegistered(): void {
   if (initialized) return;
   initialized = true;
-  const registerNew = (kind: EnvironmentKind, label: string) => kernel.commands.register({ id: `file.new.${kind}`, label, category: "File (Файл)", ...(kind === "raster" ? { shortcut: "Mod+N" } : {}), execute: () => kind === "raster" || kind === "vector" ? useShellStore.getState().requestNewDocument(kind) : useShellStore.getState().openDocument(kind) });
-  registerNew("raster", "New Raster Document (Новый растровый документ)");
-  registerNew("vector", "New Vector Document (Новый векторный документ)");
-  registerNew("audio", "New Audio Document (Новый аудиодокумент)");
-  registerNew("video", "New Video Document (Новый видеодокумент)");
+  const registerNew = (kind: EnvironmentKind, label: LocalizedText) => kernel.commands.register({ id: `file.new.${kind}`, label: legacyBilingualLabel(label), category: legacyBilingualLabel(CATEGORY_FILE), ...(kind === "raster" ? { shortcut: "Mod+N" } : {}), execute: () => kind === "raster" || kind === "vector" ? useShellStore.getState().requestNewDocument(kind) : useShellStore.getState().openDocument(kind) });
+  registerNew("raster", { en: "New Raster Document", ru: "Новый растровый документ" });
+  registerNew("vector", { en: "New Vector Document", ru: "Новый векторный документ" });
+  registerNew("audio", { en: "New Audio Document", ru: "Новый аудиодокумент" });
+  registerNew("video", { en: "New Video Document", ru: "Новый видеодокумент" });
   // File commands own the shortcut and the menu entry, but the actual write lives in the
   // shell (it needs the platform port and the export dialog), so they dispatch instead of
   // saving here. Marking the document clean without writing anything would lose work.
   const dispatch = (type: string): void => { window.dispatchEvent(new Event(type)); };
-  kernel.commands.register({ id: "file.open", label: "Open… (Открыть…)", category: "File (Файл)", shortcut: "Mod+O", execute: () => dispatch("vravio-file-open") });
-  kernel.commands.register({ id: "file.save", label: "Save (Сохранить)", category: "File (Файл)", shortcut: "Mod+S", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: () => dispatch("vravio-file-save") });
-  kernel.commands.register({ id: "file.saveAs", label: "Save As… (Сохранить как…)", category: "File (Файл)", shortcut: "Mod+Shift+S", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: () => dispatch("vravio-file-save-as") });
-  kernel.commands.register({ id: "file.saveCopy", label: "Save a Copy… (Сохранить копию…)", category: "File (Файл)", shortcut: "Mod+Alt+S", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: () => dispatch("vravio-file-save-copy") });
-  kernel.commands.register({ id: "file.export", label: "Export… (Экспортировать…)", category: "File (Файл)", shortcut: "Mod+Shift+Alt+W", isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: () => dispatch("vravio-file-export") });
-  kernel.commands.register({ id: "file.close", label: "Close Document (Закрыть документ)", category: "File (Файл)", shortcut: "Mod+W", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: ({ activeDocumentId }) => { if (activeDocumentId) useShellStore.getState().closeDocument(activeDocumentId); } });
+  kernel.commands.register({ id: "file.open", label: legacyBilingualLabel({ en: "Open…", ru: "Открыть…" }), category: legacyBilingualLabel(CATEGORY_FILE), shortcut: "Mod+O", execute: () => dispatch("vravio-file-open") });
+  kernel.commands.register({ id: "file.save", label: legacyBilingualLabel({ en: "Save", ru: "Сохранить" }), category: legacyBilingualLabel(CATEGORY_FILE), shortcut: "Mod+S", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: () => dispatch("vravio-file-save") });
+  kernel.commands.register({ id: "file.saveAs", label: legacyBilingualLabel({ en: "Save As…", ru: "Сохранить как…" }), category: legacyBilingualLabel(CATEGORY_FILE), shortcut: "Mod+Shift+S", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: () => dispatch("vravio-file-save-as") });
+  kernel.commands.register({ id: "file.saveCopy", label: legacyBilingualLabel({ en: "Save a Copy…", ru: "Сохранить копию…" }), category: legacyBilingualLabel(CATEGORY_FILE), shortcut: "Mod+Alt+S", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: () => dispatch("vravio-file-save-copy") });
+  kernel.commands.register({ id: "file.export", label: legacyBilingualLabel({ en: "Export…", ru: "Экспортировать…" }), category: legacyBilingualLabel(CATEGORY_FILE), shortcut: "Mod+Shift+Alt+W", isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: () => dispatch("vravio-file-export") });
+  kernel.commands.register({ id: "file.close", label: legacyBilingualLabel({ en: "Close Document", ru: "Закрыть документ" }), category: legacyBilingualLabel(CATEGORY_FILE), shortcut: "Mod+W", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: ({ activeDocumentId }) => { if (activeDocumentId) useShellStore.getState().closeDocument(activeDocumentId); } });
   kernel.commands.register({
     id: "layer.openElsewhere",
-    label: "Edit Layer in Its Own Tab (Открыть слой в отдельной вкладке)",
-    category: "Layer (Слой)",
+    label: legacyBilingualLabel({ en: "Edit Layer in Its Own Tab", ru: "Открыть слой в отдельной вкладке" }),
+    category: legacyBilingualLabel(CATEGORY_LAYER),
     isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster",
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void openTargetElsewhere(activeDocumentId, "raster", false); },
   });
   kernel.commands.register({
     id: "layer.openElsewhereBranch",
-    label: "Edit Layer as a Copy (Открыть слой копией)",
-    category: "Layer (Слой)",
+    label: legacyBilingualLabel({ en: "Edit Layer as a Copy", ru: "Открыть слой копией" }),
+    category: legacyBilingualLabel(CATEGORY_LAYER),
     isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster",
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void openTargetElsewhere(activeDocumentId, "raster", true); },
   });
@@ -154,39 +177,39 @@ export function ensureCommandsRegistered(): void {
   };
   kernel.commands.register({
     id: "image.openElsewhere",
-    label: "Edit Image in Raster Environment (Открыть картинку в растровой среде)",
-    category: "Object (Объект)",
+    label: legacyBilingualLabel({ en: "Edit Image in Raster Environment", ru: "Открыть картинку в растровой среде" }),
+    category: legacyBilingualLabel(CATEGORY_OBJECT),
     isEnabled: hasActiveImageShape,
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void openVectorImageElsewhere(activeDocumentId, false); },
   });
   kernel.commands.register({
     id: "image.openElsewhereBranch",
-    label: "Edit Image as a Copy (Открыть картинку копией)",
-    category: "Object (Объект)",
+    label: legacyBilingualLabel({ en: "Edit Image as a Copy", ru: "Открыть картинку копией" }),
+    category: legacyBilingualLabel(CATEGORY_OBJECT),
     isEnabled: hasActiveImageShape,
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void openVectorImageElsewhere(activeDocumentId, true); },
   });
   kernel.commands.register({
     id: "roundtrip.apply",
-    label: "Apply to Parent Document (Применить в исходный документ)",
-    category: "File (Файл)",
+    label: legacyBilingualLabel({ en: "Apply to Parent Document", ru: "Применить в исходный документ" }),
+    category: legacyBilingualLabel(CATEGORY_FILE),
     shortcut: "Mod+Shift+Enter",
     isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && kernel.roundtrip.sessionOf(activeDocumentId)?.status !== undefined && kernel.documents.get(activeDocumentId)?.provenance),
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void kernel.roundtrip.apply(activeDocumentId); },
   });
   kernel.commands.register({
     id: "roundtrip.detach",
-    label: "Detach from Parent (Отвязать от исходного)",
-    category: "File (Файл)",
+    label: legacyBilingualLabel({ en: "Detach from Parent", ru: "Отвязать от исходного" }),
+    category: legacyBilingualLabel(CATEGORY_FILE),
     isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && kernel.documents.get(activeDocumentId)?.provenance),
     execute: ({ activeDocumentId }) => { if (activeDocumentId) kernel.roundtrip.detach(activeDocumentId); },
   });
-  kernel.commands.register({ id: "layer.new", label: "New Layer (Новый слой)", category: "Layer (Слой)", shortcut: "Mod+Shift+N", isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void changeRasterDocument(activeDocumentId, "New Layer (Новый слой)", (state) => { const layer = createRasterLayer(state.width, state.height, `Layer ${state.layers.length + 1} (Слой ${state.layers.length + 1})`); state.layers.push(layer); state.activeLayerId = layer.id; return true; }); } });
-  kernel.commands.register({ id: "layer.new3DText", label: "New 3D Text Layer… (Новый объёмный текстовый слой…)", category: "3D (3D)", isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: ({ activeDocumentId }) => { if (activeDocumentId) void createScene3DTextLayer(activeDocumentId); } });
+  kernel.commands.register({ id: "layer.new", label: legacyBilingualLabel({ en: "New Layer", ru: "Новый слой" }), category: legacyBilingualLabel(CATEGORY_LAYER), shortcut: "Mod+Shift+N", isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void changeRasterDocument(activeDocumentId, "New Layer (Новый слой)", (state) => { const layer = createRasterLayer(state.width, state.height, `Layer ${state.layers.length + 1} (Слой ${state.layers.length + 1})`); state.layers.push(layer); state.activeLayerId = layer.id; return true; }); } });
+  kernel.commands.register({ id: "layer.new3DText", label: legacyBilingualLabel({ en: "New 3D Text Layer…", ru: "Новый объёмный текстовый слой…" }), category: legacyBilingualLabel(CATEGORY_3D), isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: ({ activeDocumentId }) => { if (activeDocumentId) void createScene3DTextLayer(activeDocumentId); } });
   kernel.commands.register({
     id: "layer.new3DExtrude",
-    label: "New 3D Extrusion from Layer (Экструдировать слой в 3D)",
-    category: "3D (3D)",
+    label: legacyBilingualLabel({ en: "New 3D Extrusion from Layer", ru: "Экструдировать слой в 3D" }),
+    category: legacyBilingualLabel(CATEGORY_3D),
     isEnabled: ({ activeDocumentId }) => {
       const document = kernel.documents.get<RasterDocumentState>(activeDocumentId ?? "");
       return Boolean(document && isRasterDocumentState(document.state) && document.state.activeLayerId);
@@ -202,53 +225,53 @@ export function ensureCommandsRegistered(): void {
   const editLayers = (documentId: string, label: string, mutate: (state: RasterDocumentState) => boolean) =>
     changeRasterDocument(documentId, label, mutate);
 
-  kernel.commands.register({ id: "layer.duplicate", label: "Duplicate Layer (Создать дубликат слоя)", category: "Layer (Слой)", shortcut: "Mod+J", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; const document = kernel.documents.get<RasterDocumentState>(activeDocumentId); if (!document) return; void editLayers(activeDocumentId, "Layer via Copy (Слой копированием)", (state) => Boolean(layerFromSelection(state, state.activeLayerId, state.selection, false))); } });
-  kernel.commands.register({ id: "layer.delete", label: "Delete Layer (Удалить слой)", category: "Layer (Слой)", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, "Delete Layer (Удалить слой)", (state) => removeLayer(state, state.activeLayerId)); } });
-  kernel.commands.register({ id: "layer.viaCut", label: "Layer via Cut (Вырезать на новый слой)", category: "Layer (Слой)", shortcut: "Mod+Shift+J", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && kernel.documents.get<RasterDocumentState>(activeDocumentId)?.state.selection), execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, "Layer via Cut (Слой вырезанием)", (state) => Boolean(layerFromSelection(state, state.activeLayerId, state.selection, true))); } });
-  kernel.commands.register({ id: "layer.mergeDown", label: "Merge Down (Объединить с предыдущим)", category: "Layer (Слой)", shortcut: "Mod+E", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, "Merge Down (Объединить с предыдущим)", (state) => Boolean(mergeLayerDown(state, state.activeLayerId))); } });
-  kernel.commands.register({ id: "layer.mergeVisible", label: "Merge Visible (Объединить видимые)", category: "Layer (Слой)", shortcut: "Mod+Shift+E", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, "Merge Visible (Объединить видимые)", (state) => Boolean(mergeVisibleLayers(state))); } });
-  kernel.commands.register({ id: "layer.stampVisible", label: "Stamp Visible (Отпечаток видимых)", category: "Layer (Слой)", shortcut: "Mod+Shift+Alt+E", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, "Stamp Visible (Отпечаток видимых)", (state) => Boolean(stampVisibleLayers(state))); } });
-  kernel.commands.register({ id: "layer.group", label: "Group Layers (Сгруппировать слои)", category: "Layer (Слой)", shortcut: "Mod+G", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; const chosen = useShellStore.getState().selectedLayerIdsByDocument[activeDocumentId] ?? []; void editLayers(activeDocumentId, "Group Layers (Сгруппировать слои)", (state) => Boolean(groupLayers(state, chosen.length ? chosen : [state.activeLayerId]))); } });
-  kernel.commands.register({ id: "layer.ungroup", label: "Ungroup Layers (Разгруппировать слои)", category: "Layer (Слой)", shortcut: "Mod+Shift+G", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, "Ungroup Layers (Разгруппировать слои)", (state) => ungroupLayer(state, state.activeLayerId)); } });
+  kernel.commands.register({ id: "layer.duplicate", label: legacyBilingualLabel({ en: "Duplicate Layer", ru: "Создать дубликат слоя" }), category: legacyBilingualLabel(CATEGORY_LAYER), shortcut: "Mod+J", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; const document = kernel.documents.get<RasterDocumentState>(activeDocumentId); if (!document) return; void editLayers(activeDocumentId, "Layer via Copy (Слой копированием)", (state) => Boolean(layerFromSelection(state, state.activeLayerId, state.selection, false))); } });
+  kernel.commands.register({ id: "layer.delete", label: legacyBilingualLabel({ en: "Delete Layer", ru: "Удалить слой" }), category: legacyBilingualLabel(CATEGORY_LAYER), isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, "Delete Layer (Удалить слой)", (state) => removeLayer(state, state.activeLayerId)); } });
+  kernel.commands.register({ id: "layer.viaCut", label: legacyBilingualLabel({ en: "Layer via Cut", ru: "Вырезать на новый слой" }), category: legacyBilingualLabel(CATEGORY_LAYER), shortcut: "Mod+Shift+J", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && kernel.documents.get<RasterDocumentState>(activeDocumentId)?.state.selection), execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, "Layer via Cut (Слой вырезанием)", (state) => Boolean(layerFromSelection(state, state.activeLayerId, state.selection, true))); } });
+  kernel.commands.register({ id: "layer.mergeDown", label: legacyBilingualLabel({ en: "Merge Down", ru: "Объединить с предыдущим" }), category: legacyBilingualLabel(CATEGORY_LAYER), shortcut: "Mod+E", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, "Merge Down (Объединить с предыдущим)", (state) => Boolean(mergeLayerDown(state, state.activeLayerId))); } });
+  kernel.commands.register({ id: "layer.mergeVisible", label: legacyBilingualLabel({ en: "Merge Visible", ru: "Объединить видимые" }), category: legacyBilingualLabel(CATEGORY_LAYER), shortcut: "Mod+Shift+E", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, "Merge Visible (Объединить видимые)", (state) => Boolean(mergeVisibleLayers(state))); } });
+  kernel.commands.register({ id: "layer.stampVisible", label: legacyBilingualLabel({ en: "Stamp Visible", ru: "Отпечаток видимых" }), category: legacyBilingualLabel(CATEGORY_LAYER), shortcut: "Mod+Shift+Alt+E", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, "Stamp Visible (Отпечаток видимых)", (state) => Boolean(stampVisibleLayers(state))); } });
+  kernel.commands.register({ id: "layer.group", label: legacyBilingualLabel({ en: "Group Layers", ru: "Сгруппировать слои" }), category: legacyBilingualLabel(CATEGORY_LAYER), shortcut: "Mod+G", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; const chosen = useShellStore.getState().selectedLayerIdsByDocument[activeDocumentId] ?? []; void editLayers(activeDocumentId, "Group Layers (Сгруппировать слои)", (state) => Boolean(groupLayers(state, chosen.length ? chosen : [state.activeLayerId]))); } });
+  kernel.commands.register({ id: "layer.ungroup", label: legacyBilingualLabel({ en: "Ungroup Layers", ru: "Разгруппировать слои" }), category: legacyBilingualLabel(CATEGORY_LAYER), shortcut: "Mod+Shift+G", isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, "Ungroup Layers (Разгруппировать слои)", (state) => ungroupLayer(state, state.activeLayerId)); } });
   for (const [id, label, shortcut, move] of [
     ["layer.bringForward", "Bring Forward (Переложить вперёд)", "Mod+]", "up"],
     ["layer.sendBackward", "Send Backward (Переложить назад)", "Mod+[", "down"],
     ["layer.bringToFront", "Bring to Front (На передний план)", "Mod+Shift+]", "top"],
     ["layer.sendToBack", "Send to Back (На задний план)", "Mod+Shift+[", "bottom"],
   ] as const) {
-    kernel.commands.register({ id, label, category: "Layer (Слой)", shortcut, isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, label, (state) => moveLayerInStack(state, state.activeLayerId, move)); } });
+    kernel.commands.register({ id, label, category: legacyBilingualLabel(CATEGORY_LAYER), shortcut, isEnabled: raster, execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void editLayers(activeDocumentId, label, (state) => moveLayerInStack(state, state.activeLayerId, move)); } });
   }
 
-  kernel.commands.register({ id: "edit.undo", label: "Undo (Отменить)", category: "Edit (Правка)", shortcut: "Mod+Z", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && kernel.historyByDocument.get(activeDocumentId)?.canUndo), execute: async ({ activeDocumentId }) => { if (activeDocumentId) await kernel.historyByDocument.get(activeDocumentId)?.undo(); } });
-  kernel.commands.register({ id: "edit.redo", label: "Redo (Повторить)", category: "Edit (Правка)", shortcut: "Mod+Shift+Z", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && kernel.historyByDocument.get(activeDocumentId)?.canRedo), execute: async ({ activeDocumentId }) => { if (activeDocumentId) await kernel.historyByDocument.get(activeDocumentId)?.redo(); } });
+  kernel.commands.register({ id: "edit.undo", label: legacyBilingualLabel({ en: "Undo", ru: "Отменить" }), category: legacyBilingualLabel(CATEGORY_EDIT), shortcut: "Mod+Z", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && kernel.historyByDocument.get(activeDocumentId)?.canUndo), execute: async ({ activeDocumentId }) => { if (activeDocumentId) await kernel.historyByDocument.get(activeDocumentId)?.undo(); } });
+  kernel.commands.register({ id: "edit.redo", label: legacyBilingualLabel({ en: "Redo", ru: "Повторить" }), category: legacyBilingualLabel(CATEGORY_EDIT), shortcut: "Mod+Shift+Z", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && kernel.historyByDocument.get(activeDocumentId)?.canRedo), execute: async ({ activeDocumentId }) => { if (activeDocumentId) await kernel.historyByDocument.get(activeDocumentId)?.redo(); } });
   // Select All takes the whole canvas, as it does in Photoshop. Selecting the
   // layer's opaque pixels is a different operation and keeps its own entry.
-  kernel.commands.register({ id: "select.all", label: "Select All (Выделить все)", category: "Select (Выделение)", shortcut: "Mod+A", isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: async ({ activeDocumentId }) => { if (activeDocumentId) await changeRasterSelection(activeDocumentId, "Select All (Выделить все)", (state) => selectAllPixels(state.width, state.height)); } });
-  kernel.commands.register({ id: "select.opaque", label: "Select Layer Content (Выделить содержимое слоя)", category: "Select (Выделение)", isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: async ({ activeDocumentId }) => { if (activeDocumentId) await changeRasterSelection(activeDocumentId, "Select Layer Content (Выделить содержимое слоя)", (state) => selectOpaquePixels(layerDocumentPixels(activeRasterLayer(state), state.width, state.height), state.width, state.height)); } });
-  kernel.commands.register({ id: "select.none", label: "Deselect (Снять выделение)", category: "Select (Выделение)", shortcut: "Mod+D", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && isRasterDocumentState(kernel.documents.get(activeDocumentId)?.state) && kernel.documents.get<RasterDocumentState>(activeDocumentId)?.state.selection), execute: async ({ activeDocumentId }) => { if (!activeDocumentId) return; const current = kernel.documents.get<RasterDocumentState>(activeDocumentId)?.state.selection; if (current) lastSelectionByDocument.set(activeDocumentId, { mask: current.mask.slice(), bounds: { ...current.bounds } }); await changeRasterSelection(activeDocumentId, "Deselect (Снять выделение)", () => null); } });
-  kernel.commands.register({ id: "select.reselect", label: "Reselect (Выделить снова)", category: "Select (Выделение)", shortcut: "Mod+Shift+D", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && lastSelectionByDocument.has(activeDocumentId)), execute: async ({ activeDocumentId }) => { if (!activeDocumentId) return; const previous = lastSelectionByDocument.get(activeDocumentId); if (previous) await changeRasterSelection(activeDocumentId, "Reselect (Выделить снова)", () => ({ mask: previous.mask.slice(), bounds: { ...previous.bounds } })); } });
-  kernel.commands.register({ id: "select.feather", label: "Feather Selection… (Растушевать выделение…)", category: "Select (Выделение)", shortcut: "Shift+F6", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && kernel.documents.get<RasterDocumentState>(activeDocumentId)?.state.selection), execute: () => dispatch("vravio-select-feather") });
-  kernel.commands.register({ id: "select.hideEdges", label: "Show/Hide Selection Edges (Показать/скрыть края выделения)", category: "View (Просмотр)", shortcut: "Mod+H", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: () => useShellStore.getState().toggleSelectionEdges() });
-  kernel.commands.register({ id: "select.invert", label: "Invert Selection (Инвертировать выделение)", category: "Select (Выделение)", shortcut: "Mod+Shift+I", isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: async ({ activeDocumentId }) => { if (activeDocumentId) await changeRasterSelection(activeDocumentId, "Invert Selection (Инвертировать выделение)", (state) => invertPixelSelection(state.selection, state.width, state.height)); } });
-  kernel.commands.register({ id: "view.fit", label: "Fit on Screen (Подогнать по экрану)", category: "View (Просмотр)", shortcut: "Mod+0", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: ({ activeDocumentId }) => { if (activeDocumentId) useShellStore.getState().setViewport(activeDocumentId, { mode: "fit", panX: 0, panY: 0 }); } });
-  kernel.commands.register({ id: "view.actual", label: "Actual Size 100% (Реальный размер 100%)", category: "View (Просмотр)", shortcut: "Mod+1", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: ({ activeDocumentId }) => { if (activeDocumentId) useShellStore.getState().setViewport(activeDocumentId, { mode: "actual", zoom: 1, panX: 0, panY: 0 }); } });
-  kernel.commands.register({ id: "view.zoomIn", label: "Zoom In (Увеличить масштаб)", category: "View (Просмотр)", shortcut: "Mod++", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; const current = useShellStore.getState().viewports[activeDocumentId]; useShellStore.getState().setViewport(activeDocumentId, { mode: "custom", zoom: Math.min(64, (current?.zoom ?? 1) * 1.25) }); } });
-  kernel.commands.register({ id: "view.zoomOut", label: "Zoom Out (Уменьшить масштаб)", category: "View (Просмотр)", shortcut: "Mod+-", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; const current = useShellStore.getState().viewports[activeDocumentId]; useShellStore.getState().setViewport(activeDocumentId, { mode: "custom", zoom: Math.max(0.01, (current?.zoom ?? 1) / 1.25) }); } });
-  kernel.commands.register({ id: "view.resetRotation", label: "Reset View Rotation (Сбросить вращение вида)", category: "View (Просмотр)", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: ({ activeDocumentId }) => { if (activeDocumentId) useShellStore.getState().setViewport(activeDocumentId, { rotation: 0 }); } });
-  kernel.commands.register({ id: "view.theme", label: "Cycle Theme (Сменить тему)", category: "View (Просмотр)", execute: () => useShellStore.getState().cycleTheme() });
-  kernel.commands.register({ id: "app.settings", label: "Settings (Настройки)", category: "Edit (Правка)", execute: () => useShellStore.getState().setSettingsOpen(true) });
-  kernel.commands.register({ id: "view.commandPalette", label: "Search (Поиск)", category: "Edit (Правка)", shortcut: "Mod+F", execute: () => useShellStore.getState().setPaletteOpen(true) });
-  kernel.commands.register({ id: "edit.freeTransform", label: "Free Transform (Свободная трансформация)", category: "Edit (Правка)", shortcut: "Mod+T", isEnabled: raster, execute: () => dispatch("vravio-transform-start") });
-  kernel.commands.register({ id: "view.toggleRulers", label: "Rulers (Линейки)", category: "View (Просмотр)", shortcut: "Mod+R", execute: () => useShellStore.getState().updatePreferences({ showRulers: !useShellStore.getState().preferences.showRulers }) });
-  kernel.commands.register({ id: "view.toggleGuides", label: "Guides (Направляющие)", category: "View (Просмотр)", shortcut: "Mod+;", execute: () => useShellStore.getState().updatePreferences({ showGuides: !useShellStore.getState().preferences.showGuides }) });
-  kernel.commands.register({ id: "filter.liquify", label: "Liquify… (Пластика…)", category: "Filter (Фильтр)", shortcut: "Mod+Shift+X", isEnabled: raster, execute: () => dispatch("vravio-liquify-open") });
+  kernel.commands.register({ id: "select.all", label: legacyBilingualLabel({ en: "Select All", ru: "Выделить все" }), category: legacyBilingualLabel(CATEGORY_SELECT), shortcut: "Mod+A", isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: async ({ activeDocumentId }) => { if (activeDocumentId) await changeRasterSelection(activeDocumentId, "Select All (Выделить все)", (state) => selectAllPixels(state.width, state.height)); } });
+  kernel.commands.register({ id: "select.opaque", label: legacyBilingualLabel({ en: "Select Layer Content", ru: "Выделить содержимое слоя" }), category: legacyBilingualLabel(CATEGORY_SELECT), isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: async ({ activeDocumentId }) => { if (activeDocumentId) await changeRasterSelection(activeDocumentId, "Select Layer Content (Выделить содержимое слоя)", (state) => selectOpaquePixels(layerDocumentPixels(activeRasterLayer(state), state.width, state.height), state.width, state.height)); } });
+  kernel.commands.register({ id: "select.none", label: legacyBilingualLabel({ en: "Deselect", ru: "Снять выделение" }), category: legacyBilingualLabel(CATEGORY_SELECT), shortcut: "Mod+D", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && isRasterDocumentState(kernel.documents.get(activeDocumentId)?.state) && kernel.documents.get<RasterDocumentState>(activeDocumentId)?.state.selection), execute: async ({ activeDocumentId }) => { if (!activeDocumentId) return; const current = kernel.documents.get<RasterDocumentState>(activeDocumentId)?.state.selection; if (current) lastSelectionByDocument.set(activeDocumentId, { mask: current.mask.slice(), bounds: { ...current.bounds } }); await changeRasterSelection(activeDocumentId, "Deselect (Снять выделение)", () => null); } });
+  kernel.commands.register({ id: "select.reselect", label: legacyBilingualLabel({ en: "Reselect", ru: "Выделить снова" }), category: legacyBilingualLabel(CATEGORY_SELECT), shortcut: "Mod+Shift+D", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && lastSelectionByDocument.has(activeDocumentId)), execute: async ({ activeDocumentId }) => { if (!activeDocumentId) return; const previous = lastSelectionByDocument.get(activeDocumentId); if (previous) await changeRasterSelection(activeDocumentId, "Reselect (Выделить снова)", () => ({ mask: previous.mask.slice(), bounds: { ...previous.bounds } })); } });
+  kernel.commands.register({ id: "select.feather", label: legacyBilingualLabel({ en: "Feather Selection…", ru: "Растушевать выделение…" }), category: legacyBilingualLabel(CATEGORY_SELECT), shortcut: "Shift+F6", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && kernel.documents.get<RasterDocumentState>(activeDocumentId)?.state.selection), execute: () => dispatch("vravio-select-feather") });
+  kernel.commands.register({ id: "select.hideEdges", label: legacyBilingualLabel({ en: "Show/Hide Selection Edges", ru: "Показать/скрыть края выделения" }), category: legacyBilingualLabel(CATEGORY_VIEW), shortcut: "Mod+H", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: () => useShellStore.getState().toggleSelectionEdges() });
+  kernel.commands.register({ id: "select.invert", label: legacyBilingualLabel({ en: "Invert Selection", ru: "Инвертировать выделение" }), category: legacyBilingualLabel(CATEGORY_SELECT), shortcut: "Mod+Shift+I", isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: async ({ activeDocumentId }) => { if (activeDocumentId) await changeRasterSelection(activeDocumentId, "Invert Selection (Инвертировать выделение)", (state) => invertPixelSelection(state.selection, state.width, state.height)); } });
+  kernel.commands.register({ id: "view.fit", label: legacyBilingualLabel({ en: "Fit on Screen", ru: "Подогнать по экрану" }), category: legacyBilingualLabel(CATEGORY_VIEW), shortcut: "Mod+0", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: ({ activeDocumentId }) => { if (activeDocumentId) useShellStore.getState().setViewport(activeDocumentId, { mode: "fit", panX: 0, panY: 0 }); } });
+  kernel.commands.register({ id: "view.actual", label: legacyBilingualLabel({ en: "Actual Size 100%", ru: "Реальный размер 100%" }), category: legacyBilingualLabel(CATEGORY_VIEW), shortcut: "Mod+1", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: ({ activeDocumentId }) => { if (activeDocumentId) useShellStore.getState().setViewport(activeDocumentId, { mode: "actual", zoom: 1, panX: 0, panY: 0 }); } });
+  kernel.commands.register({ id: "view.zoomIn", label: legacyBilingualLabel({ en: "Zoom In", ru: "Увеличить масштаб" }), category: legacyBilingualLabel(CATEGORY_VIEW), shortcut: "Mod++", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; const current = useShellStore.getState().viewports[activeDocumentId]; useShellStore.getState().setViewport(activeDocumentId, { mode: "custom", zoom: Math.min(64, (current?.zoom ?? 1) * 1.25) }); } });
+  kernel.commands.register({ id: "view.zoomOut", label: legacyBilingualLabel({ en: "Zoom Out", ru: "Уменьшить масштаб" }), category: legacyBilingualLabel(CATEGORY_VIEW), shortcut: "Mod+-", isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; const current = useShellStore.getState().viewports[activeDocumentId]; useShellStore.getState().setViewport(activeDocumentId, { mode: "custom", zoom: Math.max(0.01, (current?.zoom ?? 1) / 1.25) }); } });
+  kernel.commands.register({ id: "view.resetRotation", label: legacyBilingualLabel({ en: "Reset View Rotation", ru: "Сбросить вращение вида" }), category: legacyBilingualLabel(CATEGORY_VIEW), isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId), execute: ({ activeDocumentId }) => { if (activeDocumentId) useShellStore.getState().setViewport(activeDocumentId, { rotation: 0 }); } });
+  kernel.commands.register({ id: "view.theme", label: legacyBilingualLabel({ en: "Cycle Theme", ru: "Сменить тему" }), category: legacyBilingualLabel(CATEGORY_VIEW), execute: () => useShellStore.getState().cycleTheme() });
+  kernel.commands.register({ id: "app.settings", label: legacyBilingualLabel({ en: "Settings", ru: "Настройки" }), category: legacyBilingualLabel(CATEGORY_EDIT), execute: () => useShellStore.getState().setSettingsOpen(true) });
+  kernel.commands.register({ id: "view.commandPalette", label: legacyBilingualLabel({ en: "Search", ru: "Поиск" }), category: legacyBilingualLabel(CATEGORY_EDIT), shortcut: "Mod+F", execute: () => useShellStore.getState().setPaletteOpen(true) });
+  kernel.commands.register({ id: "edit.freeTransform", label: legacyBilingualLabel({ en: "Free Transform", ru: "Свободная трансформация" }), category: legacyBilingualLabel(CATEGORY_EDIT), shortcut: "Mod+T", isEnabled: raster, execute: () => dispatch("vravio-transform-start") });
+  kernel.commands.register({ id: "view.toggleRulers", label: legacyBilingualLabel({ en: "Rulers", ru: "Линейки" }), category: legacyBilingualLabel(CATEGORY_VIEW), shortcut: "Mod+R", execute: () => useShellStore.getState().updatePreferences({ showRulers: !useShellStore.getState().preferences.showRulers }) });
+  kernel.commands.register({ id: "view.toggleGuides", label: legacyBilingualLabel({ en: "Guides", ru: "Направляющие" }), category: legacyBilingualLabel(CATEGORY_VIEW), shortcut: "Mod+;", execute: () => useShellStore.getState().updatePreferences({ showGuides: !useShellStore.getState().preferences.showGuides }) });
+  kernel.commands.register({ id: "filter.liquify", label: legacyBilingualLabel({ en: "Liquify…", ru: "Пластика…" }), category: legacyBilingualLabel(CATEGORY_FILTER), shortcut: "Mod+Shift+X", isEnabled: raster, execute: () => dispatch("vravio-liquify-open") });
   const openAdjustment = (kind: string): void => { window.dispatchEvent(new CustomEvent("vravio-adjustment-open", { detail: { kind } })); };
   const adjustmentEnabled = ({ activeDocumentId }: { activeDocumentId?: string | null }) => { const document = kernel.documents.get<RasterDocumentState>(activeDocumentId ?? ""); return Boolean(document && isRasterDocumentState(document.state) && document.state.layers.find((layer) => layer.id === document.state.activeLayerId)?.kind === "pixel"); };
-  kernel.commands.register({ id: "image.adjustment.levels", label: "Levels… (Уровни…)", category: "Image (Изображение)", shortcut: "Mod+L", isEnabled: adjustmentEnabled, execute: () => openAdjustment("levels") });
-  kernel.commands.register({ id: "image.adjustment.curves", label: "Curves… (Кривые…)", category: "Image (Изображение)", shortcut: "Mod+M", isEnabled: adjustmentEnabled, execute: () => openAdjustment("curves") });
-  kernel.commands.register({ id: "image.adjustment.hueSaturation", label: "Hue/Saturation… (Цветовой тон/Насыщенность…)", category: "Image (Изображение)", shortcut: "Mod+U", isEnabled: adjustmentEnabled, execute: () => openAdjustment("hueSaturation") });
-  kernel.commands.register({ id: "image.adjustment.colorBalance", label: "Color Balance… (Цветовой баланс…)", category: "Image (Изображение)", shortcut: "Mod+B", isEnabled: adjustmentEnabled, execute: () => openAdjustment("colorBalance") });
-  kernel.commands.register({ id: "image.adjustment.invert", label: "Invert (Инвертировать)", category: "Image (Изображение)", shortcut: "Mod+I", isEnabled: adjustmentEnabled, execute: () => openAdjustment("invert") });
+  kernel.commands.register({ id: "image.adjustment.levels", label: legacyBilingualLabel({ en: "Levels…", ru: "Уровни…" }), category: legacyBilingualLabel(CATEGORY_IMAGE), shortcut: "Mod+L", isEnabled: adjustmentEnabled, execute: () => openAdjustment("levels") });
+  kernel.commands.register({ id: "image.adjustment.curves", label: legacyBilingualLabel({ en: "Curves…", ru: "Кривые…" }), category: legacyBilingualLabel(CATEGORY_IMAGE), shortcut: "Mod+M", isEnabled: adjustmentEnabled, execute: () => openAdjustment("curves") });
+  kernel.commands.register({ id: "image.adjustment.hueSaturation", label: legacyBilingualLabel({ en: "Hue/Saturation…", ru: "Цветовой тон/Насыщенность…" }), category: legacyBilingualLabel(CATEGORY_IMAGE), shortcut: "Mod+U", isEnabled: adjustmentEnabled, execute: () => openAdjustment("hueSaturation") });
+  kernel.commands.register({ id: "image.adjustment.colorBalance", label: legacyBilingualLabel({ en: "Color Balance…", ru: "Цветовой баланс…" }), category: legacyBilingualLabel(CATEGORY_IMAGE), shortcut: "Mod+B", isEnabled: adjustmentEnabled, execute: () => openAdjustment("colorBalance") });
+  kernel.commands.register({ id: "image.adjustment.invert", label: legacyBilingualLabel({ en: "Invert", ru: "Инвертировать" }), category: legacyBilingualLabel(CATEGORY_IMAGE), shortcut: "Mod+I", isEnabled: adjustmentEnabled, execute: () => openAdjustment("invert") });
   registerToolShortcuts();
   for (const command of kernel.commands.list()) if (command.shortcut) { rememberDefaultShortcut(command.id, command.shortcut); kernel.keymap.bind(command.id, command.shortcut, command.scope); }
   applyShortcutOverrides();
@@ -273,8 +296,18 @@ function registerToolShortcuts(): void {
     const [kind, letter] = key.split(":") as [EnvironmentKind, string];
     kernel.commands.register({
       id: `tool.${kind}.${letter.toLocaleLowerCase()}`,
-      label: group.map((tool) => tool.label).join(" / "),
-      category: "Tools (Инструменты)",
+      // Each language's own names joined separately, then wrapped once — not
+      // a join of already-combined "English (Русский)" strings, which used
+      // to mangle both halves whenever a shortcut letter held more than one
+      // tool (e.g. R for Blur/Smudge): localized()'s regex matches only the
+      // *last* parenthesised pair in the joined string, so the Russian side
+      // silently dropped every name but the last and the English side ended
+      // up with a stray Russian fragment baked into it.
+      label: legacyBilingualLabel({
+        en: group.map((tool) => resolveLabel(tool.label, "en")).join(" / "),
+        ru: group.map((tool) => resolveLabel(tool.label, "ru")).join(" / "),
+      }),
+      category: legacyBilingualLabel(CATEGORY_TOOLS),
       shortcut: letter,
       scope: kind,
       isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === kind,

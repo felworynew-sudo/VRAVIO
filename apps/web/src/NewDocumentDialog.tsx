@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { EnvironmentIcon } from "./EnvironmentIcon";
 import { environmentMeta } from "./environment";
-import { text } from "./i18n";
+import { resolveLabel, text } from "./i18n";
 import { useShellStore } from "./store";
 
 type Unit = "px" | "mm" | "cm" | "in";
@@ -100,8 +100,8 @@ export function NewDocumentDialog() {
 
   return <div className="dialog-backdrop new-document-backdrop" onMouseDown={store.cancelNewDocument}>
     <section className="new-document-dialog" role="dialog" aria-modal="true" aria-labelledby="new-document-title" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div className="new-document-title"><EnvironmentIcon kind={kind} /><div><small>{text(language, "NEW DOCUMENT", "НОВЫЙ ДОКУМЕНТ")}</small><h2 id="new-document-title">{text(language, "Create", "Создать")} {language === "ru" ? meta.label.match(/\((.*)\)/)?.[1] ?? meta.label : meta.label.replace(/\s*\(.*\)$/, "")}</h2></div></div><button onClick={store.cancelNewDocument} aria-label={text(language, "Close", "Закрыть")}>×</button></header>
-      <div className="new-document-environments" role="tablist" aria-label={text(language, "Document type", "Тип документа")}>{environmentKinds.map((environmentKind) => <button role="tab" aria-selected={kind === environmentKind} className={kind === environmentKind ? "active" : ""} data-kind={environmentKind} key={environmentKind} onClick={() => store.requestNewDocument(environmentKind)}><EnvironmentIcon kind={environmentKind}/><span>{language === "ru" ? environmentMeta[environmentKind].label.match(/\((.*)\)/)?.[1] ?? environmentMeta[environmentKind].label : environmentMeta[environmentKind].label.replace(/\s*\(.*\)$/, "")}</span></button>)}</div>
+      <header><div className="new-document-title"><EnvironmentIcon kind={kind} /><div><small>{text(language, "NEW DOCUMENT", "НОВЫЙ ДОКУМЕНТ")}</small><h2 id="new-document-title">{text(language, "Create", "Создать")} {resolveLabel(meta.label, language)}</h2></div></div><button onClick={store.cancelNewDocument} aria-label={text(language, "Close", "Закрыть")}>×</button></header>
+      <div className="new-document-environments" role="tablist" aria-label={text(language, "Document type", "Тип документа")}>{environmentKinds.map((environmentKind) => <button role="tab" aria-selected={kind === environmentKind} className={kind === environmentKind ? "active" : ""} data-kind={environmentKind} key={environmentKind} onClick={() => store.requestNewDocument(environmentKind)}><EnvironmentIcon kind={environmentKind}/><span>{resolveLabel(environmentMeta[environmentKind].label, language)}</span></button>)}</div>
       <div className="new-document-body">
         {kind === "audio" ? <>
           <aside/>
