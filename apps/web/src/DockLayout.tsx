@@ -5,6 +5,7 @@ import { environmentMeta } from "./environment";
 import { useShellStore } from "./store";
 import { useDocuments } from "./useDocuments";
 import { RasterWorkspace } from "./RasterWorkspace";
+import { VectorWorkspace } from "./VectorWorkspace";
 import { appendLayer, appendRasterGroup, compositeRasterDocument, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, isRasterDocumentState, rasterLayerDescendantIds, rasterLayerRows, setLayerPixels, dropPositionInRow, dropTargetForRow, placeLayer, toggleLayerLink, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerMask } from "@vravio/env-raster";
 import { kernel } from "./kernel";
 import { EnvironmentIcon } from "./EnvironmentIcon";
@@ -17,8 +18,14 @@ import { rasterAdjustmentById, rasterAdjustments } from "./raster-adjustments/re
 import { rasterCorePanelById, rasterCorePanels } from "./raster-core-panels/registry";
 import { corePanelTitle } from "./raster-core-panels/types";
 import { PANEL_REQUEST_EVENT, persistVisiblePanelIds, readVisiblePanelIds } from "./raster-core-panels/runtime";
+import { vectorCorePanelById, vectorCorePanels } from "./vector-core-panels/registry";
+import { PANEL_REQUEST_EVENT as VECTOR_PANEL_REQUEST_EVENT, persistVisiblePanelIds as persistVisibleVectorPanelIds, readVisiblePanelIds as readVisibleVectorPanelIds } from "./vector-core-panels/runtime";
+import { isVectorDocumentState, shapeBounds, updateShape, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { changeVectorDocument, deleteActiveVectorShapes, duplicateActiveVectorShape, reorderActiveVectorShape } from "./vector-commands";
+import { useContextMenu } from "./ContextMenu";
 import { luminanceHistogram } from "./raster-adjustments/histogram";
 import { changeRasterDocument } from "./commands";
+import { importModelAsLayer, updateScene3DLayer } from "./scene3d-commands";
 import type { ReversibleOperation } from "@vravio/kernel";
 import "dockview-react/dist/styles/dockview.css";
 
@@ -45,9 +52,8 @@ function ViewportPanel() {
 
   if (!active) return null;
   if (active.kind === "raster") return <RasterWorkspace document={active} />;
-  if (active.kind === "audio" || active.kind === "video") return <Suspense fallback={<div className="media-empty">Loading media workspace… (Загрузка медиа-среды…)</div>}><MediaWorkspace kind={active.kind} language={language}/></Suspense>;
-  const meta = environmentMeta[active.kind];
-  return <div className="environment-placeholder" data-kind={active.kind}><div className="canvas"><EnvironmentIcon kind={active.kind} className="placeholder-environment-icon" /><h2>{localized(active.name, language)}</h2><p>{language === "ru" ? meta.descriptionRu : meta.description}</p><small>{text(language, "Workspace kernel connected · renderer arrives in the next verified slice", "Ядро рабочей среды подключено · визуальный движок появится в следующем проверенном срезе")}</small></div></div>;
+  if (active.kind === "vector") return <VectorWorkspace document={active} />;
+  return <Suspense fallback={<div className="media-empty">Loading media workspace… (Загрузка медиа-среды…)</div>}><MediaWorkspace kind={active.kind} language={language}/></Suspense>;
 }
 
 function InspectorPanel({ params }: IDockviewPanelProps<{ kind?: string }>) {
@@ -67,8 +73,80 @@ function InspectorPanel({ params }: IDockviewPanelProps<{ kind?: string }>) {
       const definition = rasterAdjustmentById.get(adjustment.kind);
       if (definition) { const index = rasterState.layers.findIndex((item) => item.id === layer.id), pixels = compositeRasterDocument({ ...rasterState, layers: rasterState.layers.slice(0, Math.max(0, index)) }); return <div className="dock-panel-body property-stack adjustment-properties"><header><img src={definition.icon} alt=""/><strong>{language === "ru" ? definition.name.ru : definition.name.en}</strong></header><definition.Editor value={adjustment} language={language} histogram={luminanceHistogram(pixels)} onChange={(next) => { const before = adjustment, targetId = layer.id; const write = (value: typeof adjustment) => kernel.documents.update<RasterDocumentState>(document.id, (state) => { const current = state.layers.find((item) => item.id === targetId); if (current?.adjustment) current.adjustment = value; }); write(next); const history = kernel.historyByDocument.get(document.id); if (history) void history.record(mergeableEdit(`Adjustment: ${language === "ru" ? definition.name.ru : definition.name.en}`, () => write(before), () => write(next)), true); }}/></div>; }
     }
+    if (layer?.kind === "3d" && layer.scene3d) return <Scene3DProperties documentId={document.id} layer={layer} language={language} />;
+  }
+  if (document && isVectorDocumentState(document.state)) {
+    const vectorState = document.state;
+    const shape = vectorState.shapes.find((item) => item.id === vectorState.activeShapeId);
+    if (shape) {
+      const bounds = shapeBounds(shape);
+      const commit = (patch: Partial<VectorShape>) => void changeVectorDocument(document.id, "Edit Shape (Изменить фигуру)", (state) => { updateShape<VectorShape>(state, shape.id, patch); return true; });
+      const commitStyle = (patch: Partial<VectorShape["style"]>) => commit({ style: { ...shape.style, ...patch } } as Partial<VectorShape>);
+      return <div className="dock-panel-body property-stack vector-properties">
+        <strong>{shape.name}</strong>
+        <label>{text(language, "Name", "Имя")}<input value={shape.name} onChange={(event) => commit({ name: event.target.value })} /></label>
+        <div className="parameter-pair">
+          <label>X<input type="number" value={Math.round(bounds.x)} onChange={(event) => commit(shape.kind === "line" ? { x1: shape.x1 + (event.target.valueAsNumber - bounds.x), x2: shape.x2 + (event.target.valueAsNumber - bounds.x) } : { x: event.target.valueAsNumber })} /></label>
+          <label>Y<input type="number" value={Math.round(bounds.y)} onChange={(event) => commit(shape.kind === "line" ? { y1: shape.y1 + (event.target.valueAsNumber - bounds.y), y2: shape.y2 + (event.target.valueAsNumber - bounds.y) } : { y: event.target.valueAsNumber })} /></label>
+        </div>
+        {(shape.kind === "rectangle" || shape.kind === "ellipse" || shape.kind === "image") && <div className="parameter-pair">
+          <label>{text(language, "Width", "Ширина")}<input type="number" min={1} value={Math.round(shape.width)} onChange={(event) => commit({ width: Math.max(1, event.target.valueAsNumber) })} /></label>
+          <label>{text(language, "Height", "Высота")}<input type="number" min={1} value={Math.round(shape.height)} onChange={(event) => commit({ height: Math.max(1, event.target.valueAsNumber) })} /></label>
+        </div>}
+        {shape.kind === "rectangle" && <label>{text(language, "Corner radius", "Радиус углов")}<input type="number" min={0} value={shape.cornerRadius} onChange={(event) => commit({ cornerRadius: Math.max(0, event.target.valueAsNumber) })} /></label>}
+        {shape.kind === "text" && <>
+          <label>{text(language, "Text", "Текст")}<textarea value={shape.value} onChange={(event) => commit({ value: event.target.value })} /></label>
+          <label>{text(language, "Font size", "Размер шрифта")}<input type="number" min={1} value={shape.fontSize} onChange={(event) => commit({ fontSize: Math.max(1, event.target.valueAsNumber) })} /></label>
+        </>}
+        {shape.kind === "image" && <button className="secondary-action" onClick={() => void kernel.commands.execute("image.openElsewhere", { activeDocumentId: document.id })}>{text(language, "Edit in Raster Environment…", "Открыть в растровой среде…")}</button>}
+        {shape.kind !== "image" && <>
+          <label className="export-check"><input type="checkbox" checked={shape.style.fill !== null} onChange={(event) => commitStyle({ fill: event.target.checked ? (shape.style.fill ?? "#5be0b3") : null })}/>{text(language, "Fill", "Заливка")}</label>
+          {shape.style.fill !== null && <input type="color" value={shape.style.fill} onChange={(event) => commitStyle({ fill: event.target.value })} />}
+          <label className="export-check"><input type="checkbox" checked={shape.style.stroke !== null} onChange={(event) => commitStyle({ stroke: event.target.checked ? (shape.style.stroke ?? "#000000") : null })}/>{text(language, "Stroke", "Обводка")}</label>
+          {shape.style.stroke !== null && <><input type="color" value={shape.style.stroke} onChange={(event) => commitStyle({ stroke: event.target.value })} /><label>{text(language, "Stroke width", "Толщина обводки")}<input type="number" min={0} value={shape.style.strokeWidth} onChange={(event) => commitStyle({ strokeWidth: Math.max(0, event.target.valueAsNumber) })} /></label></>}
+        </>}
+        <label>{text(language, "Opacity", "Непрозрачность")}<input type="range" min={0} max={100} value={Math.round(shape.style.opacity * 100)} onChange={(event) => commitStyle({ opacity: event.target.valueAsNumber / 100 })} /></label>
+      </div>;
+    }
+    return <div className="dock-panel-body"><p className="panel-hint">{text(language, "Select a shape to see its properties.", "Выберите фигуру, чтобы увидеть её свойства.")}</p></div>;
   }
   return <div className="dock-panel-body"><p className="panel-hint">{text(language, "Selection-aware properties will appear here.", "Здесь будут отображаться свойства текущего выделения.")}</p><dl><dt>{text(language, "Selection", "Выделение")}</dt><dd>{text(language, "None", "Нет")}</dd><dt>{text(language, "Environment", "Среда")}</dt><dd>{String(params.kind ?? text(language, "Automatic", "Автоматически"))}</dd></dl></div>;
+}
+
+/** Properties panel for a persistent 3D layer: rotation, lighting and (source-dependent)
+ * material controls, each committing through updateScene3DLayer — which re-renders the layer's
+ * pixels on every change, the same "edit the data, not the pixels" contract a text layer has. */
+function Scene3DProperties({ documentId, layer, language }: { documentId: string; layer: RasterLayer; language: Language }) {
+  const data = layer.scene3d!;
+  const commit = (patch: Partial<typeof data>) => void updateScene3DLayer(documentId, layer.id, patch);
+  const commitLighting = (patch: Partial<typeof data.lighting>) => commit({ lighting: { ...data.lighting, ...patch } });
+  const commitSource = (patch: Partial<typeof data.source>) => commit({ source: { ...data.source, ...patch } as typeof data.source });
+  return <div className="dock-panel-body property-stack scene3d-properties">
+    <strong>{text(language, "3D Layer", "3D-слой")}</strong>
+    {data.source.kind === "text" && <>
+      <label>{text(language, "Text", "Текст")}<input value={data.source.value} onChange={(event) => commitSource({ value: event.target.value })}/></label>
+      <label>{text(language, "Extrusion Depth", "Глубина экструзии")}<input type="range" min={0} max={80} value={data.source.depth} onChange={(event) => commitSource({ depth: event.target.valueAsNumber })}/><output>{data.source.depth}</output></label>
+      <label className="export-check"><input type="checkbox" checked={data.source.bevelEnabled} onChange={(event) => commitSource({ bevelEnabled: event.target.checked })}/>{text(language, "Bevel", "Фаска")}</label>
+    </>}
+    {data.source.kind === "extrude" && <label>{text(language, "Extrusion Depth", "Глубина экструзии")}<input type="range" min={0} max={200} value={data.source.depth} onChange={(event) => commitSource({ depth: event.target.valueAsNumber })}/><output>{data.source.depth}</output></label>}
+    {data.source.kind === "model" && <div className="panel-hint">{text(language, "Model", "Модель")}: {data.source.fileName}</div>}
+    {data.source.kind !== "model" && <>
+      <label>{text(language, "Size", "Размер")}<input type="range" min={10} max={400} value={data.size} onChange={(event) => commit({ size: event.target.valueAsNumber })}/><output>{data.size}</output></label>
+      <label>{text(language, "Color", "Цвет")}<input type="color" value={data.color} onChange={(event) => commit({ color: event.target.value })}/></label>
+      <label>{text(language, "Metalness", "Металличность")}<input type="range" min={0} max={1} step={0.05} value={data.metalness} onChange={(event) => commit({ metalness: event.target.valueAsNumber })}/><output>{data.metalness}</output></label>
+      <label>{text(language, "Roughness", "Шероховатость")}<input type="range" min={0} max={1} step={0.05} value={data.roughness} onChange={(event) => commit({ roughness: event.target.valueAsNumber })}/><output>{data.roughness}</output></label>
+    </>}
+    <label>{text(language, "Rotate X", "Вращение X")}<input type="range" min={-180} max={180} value={data.rotationX} onChange={(event) => commit({ rotationX: event.target.valueAsNumber })}/><output>{data.rotationX}°</output></label>
+    <label>{text(language, "Rotate Y", "Вращение Y")}<input type="range" min={-180} max={180} value={data.rotationY} onChange={(event) => commit({ rotationY: event.target.valueAsNumber })}/><output>{data.rotationY}°</output></label>
+    <label>{text(language, "Rotate Z", "Вращение Z")}<input type="range" min={-180} max={180} value={data.rotationZ} onChange={(event) => commit({ rotationZ: event.target.valueAsNumber })}/><output>{data.rotationZ}°</output></label>
+    <strong>{text(language, "Lighting", "Освещение")}</strong>
+    <label>{text(language, "Light Azimuth", "Свет: азимут")}<input type="range" min={-180} max={180} value={data.lighting.azimuth} onChange={(event) => commitLighting({ azimuth: event.target.valueAsNumber })}/><output>{data.lighting.azimuth}°</output></label>
+    <label>{text(language, "Light Elevation", "Свет: высота")}<input type="range" min={0} max={90} value={data.lighting.elevation} onChange={(event) => commitLighting({ elevation: event.target.valueAsNumber })}/><output>{data.lighting.elevation}°</output></label>
+    <label>{text(language, "Light Intensity", "Яркость света")}<input type="range" min={0} max={4} step={0.1} value={data.lighting.directionalIntensity} onChange={(event) => commitLighting({ directionalIntensity: event.target.valueAsNumber })}/><output>{data.lighting.directionalIntensity}</output></label>
+    <label>{text(language, "Light Color", "Цвет света")}<input type="color" value={data.lighting.directionalColor} onChange={(event) => commitLighting({ directionalColor: event.target.value })}/></label>
+    <label>{text(language, "Ambient Intensity", "Рассеянный свет")}<input type="range" min={0} max={2} step={0.05} value={data.lighting.ambientIntensity} onChange={(event) => commitLighting({ ambientIntensity: event.target.valueAsNumber })}/><output>{data.lighting.ambientIntensity}</output></label>
+    {data.source.kind === "model" && <button className="secondary-action" onClick={() => { const input = window.document.createElement("input"); input.type = "file"; input.accept = ".obj,.glb,.gltf"; input.onchange = () => { const file = input.files?.[0]; if (file) void importModelAsLayer(documentId, file); }; input.click(); }}>{text(language, "Replace Model…", "Заменить модель…")}</button>}
+  </div>;
 }
 
 function rasterizeTextLayer(layer: RasterLayer, width: number, height: number): void {
@@ -220,6 +298,7 @@ function LayersPanel() {
   // The drop handler runs from a window listener, outside this render's closure.
   const dropHintRef = useRef(dropHint);
   dropHintRef.current = dropHint;
+  const contextMenu = useContextMenu();
   const selectedLayerIds = useShellStore((state) => (activeDocumentId ? state.selectedLayerIdsByDocument[activeDocumentId] : undefined) ?? EMPTY_LAYER_SELECTION);
   const setSelectedLayers = useShellStore((state) => state.setSelectedLayers);
   const editingMaskLayerId = useShellStore((state) => activeDocumentId ? state.editingMaskLayerIdByDocument[activeDocumentId] ?? null : null);
@@ -347,9 +426,49 @@ function LayersPanel() {
         ))}
       </div>
       <div className="layer-controls"><select value={activeLayer.blendMode} onChange={(event) => updateActive({ blendMode: event.target.value as RasterBlendMode })}>{blendModes.map((mode) => <option key={mode} value={mode}>{mode}</option>)}</select><div className="layer-controls-row"><label><span>{text(language, "Opacity", "Непрозр.")}</span><input type="number" min="0" max="100" value={Math.round(activeLayer.opacity * 100)} onChange={(event) => updateActive({ opacity: Math.max(0, Math.min(1, event.target.valueAsNumber / 100)) })}/><i>%</i></label><label><span>{text(language, "Fill", "Заливка")}</span><input type="number" min="0" max="100" value={Math.round((activeLayer.fillOpacity ?? 1) * 100)} onChange={(event) => updateActive({ fillOpacity: Math.max(0, Math.min(1, event.target.valueAsNumber / 100)) })}/><i>%</i></label></div></div>
-      <div className="layer-list">{rasterLayerRows(state.layers).filter(({ layer }) => !layerFilterOn || layerFilter === "all" || layer.kind === layerFilter || layer.kind === "group").map(({ layer, depth }) => <div className={[layer.id === state.activeLayerId ? "active" : "", selectedLayerIds.includes(layer.id) ? "selected" : "", layer.kind === "group" ? "group" : "", draggingLayerId === layer.id ? "dragging" : "", "layer-row"].filter(Boolean).join(" ")} style={{ "--layer-depth": depth } as CSSProperties} key={layer.id} data-layer-id={layer.id} data-group={layer.kind === "group"} data-drop={dropHint?.overId === layer.id ? dropHint.position : undefined} onPointerDown={beginRowDrag(layer.id)}><button onClick={() => toggleVisible(layer.id)} aria-label={text(language, "Toggle visibility", "Переключить видимость")}><img src={layer.visible ? "/ГЛАЗ ОТКРЫТ.svg" : "/ГЛАЗ ЗАКРЫТ.svg"} alt=""/></button><button onClick={(event) => clickLayer(layer.id, event)} onDoubleClick={() => { selectLayer(layer.id); if (layer.kind !== "group") setStyleLayerId(layer.id); }}><span className="layer-hierarchy-space"/>{layer.kind === "group" && <span className="layer-disclosure" onClick={(event) => { event.stopPropagation(); toggleExpanded(layer.id); }}>{layer.expanded === false ? "▸" : "▾"}</span>}<LayerThumbnail layer={layer} active={layer.id === state.activeLayerId && editingMaskLayerId !== layer.id} onActivate={() => { selectLayer(layer.id); setEditingMask(active.id, null); setSelectedLayers(active.id, [layer.id]); }}/>{layer.mask && <LayerMaskThumbnail mask={layer.mask} width={state.width} height={state.height} active={editingMaskLayerId === layer.id} onActivate={() => { selectLayer(layer.id); setEditingMask(active.id, layer.id); setSelectedLayers(active.id, [layer.id]); }}/>}{layer.colorLabel && layer.colorLabel !== "none" && <i className="layer-color-label" data-color={layer.colorLabel} aria-hidden="true"/>}<span className="layer-row-text"><b>{localized(layer.name, language)}</b><small>{layer.kind === "group" ? (layer.groupMode === "isolated" ? "isolated" : "pass through") : `${layer.blendMode} · ${Math.round(layer.opacity * 100)}%`}</small></span>{layer.linkGroup && <em className="layer-badge" title={text(language, "Linked", "Связан")}>⛓</em>}{(layer.locked || layer.lockPixels || layer.lockPosition || layer.lockTransparent) && <em className="layer-badge" title={text(language, "Locked", "Закреплён")}>🔒</em>}</button></div>)}</div>
+      <div className="layer-list">{rasterLayerRows(state.layers).filter(({ layer }) => !layerFilterOn || layerFilter === "all" || layer.kind === layerFilter || layer.kind === "group").map(({ layer, depth }) => <div className={[layer.id === state.activeLayerId ? "active" : "", selectedLayerIds.includes(layer.id) ? "selected" : "", layer.kind === "group" ? "group" : "", draggingLayerId === layer.id ? "dragging" : "", "layer-row"].filter(Boolean).join(" ")} style={{ "--layer-depth": depth } as CSSProperties} key={layer.id} data-layer-id={layer.id} data-group={layer.kind === "group"} data-drop={dropHint?.overId === layer.id ? dropHint.position : undefined} onPointerDown={beginRowDrag(layer.id)} onContextMenu={(event) => { selectLayer(layer.id); contextMenu.open(event, [
+        { label: text(language, "Duplicate Layer", "Дублировать слой"), onSelect: () => void kernel.commands.execute("layer.duplicate", { activeDocumentId: active.id }) },
+        { label: text(language, "Delete Layer", "Удалить слой"), onSelect: deleteLayer, danger: true },
+        { label: text(language, "Layer Style…", "Стиль слоя…"), onSelect: () => setStyleLayerId(layer.id), disabled: layer.kind === "group" },
+        { label: text(language, "Merge Down", "Объединить с нижним"), onSelect: () => void kernel.commands.execute("layer.mergeDown", { activeDocumentId: active.id }) },
+        { label: text(language, "Merge Visible", "Объединить видимые"), onSelect: () => void kernel.commands.execute("layer.mergeVisible", { activeDocumentId: active.id }) },
+        { label: text(language, "Group Layers", "Сгруппировать слои"), onSelect: addGroup, separatorBefore: true },
+        { label: text(language, "Ungroup Layers", "Разгруппировать слои"), onSelect: () => void kernel.commands.execute("layer.ungroup", { activeDocumentId: active.id }), disabled: layer.kind !== "group" },
+        { label: text(language, layer.linkGroup ? "Unlink Layers" : "Link Layers", layer.linkGroup ? "Отвязать слои" : "Связать слои"), onSelect: () => kernel.documents.update<RasterDocumentState>(active.id, (current) => { toggleLayerLink(current, selectedLayerIds.length > 1 ? selectedLayerIds : [layer.id]); }) },
+      ]); }}><button onClick={() => toggleVisible(layer.id)} aria-label={text(language, "Toggle visibility", "Переключить видимость")}><img src={layer.visible ? "/ГЛАЗ ОТКРЫТ.svg" : "/ГЛАЗ ЗАКРЫТ.svg"} alt=""/></button><button onClick={(event) => clickLayer(layer.id, event)} onDoubleClick={() => { selectLayer(layer.id); if (layer.kind !== "group") setStyleLayerId(layer.id); }}><span className="layer-hierarchy-space"/>{layer.kind === "group" && <span className="layer-disclosure" onClick={(event) => { event.stopPropagation(); toggleExpanded(layer.id); }}>{layer.expanded === false ? "▸" : "▾"}</span>}<LayerThumbnail layer={layer} active={layer.id === state.activeLayerId && editingMaskLayerId !== layer.id} onActivate={() => { selectLayer(layer.id); setEditingMask(active.id, null); setSelectedLayers(active.id, [layer.id]); }}/>{layer.mask && <LayerMaskThumbnail mask={layer.mask} width={state.width} height={state.height} active={editingMaskLayerId === layer.id} onActivate={() => { selectLayer(layer.id); setEditingMask(active.id, layer.id); setSelectedLayers(active.id, [layer.id]); }}/>}{layer.colorLabel && layer.colorLabel !== "none" && <i className="layer-color-label" data-color={layer.colorLabel} aria-hidden="true"/>}<span className="layer-row-text"><b>{localized(layer.name, language)}</b><small>{layer.kind === "group" ? (layer.groupMode === "isolated" ? "isolated" : "pass through") : `${layer.blendMode} · ${Math.round(layer.opacity * 100)}%`}</small></span>{layer.linkGroup && <em className="layer-badge" title={text(language, "Linked", "Связан")}>⛓</em>}{(layer.locked || layer.lockPixels || layer.lockPosition || layer.lockTransparent) && <em className="layer-badge" title={text(language, "Locked", "Закреплён")}>🔒</em>}</button></div>)}</div>
       <div className="layer-actions adjustment-actions">{showAdjustments && <div className="adjustment-menu">{rasterAdjustments.filter((definition) => definition.supportsAdjustmentLayer).map((definition) => <button key={definition.id} onClick={() => addAdjustment(definition)}><img src={definition.icon} alt="" width={16} height={16}/><span>{language === "ru" ? definition.name.ru : definition.name.en}</span></button>)}</div>}<button onClick={() => { kernel.documents.update<RasterDocumentState>(active.id, (current) => { toggleLayerLink(current, selectedLayerIds.length > 1 ? selectedLayerIds : [current.activeLayerId]); }); }} title={text(language, "Link layers", "Связать слои")}><img src="/СВЯЗЬ.svg" alt=""/></button><button disabled={activeLayer.kind === "group"} onClick={() => setStyleLayerId(activeLayer.id)} title={text(language, "Layer style", "Стиль слоя")}><b className="fx-label">fx</b></button><button onClick={() => setShowAdjustments((value) => !value)} title={text(language, "New adjustment layer", "Новый корректирующий слой")}><img src="/КОРРЕКТИРУЮЩИЙ СЛОЙ.svg" alt=""/></button><button className={activeLayer.clipping ? "active" : ""} onClick={toggleClipping} disabled={activeLayer.kind === "group"} title={text(language, "Create clipping mask", "Создать обтравочную маску")}><img src="/ОБТРАВОЧНАЯ МАСКА.svg" alt=""/></button><button onClick={addMask} disabled={activeLayer.kind === "group" || Boolean(activeLayer.mask)} title={text(language, "Add layer mask", "Добавить маску слоя")}><img src="/МАСКА СЛОЯ.svg" alt=""/></button><button onClick={addGroup} title={text(language, "New group", "Новая группа")}><img src="/ГРУППА.svg" alt=""/></button><button onClick={addLayer} title={text(language, "New layer", "Новый слой")}><img src="/НОВЫЙ СЛОЙ.svg" alt=""/></button><button data-role="trash" data-armed={dropHint?.overId === "trash" || undefined} onClick={deleteLayer} title={text(language, "Delete layer (drop a layer here)", "Удалить слой (можно перетащить сюда)")}><img src="/КОРЗИНА.svg" alt=""/></button></div>
-      {styleLayer && <LayerStyleDialog layer={styleLayer} onClose={() => setStyleLayerId(null)} onApply={(patch) => kernel.documents.update<RasterDocumentState>(active.id, (current) => { const target = current.layers.find((layer) => layer.id === styleLayer.id); if (target) Object.assign(target, patch); })}/>} 
+      {styleLayer && <LayerStyleDialog layer={styleLayer} onClose={() => setStyleLayerId(null)} onApply={(patch) => kernel.documents.update<RasterDocumentState>(active.id, (current) => { const target = current.layers.find((layer) => layer.id === styleLayer.id); if (target) Object.assign(target, patch); })}/>}
+      {contextMenu.node}
+    </div>;
+  }
+  if (active && isVectorDocumentState(active.state)) {
+    const state = active.state;
+    // Front to back, matching how the raster panel lists its top layer first — shapes.at(-1)
+    // is what a click on the canvas picks first, so it belongs at the top of this list too.
+    const ordered = [...state.shapes].reverse();
+    const selectShape = (id: string) => kernel.documents.update<VectorDocumentState>(active.id, (current) => { current.activeShapeId = id; current.selection = [id]; });
+    const toggleVisible = (id: string) => void changeVectorDocument(active.id, "Toggle Visibility (Переключить видимость)", (current) => { const shape = current.shapes.find((item) => item.id === id); if (!shape) return false; updateShape<VectorShape>(current, id, { visible: !shape.visible } as Partial<VectorShape>); return true; });
+    const toggleLocked = (id: string) => void changeVectorDocument(active.id, "Toggle Lock (Переключить блокировку)", (current) => { const shape = current.shapes.find((item) => item.id === id); if (!shape) return false; updateShape<VectorShape>(current, id, { locked: !shape.locked } as Partial<VectorShape>); return true; });
+    return <div className="dock-panel-body">
+      <div className="layer-list">{ordered.map((shape) => <div key={shape.id} className={["layer-row", shape.id === state.activeShapeId ? "active" : ""].filter(Boolean).join(" ")} onClick={() => selectShape(shape.id)} onContextMenu={(event) => { selectShape(shape.id); contextMenu.open(event, [
+        { label: text(language, "Duplicate", "Дублировать"), onSelect: () => duplicateActiveVectorShape(active.id) },
+        { label: text(language, "Delete", "Удалить"), onSelect: () => deleteActiveVectorShapes(active.id), danger: true },
+        { label: text(language, "Bring to Front", "На передний план"), onSelect: () => reorderActiveVectorShape(active.id, "front"), separatorBefore: true },
+        { label: text(language, "Bring Forward", "Переместить выше"), onSelect: () => reorderActiveVectorShape(active.id, "forward") },
+        { label: text(language, "Send Backward", "Переместить ниже"), onSelect: () => reorderActiveVectorShape(active.id, "backward") },
+        { label: text(language, "Send to Back", "На задний план"), onSelect: () => reorderActiveVectorShape(active.id, "back") },
+      ]); }}>
+        <button onClick={(event) => { event.stopPropagation(); toggleVisible(shape.id); }} aria-label={text(language, "Toggle visibility", "Переключить видимость")}><img src={shape.visible ? "/ГЛАЗ ОТКРЫТ.svg" : "/ГЛАЗ ЗАКРЫТ.svg"} alt=""/></button>
+        <span className="layer-row-text"><b>{shape.name}</b><small>{shape.kind} · {Math.round(shapeBounds(shape).width)}×{Math.round(shapeBounds(shape).height)}</small></span>
+        <button onClick={(event) => { event.stopPropagation(); toggleLocked(shape.id); }} aria-label={text(language, "Toggle lock", "Переключить блокировку")} className={shape.locked ? "active" : ""}>{shape.locked ? "🔒" : "🔓"}</button>
+      </div>)}
+        {!ordered.length && <div className="empty-row">{text(language, "No shapes yet — draw one with a tool", "Пока нет фигур — нарисуйте что-нибудь инструментом")}</div>}
+      </div>
+      <div className="layer-actions">
+        <button disabled={!state.activeShapeId} onClick={() => duplicateActiveVectorShape(active.id)} title={text(language, "Duplicate", "Дублировать")}><img src="/ПАНЕЛЬ-СЛОИ.svg" alt="" width={16} height={16}/></button>
+        <button disabled={!state.selection.length} data-role="trash" onClick={() => deleteActiveVectorShapes(active.id)} title={text(language, "Delete shape", "Удалить фигуру")}><img src="/КОРЗИНА.svg" alt=""/></button>
+      </div>
+      {contextMenu.node}
     </div>;
   }
   return <div className="dock-panel-body"><button className="panel-action">＋ {timed ? text(language, "Track", "Дорожка") : text(language, "Layer", "Слой")}</button><div className="empty-row">{timed ? text(language, "No tracks yet", "Дорожек пока нет") : text(language, "No layers yet", "Слоёв пока нет")}</div></div>;
@@ -461,8 +580,20 @@ export function DockLayout() {
         api.addPanel({ id: definition.id, component: definition.component, title: corePanelTitle(definition, language), position: { referenceGroup: groupId, direction: "within" } });
       }
     };
+    const handleVector = (raw: Event) => {
+      const event = raw as CustomEvent<{ id: string; visible: boolean }>;
+      const api = apiRef.current, definition = vectorCorePanelById.get(event.detail.id); if (!api || !definition) return;
+      const existing = api.getPanel(definition.id);
+      if (!event.detail.visible && existing) { api.removePanel(existing); return; }
+      if (event.detail.visible && !existing) {
+        let groupId = api.getGroup("right-panels")?.id;
+        if (!groupId) { const group = api.addEdgeGroup("right", { id: "right-panels", initialSize: 280, minimumSize: 220, collapsedSize: 43, autoHide: true }); group.setHeaderPosition("top"); groupId = group.id; }
+        api.addPanel({ id: definition.id, component: definition.component, title: corePanelTitle(definition, language), position: { referenceGroup: groupId, direction: "within" } });
+      }
+    };
     window.addEventListener(PANEL_REQUEST_EVENT, handle);
-    return () => window.removeEventListener(PANEL_REQUEST_EVENT, handle);
+    window.addEventListener(VECTOR_PANEL_REQUEST_EVENT, handleVector);
+    return () => { window.removeEventListener(PANEL_REQUEST_EVENT, handle); window.removeEventListener(VECTOR_PANEL_REQUEST_EVENT, handleVector); };
   }, [language]);
   const onReady = useCallback((event: DockviewReadyEvent) => {
     apiRef.current = event.api;
@@ -478,7 +609,12 @@ export function DockLayout() {
       }
     }
     if (!restored) createDefaultLayout(event, language);
-    event.api.onDidLayoutChange(() => { localStorage.setItem(storageKey, JSON.stringify(event.api.toJSON())); persistVisiblePanelIds(event.api.panels.map((panel) => panel.id).filter((id) => rasterCorePanelById.has(id))); });
+    event.api.onDidLayoutChange(() => {
+      localStorage.setItem(storageKey, JSON.stringify(event.api.toJSON()));
+      const ids = event.api.panels.map((panel) => panel.id);
+      persistVisiblePanelIds(ids.filter((id) => rasterCorePanelById.has(id)));
+      persistVisibleVectorPanelIds(ids.filter((id) => vectorCorePanelById.has(id)));
+    });
   }, [language]);
 
   return <div className="dock-host"><DockviewReact key={language} theme={themeDark} components={components} defaultTabComponent={PanelTab} rightHeaderActionsComponent={PanelHeaderActions} onReady={onReady} /></div>;

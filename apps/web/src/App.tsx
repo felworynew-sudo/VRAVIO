@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { confineToSelection, cropRasterDocument, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
+import { confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
 import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
 import { withBusyPainted } from "./busy";
 import { useShellStore, type Language } from "./store";
@@ -29,6 +29,10 @@ import type { RasterAdjustmentDefinition } from "./raster-adjustments/types";
 import { adjustedPixels } from "./raster-adjustments/apply";
 import { rasterCorePanels } from "./raster-core-panels/registry";
 import { PANEL_CHANGED_EVENT, readVisiblePanelIds, requestPanelVisibility } from "./raster-core-panels/runtime";
+import { vectorCorePanels } from "./vector-core-panels/registry";
+import { PANEL_CHANGED_EVENT as VECTOR_PANEL_CHANGED_EVENT, readVisiblePanelIds as readVisibleVectorPanelIds, requestPanelVisibility as requestVectorPanelVisibility } from "./vector-core-panels/runtime";
+import { duplicateActiveVectorShape, deleteActiveVectorShapes, reorderActiveVectorShape } from "./vector-commands";
+import { isVectorDocumentState } from "@vravio/env-vector";
 import { luminanceHistogram } from "./raster-adjustments/histogram";
 import "./styles.css";
 
@@ -65,12 +69,23 @@ export function App() {
     return id;
   };
 
+  const importPsd = async (file: File) => {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let result: ReturnType<typeof decodePsd>;
+    try { result = decodePsd(bytes); } catch (error) { diagnostic("error", "file.import", `Could not decode ${file.name}: ${error instanceof Error ? error.message : String(error)}`); return; }
+    for (const warning of result.warnings) diagnostic("warn", "file.import", warning);
+    store.openDocument("raster", { name: file.name, width: result.document.width, height: result.document.height, resolution: 72, resolutionUnit: "ppi", backgroundColor: null, pixelAspectRatio: 1 });
+    const id = useShellStore.getState().activeDocumentId; if (!id) return;
+    kernel.documents.update<RasterDocumentState>(id, (state) => { state.layers = result.document.layers; state.activeLayerId = result.document.activeLayerId; });
+  };
+
   const importImage = async (file: File) => {
     const extension = rawExtensionOf(file.name);
     if (extension && (rawFileExtensions as readonly string[]).includes(extension)) {
       setCameraRawImport({ buffer: await file.arrayBuffer(), name: file.name });
       return;
     }
+    if (extension === "psd" || extension === "psb") { await importPsd(file); return; }
     const source = await decodeImportedImage(file);
     if (!source) { diagnostic("error", "file.import", `Could not decode ${file.name}`); return; }
     store.openDocument("raster", { name: file.name, width: source.width, height: source.height, resolution: 72, resolutionUnit: "ppi", backgroundColor: null, pixelAspectRatio: 1 });
@@ -122,6 +137,7 @@ export function App() {
   const effectiveForegroundColor = editingMaskLayerId ? (maskForegroundIsWhite ? "#ffffff" : "#000000") : store.foregroundColor;
   const effectiveBackgroundColor = editingMaskLayerId ? (maskForegroundIsWhite ? "#000000" : "#ffffff") : store.backgroundColor;
   const activeTextLayer = (() => { if (!active || !isRasterDocumentState(active.state)) return null; const state = active.state; return state.layers.find((layer) => layer.id === state.activeLayerId && layer.kind === "text" && layer.text) ?? null; })();
+  const activeImageShape = (() => { if (!active || !isVectorDocumentState(active.state)) return false; const state = active.state; return state.shapes.find((shape) => shape.id === state.activeShapeId)?.kind === "image"; })();
   const unionBounds = (boxes: RasterRect[]): RasterRect => { const left = Math.min(...boxes.map((box) => box.x)), top = Math.min(...boxes.map((box) => box.y)), right = Math.max(...boxes.map((box) => box.x + box.width)), bottom = Math.max(...boxes.map((box) => box.y + box.height)); return { x: left, y: top, width: right - left, height: bottom - top }; };
   const alignOrDistributeLayers = (kind: "align" | "distribute", edge: AlignEdge) => {
     if (!active || !isRasterDocumentState(active.state)) return;
@@ -248,7 +264,7 @@ export function App() {
     return () => window.removeEventListener("vravio-diagnostics-change", refresh);
   }, []);
 
-  useEffect(() => { const refresh = () => setPanelRevision((value) => value + 1); window.addEventListener(PANEL_CHANGED_EVENT, refresh); return () => window.removeEventListener(PANEL_CHANGED_EVENT, refresh); }, []);
+  useEffect(() => { const refresh = () => setPanelRevision((value) => value + 1); window.addEventListener(PANEL_CHANGED_EVENT, refresh); window.addEventListener(VECTOR_PANEL_CHANGED_EVENT, refresh); return () => { window.removeEventListener(PANEL_CHANGED_EVENT, refresh); window.removeEventListener(VECTOR_PANEL_CHANGED_EVENT, refresh); }; }, []);
 
   useEffect(() => {
     const save = () => void saveProject();
@@ -331,38 +347,57 @@ export function App() {
           ["Close (Закрыть)", "Ctrl+W", () => active && store.closeDocument(active.id), !active],
         ]}/>
         <Menu label="Edit (Правка)" language={store.language} open={openMenu === "edit"} onToggle={() => setOpenMenu(openMenu === "edit" ? null : "edit")} items={[["Undo (Отменить)", "Ctrl+Z", () => void kernel.commands.execute("edit.undo", activeCommandContext())], ["Redo (Повторить)", "Ctrl+Shift+Z", () => void kernel.commands.execute("edit.redo", activeCommandContext())], ["Free Transform (Свободная трансформация)", "Ctrl+T", () => window.dispatchEvent(new Event("vravio-transform-start"))]]}/>
-        <Menu label="Image (Изображение)" language={store.language} open={openMenu === "image"} onToggle={() => setOpenMenu(openMenu === "image" ? null : "image")} items={[
+        {active?.kind === "raster" && <Menu label="Image (Изображение)" language={store.language} open={openMenu === "image"} onToggle={() => setOpenMenu(openMenu === "image" ? null : "image")} items={[
           { label: "Adjustments (Коррекция)", items: rasterAdjustments.map((definition) => [`${definition.name.en}… (${definition.name.ru}…)`, definition.shortcut ?? "", () => openImageAdjustment(definition), !activeRasterState || activeRasterState.layers.find((layer) => layer.id === activeRasterState.activeLayerId)?.kind !== "pixel"] as MainMenuItem) },
           ["Smart Crop 1:1 (Умное кадрирование 1:1)", "", () => { void smartCrop(1, "1:1"); }, !active || !isRasterDocumentState(active.state)],
           ["Smart Crop 16:9 (Умное кадрирование 16:9)", "", () => { void smartCrop(16 / 9, "16:9"); }, !active || !isRasterDocumentState(active.state)],
           ["Smart Crop 4:5 (Умное кадрирование 4:5)", "", () => { void smartCrop(4 / 5, "4:5"); }, !active || !isRasterDocumentState(active.state)],
           ["Image Size… (Размер изображения…)", "Ctrl+Alt+I", () => {}, true],
           ["Canvas Size… (Размер холста…)", "Ctrl+Alt+C", () => {}, true],
-        ]}/>
-        <Menu label="Layer (Слой)" language={store.language} open={openMenu === "layer"} onToggle={() => setOpenMenu(openMenu === "layer" ? null : "layer")} items={[
+        ]}/>}
+        {active?.kind === "raster" && <Menu label="Layer (Слой)" language={store.language} open={openMenu === "layer"} onToggle={() => setOpenMenu(openMenu === "layer" ? null : "layer")} items={[
           ["Duplicate Layer (Дублировать слой)", "Ctrl+J", () => void kernel.commands.execute("layer.duplicate", activeCommandContext()), !active || !isRasterDocumentState(active.state)],
           ["Delete Layer (Удалить слой)", "", () => void kernel.commands.execute("layer.delete", activeCommandContext()), !active || !isRasterDocumentState(active.state)],
+          ["New 3D Text Layer… (Новый объёмный текстовый слой…)", "", () => void kernel.commands.execute("layer.new3DText", activeCommandContext()), !active || !isRasterDocumentState(active.state)],
+          ["New 3D Extrusion from Layer (Экструдировать слой в 3D)", "", () => void kernel.commands.execute("layer.new3DExtrude", activeCommandContext()), !active || !isRasterDocumentState(active.state)],
           ["Add Watermark (Добавить водяной знак)", "", () => addWatermark("bottomRight"), !active || !isRasterDocumentState(active.state)],
           ["Layer Style… (Стиль слоя…)", "", () => window.dispatchEvent(new Event("vravio-layer-style-open")), !active || active.kind !== "raster"],
           ["Merge Down (Объединить с нижним)", "Ctrl+E", () => {}, true],
           ["Flatten Image (Свести изображение)", "", () => {}, true],
-        ]}/>
-        <Menu label="Type (Текст)" language={store.language} open={openMenu === "type"} onToggle={() => setOpenMenu(openMenu === "type" ? null : "type")} items={[
+        ]}/>}
+        {active?.kind === "vector" && <Menu label="Object (Объект)" language={store.language} open={openMenu === "object"} onToggle={() => setOpenMenu(openMenu === "object" ? null : "object")} items={[
+          ["Duplicate (Дублировать)", "Ctrl+J", () => active && duplicateActiveVectorShape(active.id)],
+          ["Delete (Удалить)", "Delete", () => active && deleteActiveVectorShapes(active.id)],
+          ["Bring to Front (На передний план)", "", () => active && reorderActiveVectorShape(active.id, "front")],
+          ["Bring Forward (Переместить выше)", "", () => active && reorderActiveVectorShape(active.id, "forward")],
+          ["Send Backward (Переместить ниже)", "", () => active && reorderActiveVectorShape(active.id, "backward")],
+          ["Send to Back (На задний план)", "", () => active && reorderActiveVectorShape(active.id, "back")],
+          ["Edit Image in Raster Environment… (Открыть картинку в растровой среде…)", "", () => active && void kernel.commands.execute("image.openElsewhere", { activeDocumentId: active.id }), !activeImageShape],
+          ["Edit Image as a Copy… (Открыть картинку копией…)", "", () => active && void kernel.commands.execute("image.openElsewhereBranch", { activeDocumentId: active.id }), !activeImageShape],
+        ]}/>}
+        {active?.kind === "raster" && <Menu label="Type (Текст)" language={store.language} open={openMenu === "type"} onToggle={() => setOpenMenu(openMenu === "type" ? null : "type")} items={[
           ["Faux Bold (Псевдо-полужирный)", "", () => toggleActiveTextStyle("bold"), !activeTextLayer],
           ["Faux Italic (Псевдо-курсив)", "", () => toggleActiveTextStyle("italic"), !activeTextLayer],
           ["Underline (Подчёркнутый)", "", () => toggleActiveTextStyle("underline"), !activeTextLayer],
           ["Warp Text… (Деформация текста…)", "", () => {}, true],
           ["Convert to Shape (Преобразовать в фигуру)", "", () => {}, true],
           ["Create Work Path (Создать рабочий контур)", "", () => {}, true],
-        ]}/>
-        <Menu label="Filter (Фильтр)" language={store.language} open={openMenu === "filter"} onToggle={() => setOpenMenu(openMenu === "filter" ? null : "filter")} items={[["Filter Gallery… (Галерея фильтров…)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Camera Raw Filter… (Фильтр Camera Raw…)", "", () => void openCameraRawReprocess(), !activeRawOrigin], ["Liquify… (Пластика…)", "Ctrl+Shift+X", () => setLiquifyOpen(true), !active || !isRasterDocumentState(active.state)], ["Blur Gallery (Галерея размытия)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Sharpen (Усиление резкости)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Noise (Шум)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Stylize (Стилизация)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"]]}/>
+        ]}/>}
+        {active?.kind === "raster" && <Menu label="Filter (Фильтр)" language={store.language} open={openMenu === "filter"} onToggle={() => setOpenMenu(openMenu === "filter" ? null : "filter")} items={[["Filter Gallery… (Галерея фильтров…)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Camera Raw Filter… (Фильтр Camera Raw…)", "", () => void openCameraRawReprocess(), !activeRawOrigin], ["Liquify… (Пластика…)", "Ctrl+Shift+X", () => setLiquifyOpen(true), !active || !isRasterDocumentState(active.state)], ["Blur Gallery (Галерея размытия)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Sharpen (Усиление резкости)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Noise (Шум)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Stylize (Стилизация)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"]]}/>}
         <Menu label="Plugins (Плагины)" language={store.language} open={openMenu === "plugins"} onToggle={() => setOpenMenu(openMenu === "plugins" ? null : "plugins")} items={[
           ["Manage Plugins… (Управление плагинами…)", "", () => {}, true],
         ]}/>
-        <Menu label="Window (Окно)" language={store.language} open={openMenu === "window"} onToggle={() => setOpenMenu(openMenu === "window" ? null : "window")} items={[...rasterCorePanels.map((panel) => { const visible = readVisiblePanelIds().has(panel.id); return [`${visible ? "✓ " : ""}${panel.title.en} (${panel.title.ru})`, "", () => requestPanelVisibility(panel.id, !visible)] as MainMenuItem; }), ["Settings (Настройки)", "", () => store.setSettingsOpen(true)], ["Command Palette (Палитра команд)", "Ctrl+K", () => store.setPaletteOpen(true)]]}/>
+        <Menu label="Window (Окно)" language={store.language} open={openMenu === "window"} onToggle={() => setOpenMenu(openMenu === "window" ? null : "window")} items={[...(
+          active?.kind === "vector" ? vectorCorePanels.map((panel) => { const visible = readVisibleVectorPanelIds().has(panel.id); return [`${visible ? "✓ " : ""}${panel.title.en} (${panel.title.ru})`, "", () => requestVectorPanelVisibility(panel.id, !visible)] as MainMenuItem; })
+          : active?.kind === "raster" ? rasterCorePanels.map((panel) => { const visible = readVisiblePanelIds().has(panel.id); return [`${visible ? "✓ " : ""}${panel.title.en} (${panel.title.ru})`, "", () => requestPanelVisibility(panel.id, !visible)] as MainMenuItem; })
+          // Audio/video's MediaWorkspace is a self-contained editor (bin, transport, clip
+          // inspector all built in) with nothing yet wired to the dockable side panels, so
+          // there is genuinely no panel catalog to offer here — an empty list, not raster's.
+          : []
+        ), ["Settings (Настройки)", "", () => store.setSettingsOpen(true)], ["Command Palette (Палитра команд)", "Ctrl+K", () => store.setPaletteOpen(true)]]}/>
         <Menu label="Help (Справка)" language={store.language} open={openMenu === "help"} onToggle={() => setOpenMenu(openMenu === "help" ? null : "help")} items={[["Diagnostics log (Журнал диагностики)", "", () => setDiagnosticsOpen(true)], ["About VRAVIO (О VRAVIO)", "", () => window.alert("VRAVIO — local-first creative suite")]]}/>
       </nav>
-      <input ref={openImageRef} hidden type="file" accept={`image/png,image/jpeg,image/webp,image/gif,image/avif,image/svg+xml,.svg,${rawFileExtensions.map((extension) => `.${extension}`).join(",")}`} onChange={(event) => { const file = event.target.files?.[0]; if (file) void importImage(file); event.currentTarget.value = ""; }}/>
+      <input ref={openImageRef} hidden type="file" accept={`image/png,image/jpeg,image/webp,image/gif,image/avif,image/svg+xml,.svg,.psd,.psb,${rawFileExtensions.map((extension) => `.${extension}`).join(",")}`} onChange={(event) => { const file = event.target.files?.[0]; if (file) void importImage(file); event.currentTarget.value = ""; }}/>
       <button className="palette-button" onClick={() => store.setPaletteOpen(true)}>⌘ {store.language === "ru" ? "Команды" : "Commands"} <kbd>Ctrl K</kbd></button>
       <button className="settings-button" onClick={() => store.setSettingsOpen(true)} aria-label={store.language === "ru" ? "Настройки" : "Settings"} title={store.language === "ru" ? "Настройки" : "Settings"}>⚙</button>
     </header>

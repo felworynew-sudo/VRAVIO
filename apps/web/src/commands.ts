@@ -1,6 +1,8 @@
 import type { CommandContext, EnvironmentKind } from "@vravio/kernel";
 import { activeRasterLayer, groupLayers, layerDocumentPixels, layerFromSelection, mergeLayerDown, mergeVisibleLayers, moveLayerInStack, removeLayer, selectAllPixels, stampVisibleLayers, ungroupLayer, createRasterLayer, invertPixelSelection, isRasterDocumentState, restrictSelectionToAlpha, selectOpaquePixels, type PixelSelection, type RasterDocumentState, type RasterLayer } from "@vravio/env-raster";
+import { isVectorDocumentState, type VectorDocumentState } from "@vravio/env-vector";
 import { kernel } from "./kernel";
+import { createScene3DExtrudeLayer, createScene3DTextLayer } from "./scene3d-commands";
 import { useShellStore } from "./store";
 import { tools } from "./tools";
 import { applyShortcutOverrides, rememberDefaultShortcut } from "./shortcuts";
@@ -33,6 +35,24 @@ async function openTargetElsewhere(documentId: string, targetEnv: EnvironmentKin
     parentDocId: documentId,
     target: { kind: "raster-layer", layerId: layer.id },
     targetEnv,
+    branch,
+  });
+  useShellStore.getState().adoptDocument(session.childDocId);
+}
+
+/** Opens the active image shape's picture as a raster document of its own, the vector-side
+ * counterpart to openTargetElsewhere — same round-trip manager, same asset-reference mechanism,
+ * just a `vector-node` target instead of a `raster-layer` one. */
+async function openVectorImageElsewhere(documentId: string, branch: boolean): Promise<void> {
+  const document = kernel.documents.get<VectorDocumentState>(documentId);
+  if (!document || !isVectorDocumentState(document.state)) return;
+  const shape = document.state.shapes.find((item) => item.id === document.state.activeShapeId);
+  if (!shape || shape.kind !== "image") return;
+
+  const session = await kernel.roundtrip.open({
+    parentDocId: documentId,
+    target: { kind: "vector-node", nodeId: shape.id },
+    targetEnv: "raster",
     branch,
   });
   useShellStore.getState().adoptDocument(session.childDocId);
@@ -126,11 +146,31 @@ export function ensureCommandsRegistered(): void {
     isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster",
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void openTargetElsewhere(activeDocumentId, "raster", true); },
   });
+  const hasActiveImageShape = ({ activeDocumentId }: { activeDocumentId?: string | null }) => {
+    const document = kernel.documents.get<VectorDocumentState>(activeDocumentId ?? "");
+    if (!document || !isVectorDocumentState(document.state)) return false;
+    const shape = document.state.shapes.find((item) => item.id === document.state.activeShapeId);
+    return shape?.kind === "image";
+  };
+  kernel.commands.register({
+    id: "image.openElsewhere",
+    label: "Edit Image in Raster Environment (Открыть картинку в растровой среде)",
+    category: "Object (Объект)",
+    isEnabled: hasActiveImageShape,
+    execute: ({ activeDocumentId }) => { if (activeDocumentId) void openVectorImageElsewhere(activeDocumentId, false); },
+  });
+  kernel.commands.register({
+    id: "image.openElsewhereBranch",
+    label: "Edit Image as a Copy (Открыть картинку копией)",
+    category: "Object (Объект)",
+    isEnabled: hasActiveImageShape,
+    execute: ({ activeDocumentId }) => { if (activeDocumentId) void openVectorImageElsewhere(activeDocumentId, true); },
+  });
   kernel.commands.register({
     id: "roundtrip.apply",
     label: "Apply to Parent Document (Применить в исходный документ)",
     category: "File (Файл)",
-    shortcut: "Mod+Shift+Return",
+    shortcut: "Mod+Shift+Enter",
     isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && kernel.roundtrip.sessionOf(activeDocumentId)?.status !== undefined && kernel.documents.get(activeDocumentId)?.provenance),
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void kernel.roundtrip.apply(activeDocumentId); },
   });
@@ -142,6 +182,21 @@ export function ensureCommandsRegistered(): void {
     execute: ({ activeDocumentId }) => { if (activeDocumentId) kernel.roundtrip.detach(activeDocumentId); },
   });
   kernel.commands.register({ id: "layer.new", label: "New Layer (Новый слой)", category: "Layer (Слой)", shortcut: "Mod+Shift+N", isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: ({ activeDocumentId }) => { if (!activeDocumentId) return; void changeRasterDocument(activeDocumentId, "New Layer (Новый слой)", (state) => { const layer = createRasterLayer(state.width, state.height, `Layer ${state.layers.length + 1} (Слой ${state.layers.length + 1})`); state.layers.push(layer); state.activeLayerId = layer.id; return true; }); } });
+  kernel.commands.register({ id: "layer.new3DText", label: "New 3D Text Layer… (Новый объёмный текстовый слой…)", category: "3D (3D)", isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster", execute: ({ activeDocumentId }) => { if (activeDocumentId) void createScene3DTextLayer(activeDocumentId); } });
+  kernel.commands.register({
+    id: "layer.new3DExtrude",
+    label: "New 3D Extrusion from Layer (Экструдировать слой в 3D)",
+    category: "3D (3D)",
+    isEnabled: ({ activeDocumentId }) => {
+      const document = kernel.documents.get<RasterDocumentState>(activeDocumentId ?? "");
+      return Boolean(document && isRasterDocumentState(document.state) && document.state.activeLayerId);
+    },
+    execute: ({ activeDocumentId }) => {
+      const document = kernel.documents.get<RasterDocumentState>(activeDocumentId ?? "");
+      if (!document || !isRasterDocumentState(document.state) || !document.state.activeLayerId) return;
+      void createScene3DExtrudeLayer(activeDocumentId!, document.state.activeLayerId);
+    },
+  });
   // Photoshop's layer shortcuts, in its own order and with its own keys.
   const raster = ({ activeDocumentId }: { activeDocumentId?: string | null }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster";
   const editLayers = (documentId: string, label: string, mutate: (state: RasterDocumentState) => boolean) =>

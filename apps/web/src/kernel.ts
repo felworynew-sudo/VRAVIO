@@ -1,6 +1,7 @@
 import { AssetStore, AutosaveManager, CommandRegistry, DocumentSnapshotStore, DocumentStore, EnvironmentRegistry, GPUContext, HistoryManager, KeymapManager, ModelStore, ResilientStorageAdapter, RoundTripManager } from "@vravio/kernel";
 import { RasterEnvironment } from "@vravio/env-raster";
 import { createWebPlatform } from "./webPlatform";
+import { VectorEnvironment } from "./vector-environment";
 
 // Which store actually works is settled by writing a byte and reading it back,
 // not by asking whether the API exists: Safari reports an origin private file
@@ -21,6 +22,7 @@ const historyByDocument = new Map<string, HistoryManager>();
 // asks it for whichever kind a document is, and knows nothing else about them.
 const environments = new EnvironmentRegistry();
 environments.register(new RasterEnvironment({ documents: documentsStore, assets }));
+environments.register(new VectorEnvironment({ documents: documentsStore, assets }));
 const roundtrip = new RoundTripManager({
   documents: documentsStore, assets, environments,
   historyFor: (id) => historyByDocument.get(id),

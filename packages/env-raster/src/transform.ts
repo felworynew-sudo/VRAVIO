@@ -1,6 +1,89 @@
 import { layerDocumentPixels } from "./layer-bounds";
 import { selectionBounds } from "./selection";
-import type { PixelSelection, RasterDocumentState, RasterRect } from "./types";
+import type { PixelSelection, Point, RasterDocumentState, RasterRect } from "./types";
+
+/** Coefficients of the projective map from the unit square (0,0)-(1,0)-(1,1)-(0,1) onto an
+ * arbitrary quadrilateral (corners given in the same TL,TR,BR,BL order), by Heckbert's method
+ * ("Fundamentals of Texture Mapping and Image Warping", 1989, §I). Falls back to a plain affine
+ * fit when the quad is already a parallelogram, where the general formula divides by zero —
+ * covers Skew, which only ever produces parallelograms. */
+function quadMapping(corners: readonly [Point, Point, Point, Point]) {
+  const [p0, p1, p2, p3] = corners;
+  const dx3 = p0.x - p1.x + p2.x - p3.x, dy3 = p0.y - p1.y + p2.y - p3.y;
+  if (Math.abs(dx3) < 1e-9 && Math.abs(dy3) < 1e-9) {
+    return { a: p1.x - p0.x, b: p2.x - p1.x, c: p0.x, d: p1.y - p0.y, e: p2.y - p1.y, f: p0.y, g: 0, h: 0 };
+  }
+  const dx1 = p1.x - p2.x, dx2 = p3.x - p2.x, dy1 = p1.y - p2.y, dy2 = p3.y - p2.y;
+  const denom = dx1 * dy2 - dx2 * dy1;
+  const g = denom === 0 ? 0 : (dx3 * dy2 - dx2 * dy3) / denom;
+  const h = denom === 0 ? 0 : (dx1 * dy3 - dx3 * dy1) / denom;
+  return { a: p1.x - p0.x + g * p1.x, b: p3.x - p0.x + h * p3.x, c: p0.x, d: p1.y - p0.y + g * p1.y, e: p3.y - p0.y + h * p3.y, f: p0.y, g, h };
+}
+
+/** Inverse of quadMapping's 3x3 projective matrix [[a,b,c],[d,e,f],[g,h,1]], applied to (x,y,1)
+ * and normalized by the resulting third component — turns an absolute canvas point back into
+ * the quad's own unit-square (u,v), so the destination can be sampled from the source rectangle. */
+function inverseUnitSquare(mapping: ReturnType<typeof quadMapping>, x: number, y: number): { u: number; v: number } {
+  const { a, b, c, d, e, f, g, h } = mapping;
+  const det = a * (e - f * h) - b * (d - f * g) + c * (d * h - e * g);
+  if (Math.abs(det) < 1e-12) return { u: -1, v: -1 };
+  const i00 = (e - f * h) / det, i01 = (c * h - b) / det, i02 = (b * f - c * e) / det;
+  const i10 = (f * g - d) / det, i11 = (a - c * g) / det, i12 = (c * d - a * f) / det;
+  const i20 = (d * h - e * g) / det, i21 = (b * g - a * h) / det, i22 = (a * e - b * d) / det;
+  const wx = i00 * x + i01 * y + i02, wy = i10 * x + i11 * y + i12, ww = i20 * x + i21 * y + i22;
+  if (Math.abs(ww) < 1e-9) return { u: -1, v: -1 };
+  return { u: wx / ww, v: wy / ww };
+}
+
+/** Remaps sourceBounds into an arbitrary quadrilateral (TL,TR,BR,BL) instead of scaleLayerPixels'
+ * axis-aligned rectangle — the shared engine behind Skew (a parallelogram), Distort (a free
+ * quad) and Perspective (a quad the caller keeps trapezoidal by mirroring corner drags), which
+ * differ only in how their on-canvas handles are allowed to move, not in how pixels are sampled. */
+export function quadLayerPixels(pixels: Uint8ClampedArray, width: number, height: number, sourceBounds: RasterRect, corners: readonly [Point, Point, Point, Point], selection: PixelSelection | null = null): Uint8ClampedArray {
+  const output = pixels.slice(), source = pixels.slice();
+  const left = Math.max(0, Math.floor(sourceBounds.x)), top = Math.max(0, Math.floor(sourceBounds.y));
+  const right = Math.min(width, Math.ceil(sourceBounds.x + sourceBounds.width)), bottom = Math.min(height, Math.ceil(sourceBounds.y + sourceBounds.height));
+  const selectedAlpha = (index: number) => selection ? selection.mask[index]! / 255 : (index % width >= left && index % width < right && Math.floor(index / width) >= top && Math.floor(index / width) < bottom ? 1 : 0);
+  for (let y = top; y < bottom; y += 1) for (let x = left; x < right; x += 1) {
+    const index = y * width + x, alpha = selectedAlpha(index); if (alpha <= 0) continue;
+    const pixel = index * 4, remaining = 1 - alpha;
+    output[pixel] = Math.round(output[pixel]! * remaining); output[pixel + 1] = Math.round(output[pixel + 1]! * remaining); output[pixel + 2] = Math.round(output[pixel + 2]! * remaining); output[pixel + 3] = Math.round(output[pixel + 3]! * remaining);
+  }
+  const mapping = quadMapping(corners);
+  const xs = corners.map((p) => p.x), ys = corners.map((p) => p.y);
+  const targetLeft = Math.floor(Math.min(...xs)), targetTop = Math.floor(Math.min(...ys)), targetRight = Math.ceil(Math.max(...xs)), targetBottom = Math.ceil(Math.max(...ys));
+  for (let y = Math.max(0, targetTop); y < Math.min(height, targetBottom); y += 1) for (let x = Math.max(0, targetLeft); x < Math.min(width, targetRight); x += 1) {
+    const { u, v } = inverseUnitSquare(mapping, x + .5, y + .5);
+    if (u < 0 || u > 1 || v < 0 || v > 1) continue;
+    const sourceX = Math.max(left, Math.min(right - 1, Math.floor(sourceBounds.x + u * sourceBounds.width)));
+    const sourceY = Math.max(top, Math.min(bottom - 1, Math.floor(sourceBounds.y + v * sourceBounds.height)));
+    const sourceIndex = sourceY * width + sourceX, maskAlpha = selectedAlpha(sourceIndex); if (maskAlpha <= 0) continue;
+    const from = sourceIndex * 4, to = (y * width + x) * 4, sourceAlpha = source[from + 3]! / 255 * maskAlpha, destinationAlpha = output[to + 3]! / 255, alpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha);
+    if (alpha <= 0) continue;
+    output[to] = Math.round((source[from]! * sourceAlpha + output[to]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
+    output[to + 1] = Math.round((source[from + 1]! * sourceAlpha + output[to + 1]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
+    output[to + 2] = Math.round((source[from + 2]! * sourceAlpha + output[to + 2]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
+    output[to + 3] = Math.round(alpha * 255);
+  }
+  return output;
+}
+
+export function quadSelection(selection: PixelSelection | null, width: number, height: number, sourceBounds: RasterRect, corners: readonly [Point, Point, Point, Point]): PixelSelection | null {
+  if (!selection) return null;
+  const mask = new Uint8ClampedArray(width * height);
+  const mapping = quadMapping(corners);
+  const xs = corners.map((p) => p.x), ys = corners.map((p) => p.y);
+  const targetLeft = Math.floor(Math.min(...xs)), targetTop = Math.floor(Math.min(...ys)), targetRight = Math.ceil(Math.max(...xs)), targetBottom = Math.ceil(Math.max(...ys));
+  for (let y = Math.max(0, targetTop); y < Math.min(height, targetBottom); y += 1) for (let x = Math.max(0, targetLeft); x < Math.min(width, targetRight); x += 1) {
+    const { u, v } = inverseUnitSquare(mapping, x + .5, y + .5);
+    if (u < 0 || u > 1 || v < 0 || v > 1) continue;
+    const sourceX = Math.max(0, Math.min(width - 1, Math.floor(sourceBounds.x + u * sourceBounds.width)));
+    const sourceY = Math.max(0, Math.min(height - 1, Math.floor(sourceBounds.y + v * sourceBounds.height)));
+    mask[y * width + x] = selection.mask[sourceY * width + sourceX]!;
+  }
+  const bounds = selectionBounds(mask, width, height);
+  return bounds.width && bounds.height ? { mask, bounds } : null;
+}
 
 export function translateLayerPixels(pixels: Uint8ClampedArray, width: number, height: number, dx: number, dy: number, selection: PixelSelection | null = null): Uint8ClampedArray {
   const offsetX = Math.round(dx), offsetY = Math.round(dy);

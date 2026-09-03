@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { parseHexColor, toHexColor } from "@vravio/env-raster";
 import { useShellStore } from "./store";
 import { text } from "./i18n";
+import { ColorPickerDialog } from "./ColorPickerDialog";
 
 type Rgb = { r: number; g: number; b: number };
 
@@ -34,6 +35,7 @@ export function ColorPanel() {
   const reset = useShellStore((state) => state.resetColors);
   const [target, setTarget] = useState<"foreground" | "background">("foreground");
   const [model, setModel] = useState<"rgb" | "hsb">("rgb");
+  const [pickerFor, setPickerFor] = useState<"foreground" | "background" | null>(null);
   const spectrumRef = useRef<HTMLCanvasElement>(null);
 
   const active = target === "foreground" ? foreground : background;
@@ -72,8 +74,8 @@ export function ColorPanel() {
 
   return <div className="dock-panel-body color-panel">
     <div className="color-chips">
-      <button className={`color-chip${target === "foreground" ? " active" : ""}`} style={{ background: foreground }} onClick={() => setTarget("foreground")} title={text(language, "Foreground", "Основной")} aria-label={text(language, "Foreground", "Основной")} />
-      <button className={`color-chip${target === "background" ? " active" : ""}`} style={{ background }} onClick={() => setTarget("background")} title={text(language, "Background", "Фоновый")} aria-label={text(language, "Background", "Фоновый")} />
+      <button className={`color-chip${target === "foreground" ? " active" : ""}`} style={{ background: foreground }} onClick={() => setTarget("foreground")} onDoubleClick={() => setPickerFor("foreground")} title={text(language, "Foreground (double-click for Color Picker)", "Основной (двойной клик — окно выбора цвета)")} aria-label={text(language, "Foreground", "Основной")} />
+      <button className={`color-chip${target === "background" ? " active" : ""}`} style={{ background }} onClick={() => setTarget("background")} onDoubleClick={() => setPickerFor("background")} title={text(language, "Background (double-click for Color Picker)", "Фоновый (двойной клик — окно выбора цвета)")} aria-label={text(language, "Background", "Фоновый")} />
       <div className="color-chip-actions">
         <button onClick={swap} title={`${text(language, "Swap", "Поменять")} (X)`}>⇄</button>
         <button onClick={reset} title={`${text(language, "Default", "По умолчанию")} (D)`}>◧</button>
@@ -110,5 +112,6 @@ export function ColorPanel() {
     <div className="color-swatches">
       {swatches.map((swatch) => <button key={swatch} style={{ background: swatch }} onClick={() => apply(swatch)} title={swatch} aria-label={swatch} />)}
     </div>
+    {pickerFor && <ColorPickerDialog language={language} initial={pickerFor === "foreground" ? foreground : background} onApply={(hex) => (pickerFor === "foreground" ? setForeground : setBackground)(hex)} onClose={() => setPickerFor(null)} />}
   </div>;
 }

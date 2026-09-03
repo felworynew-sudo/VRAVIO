@@ -24,6 +24,31 @@ export type RasterAdjustment =
   | { kind: "threshold"; threshold: number }
   | { kind: "colorLookup"; lut: ColorLookupTable; amount: number };
 
+export interface Scene3DLighting { ambientIntensity: number; ambientColor: string; directionalIntensity: number; directionalColor: string; /** degrees around Y (azimuth) and above the horizon (elevation) */ azimuth: number; elevation: number }
+
+/**
+ * What geometry a 3D layer renders, kept as plain data rather than a live scene graph so it
+ * survives structuredClone in undo snapshots the same way every other layer property does. A
+ * model never carries its own bytes here — `assetId` is a reference into the shared asset store,
+ * the same "asset, not a copy" rule every other cross-environment picture in this project follows.
+ */
+export type Scene3DSource =
+  | { kind: "text"; value: string; font: "helvetiker_regular" | "helvetiker_bold"; depth: number; bevelEnabled: boolean; bevelThickness: number; bevelSize: number; bevelSegments: number; curveSegments: number }
+  | { kind: "model"; assetId: string; fileName: string }
+  | { kind: "extrude"; sourceLayerId: string; depth: number };
+
+export interface Scene3DLayerData {
+  source: Scene3DSource;
+  size: number;
+  color: string;
+  metalness: number;
+  roughness: number;
+  rotationX: number;
+  rotationY: number;
+  rotationZ: number;
+  lighting: Scene3DLighting;
+}
+
 export interface RasterTextPath { start: { x: number; y: number }; control: { x: number; y: number }; end: { x: number; y: number }; flip?: boolean }
 export interface RasterTextTransform { a: number; b: number; c: number; d: number; e: number; f: number }
 export interface RasterTextData { value: string; x: number; y: number; fontFamily: string; fontSize: number; lineHeight: number; letterSpacing: number; align: "left" | "center" | "right"; color: string; bold?: boolean; italic?: boolean; underline?: boolean; mode?: "point" | "area" | "path" | "dynamic"; /** Paragraph (bounded) text word-wraps within this width instead of only breaking on explicit newlines. */ boxWidth?: number; boxHeight?: number; path?: RasterTextPath; dynamicPreset?: "circle" | "arch" | "bow"; /** Non-destructive affine transform applied to the live text geometry. */ transform?: RasterTextTransform; /** Cached visible raster bounds, refreshed by the text renderer. */ visualBounds?: RasterRect }
@@ -104,6 +129,7 @@ export interface RasterLayer {
   kind: RasterLayerKind;
   adjustment?: RasterAdjustment;
   text?: RasterTextData;
+  scene3d?: Scene3DLayerData;
   effects: RasterLayerEffects;
   /** Normalized tree link. null means document root. */
   parentId: string | null;

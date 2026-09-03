@@ -49,7 +49,8 @@ export function NavigatorPanel() {
     };
   }, [state, active?.revision]);
 
-  if (!active || !state) return <div className="dock-panel-body"><div className="empty-row">{text(language, "No document", "Нет документа")}</div></div>;
+  if (!active) return <div className="dock-panel-body"><div className="empty-row">{text(language, "No document", "Нет документа")}</div></div>;
+  if (!state) return <div className="dock-panel-body"><div className="empty-row">{text(language, "Not available for this environment", "Недоступно для этой среды")}</div></div>;
 
   const thumbScale = Math.min(THUMBNAIL_MAX / state.width, THUMBNAIL_MAX / state.height);
   const thumbWidth = Math.max(1, Math.round(state.width * thumbScale)), thumbHeight = Math.max(1, Math.round(state.height * thumbScale));

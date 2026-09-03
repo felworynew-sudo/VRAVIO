@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import {
   activeRasterLayer, appendLayer, clampRegionToDocument, copyHealedRegion, layerAccepts, layerLockReason, layerOpaqueBounds, paintMask, marqueeCorners, marqueeRect, pickLayerAt, combineSelections, compositeRasterDocument, compositeRasterRegion, createContiguousColorSelection, drawShape, DirtyRegion, RasterTileCache, type ShapeKind, createEllipseSelection, createPolygonSelection, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
   accumulateUniquePixelBytes, changedRenderRegion, confineToSelection, visitPixelBuffers, layerDocumentPixels, mipForZoom, setLayerPixels, isRasterDocumentState, layerRenderSignatures, liftSelection, parseHexColor, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectionOutlinePath, stampFloating, toHexColor,
-  translateLayerPixels, translateSelection, type FloatingPixels, type LayerRenderSignature, type PixelSelection, type Point, type RasterDocumentState, type RasterGuide, type RasterLayer, type RasterRect, type RasterTextData, type SelectionCombineMode,
+  translateLayerPixels, translateSelection, quadLayerPixels, quadSelection, selectionBounds, type FloatingPixels, type LayerRenderSignature, type PixelSelection, type Point, type RasterDocumentState, type RasterGuide, type RasterLayer, type RasterRect, type RasterTextData, type SelectionCombineMode,
   cloneDab, cloneStrokeSegment,
   blurDab, blurStrokeSegment, smudgeStrokeSegment,
   dodgeBurnDab, dodgeBurnStrokeSegment, type DodgeBurnRange,
@@ -12,11 +12,13 @@ import {
 } from "@vravio/env-raster";
 import { createBufferRevisionOperation, type AssetId, type VravioDocument } from "@vravio/kernel";
 import { kernel } from "./kernel";
+import { importModelAsLayer } from "./scene3d-commands";
 import { defaultViewport, useShellStore, type DocumentViewport } from "./store";
 import { beginBusy, withBusy } from "./busy";
 import { diagnostic } from "./diagnostics";
 import { identityTextTransform, multiplyTextTransform, renderTextLayerPixels, textBoundsTransform, textFontString } from "./textRender";
-import { localized } from "./i18n";
+import { localized, text } from "./i18n";
+import { useContextMenu } from "./ContextMenu";
 
 /** Asset storage takes plain bytes; a clamped view is not one. */
 /**
@@ -266,6 +268,118 @@ interface PendingPixelTransform {
    * second hole out of an image the first drag already cut from.
    */
   float?: FloatingPixels;
+  /**
+   * Present once the transform has entered Skew/Distort/Perspective (via the
+   * transform tool's right-click menu): the quad the layer's original bounds
+   * were warped into, TL/TR/BR/BL. Its absence is what keeps every ordinary
+   * move/scale/rotate on the well-tested axis-aligned path — quad mode is
+   * additive, not a replacement, and there's no path back out of it within the
+   * same pending transform once it's entered.
+   */
+  corners?: readonly [Point, Point, Point, Point];
+  /**
+   * Present once the transform has entered Warp: the current 4x4 anchor grid (16 points,
+   * row-major), independent of `corners` — a transform is in at most one of the two. Every
+   * resample, across however many separate point-drags this Warp session sees, always reads from
+   * `meshOrigin`'s pristine pixels and its matching regular grid, never from a previous drag's
+   * already-warped result — the only way to drag one corner after another without each pass
+   * blurring the last.
+   */
+  mesh?: readonly Point[];
+  meshOrigin?: { pixels: Uint8ClampedArray; bounds: RasterRect };
+}
+
+type QuadTransformMode = "skew" | "distort" | "perspective";
+
+/** Which corner (0-3, TL/TR/BR/BL) or, for Skew, which edge-midpoint (4-7, top/right/bottom/left) a quad handle index refers to. */
+function quadHandlePoints(corners: readonly [Point, Point, Point, Point], mode: QuadTransformMode): { index: number; point: Point }[] {
+  const [tl, tr, br, bl] = corners;
+  if (mode !== "skew") return [{ index: 0, point: tl }, { index: 1, point: tr }, { index: 2, point: br }, { index: 3, point: bl }];
+  const mid = (a: Point, b: Point) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+  return [{ index: 4, point: mid(tl, tr) }, { index: 5, point: mid(tr, br) }, { index: 6, point: mid(br, bl) }, { index: 7, point: mid(bl, tl) }];
+}
+
+/**
+ * Applies one handle's cumulative drag (from the gesture's start) to a copy of the corners it
+ * started with — recomputed fresh from that base every frame, the same "base plus running
+ * total" shape scale/rotate already use, so a fast pointer can't compound rounding error frame
+ * over frame.
+ *
+ * Skew's two edge handles slide their whole edge as a unit, so every corner stays on a straight
+ * line — a parallelogram, never a general quad. Distort moves exactly the one corner grabbed.
+ * Perspective moves that corner AND mirrors its edge-partners the opposite way, which is what
+ * keeps a single drag reading as "this edge narrows toward a vanishing point" instead of
+ * lopsided — a light approximation of a true one-point perspective grid, not a projective solve.
+ */
+function applyQuadHandleDelta(base: readonly [Point, Point, Point, Point], handleIndex: number, mode: QuadTransformMode, dx: number, dy: number): [Point, Point, Point, Point] {
+  const corners: [Point, Point, Point, Point] = [{ ...base[0] }, { ...base[1] }, { ...base[2] }, { ...base[3] }];
+  if (mode === "skew") {
+    if (handleIndex === 4) { corners[0].x += dx; corners[1].x += dx; }
+    else if (handleIndex === 5) { corners[1].y += dy; corners[2].y += dy; }
+    else if (handleIndex === 6) { corners[2].x += dx; corners[3].x += dx; }
+    else if (handleIndex === 7) { corners[0].y += dy; corners[3].y += dy; }
+    return corners;
+  }
+  corners[handleIndex] = { x: base[handleIndex]!.x + dx, y: base[handleIndex]!.y + dy };
+  if (mode === "perspective") {
+    const hPartner = [1, 0, 3, 2][handleIndex]!, vPartner = [3, 2, 1, 0][handleIndex]!;
+    corners[hPartner]!.x = base[hPartner]!.x - dx;
+    corners[vPartner]!.y = base[vPartner]!.y - dy;
+  }
+  return corners;
+}
+
+/** Photoshop's default Warp grid: 3x3 cells, so 4x4 draggable anchor points, row-major. */
+const WARP_GRID = 3;
+
+/** The undistorted 4x4 anchor grid a warp always resamples from — fixed for the life of one
+ * Warp session (see the field comment on PendingPixelTransform.mesh), regardless of how far any
+ * point has since been dragged. */
+function regularMesh(bounds: RasterRect, gridSize: number): Point[] {
+  const points: Point[] = [];
+  for (let row = 0; row <= gridSize; row += 1) for (let col = 0; col <= gridSize; col += 1) {
+    points.push({ x: bounds.x + (bounds.width * col) / gridSize, y: bounds.y + (bounds.height * row) / gridSize });
+  }
+  return points;
+}
+
+/**
+ * Warps basePixels by treating the mesh as a grid of independent quads, each resampled from its
+ * own undistorted rectangle of baseBounds via quadLayerPixels — the same engine Skew, Distort and
+ * Perspective use, just tiled. Every cell reads from the SAME fixed original pixels (chained
+ * through `output` only so later cells composite over earlier ones, never so a cell resamples
+ * another cell's already-resampled pixels), which is what keeps a multi-point drag from
+ * accumulating resampling blur cell over cell.
+ */
+function meshLayerPixels(basePixels: Uint8ClampedArray, width: number, height: number, baseBounds: RasterRect, mesh: readonly Point[], selection: PixelSelection | null): Uint8ClampedArray {
+  const baseGrid = regularMesh(baseBounds, WARP_GRID);
+  let output = basePixels;
+  for (let row = 0; row < WARP_GRID; row += 1) for (let col = 0; col < WARP_GRID; col += 1) {
+    const i00 = row * (WARP_GRID + 1) + col, i10 = i00 + 1, i01 = i00 + (WARP_GRID + 1), i11 = i01 + 1;
+    const tl = baseGrid[i00]!, tr = baseGrid[i10]!, bl = baseGrid[i01]!;
+    const cellSource: RasterRect = { x: tl.x, y: tl.y, width: tr.x - tl.x, height: bl.y - tl.y };
+    output = quadLayerPixels(output, width, height, cellSource, [mesh[i00]!, mesh[i10]!, mesh[i11]!, mesh[i01]!], selection);
+  }
+  return output;
+}
+
+/** Selection counterpart of meshLayerPixels: each cell's warped mask is folded into one by
+ * taking the brighter coverage where two cells' resampling both touch a pixel (they shouldn't
+ * for a sane warp, but a max is a safer merge than a plain overwrite if they ever do). */
+function meshSelection(selection: PixelSelection | null, width: number, height: number, baseBounds: RasterRect, mesh: readonly Point[]): PixelSelection | null {
+  if (!selection) return null;
+  const baseGrid = regularMesh(baseBounds, WARP_GRID);
+  const mask = new Uint8ClampedArray(width * height);
+  for (let row = 0; row < WARP_GRID; row += 1) for (let col = 0; col < WARP_GRID; col += 1) {
+    const i00 = row * (WARP_GRID + 1) + col, i10 = i00 + 1, i01 = i00 + (WARP_GRID + 1), i11 = i01 + 1;
+    const tl = baseGrid[i00]!, tr = baseGrid[i10]!, bl = baseGrid[i01]!;
+    const cellSource: RasterRect = { x: tl.x, y: tl.y, width: tr.x - tl.x, height: bl.y - tl.y };
+    const cell = quadSelection(selection, width, height, cellSource, [mesh[i00]!, mesh[i10]!, mesh[i11]!, mesh[i01]!]);
+    if (!cell) continue;
+    for (let index = 0; index < mask.length; index += 1) mask[index] = Math.max(mask[index]!, cell.mask[index]!);
+  }
+  const bounds = selectionBounds(mask, width, height);
+  return bounds.width && bounds.height ? { mask, bounds } : null;
 }
 
 interface TextDraft {
@@ -283,13 +397,15 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const workspaceRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textTransformCanvasRef = useRef<HTMLCanvasElement>(null);
-  const brushCursorRef = useRef<SVGGElement>(null);
+  const brushCursorRef = useRef<HTMLDivElement>(null);
   const gesture = useRef<{ before: Uint8ClampedArray; working: Uint8ClampedArray; curveStart: Point; pending: Point; pointerId: number; frame: number | null; dirty?: RasterRect | null; strokeBounds?: RasterRect | null; target: "pixels" | "mask"; layerId: string; sourceOffsetX?: number; sourceOffsetY?: number; sourcePixels?: Uint8ClampedArray } | null>(null);
   const selectionGesture = useRef<{ kind: "rectangle" | "ellipse" | "lasso"; from: Point; current: Point; points: Point[]; pointerId: number; mode: SelectionCombineMode; spaceAnchor: Point | null } | null>(null);
   const documentGesture = useRef<
     | { kind: "move" | "crop"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean; /** basePixels is the transform's original, so offsets are the running total. */ fromOrigin?: boolean; /** Content lifted off the layer once; moving places it, never re-cuts. */ float?: FloatingPixels }
     | { kind: "scale"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; handleX: -1 | 0 | 1; handleY: -1 | 0 | 1; dx: number; dy: number; text?: PendingTextTransform }
     | { kind: "rotate"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; center: Point; startAngle: number; baseRotation: number; dx: number; dy: number; text?: PendingTextTransform }
+    | { kind: "quad"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; baseCorners: readonly [Point, Point, Point, Point]; handleIndex: number; mode: QuadTransformMode }
+    | { kind: "warp"; from: Point; current: Point; pointerId: number; before: RasterDocumentState; meshOrigin: { pixels: Uint8ClampedArray; bounds: RasterRect }; baseSelection: PixelSelection | null; baseMesh: readonly Point[]; pointIndex: number }
     | null
   >(null);
   const pendingTransformRef = useRef<PendingPixelTransform | null>(null);
@@ -591,6 +707,20 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       const pixels = rotateLayerPixels(transforming.basePixels, state.width, state.height, transforming.sourceBounds, angle - transforming.baseRotation, transforming.baseSelection);
       const selection = rotateSelection(transforming.baseSelection, state.width, state.height, transforming.sourceBounds, angle - transforming.baseRotation);
       const preview = { before: transforming.before, layerId: transforming.before.activeLayerId, dx: transforming.dx, dy: transforming.dy, pixels, selection, rotation: angle };
+      pendingTransformRef.current = preview; setTransformPreview(preview); announceTransform(preview); renderWorking(pixels);
+    } else if (transforming.kind === "quad") {
+      const dx = point.x - transforming.from.x, dy = point.y - transforming.from.y;
+      const corners = applyQuadHandleDelta(transforming.baseCorners, transforming.handleIndex, transforming.mode, dx, dy);
+      const pixels = quadLayerPixels(transforming.basePixels, state.width, state.height, transforming.sourceBounds, corners, transforming.baseSelection);
+      const selection = quadSelection(transforming.baseSelection, state.width, state.height, transforming.sourceBounds, corners);
+      const preview: PendingPixelTransform = { before: transforming.before, layerId: transforming.before.activeLayerId, dx: 0, dy: 0, pixels, selection, rotation: 0, corners };
+      pendingTransformRef.current = preview; setTransformPreview(preview); announceTransform(preview); renderWorking(pixels);
+    } else if (transforming.kind === "warp") {
+      const dx = point.x - transforming.from.x, dy = point.y - transforming.from.y;
+      const mesh = transforming.baseMesh.map((anchor, index) => index === transforming.pointIndex ? { x: anchor.x + dx, y: anchor.y + dy } : anchor);
+      const pixels = meshLayerPixels(transforming.meshOrigin.pixels, state.width, state.height, transforming.meshOrigin.bounds, mesh, transforming.baseSelection);
+      const selection = meshSelection(transforming.baseSelection, state.width, state.height, transforming.meshOrigin.bounds, mesh);
+      const preview: PendingPixelTransform = { before: transforming.before, layerId: transforming.before.activeLayerId, dx: 0, dy: 0, pixels, selection, rotation: 0, mesh, meshOrigin: transforming.meshOrigin };
       pendingTransformRef.current = preview; setTransformPreview(preview); announceTransform(preview); renderWorking(pixels);
     } else if (transforming.kind === "move") {
       const deltaX = point.x - transforming.from.x, deltaY = point.y - transforming.from.y, dx = transforming.startDx + deltaX, dy = transforming.startDy + deltaY;
@@ -965,6 +1095,34 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     if (pendingTransform) {
       const bounds = pendingTransform.text?.targetBounds ?? pendingTransform.selection?.bounds ?? alphaBounds(pendingTransform.pixels, state.width, state.height), tolerance = 11 / viewport.zoom;
       if (!bounds) { pendingTransformRef.current = null; setTransformPreview(null); announceTransform(null); diagnostic("warn", "transform", "Discarded invalid empty pending transform", { documentId: document.id, layerId: pendingTransform.layerId }); return; }
+      if (pendingTransform.corners) {
+        // Once a transform has entered Skew/Distort/Perspective it only ever offers that quad's
+        // own handles — no rotate stem, no rectangular scale handles, and no path back to them
+        // within this same pending transform (see the field's own comment on why).
+        const mode = (String(toolOptions["raster.move"]?.transformMode ?? "distort")) as QuadTransformMode;
+        const nearest = quadHandlePoints(pendingTransform.corners, mode).find((entry) => Math.hypot(point.x - entry.point.x, point.y - entry.point.y) <= tolerance);
+        if (nearest) {
+          canvas.setPointerCapture(event.pointerId);
+          documentGesture.current = { kind: "quad", from: point, current: point, pointerId: event.pointerId, before: pendingTransform.before, basePixels: pendingTransform.pixels.slice(), baseSelection: pendingTransform.selection ? { mask: pendingTransform.selection.mask.slice(), bounds: { ...pendingTransform.selection.bounds } } : null, sourceBounds: { ...bounds }, baseCorners: pendingTransform.corners, handleIndex: nearest.index, mode };
+          return;
+        }
+        const xs = pendingTransform.corners.map((corner) => corner.x), ys = pendingTransform.corners.map((corner) => corner.y);
+        if (point.x < Math.min(...xs) || point.x > Math.max(...xs) || point.y < Math.min(...ys) || point.y > Math.max(...ys)) { finishPendingTransform(true); return; }
+        return;
+      }
+      if (pendingTransform.mesh && pendingTransform.meshOrigin) {
+        // Warp's own handles: any of the 16 grid anchors, and nothing else — same reasoning as
+        // the quad modes above, and for the same reason no rotate stem or rectangular handles.
+        const pointIndex = pendingTransform.mesh.findIndex((anchor) => Math.hypot(point.x - anchor.x, point.y - anchor.y) <= tolerance);
+        if (pointIndex >= 0) {
+          canvas.setPointerCapture(event.pointerId);
+          documentGesture.current = { kind: "warp", from: point, current: point, pointerId: event.pointerId, before: pendingTransform.before, meshOrigin: pendingTransform.meshOrigin, baseSelection: pendingTransform.selection ? { mask: pendingTransform.selection.mask.slice(), bounds: { ...pendingTransform.selection.bounds } } : null, baseMesh: pendingTransform.mesh, pointIndex };
+          return;
+        }
+        const xs = pendingTransform.mesh.map((anchor) => anchor.x), ys = pendingTransform.mesh.map((anchor) => anchor.y);
+        if (point.x < Math.min(...xs) || point.x > Math.max(...xs) || point.y < Math.min(...ys) || point.y > Math.max(...ys)) { finishPendingTransform(true); return; }
+        return;
+      }
       const rotatePoint = { x: bounds.x + bounds.width / 2, y: bounds.y - 27 / viewport.zoom };
       if (Math.hypot(point.x - rotatePoint.x, point.y - rotatePoint.y) <= tolerance) {
         canvas.setPointerCapture(event.pointerId); const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
@@ -1430,7 +1588,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       if (transformFrameRef.current !== null) { cancelAnimationFrame(transformFrameRef.current); transformFrameRef.current = null; }
       documentGesture.current = null;
       setSelectionDraft(null);
-      if (transforming.kind === "scale" || transforming.kind === "rotate") { applyTransformFrame(transforming); return; }
+      if (transforming.kind === "scale" || transforming.kind === "rotate" || transforming.kind === "quad" || transforming.kind === "warp") { applyTransformFrame(transforming); return; }
       const dx = transforming.startDx + transforming.current.x - transforming.from.x, dy = transforming.startDy + transforming.current.y - transforming.from.y;
       if (transforming.kind === "move") {
         const deltaX = transforming.current.x - transforming.from.x, deltaY = transforming.current.y - transforming.from.y;
@@ -1570,6 +1728,62 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   // edge can be judged without the animation crawling over it.
   const committedSelectionPath = displayedSelection && !selectionEdgesHidden ? selectionOutlinePath(displayedSelection.mask, state.width, state.height) : "";
   const brushLike = activeToolId === "raster.brush" || activeToolId === "raster.pencil" || activeToolId === "raster.highlighter" || activeToolId === "raster.eraser" || activeToolId === "raster.clone" || activeToolId === "raster.spotHeal" || activeToolId === "raster.blur" || activeToolId === "raster.smudge" || activeToolId === "raster.dodge" || activeToolId === "raster.burn";
+  const selectionLike = activeToolId === "raster.marquee" || activeToolId === "raster.ellipseMarquee" || activeToolId === "raster.lasso";
+  const selectionContextMenu = useContextMenu();
+  const transformContextMenu = useContextMenu();
+  const onSelectionContextMenu = (event: React.MouseEvent) => {
+    event.preventDefault();
+    if (!selectionLike || !activeToolId) return;
+    const currentMode = String(toolOptions[activeToolId]?.mode ?? "replace");
+    const modes: { value: SelectionCombineMode; english: string; russian: string }[] = [
+      { value: "replace", english: "Replace Selection", russian: "Заменить выделение" },
+      { value: "add", english: "Add to Selection", russian: "Добавить к выделению" },
+      { value: "subtract", english: "Subtract from Selection", russian: "Вычесть из выделения" },
+      { value: "intersect", english: "Intersect with Selection", russian: "Пересечь с выделением" },
+    ];
+    selectionContextMenu.open(event, modes.map((entry) => ({
+      label: (currentMode === entry.value ? "✓ " : "") + text(language, entry.english, entry.russian),
+      onSelect: () => setToolOption(activeToolId, "mode", entry.value),
+    })));
+  };
+  // The transform tool's own right-click menu: Photoshop's Edit > Transform submodes, offered
+  // only once a Free Transform is actually active on a pixel layer (a text transform stays on
+  // the rectangular path — quad-warping live text has no defined meaning here).
+  const onTransformContextMenu = (event: React.MouseEvent) => {
+    event.preventDefault();
+    const pending = pendingTransformRef.current;
+    if (activeToolId !== "raster.move" || !pending || pending.text) return;
+    const bounds = pending.selection?.bounds ?? alphaBounds(pending.pixels, state.width, state.height);
+    if (!bounds) return;
+    const currentMode = pending.corners ? String(toolOptions["raster.move"]?.transformMode ?? "distort") : pending.mesh ? "warp" : "free";
+    const enterQuadMode = (mode: QuadTransformMode) => {
+      setToolOption("raster.move", "transformMode", mode);
+      if (!pending.corners) {
+        const corners: [Point, Point, Point, Point] = [{ x: bounds.x, y: bounds.y }, { x: bounds.x + bounds.width, y: bounds.y }, { x: bounds.x + bounds.width, y: bounds.y + bounds.height }, { x: bounds.x, y: bounds.y + bounds.height }];
+        const next: PendingPixelTransform = { ...pending, corners };
+        pendingTransformRef.current = next; setTransformPreview(next); announceTransform(next);
+      }
+    };
+    const enterWarp = () => {
+      if (pending.mesh) return;
+      const meshOrigin = { pixels: pending.pixels.slice(), bounds: { ...bounds } };
+      const mesh = regularMesh(bounds, WARP_GRID);
+      const next: PendingPixelTransform = { ...pending, mesh, meshOrigin };
+      pendingTransformRef.current = next; setTransformPreview(next); announceTransform(next);
+    };
+    const modes: { value: QuadTransformMode; english: string; russian: string }[] = [
+      { value: "skew", english: "Skew", russian: "Наклон" },
+      { value: "distort", english: "Distort", russian: "Искажение" },
+      { value: "perspective", english: "Perspective", russian: "Перспектива" },
+    ];
+    transformContextMenu.open(event, [
+      ...modes.map((entry) => ({
+        label: (currentMode === entry.value ? "✓ " : "") + text(language, entry.english, entry.russian),
+        onSelect: () => enterQuadMode(entry.value),
+      })),
+      { label: (currentMode === "warp" ? "✓ " : "") + text(language, "Warp", "Деформация"), onSelect: enterWarp, separatorBefore: true },
+    ]);
+  };
   const brushOptions = toolOptions[activeToolId ?? ""] ?? {};
   const tipAngle = Number(brushOptions.angle ?? 0), tipRoundness = Number(brushOptions.roundness ?? 100);
   const tipRadians = tipAngle * Math.PI / 180, tipShortRadius = 48 * tipRoundness / 100;
@@ -1628,18 +1842,22 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
 
   const updateBrushCursor = (event: React.PointerEvent<HTMLCanvasElement>) => {
     if (!brushLike || !workspaceRef.current || !brushCursorRef.current) return;
-    const point = pointFromNativeEvent(workspaceRef.current, viewport, state.width, state.height, event.nativeEvent);
-    brushCursorRef.current.setAttribute("transform", `translate(${point.x} ${point.y}) rotate(${tipAngle})`);
+    // Screen pixels, not document ones: the cursor is interface, drawn in a layer
+    // that sits outside .raster-stage's zoom transform, so a plain client-relative
+    // position is already correct — no inverse-zoom math needed to place it.
+    const rect = workspaceRef.current.getBoundingClientRect();
+    const screenX = event.clientX - rect.left, screenY = event.clientY - rect.top;
+    brushCursorRef.current.style.transform = `translate(${screenX}px, ${screenY}px) rotate(${tipAngle}deg)`;
     brushCursorRef.current.style.opacity = "1";
     if (activeToolId === "raster.clone") {
+      const point = pointFromNativeEvent(workspaceRef.current, viewport, state.width, state.height, event.nativeEvent);
       updateCloneSourceView(point);
-      const preview = cloneSourceCanvasRef.current, workspace = workspaceRef.current;
-      if (preview && workspace) {
-        const rect = workspace.getBoundingClientRect();
+      const preview = cloneSourceCanvasRef.current;
+      if (preview) {
         // Anchored on the pointer itself, so it sits inside the brush ring
         // rather than beside it. The ring is drawn on the same centre.
-        preview.style.left = `${event.clientX - rect.left}px`;
-        preview.style.top = `${event.clientY - rect.top}px`;
+        preview.style.left = `${screenX}px`;
+        preview.style.top = `${screenY}px`;
       }
     }
   };
@@ -1709,9 +1927,16 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   for (let value = Math.floor(-documentOriginX / (step * viewport.zoom)) * step; value * viewport.zoom + documentOriginX < workspaceSize.width; value += step) horizontalTicks.push(value);
   for (let value = Math.floor(-documentOriginY / (step * viewport.zoom)) * step; value * viewport.zoom + documentOriginY < workspaceSize.height; value += step) verticalTicks.push(value);
   const guides = state.guides ?? [];
-  return <div ref={workspaceRef} className="raster-workspace" data-active-tool={activeToolId} data-pixel-zoom={viewport.zoom >= 1 || undefined} data-space-held={spaceHeld || undefined} data-navigating={navigating || undefined} onPointerDownCapture={beginNavigation} onPointerMoveCapture={moveNavigation} onPointerUpCapture={endNavigation} onPointerCancelCapture={endNavigation} onWheel={handleWheel}>
+  const onDropModel = (event: React.DragEvent<HTMLDivElement>) => {
+    const files = [...(event.dataTransfer?.files ?? [])].filter((file) => /\.(obj|glb|gltf)$/i.test(file.name));
+    if (!files.length) return;
+    event.preventDefault();
+    files.forEach((file) => void importModelAsLayer(document.id, file));
+  };
+
+  return <div ref={workspaceRef} className="raster-workspace" data-active-tool={activeToolId} data-pixel-zoom={viewport.zoom >= 1 || undefined} data-space-held={spaceHeld || undefined} data-navigating={navigating || undefined} onPointerDownCapture={beginNavigation} onPointerMoveCapture={moveNavigation} onPointerUpCapture={endNavigation} onPointerCancelCapture={endNavigation} onWheel={handleWheel} onDragOver={(event) => { if ([...(event.dataTransfer?.items ?? [])].some((item) => item.kind === "file")) event.preventDefault(); }} onDrop={onDropModel}>
     <div className="raster-stage" style={stageStyle}>
-      <canvas ref={canvasRef} className={brushLike ? "brush-cursor-canvas" : ""} width={state.width} height={state.height} onPointerEnter={updateBrushCursor} onPointerLeave={() => { if (brushCursorRef.current) brushCursorRef.current.style.opacity = "0"; setCloneSourceView(null); }} onPointerDown={handlePointerDown} onPointerMove={(event) => { updateBrushCursor(event); handlePointerMove(event); }} onPointerUp={finishGesture} onPointerCancel={finishGesture} onContextMenu={(event) => { event.preventDefault(); if (!brushLike) return; const rect = workspaceRef.current?.getBoundingClientRect(); if (rect) setBrushPopup({ left: Math.min(event.clientX - rect.left, rect.width - 300), top: Math.min(event.clientY - rect.top, rect.height - 430), detailed: false }); }} />
+      <canvas ref={canvasRef} className={brushLike ? "brush-cursor-canvas" : ""} width={state.width} height={state.height} onPointerEnter={updateBrushCursor} onPointerLeave={() => { if (brushCursorRef.current) brushCursorRef.current.style.opacity = "0"; setCloneSourceView(null); }} onPointerDown={handlePointerDown} onPointerMove={(event) => { updateBrushCursor(event); handlePointerMove(event); }} onPointerUp={finishGesture} onPointerCancel={finishGesture} onContextMenu={(event) => { if (selectionLike) { onSelectionContextMenu(event); return; } if (activeToolId === "raster.move" && pendingTransformRef.current) { onTransformContextMenu(event); return; } event.preventDefault(); if (!brushLike) return; const rect = workspaceRef.current?.getBoundingClientRect(); if (rect) setBrushPopup({ left: Math.min(event.clientX - rect.left, rect.width - 300), top: Math.min(event.clientY - rect.top, rect.height - 430), detailed: false }); }} />
       {transformPreview?.text && <canvas
         ref={textTransformCanvasRef}
         className="text-transform-preview"
@@ -1737,30 +1962,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
           <path className="patch-source-path" d={committedSelectionPath} transform={`translate(${patchOffset.x} ${patchOffset.y})`}/>
         </svg>
       )}
-      {activeToolId === "raster.clone" && (
-        <>
-          {/* The sample, shown inside the tip: what the next dab will lay down,
-              clipped to a circle so it reads as the brush rather than a swatch. */}
-          <canvas ref={cloneSourceCanvasRef} className="clone-source-preview" width={2} height={2} aria-hidden="true"
-            style={cloneSourceView ? {
-              width: `${Number(toolOptions["raster.clone"]?.size ?? 24) * viewport.zoom}px`,
-              height: `${Number(toolOptions["raster.clone"]?.size ?? 24) * viewport.zoom}px`,
-            } : { opacity: 0 }}/>
-          {cloneSourceView && <svg className="clone-source-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">
-            {/* The crosshair marks where the reading is coming from. Alt-clicking
-                sets it; before that there is nothing to point at. */}
-            {/* Drawn in screen units, not document units: a crosshair is part of
-                the interface, and interface does not grow with the zoom. Only
-                the ring, which shows the tip's real footprint, scales. */}
-            <g transform={`translate(${cloneSourceView.x} ${cloneSourceView.y})`}>
-              <circle className="clone-source-ring" r={Number(toolOptions["raster.clone"]?.size ?? 24) / 2} fill="none"/>
-              <path className="cursor-dark" vectorEffect="non-scaling-stroke" d={`M${-9 / viewport.zoom} 0H${9 / viewport.zoom}M0 ${-9 / viewport.zoom}V${9 / viewport.zoom}`}/>
-              <path className="cursor-light" vectorEffect="non-scaling-stroke" d={`M${-8 / viewport.zoom} 0H${8 / viewport.zoom}M0 ${-8 / viewport.zoom}V${8 / viewport.zoom}`}/>
-            </g>
-          </svg>}
-        </>
-      )}
-      {brushLike && <svg className="brush-cursor-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><g ref={brushCursorRef} style={{ opacity: 0 }}>{preciseCursor ? <><path className="cursor-dark" d={`M${-7 / viewport.zoom} 0H${7 / viewport.zoom}M0 ${-7 / viewport.zoom}V${7 / viewport.zoom}`}/><path className="cursor-light" d={`M${-6 / viewport.zoom} 0H${6 / viewport.zoom}M0 ${-6 / viewport.zoom}V${6 / viewport.zoom}`}/></> : <><ellipse className="cursor-dark" rx={Number(brushOptions.size ?? 24) / 2} ry={Number(brushOptions.size ?? 24) * tipRoundness / 200}/><ellipse className="cursor-light" rx={Number(brushOptions.size ?? 24) / 2} ry={Number(brushOptions.size ?? 24) * tipRoundness / 200}/></>}</g></svg>}
       {selectionRect && selectionRect.width > 0 && selectionRect.height > 0 && <svg className="selection-overlay" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">
         {draftKind === "lasso" ? <polyline points={lassoDraft.map((point) => `${point.x},${point.y}`).join(" ")} /> : draftKind === "ellipse" ? <ellipse cx={selectionRect.x + selectionRect.width / 2} cy={selectionRect.y + selectionRect.height / 2} rx={selectionRect.width / 2} ry={selectionRect.height / 2} /> : <rect x={selectionRect.x} y={selectionRect.y} width={selectionRect.width} height={selectionRect.height} />}
       </svg>}
@@ -1776,7 +1977,16 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         </svg>;
       })()}
       {!selectionDraft && committedSelectionPath && <svg className="selection-overlay committed-selection" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><path className="selection-soft-edge" d={committedSelectionPath} /><path className="selection-hard-edge" d={committedSelectionPath} /></svg>}
-      {transformPreview && transformBounds && <svg className="transform-controls" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><rect x={transformBounds.x} y={transformBounds.y} width={transformBounds.width} height={transformBounds.height}/><line className="transform-rotation-stem" x1={transformBounds.x + transformBounds.width / 2} y1={transformBounds.y} x2={transformBounds.x + transformBounds.width / 2} y2={transformBounds.y - 27 / viewport.zoom}/><circle className="transform-rotation-handle" cx={transformBounds.x + transformBounds.width / 2} cy={transformBounds.y - 27 / viewport.zoom} r={5 / viewport.zoom}/>{([[0,0],[.5,0],[1,0],[0,.5],[1,.5],[0,1],[.5,1],[1,1]] as [number, number][]).map(([x,y], index) => <rect className="transform-handle" key={index} x={transformBounds.x + transformBounds.width * x - 4 / viewport.zoom} y={transformBounds.y + transformBounds.height * y - 4 / viewport.zoom} width={8 / viewport.zoom} height={8 / viewport.zoom}/>)}</svg>}
+      {transformPreview && transformPreview.corners && <svg className="transform-controls" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">
+        <polygon className="transform-quad-outline" points={transformPreview.corners.map((corner) => `${corner.x},${corner.y}`).join(" ")}/>
+        {quadHandlePoints(transformPreview.corners, String(toolOptions["raster.move"]?.transformMode ?? "distort") as QuadTransformMode).map(({ index, point }) => <rect className="transform-handle" key={index} x={point.x - 4 / viewport.zoom} y={point.y - 4 / viewport.zoom} width={8 / viewport.zoom} height={8 / viewport.zoom}/>)}
+      </svg>}
+      {transformPreview && transformPreview.mesh && <svg className="transform-controls" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true">
+        {Array.from({ length: WARP_GRID + 1 }, (_, row) => <polyline key={`row-${row}`} className="transform-quad-outline" points={transformPreview.mesh!.slice(row * (WARP_GRID + 1), row * (WARP_GRID + 1) + WARP_GRID + 1).map((anchor) => `${anchor.x},${anchor.y}`).join(" ")}/>)}
+        {Array.from({ length: WARP_GRID + 1 }, (_, col) => <polyline key={`col-${col}`} className="transform-quad-outline" points={Array.from({ length: WARP_GRID + 1 }, (_, row) => transformPreview.mesh![row * (WARP_GRID + 1) + col]!).map((anchor) => `${anchor.x},${anchor.y}`).join(" ")}/>)}
+        {transformPreview.mesh.map((anchor, index) => <rect className="transform-handle" key={index} x={anchor.x - 4 / viewport.zoom} y={anchor.y - 4 / viewport.zoom} width={8 / viewport.zoom} height={8 / viewport.zoom}/>)}
+      </svg>}
+      {transformPreview && !transformPreview.corners && !transformPreview.mesh && transformBounds && <svg className="transform-controls" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><rect x={transformBounds.x} y={transformBounds.y} width={transformBounds.width} height={transformBounds.height}/><line className="transform-rotation-stem" x1={transformBounds.x + transformBounds.width / 2} y1={transformBounds.y} x2={transformBounds.x + transformBounds.width / 2} y2={transformBounds.y - 27 / viewport.zoom}/><circle className="transform-rotation-handle" cx={transformBounds.x + transformBounds.width / 2} cy={transformBounds.y - 27 / viewport.zoom} r={5 / viewport.zoom}/>{([[0,0],[.5,0],[1,0],[0,.5],[1,.5],[0,1],[.5,1],[1,1]] as [number, number][]).map(([x,y], index) => <rect className="transform-handle" key={index} x={transformBounds.x + transformBounds.width * x - 4 / viewport.zoom} y={transformBounds.y + transformBounds.height * y - 4 / viewport.zoom} width={8 / viewport.zoom} height={8 / viewport.zoom}/>)}</svg>}
       {textFrameDraft && <svg className="text-frame-draft" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><rect x={textFrameDraft.x} y={textFrameDraft.y} width={textFrameDraft.width} height={textFrameDraft.height}/></svg>}
       {textDraft && (() => {
         const existingLayer = textDraft.layerId ? state.layers.find((item) => item.id === textDraft.layerId) : null;
@@ -1792,6 +2002,41 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         return <><textarea className="canvas-text-entry" data-text-mode={textDraft.mode} autoFocus spellCheck={false} style={wysiwyg} value={textDraft.value} onPointerDown={(event) => event.stopPropagation()} onChange={(event) => setTextDraft({ ...textDraft, value: event.target.value })} onBlur={() => { if (textCancelRef.current) textCancelRef.current = false; else commitText(); }} onKeyDown={(event) => { event.stopPropagation(); if (event.key === "Escape") { event.preventDefault(); cancelText(); } if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); commitText(); } }} placeholder="Type (Введите текст)"/>{textDraft.path && <svg className="text-path-guide" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><path d={`M ${textDraft.path.start.x} ${textDraft.path.start.y} Q ${textDraft.path.control.x} ${textDraft.path.control.y} ${textDraft.path.end.x} ${textDraft.path.end.y}`}/></svg>}</>;
       })()}
     </div>
+    {/*
+      Cursors live outside .raster-stage on purpose: that element carries the zoom's CSS scale
+      transform, and vector-effect:non-scaling-stroke does not reliably cancel a *CSS* transform
+      on an ancestor the way it cancels an SVG viewBox/internal transform — the ring's outline
+      was measurably scaling with zoom despite asking it not to. Positioned here, in an
+      unscaled sibling layer, a ring's diameter is set directly in screen pixels (so it still
+      shows the tool's true footprint at the current zoom) while its border is a literal CSS
+      pixel value untouched by any transform — the interface, unlike the document, does not
+      grow with the zoom. Same reasoning documentOriginX/Y already use for the rulers.
+    */}
+    {brushLike && <div ref={brushCursorRef} className="brush-cursor" style={{ opacity: 0 }}>
+      {preciseCursor
+        ? <span className="cursor-crosshair"/>
+        : <span className="cursor-ring" style={{ width: Number(brushOptions.size ?? 24) * viewport.zoom, height: Number(brushOptions.size ?? 24) * viewport.zoom * tipRoundness / 100 }}/>}
+    </div>}
+    {activeToolId === "raster.clone" && (
+      <>
+        {/* The sample, shown inside the tip: what the next dab will lay down,
+            clipped to a circle so it reads as the brush rather than a swatch. */}
+        <canvas ref={cloneSourceCanvasRef} className="clone-source-preview" width={2} height={2} aria-hidden="true"
+          style={cloneSourceView ? {
+            width: `${Number(toolOptions["raster.clone"]?.size ?? 24) * viewport.zoom}px`,
+            height: `${Number(toolOptions["raster.clone"]?.size ?? 24) * viewport.zoom}px`,
+          } : { opacity: 0 }}/>
+        {cloneSourceView && <div className="clone-source-cursor" style={{
+          left: documentOriginX + cloneSourceView.x * viewport.zoom,
+          top: documentOriginY + cloneSourceView.y * viewport.zoom,
+          width: Number(toolOptions["raster.clone"]?.size ?? 24) * viewport.zoom,
+          height: Number(toolOptions["raster.clone"]?.size ?? 24) * viewport.zoom,
+        }}>
+          <span className="cursor-ring"/>
+          <span className="cursor-crosshair"/>
+        </div>}
+      </>
+    )}
     {preferences.showRulers && <div className="rulers" aria-hidden="true"><div className="ruler-corner"/><div className="ruler-horizontal" onPointerDown={(event) => guidePointer(event, "horizontal")} onPointerMove={(event) => { if (guideDraft?.orientation === "horizontal") guidePointer(event, "horizontal"); }} onPointerUp={(event) => guidePointer(event, "horizontal", true)}>{horizontalTicks.map((value) => <i key={value} style={{ left: value * viewport.zoom + documentOriginX }}><span>{Math.round(value)}</span></i>)}</div><div className="ruler-vertical" onPointerDown={(event) => guidePointer(event, "vertical")} onPointerMove={(event) => { if (guideDraft?.orientation === "vertical") guidePointer(event, "vertical"); }} onPointerUp={(event) => guidePointer(event, "vertical", true)}>{verticalTicks.map((value) => <i key={value} style={{ top: value * viewport.zoom + documentOriginY }}><span>{Math.round(value)}</span></i>)}</div></div>}
     {brushPopup && brushLike && <aside className="brush-popup" style={{ left: Math.max(6, brushPopup.left), top: Math.max(6, brushPopup.top) }} onContextMenu={(event) => event.preventDefault()}>
       <header><strong>Brush Tip (Отпечаток кисти)</strong><button onClick={() => setBrushPopup(null)}>×</button></header>
@@ -1817,5 +2062,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         </footer>
       </section>
     </div>}
+    {selectionContextMenu.node}
+    {transformContextMenu.node}
   </div>;
 }

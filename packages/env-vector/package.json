@@ -1,0 +1,22 @@
+{
+  "name": "@vravio/env-vector",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "vitest": "4.1.11"
+  },
+  "dependencies": {
+    "@vravio/kernel": "workspace:*",
+    "@vravio/env-raster": "workspace:*"
+  }
+}
