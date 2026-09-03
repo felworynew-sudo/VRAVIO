@@ -361,3 +361,56 @@ export function stampFloating(
   }
   return output;
 }
+
+/** Photoshop's default Warp grid: 3x3 cells, so 4x4 draggable anchor points, row-major. */
+export const WARP_GRID = 3;
+
+/** The undistorted 4x4 anchor grid a warp always resamples from — fixed for the life of one
+ * Warp session (the caller's own pending-transform state carries the fixed base bounds this is
+ * built from), regardless of how far any point has since been dragged. */
+export function regularMesh(bounds: RasterRect, gridSize: number): Point[] {
+  const points: Point[] = [];
+  for (let row = 0; row <= gridSize; row += 1) for (let col = 0; col <= gridSize; col += 1) {
+    points.push({ x: bounds.x + (bounds.width * col) / gridSize, y: bounds.y + (bounds.height * row) / gridSize });
+  }
+  return points;
+}
+
+/**
+ * Warps basePixels by treating the mesh as a grid of independent quads, each resampled from its
+ * own undistorted rectangle of baseBounds via quadLayerPixels — the same engine Skew, Distort and
+ * Perspective use, just tiled. Every cell reads from the SAME fixed original pixels (chained
+ * through `output` only so later cells composite over earlier ones, never so a cell resamples
+ * another cell's already-resampled pixels), which is what keeps a multi-point drag from
+ * accumulating resampling blur cell over cell.
+ */
+export function meshLayerPixels(basePixels: Uint8ClampedArray, width: number, height: number, baseBounds: RasterRect, mesh: readonly Point[], selection: PixelSelection | null): Uint8ClampedArray {
+  const baseGrid = regularMesh(baseBounds, WARP_GRID);
+  let output = basePixels;
+  for (let row = 0; row < WARP_GRID; row += 1) for (let col = 0; col < WARP_GRID; col += 1) {
+    const i00 = row * (WARP_GRID + 1) + col, i10 = i00 + 1, i01 = i00 + (WARP_GRID + 1), i11 = i01 + 1;
+    const tl = baseGrid[i00]!, tr = baseGrid[i10]!, bl = baseGrid[i01]!;
+    const cellSource: RasterRect = { x: tl.x, y: tl.y, width: tr.x - tl.x, height: bl.y - tl.y };
+    output = quadLayerPixels(output, width, height, cellSource, [mesh[i00]!, mesh[i10]!, mesh[i11]!, mesh[i01]!], selection);
+  }
+  return output;
+}
+
+/** Selection counterpart of meshLayerPixels: each cell's warped mask is folded into one by
+ * taking the brighter coverage where two cells' resampling both touch a pixel (they shouldn't
+ * for a sane warp, but a max is a safer merge than a plain overwrite if they ever do). */
+export function meshSelection(selection: PixelSelection | null, width: number, height: number, baseBounds: RasterRect, mesh: readonly Point[]): PixelSelection | null {
+  if (!selection) return null;
+  const baseGrid = regularMesh(baseBounds, WARP_GRID);
+  const mask = new Uint8ClampedArray(width * height);
+  for (let row = 0; row < WARP_GRID; row += 1) for (let col = 0; col < WARP_GRID; col += 1) {
+    const i00 = row * (WARP_GRID + 1) + col, i10 = i00 + 1, i01 = i00 + (WARP_GRID + 1), i11 = i01 + 1;
+    const tl = baseGrid[i00]!, tr = baseGrid[i10]!, bl = baseGrid[i01]!;
+    const cellSource: RasterRect = { x: tl.x, y: tl.y, width: tr.x - tl.x, height: bl.y - tl.y };
+    const cell = quadSelection(selection, width, height, cellSource, [mesh[i00]!, mesh[i10]!, mesh[i11]!, mesh[i01]!]);
+    if (!cell) continue;
+    for (let index = 0; index < mask.length; index += 1) mask[index] = Math.max(mask[index]!, cell.mask[index]!);
+  }
+  const bounds = selectionBounds(mask, width, height);
+  return bounds.width && bounds.height ? { mask, bounds } : null;
+}

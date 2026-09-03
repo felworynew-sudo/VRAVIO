@@ -50,6 +50,8 @@ interface Effects {
   cloneSource: { x: number; y: number } | null;
   cloneOffset: { x: number; y: number } | null;
   readonly spotHealPreviews: { mask: Uint8ClampedArray; originX: number; originY: number; width: number; height: number }[];
+  selectedLayers: readonly string[];
+  readonly selectedLayerSets: (readonly string[])[];
 }
 
 /**
@@ -155,7 +157,7 @@ function drive(
 ): { effects: Effects; document: RasterDocumentState; untouched: RasterDocumentState } {
   const document = documentFixture();
   const untouched = documentFixture();
-  const effects: Effects = { commits: [], selectionCommits: [], documentCommits: [], foreground: [], hiddenLayerPreviews: [], activeLayerSets: [], viewportResets: 0, maskForegroundWhite: [], captured: [], stateHistory: [], previews: [], state: tool.createState(), lastStrokePoint: null, cloneSource: null, cloneOffset: null, spotHealPreviews: [] };
+  const effects: Effects = { commits: [], selectionCommits: [], documentCommits: [], foreground: [], hiddenLayerPreviews: [], activeLayerSets: [], viewportResets: 0, maskForegroundWhite: [], captured: [], stateHistory: [], previews: [], state: tool.createState(), lastStrokePoint: null, cloneSource: null, cloneOffset: null, spotHealPreviews: [], selectedLayers: [], selectedLayerSets: [] };
 
   const context: ToolContext<unknown> = {
     documentId: "test-document",
@@ -200,6 +202,12 @@ function drive(
     get cloneOffset() { return effects.cloneOffset; },
     setCloneOffset: (offset) => { effects.cloneOffset = offset; },
     previewSpotHealMask: (mask, originX, originY, width, height) => { effects.spotHealPreviews.push({ mask, originX, originY, width, height }); },
+    get selectedLayers() { return effects.selectedLayers; },
+    setSelectedLayers: (layerIds) => { effects.selectedLayers = layerIds; effects.selectedLayerSets.push(layerIds); },
+    // No RAF here — the harness drives a gesture synchronously already (see
+    // schedulePreview's own comment above), so the tool's per-frame work runs
+    // immediately and its effects are observable within the same drive() call.
+    scheduleWork: (fn) => fn(),
   };
 
   gesture(context, effects);

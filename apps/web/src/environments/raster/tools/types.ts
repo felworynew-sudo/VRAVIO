@@ -61,6 +61,19 @@ export interface ToolContext<TState> {
   readonly options: Readonly<Record<string, string | number | boolean>>;
   readonly activeLayer: RasterLayer | null;
   readonly selection: PixelSelection | null;
+
+  /**
+   * The Layers panel's own highlighted set — plural, distinct from
+   * `activeLayer`, which is singular and is what an edit actually applies to.
+   *
+   * Auto-Select's Shift-click needs both: it changes which layer is *active*
+   * (via `setActiveLayer`, no history step, same as clicking a layer row) and
+   * separately extends the panel's highlighted set, exactly as clicking a row
+   * with Shift held already does there. Host-level because the highlighted
+   * set is shell chrome, not document state — undo has never applied to it.
+   */
+  readonly selectedLayers: readonly string[];
+  setSelectedLayers(layerIds: readonly string[]): void;
   /**
    * Whether the space bar is down right now.
    *
@@ -117,6 +130,22 @@ export interface ToolContext<TState> {
    * repaints from the committed state itself.
    */
   schedulePreview(pixels: Uint8ClampedArray, target: PaintTarget["kind"], layerId: string, dirty?: RasterRect | null): void;
+
+  /**
+   * Coalesces expensive per-frame *work* to once per animation frame — the
+   * same problem `schedulePreview` solves for painting, but for a tool whose
+   * `onPointerMove` itself has to recompute something costly (a transform's
+   * whole-canvas resample) before it has any pixels ready to hand
+   * `schedulePreview`. Native `pointermove` can fire faster than the browser
+   * repaints; resampling synchronously on every one of them is what made
+   * dragging a scale/rotate/warp handle read as a freeze before this existed
+   * (`raster.move`'s own `applyTransformFrame`/`scheduleTransformFrame`,
+   * which this generalises rather than replaces with a new idea). Only the
+   * most recently scheduled `fn` between two frames actually runs — an
+   * earlier one that never got its frame is dropped, not queued, so a fast
+   * drag never falls behind trying to catch up on stale frames.
+   */
+  scheduleWork(fn: () => void): void;
 
   /**
    * Recomposites the document straight to the canvas with one layer

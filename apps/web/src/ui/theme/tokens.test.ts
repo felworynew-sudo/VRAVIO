@@ -11,8 +11,14 @@ import { describe, expect, it } from "vitest";
  * every file here, which is a large change to make for one test's sake.
  */
 declare function require(id: "node:fs"): { readFileSync(path: string, encoding: "utf-8"): string };
+declare function require(id: "node:url"): { fileURLToPath(url: URL): string };
 
-const styles = require("node:fs").readFileSync(new URL("../../styles.css", import.meta.url).pathname, "utf-8");
+// `URL.pathname` on Windows turns `file:///D:/...` into `/D:/...` — the extra
+// leading slash before the drive letter then makes readFileSync resolve it
+// relative to the current drive, doubling the prefix into `D:\D:\...`.
+// `fileURLToPath` is the platform-correct converse of `pathToFileURL` and
+// strips it properly on every OS.
+const styles = require("node:fs").readFileSync(require("node:url").fileURLToPath(new URL("../../styles.css", import.meta.url)), "utf-8");
 
 /**
  * Stage 2 of docs/migration-plan.md: the palette is one set of tokens, and a
