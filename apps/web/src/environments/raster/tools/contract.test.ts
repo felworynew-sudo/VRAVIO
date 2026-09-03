@@ -56,8 +56,15 @@ interface Effects {
 function summarise(value: unknown): unknown {
   if (ArrayBuffer.isView(value)) {
     const view = value as unknown as { length: number; [index: number]: number };
+    // Every byte, not a sampled stride: a stride wide enough to be cheap on
+    // a real document (megabytes) is also wide enough to step clean over a
+    // small tool's whole effect on this fixture (64x48, 49152 bytes total) —
+    // found when `hardness` on `blur`/`burn` genuinely changed ~100 bytes
+    // clustered in one small dab and every one of the 13 sampled indices a
+    // stride-997 walk would have checked missed all of them. The fixture is
+    // small enough that summing every byte costs nothing here.
     let checksum = 0;
-    for (let index = 0; index < view.length; index += 997) checksum = (checksum + view[index]!) % 1_000_003;
+    for (let index = 0; index < view.length; index += 1) checksum = (checksum + view[index]!) % 1_000_003;
     return `buffer(${view.length},${checksum})`;
   }
   if (Array.isArray(value)) return value.map(summarise);
@@ -339,17 +346,33 @@ describe("every tool in the catalogue keeps the contract", () => {
           if (option.type === "color") continue;
 
           // A value that is not the default, chosen by the option's own type.
-          const changed = option.type === "boolean" ? !option.defaultValue
+          // "angle" is the one exception: an ellipse has 180°-rotational
+          // symmetry, so max (180, for a -180..180 range) maps it onto
+          // itself — not a "changed" value at all for this option, whatever
+          // it is for every other number option's own range. 90° is the
+          // rotation that actually swings the major axis onto the minor one.
+          const changed = option.id === "angle" ? 90
+            : option.type === "boolean" ? !option.defaultValue
             : option.type === "select" ? option.values.find((value) => value.value !== option.defaultValue)?.value
             : option.defaultValue === option.max ? option.min : option.max;
           if (changed === undefined) continue;
 
-          const variant = drive(tool, { ...options, [option.id]: changed }, (context) => fullGesture(context, tool));
+          // "angle" also rotates the brush's ellipse — provably a no-op at
+          // the default "roundness" (a rotated circle is the same circle),
+          // the way blur/dodge/burn/smudge's contract check found it
+          // (retouch.ts and paint.ts's dab shapes are both `hypot(x/radius,
+          // y/(radius*roundness))`, rotation-invariant whenever
+          // roundness === 1). Not a broken option, a broken angle *reading*
+          // of it: pin roundness away from that symmetric point for this one
+          // comparison, on both sides, so only angle actually varies.
+          const pin = option.id === "angle" && descriptorOptions.some((candidate) => candidate.id === "roundness") ? { roundness: 60 } : null;
+          const base = pin ? drive(tool, { ...options, ...pin }, (context) => fullGesture(context, tool)) : baseline;
+          const variant = drive(tool, { ...options, ...pin, [option.id]: changed }, (context) => fullGesture(context, tool));
 
           // The rule the project already committed to: if a tool has a
           // setting, the setting affects the tool. A checkbox that changes
           // nothing is worse than an absent one.
-          expect(signature(variant), `${tool.id}: option "${option.id}" changed nothing`).not.toBe(signature(baseline));
+          expect(signature(variant), `${tool.id}: option "${option.id}" changed nothing`).not.toBe(signature(base));
         }
 
         // The real colour channel: every tool with a "color" option paints

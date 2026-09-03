@@ -1,11 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   activeRasterLayer, appendLayer, clampRegionToDocument, copyHealedRegion, layerAccepts, layerLockReason, layerOpaqueBounds, paintMask, marqueeCorners, pickLayerAt, combineSelections, compositeRasterDocument, compositeRasterRegion, drawShape, DirtyRegion, RasterTileCache, type ShapeKind, createEllipseSelection, createPolygonSelection, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawQuadraticStrokeSegment, floodFill,
-  accumulateUniquePixelBytes, changedRenderRegion, confineToSelection, visitPixelBuffers, layerDocumentPixels, mipForZoom, setLayerPixels, isRasterDocumentState, layerRenderSignatures, liftSelection, parseHexColor, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectionOutlinePath, stampFloating, toHexColor,
+  accumulateUniquePixelBytes, changedRenderRegion, confineToSelection, visitPixelBuffers, layerDocumentPixels, mipForZoom, setLayerPixels, isRasterDocumentState, layerRenderSignatures, liftSelection, parseHexColor, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, scaleLayerPixels, scaleSelection, selectionOutlinePath, stampFloating,
   translateLayerPixels, translateSelection, quadLayerPixels, quadSelection, selectionBounds, unionRect, type FloatingPixels, type LayerRenderSignature, type PixelSelection, type Point, type RasterDocumentState, type RasterGuide, type RasterLayer, type RasterRect, type RasterTextData, type SelectionCombineMode,
   cloneDab, cloneStrokeSegment,
-  blurDab, blurStrokeSegment, smudgeStrokeSegment,
-  dodgeBurnDab, dodgeBurnStrokeSegment, type DodgeBurnRange,
   spotHealDab, spotHealStrokeSegment, spotHealApply,
   patchFromSelection,
   RASTER_ASSET_MIME, decodeRasterAsset, encodeRasterAsset, isRasterAsset,
@@ -782,12 +780,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     const opacity = Number(options.opacity ?? 100) / 100 * Number(options.flow ?? 100) / 100;
     if (activeToolId === "raster.clone") {
       cloneStrokeSegment(current.working, state.width, state.height, current.curveStart, current.pending, current.sourceOffsetX ?? 0, current.sourceOffsetY ?? 0, Number(options.size ?? 24), opacity, brushMask, Number(options.hardness ?? 82) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), true, false, current.sourcePixels, Number(options.spacing ?? 12) / 100);
-    } else if (activeToolId === "raster.blur") {
-      blurStrokeSegment(current.working, current.sourcePixels ?? current.before, state.width, state.height, current.curveStart, point, Number(options.size ?? 24), Number(options.strength ?? 50) / 100, brushMask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
-    } else if (activeToolId === "raster.smudge") {
-      smudgeStrokeSegment(current.working, current.sourcePixels ?? current.before, state.width, state.height, current.curveStart, point, Number(options.size ?? 24), Number(options.strength ?? 50) / 100, brushMask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
-    } else if (activeToolId === "raster.dodge" || activeToolId === "raster.burn") {
-      dodgeBurnStrokeSegment(current.working, state.width, state.height, current.curveStart, point, Number(options.size ?? 24), Number(options.exposure ?? 50) / 100, activeToolId === "raster.dodge" ? "dodge" : "burn", (options.range as DodgeBurnRange) ?? "midtones", brushMask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
     } else {
       drawQuadraticStrokeSegment(current.working, state.width, state.height, current.curveStart, current.pending, end, Number(options.size ?? 24), parseHexColor(current.target === "mask" && activeToolId === "raster.eraser" ? "#ffffff" : paintColor), opacity, current.target === "pixels" && activeToolId === "raster.eraser", brushMask, activeToolId === "raster.pencil" ? 1 : Number(options.hardness ?? 82) / 100, Number(options.spacing ?? 12) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), options.pressureSize !== false, options.pressureOpacity === true);
     }
@@ -1362,8 +1354,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       gesture.current = { before: canvasPixels(layer).slice(), working: canvasPixels(layer).slice(), curveStart: point, pending: point, pointerId: event.pointerId, frame: null, target: "pixels", layerId: layer.id };
       return;
     }
-    const paintingTool = activeToolId === "raster.blur" || activeToolId === "raster.smudge" || activeToolId === "raster.dodge" || activeToolId === "raster.burn";
-    if (event.altKey && paintingTool) { if (maskTarget?.mask) { const sample = maskTarget.mask.pixels[Math.max(0, Math.min(maskTarget.mask.pixels.length - 1, Math.floor(point.y) * state.width + Math.floor(point.x)))] ?? 0; setMaskForegroundWhite(document.id, sample >= 128); } else setForegroundColor(toHexColor(sampleAverage(compositeRasterDocument(state), state.width, state.height, point.x, point.y, 1))); return; }
     if (activeToolId === "raster.text") {
       const hit = [...state.layers].reverse().find((item) => { if (item.kind !== "text" || !item.text) return false; const lines = item.text.value.split("\n"), width = item.text.boxWidth ?? Math.max(...lines.map((line) => line.length), 1) * item.text.fontSize * .65, height = item.text.boxHeight ?? lines.length * item.text.fontSize * item.text.lineHeight; const left = item.text.path ? Math.min(item.text.path.start.x, item.text.path.end.x, item.text.path.control.x) : item.text.x, top = item.text.path ? Math.min(item.text.path.start.y, item.text.path.end.y, item.text.path.control.y) - item.text.fontSize : item.text.y; return point.x >= left && point.x <= left + Math.max(width, item.text.path ? Math.abs(item.text.path.end.x - item.text.path.start.x) : 0) && point.y >= top && point.y <= top + Math.max(height, item.text.fontSize * 2); });
       if (hit?.text) kernel.documents.update<RasterDocumentState>(document.id, (current) => { current.activeLayerId = hit.id; });
@@ -1415,25 +1405,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       setSelectionDraft(activeToolId === "raster.crop" ? { x: point.x, y: point.y, width: 0, height: 0 } : null);
       return;
     }
-    if (layer.locked) return;
-    if (activeToolId !== "raster.blur" && activeToolId !== "raster.smudge" && activeToolId !== "raster.dodge" && activeToolId !== "raster.burn") return;
-    canvas.setPointerCapture(event.pointerId);
-    // These four never touch a mask — there is nothing tonal to adjust in a
-    // black-and-white threshold buffer.
-    if (maskTarget) return;
-    const before = canvasPixels(layer).slice(), working = before.slice();
-    const options = toolOptions[activeToolId] ?? {};
-    const previous = lastBrushPointRef.current, shiftFrom = event.shiftKey && previous?.toolId === activeToolId && previous.layerId === brushTargetKey ? previous.point : null;
-    if (shiftFrom) {
-      if (activeToolId === "raster.blur") blurStrokeSegment(working, before, state.width, state.height, shiftFrom, point, Number(options.size ?? 24), Number(options.strength ?? 50) / 100, brushMask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
-      else if (activeToolId === "raster.smudge") smudgeStrokeSegment(working, before, state.width, state.height, shiftFrom, point, Number(options.size ?? 24), Number(options.strength ?? 50) / 100, brushMask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
-      else dodgeBurnStrokeSegment(working, state.width, state.height, shiftFrom, point, Number(options.size ?? 24), Number(options.exposure ?? 50) / 100, activeToolId === "raster.dodge" ? "dodge" : "burn", (options.range as DodgeBurnRange) ?? "midtones", brushMask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
-      lastBrushPointRef.current = { toolId: activeToolId, layerId: brushTargetKey, point }; renderWorking(working, "pixels", paintTargetId); void commitPixels(before, working, "Straight Brush Line (Прямая линия кисти)", "pixels", paintTargetId); return;
-    }
-    if (activeToolId === "raster.blur") blurDab(working, before, state.width, state.height, point, Number(options.size ?? 24), Number(options.strength ?? 50) / 100, brushMask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
-    else if (activeToolId === "raster.dodge" || activeToolId === "raster.burn") dodgeBurnDab(working, state.width, state.height, point, Number(options.size ?? 24), Number(options.exposure ?? 50) / 100, activeToolId === "raster.dodge" ? "dodge" : "burn", (options.range as DodgeBurnRange) ?? "midtones", brushMask, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0));
-    gesture.current = { before, working, curveStart: point, pending: point, pointerId: event.pointerId, frame: null, target: "pixels", layerId: paintTargetId, sourcePixels: before };
-    renderWorking(working, "pixels", paintTargetId);
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -1710,7 +1681,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     if (current.frame !== null) cancelAnimationFrame(current.frame);
     gesture.current = null;
     if (activeToolId && activeToolId !== "raster.patch") lastBrushPointRef.current = { toolId: activeToolId, layerId: current.target === "mask" ? `mask:${current.layerId}` : current.layerId, point: current.pending };
-    const label = activeToolId === "raster.clone" ? "Clone (Штамп)" : activeToolId === "raster.patch" ? "Patch (Заплатка)" : activeToolId === "raster.blur" ? "Blur (Размытие)" : activeToolId === "raster.smudge" ? "Smudge (Палец)" : activeToolId === "raster.dodge" ? "Dodge (Осветлитель)" : "Burn (Затемнитель)";
+    const label = activeToolId === "raster.clone" ? "Clone (Штамп)" : "Patch (Заплатка)";
     void commitPixels(current.before, current.working, current.target === "mask" ? "Paint Layer Mask (Рисование по маске слоя)" : label, current.target, current.layerId, current.strokeBounds ?? null);
   };
 
