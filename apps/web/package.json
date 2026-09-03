@@ -14,6 +14,7 @@
     "@ffmpeg/ffmpeg": "0.12.15",
     "@ffmpeg/util": "0.12.2",
     "@vravio/env-raster": "workspace:*",
+    "@vravio/env-vector": "workspace:*",
     "@vravio/kernel": "workspace:*",
     "dockview": "8.2.0",
     "dockview-react": "8.2.0",
