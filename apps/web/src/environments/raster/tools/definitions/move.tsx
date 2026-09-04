@@ -418,11 +418,14 @@ const move: RasterToolDefinition<MoveState> = {
     if (!drag || drag.pointerId !== pointer.pointerId) return;
     const nextDrag = { ...drag, current: pointer.point } as MoveDrag;
     context.setState({ pending: context.state.pending, drag: nextDrag });
+    // `context.state` is a snapshot taken when this context was built, not a live view — reading
+    // it back inside the deferred callback would see the drag as it was *before* the line above,
+    // not after. Closing over `nextDrag` (computed just now, synchronously) is what makes the
+    // coalescing in `scheduleWork`'s own contract correct: whichever call was scheduled last
+    // carries its own accurate position, not a stale re-read of a snapshot that never updates.
     context.scheduleWork(() => {
-      const latest = context.state.drag;
-      if (!latest || latest.pointerId !== pointer.pointerId) return;
-      const pending = applyDragFrame(context, latest);
-      if (pending) context.setState({ pending, drag: latest });
+      const pending = applyDragFrame(context, nextDrag);
+      if (pending) context.setState({ pending, drag: nextDrag });
     });
   },
 
