@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendLayer, changedRenderRegion, createAdjustmentLayer, createRasterDocument, createRasterLayer, layerRenderSignatures } from "./index";
+import { appendLayer, changedRenderRegion, createAdjustmentLayer, createRasterDocument, createRasterLayer, layerRenderSignatures, setLayerPixels } from "./index";
 import type { RasterDocumentState, RasterLayer } from "./types";
 
 const W = 64, H = 64;
@@ -24,7 +24,18 @@ const scene = () => {
 };
 
 const region = (state: RasterDocumentState, before: ReturnType<typeof layerRenderSignatures>) =>
-  changedRenderRegion(before, layerRenderSignatures(state), state);
+  changedRenderRegion(before, layerRenderSignatures(state));
+
+/** A canvas-sized buffer with one filled square, the shape a tool hands to
+ * `setLayerPixels` before it is trimmed down to the layer's own bounds. */
+const strokeBuffer = (x0: number, y0: number, size: number) => {
+  const pixels = new Uint8ClampedArray(W * H * 4);
+  for (let y = y0; y < y0 + size; y += 1) for (let x = x0; x < x0 + size; x += 1) {
+    const at = (y * W + x) * 4;
+    pixels[at] = 200; pixels[at + 1] = 80; pixels[at + 2] = 60; pixels[at + 3] = 255;
+  }
+  return pixels;
+};
 
 describe("what changed between two renders", () => {
   it("reports nothing when nothing changed", () => {
@@ -60,6 +71,27 @@ describe("what changed between two renders", () => {
     lower.visible = false;
 
     expect(region(state, before)).toEqual({ x: 4, y: 4, width: 10, height: 10 });
+  });
+
+  it("bounds a layer stored trimmed to its own content, not to the canvas", () => {
+    // Every other case here paints straight into a canvas-sized buffer, which is
+    // not the shape a layer has after a real edit: `setLayerPixels` trims it to
+    // its content and moves `bounds` with it. Reading that trimmed buffer with
+    // the canvas's dimensions runs off the end of it, and an out-of-range read on
+    // a typed array is `undefined` — which the alpha test counted as opaque, so
+    // a twelve-pixel stroke reported the entire document as changed and the tile
+    // cache recomposited all of it.
+    const state = createRasterDocument(W, H);
+    state.layers = [];
+    const layer = createRasterLayer(W, H, "Trimmed");
+    setLayerPixels(layer, strokeBuffer(40, 40, 12), W, H);
+    appendLayer(state, layer);
+    expect(layer.pixels.length).toBe(12 * 12 * 4);
+
+    const before = layerRenderSignatures(state);
+    setLayerPixels(layer, strokeBuffer(40, 40, 20), W, H);
+
+    expect(region(state, before)).toEqual({ x: 40, y: 40, width: 20, height: 20 });
   });
 
   it("gives up when the layer set changes", () => {

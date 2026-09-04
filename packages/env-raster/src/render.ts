@@ -119,11 +119,15 @@ function blendNonSeparable(
  * written in place, so the answer is cached against the buffer itself and
  * survives for as long as the layer is unedited.
  */
-const opaqueBounds = new WeakMap<Uint8ClampedArray, RasterRect | null>();
+const opaqueBounds = new WeakMap<Uint8ClampedArray, { width: number; height: number; bounds: RasterRect | null }>();
 
 export function layerOpaqueBounds(pixels: Uint8ClampedArray, width: number, height: number): RasterRect | null {
+  // The geometry is part of the question, not just the buffer: the same buffer is
+  // read at canvas size in one place and at its layer's own trimmed size in
+  // another, and a cache keyed on the buffer alone would answer the second call
+  // with the first one's rectangle.
   const cached = opaqueBounds.get(pixels);
-  if (cached !== undefined) return cached;
+  if (cached && cached.width === width && cached.height === height) return cached.bounds;
 
   // Read four bytes at a time: the alpha test is the whole loop, and per-byte
   // indexing over two million pixels is most of its cost.
@@ -147,7 +151,7 @@ export function layerOpaqueBounds(pixels: Uint8ClampedArray, width: number, heig
     if (rowRight + 1 > right) right = rowRight + 1;
   }
   const bounds = right > left && bottom > top ? { x: left, y: top, width: right - left, height: bottom - top } : null;
-  opaqueBounds.set(pixels, bounds);
+  opaqueBounds.set(pixels, { width, height, bounds });
   return bounds;
 }
 
@@ -408,6 +412,14 @@ export function sampleAverage(pixels: Uint8ClampedArray, width: number, height: 
 export interface LayerRenderSignature {
   readonly id: string;
   readonly pixels: Uint8ClampedArray;
+  /**
+   * Where that buffer lives, and the geometry it has to be read with.
+   *
+   * A layer keeps its pixels trimmed to its own content (`setLayerPixels`), so
+   * the buffer is `bounds.width * bounds.height`, not canvas-sized — reading it
+   * with the canvas's dimensions walks off the end of it.
+   */
+  readonly bounds: RasterRect;
   readonly mask: Uint8ClampedArray | null;
   readonly maskEnabled: boolean;
   readonly visible: boolean;
@@ -425,6 +437,7 @@ export function layerRenderSignatures(state: RasterDocumentState): LayerRenderSi
   return flattenRasterLayers(state.layers).map((layer) => ({
     id: layer.id,
     pixels: layer.pixels,
+    bounds: layer.bounds,
     mask: layer.mask?.pixels ?? null,
     maskEnabled: layer.mask?.enabled ?? false,
     visible: layer.visible,
@@ -447,6 +460,22 @@ const sameSignature = (a: LayerRenderSignature, b: LayerRenderSignature): boolea
   && a.parentId === b.parentId && a.orderKey === b.orderKey;
 
 /**
+ * Where a signature's opaque content actually is, in document coordinates.
+ *
+ * Read with the layer's own geometry and then offset, not with the canvas's:
+ * a trimmed buffer read at canvas size runs past its end, and an out-of-range
+ * read on a typed array is `undefined`, which the alpha test counts as opaque.
+ * That silently turned every ordinary stroke's region into the whole document —
+ * safe, since repainting too much only costs time, and therefore invisible: the
+ * tile cache simply stopped paying off for exactly the case it exists for.
+ */
+function signatureRegion(signature: LayerRenderSignature): RasterRect | null {
+  const local = layerOpaqueBounds(signature.pixels, signature.bounds.width, signature.bounds.height);
+  if (!local) return null;
+  return { x: local.x + signature.bounds.x, y: local.y + signature.bounds.y, width: local.width, height: local.height };
+}
+
+/**
  * The region that can look different between two states, or null for "all of it".
  *
  * Null is returned whenever the answer cannot be bounded honestly: the layer
@@ -458,7 +487,6 @@ const sameSignature = (a: LayerRenderSignature, b: LayerRenderSignature): boolea
 export function changedRenderRegion(
   before: readonly LayerRenderSignature[],
   after: readonly LayerRenderSignature[],
-  state: RasterDocumentState,
 ): RasterRect | null {
   if (before.length !== after.length) return null;
   for (let index = 0; index < before.length; index += 1) if (before[index]!.id !== after[index]!.id) return null;
@@ -476,8 +504,8 @@ export function changedRenderRegion(
     // An adjustment reads everything below it and an effect paints outside the
     // layer, so neither can be bounded by the layer's own content.
     if (was.adjustment || now.adjustment || hasEnabledEffectValue(was.effects) || hasEnabledEffectValue(now.effects)) return null;
-    include(layerOpaqueBounds(was.pixels, state.width, state.height));
-    include(layerOpaqueBounds(now.pixels, state.width, state.height));
+    include(signatureRegion(was));
+    include(signatureRegion(now));
   }
 
   if (right <= left || bottom <= top) return { x: 0, y: 0, width: 0, height: 0 };

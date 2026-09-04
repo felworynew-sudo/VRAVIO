@@ -65,7 +65,7 @@ export function useRasterCommit(params: {
         // undo. Rather than assume the whole document, ask which layers render
         // differently now and repaint what they cover. Null still means "cannot
         // be bounded honestly", and then everything goes.
-        const changed = previousSignatures ? changedRenderRegion(previousSignatures, signatures, state) : null;
+        const changed = previousSignatures ? changedRenderRegion(previousSignatures, signatures) : null;
         if (!changed) tiles.current.invalidateAll();
         else if (changed.width > 0 && changed.height > 0) tiles.current.invalidate(changed);
       }
