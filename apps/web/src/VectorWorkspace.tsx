@@ -1,12 +1,42 @@
 import { useEffect, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { addShape, createImageShape, createShape, duplicateShape, isVectorDocumentState, moveShapeInStack, pathData, removeShapes, shapeAt, shapeBounds, translateShape, updateShape, type VectorDocumentState, type VectorPoint, type VectorShape, type VectorShapeKind } from "@vravio/env-vector";
+import { addShape, createImageShape, isVectorDocumentState, pathData, removeShapes, shapeAt, shapeBounds, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
 import { RASTER_ASSET_MIME, decodeRasterAsset, encodeRasterAsset } from "@vravio/env-raster";
 import type { AssetId, VravioDocument } from "@vravio/kernel";
 import { kernel } from "./kernel";
-import { changeVectorDocument, commitVectorDrag, snapshotVector, type VectorSnapshot } from "./vector-commands";
+import { changeVectorDocument, commitVectorDrag, snapshotVector } from "./vector-commands";
 import { defaultViewport, useShellStore } from "./store";
 import { useContextMenu } from "./ContextMenu";
 import { text } from "./i18n";
+import { vectorToolById } from "./environments/vector/tools/registry";
+import { closePath, deleteLastPoint, deletePath, finishPath, hasDraft, type PenState } from "./environments/vector/tools/definitions/pen";
+import type { ToolContext, ToolPointer } from "./environments/vector/tools/types";
+
+/**
+ * Stage 5 of docs/migration-plan.md: the vector counterpart of
+ * `RasterWorkspace.tsx`'s tool-catalogue bridge. Unlike raster's staged
+ * rollout (a bridge alongside a shrinking `switch`, one tool moved per
+ * session across many), all six vector tools move over in this single
+ * change and the pre-port pointer-handling logic (the `draft`/`pathDraft`/
+ * `penHandle`/`nodeDrag` refs and the `selectedNode` state, `hitTestNode`,
+ * `shapeToolKinds`, `style()`) is deleted in the same pass — there is no
+ * partial state worth preserving between sessions for six tools sharing one
+ * `<svg>` gesture, the way there was for thirty sharing a canvas.
+ *
+ * What stays host-level, and why, mirrors the precedents raster's own port
+ * already set:
+ * - The generic selection outline/handles (shown for the active shape
+ *   regardless of which tool is active) and the pen/image right-click
+ *   menus have no pointer gesture of their own to hang a hook off — the
+ *   same category raster.move's Skew/Distort/Perspective/Warp menu and the
+ *   marquee family's Replace/Add/Subtract/Intersect menu are in.
+ * - Delete/Backspace deleting the *shape* selection is chrome that works
+ *   under any tool, not a behaviour any one tool owns (vector.nodes' own
+ *   Delete/Backspace, for the selected *point*, moved into its own
+ *   `Overlay` — see nodes.tsx).
+ * - The viewport fit effect, wheel-to-zoom/pan and image drag-and-drop
+ *   import are canvas chrome independent of the active tool, the same as
+ *   pan/zoom/rotate are for raster.
+ */
 
 function clampZoom(zoom: number): number {
   return Math.max(0.01, Math.min(64, zoom));
@@ -20,34 +50,6 @@ function toDocumentPoint(event: { clientX: number; clientY: number }, workspace:
   const radians = -viewport.rotation * Math.PI / 180, cosine = Math.cos(radians), sine = Math.sin(radians);
   return { x: (cosine * dx - sine * dy) / viewport.zoom + width / 2, y: (sine * dx + cosine * dy) / viewport.zoom + height / 2 };
 }
-
-const shapeToolKinds: Partial<Record<string, VectorShapeKind>> = { "vector.rectangle": "rectangle", "vector.ellipse": "ellipse", "vector.text": "text" };
-
-type NodePart = "anchor" | "handleIn" | "handleOut";
-
-/** Absolute position of a point's anchor or one of its (offset-stored) handles. */
-function nodePosition(point: VectorPoint, part: NodePart): { x: number; y: number } {
-  if (part === "anchor") return { x: point.x, y: point.y };
-  const handle = point[part];
-  return handle ? { x: point.x + handle.x, y: point.y + handle.y } : { x: point.x, y: point.y };
-}
-
-/** Finds the closest anchor/handle of a path within `tolerance` document units of `at`, preferring handles (they sit on top visually) over anchors when both are in range. */
-function hitTestNode(shape: VectorShape, at: { x: number; y: number }, tolerance: number): { pointIndex: number; part: NodePart } | null {
-  if (shape.kind !== "path") return null;
-  type Best = { pointIndex: number; part: NodePart; distance: number };
-  let best: Best | null = null;
-  shape.points.forEach((point, pointIndex) => {
-    (["handleOut", "handleIn", "anchor"] as const).forEach((part) => {
-      if (part !== "anchor" && !point[part]) return;
-      const position = nodePosition(point, part);
-      const distance = Math.hypot(position.x - at.x, position.y - at.y);
-      if (distance <= tolerance && (!best || distance < (best as Best).distance)) best = { pointIndex, part, distance };
-    });
-  });
-  return best ? { pointIndex: (best as Best).pointIndex, part: (best as Best).part } : null;
-}
-
 
 /** Resolves an asset's pixels to a `<image>`-ready data URL, refetching whenever `rev` changes —
  * the caller reads the asset's current head at render time and passes it in, so a revision that
@@ -101,17 +103,19 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   const store = useShellStore();
   const activeToolId = useShellStore((shell) => shell.activeToolByDocument[document.id]);
   const foregroundColor = useShellStore((shell) => shell.foregroundColor);
+  const toolOptions = useShellStore((shell) => shell.toolOptions);
   const viewport = useShellStore((shell) => shell.viewports[document.id] ?? defaultViewport);
   const setViewport = store.setViewport;
   const workspaceRef = useRef<HTMLDivElement>(null);
-  const draft = useRef<{ tool: string; shapeId: string; start: { x: number; y: number }; before: VectorSnapshot } | null>(null);
-  const pathDraft = useRef<{ id: string; before: VectorSnapshot } | null>(null);
-  /** While set, pointer movement pulls a symmetric bezier handle out of the point just placed — Illustrator's click-drag-to-curve. Cleared on pointer-up; the point stays a plain corner if the pointer never moved far enough to count as a drag. */
-  const penHandle = useRef<{ shapeId: string; pointIndex: number; anchor: { x: number; y: number } } | null>(null);
   const contextMenu = useContextMenu();
-  /** Node tool: which anchor/handle is being dragged, and the snapshot to diff against at commit. */
-  const nodeDrag = useRef<{ shapeId: string; pointIndex: number; part: NodePart; before: VectorSnapshot } | null>(null);
-  const [selectedNode, setSelectedNode] = useState<{ shapeId: string; pointIndex: number } | null>(null);
+
+  // One state slot per tool id, held here rather than inside a tool — the
+  // same reason raster's RasterWorkspace does: a tool file stays a plain
+  // object with no hooks of its own, and switching tools cannot leave a
+  // half-finished gesture running.
+  const [toolStates, setToolStates] = useState<Record<string, unknown>>({});
+  const toolStatesRef = useRef(toolStates);
+  toolStatesRef.current = toolStates;
 
   useEffect(() => {
     const workspace = workspaceRef.current;
@@ -128,169 +132,106 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
     return () => observer.disconnect();
   }, [document.id, setViewport, state.width, state.height, viewport.mode]);
 
-  // Delete/Backspace/Escape are handled locally rather than through kernel.commands: they act
-  // on "the selected shape in this workspace", which has no meaning outside it, unlike a
-  // document-level action such as Undo. Escape also has to cancel an in-progress path, a piece
-  // of state kernel.commands has no way to reach.
+  const catalogueTool = activeToolId ? vectorToolById.get(activeToolId) : undefined;
+
+  const toolContextFor = (toolId: string): ToolContext<unknown> => {
+    const tool = vectorToolById.get(toolId);
+    const current = toolStatesRef.current[toolId] ?? tool?.createState();
+    return {
+      documentId: document.id,
+      document: state,
+      viewport,
+      options: (toolOptions[toolId] ?? {}) as Readonly<Record<string, string | number | boolean>>,
+      activeShape: state.shapes.find((shape) => shape.id === state.activeShapeId) ?? null,
+      selection: state.selection,
+      foregroundColor,
+      state: current,
+      setState: (next) => {
+        toolStatesRef.current = { ...toolStatesRef.current, [toolId]: next };
+        setToolStates(toolStatesRef.current);
+      },
+      mutate: (fn) => kernel.documents.update<VectorDocumentState>(document.id, fn),
+      snapshot: () => snapshotVector(state),
+      commitDrag: (before, label) => commitVectorDrag(document.id, label, before),
+      changeDocument: (label, mutateFn) => changeVectorDocument(document.id, label, mutateFn),
+    };
+  };
+
+  // Tool state is kept per id and outlives a switch, so the tool being left
+  // has to be told to let go of it — the same effect RasterWorkspace runs
+  // for the same reason: without it, changing tool mid-press strands the
+  // gesture (a pen path left dangling, a drag never committed).
+  const previousToolRef = useRef(activeToolId);
+  useEffect(() => {
+    const previous = previousToolRef.current;
+    previousToolRef.current = activeToolId;
+    if (previous === activeToolId || !previous) return;
+    const leaving = vectorToolById.get(previous);
+    leaving?.onDeactivate?.(toolContextFor(previous));
+  });
+
+  // Delete/Backspace deletes the shape selection — chrome that works under
+  // any tool, not owned by one (vector.nodes' own Delete/Backspace, for the
+  // selected point, lives in its own Overlay and calls stopPropagation so
+  // the two never both fire for the same keypress). Escape-cancels-the-
+  // pen-path moved into pen.tsx's own Overlay for the same reason.
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (useShellStore.getState().activeDocumentId !== document.id) return;
       const target = event.target as HTMLElement | null;
       if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable) return;
       const current = kernel.documents.get<VectorDocumentState>(document.id); if (!current) return;
-      if ((event.key === "Delete" || event.key === "Backspace") && activeToolId === "vector.nodes" && selectedNode) {
-        event.preventDefault();
-        const { shapeId, pointIndex } = selectedNode;
-        setSelectedNode(null);
-        void changeVectorDocument(document.id, "Delete Point (Удалить точку)", (draftState) => {
-          const shape = draftState.shapes.find((item) => item.id === shapeId);
-          if (shape?.kind !== "path" || shape.points.length <= 2) return false;
-          shape.points = shape.points.filter((_, index) => index !== pointIndex);
-          return true;
-        });
-      } else if ((event.key === "Delete" || event.key === "Backspace") && current.state.selection.length) {
+      if ((event.key === "Delete" || event.key === "Backspace") && current.state.selection.length) {
         event.preventDefault();
         const ids = current.state.selection;
         void changeVectorDocument(document.id, "Delete Shape (Удалить фигуру)", (draftState) => { removeShapes(draftState, ids); return true; });
-      } else if (event.key === "Escape" && pathDraft.current) {
-        // Cancels the whole in-progress path rather than just the last point — its points were
-        // written live with no history steps of their own, so there is nothing to step back
-        // through; only the snapshot from before the first click can restore the prior state.
-        const before = pathDraft.current.before;
-        pathDraft.current = null;
-        kernel.documents.update<VectorDocumentState>(document.id, (draftState) => { draftState.shapes = structuredClone(before.shapes); draftState.activeShapeId = before.activeShapeId; draftState.selection = before.selection; });
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [document.id, activeToolId, selectedNode]);
+  }, [document.id]);
 
-  const style = (): { fill: string | null; stroke: string | null; strokeWidth: number; opacity: number } => ({ fill: foregroundColor, stroke: null, strokeWidth: 2, opacity: 1 });
+  const toolPointerFrom = (event: ReactPointerEvent<SVGSVGElement>, point: { x: number; y: number }): ToolPointer => ({
+    point, screenX: event.clientX, screenY: event.clientY, pointerId: event.pointerId,
+    shiftKey: event.shiftKey, altKey: event.altKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey, button: event.button, detail: event.detail,
+  });
 
   const onPointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {
-    if (event.button !== 0) return; // right-click opens the context menu instead, left-click only draws
+    if (event.button !== 0 || !catalogueTool) return; // right-click opens the context menu instead, left-click only draws
     const workspace = workspaceRef.current; if (!workspace) return;
     const point = toDocumentPoint(event, workspace, viewport, state.width, state.height);
-    const kind = shapeToolKinds[activeToolId ?? ""];
-
-    if (activeToolId === "vector.pen") {
-      event.preventDefault();
-      if (pathDraft.current) {
-        const shapeId = pathDraft.current.id;
-        let pointIndex = -1;
-        kernel.documents.update<VectorDocumentState>(document.id, (draftState) => { const shape = draftState.shapes.find((item) => item.id === shapeId); if (shape?.kind === "path") { shape.points = [...shape.points, { x: point.x, y: point.y }]; pointIndex = shape.points.length - 1; } });
-        if (pointIndex >= 0) penHandle.current = { shapeId, pointIndex, anchor: point };
-        if (event.detail >= 2) { const finished = pathDraft.current; pathDraft.current = null; penHandle.current = null; commitVectorDrag(document.id, "New Path (Новый контур)", finished.before); }
-      } else {
-        const before = snapshotVector(state);
-        const shape = createShape("path", point.x, point.y, style());
-        pathDraft.current = { id: shape.id, before };
-        penHandle.current = { shapeId: shape.id, pointIndex: 0, anchor: point };
-        kernel.documents.update<VectorDocumentState>(document.id, (draftState) => addShape(draftState, shape));
-      }
-      return;
-    }
-
-    if (kind) {
-      event.preventDefault();
-      const before = snapshotVector(state);
-      const shape = createShape(kind, point.x, point.y, style());
-      draft.current = { tool: activeToolId!, shapeId: shape.id, start: point, before };
-      kernel.documents.update<VectorDocumentState>(document.id, (draftState) => addShape(draftState, shape));
-      if (kind === "text") { draft.current = null; commitVectorDrag(document.id, "New Text (Новый текст)", before); }
-      return;
-    }
-
-    if (activeToolId === "vector.nodes") {
-      const activeShape = state.shapes.find((shape) => shape.id === state.activeShapeId) ?? null;
-      const tolerance = 6 / viewport.zoom;
-      const node = activeShape ? hitTestNode(activeShape, point, tolerance) : null;
-      if (node && activeShape) {
-        event.preventDefault();
-        setSelectedNode({ shapeId: activeShape.id, pointIndex: node.pointIndex });
-        nodeDrag.current = { shapeId: activeShape.id, pointIndex: node.pointIndex, part: node.part, before: snapshotVector(state) };
-        return;
-      }
-      setSelectedNode(null);
-      // Fall through to the select-tool behavior below: pick a shape to make active, or deselect.
-    }
-
-    // Select tool: pick the topmost shape under the pointer and start a move-drag; clicking
-    // empty space deselects without a history step, matching how a raster marquee click doesn't
-    // push an undo entry.
-    const hit = shapeAt(state, point.x, point.y);
-    if (hit) { draft.current = { tool: "move", shapeId: hit.id, start: point, before: snapshotVector(state) }; kernel.documents.update<VectorDocumentState>(document.id, (draftState) => { draftState.activeShapeId = hit.id; draftState.selection = [hit.id]; }); }
-    else { draft.current = null; kernel.documents.update<VectorDocumentState>(document.id, (draftState) => { draftState.activeShapeId = null; draftState.selection = []; }); }
+    catalogueTool.onPointerDown?.(toolContextFor(catalogueTool.id), toolPointerFrom(event, point));
   };
 
   const onPointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
-    if (nodeDrag.current) {
-      const workspace = workspaceRef.current; if (!workspace) return;
-      const point = toDocumentPoint(event, workspace, viewport, state.width, state.height);
-      const { shapeId, pointIndex, part } = nodeDrag.current;
-      kernel.documents.update<VectorDocumentState>(document.id, (draftState) => {
-        const shape = draftState.shapes.find((item) => item.id === shapeId);
-        if (shape?.kind !== "path" || !shape.points[pointIndex]) return;
-        shape.points = shape.points.map((current, index) => {
-          if (index !== pointIndex) return current;
-          if (part === "anchor") return { ...current, x: point.x, y: point.y };
-          const offset = { x: point.x - current.x, y: point.y - current.y };
-          const mirror = !event.altKey;
-          const opposite: NodePart = part === "handleOut" ? "handleIn" : "handleOut";
-          return { ...current, [part]: offset, ...(mirror ? { [opposite]: { x: -offset.x, y: -offset.y } } : {}) };
-        });
-      });
-      return;
-    }
-    if (penHandle.current) {
-      const workspace = workspaceRef.current; if (!workspace) return;
-      const point = toDocumentPoint(event, workspace, viewport, state.width, state.height);
-      const { shapeId, pointIndex, anchor } = penHandle.current;
-      const dx = point.x - anchor.x, dy = point.y - anchor.y;
-      // Below this, a click reads as a corner point, not an accidental one-pixel drag.
-      if (Math.hypot(dx, dy) < 1) return;
-      kernel.documents.update<VectorDocumentState>(document.id, (draftState) => {
-        const shape = draftState.shapes.find((item) => item.id === shapeId);
-        if (shape?.kind === "path" && shape.points[pointIndex]) shape.points = shape.points.map((current, index) => index === pointIndex ? { ...current, handleOut: { x: dx, y: dy }, handleIn: { x: -dx, y: -dy } } : current);
-      });
-      return;
-    }
-    if (!draft.current) return;
+    if (!catalogueTool) return;
     const workspace = workspaceRef.current; if (!workspace) return;
     const point = toDocumentPoint(event, workspace, viewport, state.width, state.height);
-    const { tool, shapeId, start } = draft.current;
-    if (tool === "move") { const dx = point.x - start.x, dy = point.y - start.y; draft.current.start = point; kernel.documents.update<VectorDocumentState>(document.id, (draftState) => translateShape(draftState, shapeId, dx, dy)); return; }
-    if (shapeToolKinds[tool]) {
-      const x = Math.min(start.x, point.x), y = Math.min(start.y, point.y), width = Math.abs(point.x - start.x), height = Math.abs(point.y - start.y);
-      kernel.documents.update<VectorDocumentState>(document.id, (draftState) => updateShape(draftState, shapeId, { x, y, width: Math.max(1, width), height: Math.max(1, height) }));
-    }
+    catalogueTool.onPointerMove?.(toolContextFor(catalogueTool.id), toolPointerFrom(event, point));
   };
 
-  const onPointerUp = () => {
-    if (nodeDrag.current) { const { before } = nodeDrag.current; nodeDrag.current = null; commitVectorDrag(document.id, "Edit Path (Изменить контур)", before); return; }
-    if (penHandle.current) { penHandle.current = null; return; }
-    if (!draft.current) return;
-    const { tool, before } = draft.current;
-    draft.current = null;
-    const label = tool === "move" ? "Move Shape (Переместить фигуру)" : "New Shape (Новая фигура)";
-    commitVectorDrag(document.id, label, before);
+  const onPointerUp = (event: ReactPointerEvent<SVGSVGElement>) => {
+    if (!catalogueTool) return;
+    const workspace = workspaceRef.current; if (!workspace) return;
+    const point = toDocumentPoint(event, workspace, viewport, state.width, state.height);
+    catalogueTool.onGestureEnd?.(toolContextFor(catalogueTool.id), toolPointerFrom(event, point));
   };
 
   // The pen tool's own right-click menu — Photoshop's, adapted: while a path is in
   // progress, "finish" commits it open, "close" joins the last point back to the first,
   // "delete last point" backs out one click without touching the rest, and "delete path"
   // discards the whole thing and restores exactly what was on the canvas before it started.
-  const finishPath = () => { const drawing = pathDraft.current; if (!drawing) return; pathDraft.current = null; commitVectorDrag(document.id, "New Path (Новый контур)", drawing.before); };
-  const closePath = () => { const drawing = pathDraft.current; if (!drawing) return; kernel.documents.update<VectorDocumentState>(document.id, (draftState) => { const shape = draftState.shapes.find((item) => item.id === drawing.id); if (shape?.kind === "path") shape.closed = true; }); finishPath(); };
-  const deleteLastPoint = () => { const drawing = pathDraft.current; if (!drawing) return; kernel.documents.update<VectorDocumentState>(document.id, (draftState) => { const shape = draftState.shapes.find((item) => item.id === drawing.id); if (shape?.kind === "path" && shape.points.length > 1) shape.points = shape.points.slice(0, -1); }); };
-  const deletePath = () => { const drawing = pathDraft.current; if (!drawing) return; pathDraft.current = null; kernel.documents.update<VectorDocumentState>(document.id, (draftState) => { draftState.shapes = structuredClone(drawing.before.shapes); draftState.activeShapeId = drawing.before.activeShapeId; draftState.selection = drawing.before.selection; }); };
+  // No pointer gesture of its own to hang a hook off, so it stays host-level and calls
+  // straight into pen.tsx's exported functions — the same shape raster.move's own
+  // right-click Skew/Distort/Perspective/Warp menu is in.
   const onCanvasContextMenu = (event: ReactMouseEvent<SVGSVGElement>) => {
-    if (activeToolId === "vector.pen" && pathDraft.current) {
+    const penContext = toolContextFor("vector.pen") as ToolContext<PenState>;
+    if (activeToolId === "vector.pen" && hasDraft(penContext)) {
       contextMenu.open(event, [
-        { label: text(store.language, "Finish Path", "Завершить контур"), onSelect: finishPath },
-        { label: text(store.language, "Close Path", "Закрыть контур"), onSelect: closePath },
-        { label: text(store.language, "Delete Last Point", "Удалить последнюю точку"), onSelect: deleteLastPoint },
-        { label: text(store.language, "Delete Path", "Удалить контур"), onSelect: deletePath, danger: true, separatorBefore: true },
+        { label: text(store.language, "Finish Path", "Завершить контур"), onSelect: () => finishPath(penContext) },
+        { label: text(store.language, "Close Path", "Закрыть контур"), onSelect: () => closePath(penContext) },
+        { label: text(store.language, "Delete Last Point", "Удалить последнюю точку"), onSelect: () => deleteLastPoint(penContext) },
+        { label: text(store.language, "Delete Path", "Удалить контур"), onSelect: () => deletePath(penContext), danger: true, separatorBefore: true },
       ]);
       return;
     }
@@ -359,16 +300,7 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
         {state.shapes.map(renderShape)}
         {bounds && <rect className="vector-selection" x={bounds.x} y={bounds.y} width={bounds.width} height={bounds.height} vectorEffect="non-scaling-stroke"/>}
         {bounds && [[bounds.x, bounds.y], [bounds.x + bounds.width, bounds.y], [bounds.x, bounds.y + bounds.height], [bounds.x + bounds.width, bounds.y + bounds.height]].map(([x, y]) => <circle className="vector-handle" key={`${x}-${y}`} cx={x} cy={y} r={5 / viewport.zoom} vectorEffect="non-scaling-stroke"/>)}
-        {activeToolId === "vector.nodes" && active?.kind === "path" && active.points.map((point, pointIndex) => {
-          const isSelected = selectedNode?.shapeId === active.id && selectedNode.pointIndex === pointIndex;
-          return <g key={pointIndex}>
-            {point.handleOut && <line className="vector-node-handle-line" x1={point.x} y1={point.y} x2={point.x + point.handleOut.x} y2={point.y + point.handleOut.y} vectorEffect="non-scaling-stroke"/>}
-            {point.handleIn && <line className="vector-node-handle-line" x1={point.x} y1={point.y} x2={point.x + point.handleIn.x} y2={point.y + point.handleIn.y} vectorEffect="non-scaling-stroke"/>}
-            {point.handleOut && <circle className="vector-node-handle" cx={point.x + point.handleOut.x} cy={point.y + point.handleOut.y} r={3.5 / viewport.zoom} vectorEffect="non-scaling-stroke"/>}
-            {point.handleIn && <circle className="vector-node-handle" cx={point.x + point.handleIn.x} cy={point.y + point.handleIn.y} r={3.5 / viewport.zoom} vectorEffect="non-scaling-stroke"/>}
-            <rect className={isSelected ? "vector-node-anchor selected" : "vector-node-anchor"} x={point.x - 4 / viewport.zoom} y={point.y - 4 / viewport.zoom} width={8 / viewport.zoom} height={8 / viewport.zoom} vectorEffect="non-scaling-stroke"/>
-          </g>;
-        })}
+        {catalogueTool?.Overlay && <catalogueTool.Overlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>} context={toolContextFor(catalogueTool.id)}/>}
       </svg>
     </div>
     {contextMenu.node}
