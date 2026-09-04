@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { spaceZoomFrom } from "./RasterWorkspace";
+import { spaceZoomFrom } from "./raster-coordinates";
 
 const keys = (held: Partial<{ metaKey: boolean; ctrlKey: boolean; altKey: boolean }>) =>
   ({ metaKey: false, ctrlKey: false, altKey: false, ...held });

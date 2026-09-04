@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { strokePressure } from "./RasterWorkspace";
+import { strokePressure } from "./raster-coordinates";
 
 describe("stroke pressure", () => {
   it("paints a mouse at full width", () => {
