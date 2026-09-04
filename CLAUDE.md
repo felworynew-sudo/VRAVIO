@@ -260,6 +260,24 @@ npx pnpm -r test --run
   keychain не сработал.
 - Гит-идентичность настроена локально в репозитории, не глобально.
 
+**Если сессия идёт на Windows** (не на macOS, для которой писан весь раздел
+выше) — команды другие, проверено рабочими на переносе `raster.move`:
+- `pnpm`/`npx` не в PATH вовсе. Вместо `npx pnpm -r exec tsc --noEmit` —
+  `D:/node.exe apps/web/node_modules/typescript/bin/tsc --noEmit -p
+  <package>/tsconfig.json`, по каждому пакету (`apps/web`,
+  `packages/env-raster`, `packages/kernel`, `packages/env-vector`). Вместо
+  `npx pnpm -r test --run` — `D:/node.exe
+  apps/web/node_modules/vitest/vitest.mjs run` (один вызов покрывает весь
+  workspace).
+- Дев-сервер: `cd apps/web && D:/node.exe node_modules/vite/bin/vite.js
+  --port 5174 --strictPort`. `.claude/launch.json`'s настроенная команда не
+  работает по той же причине (нет `pnpm` в PATH).
+- Токен для пуша — файл `/d/github-token.txt`, не keychain:
+  ```
+  TOKEN=$(cat /d/github-token.txt | tr -d '[:space:]') && git push "https://${TOKEN}@github.com/felworynew-sudo/VRAVIO.git" main 2>&1 | sed "s/${TOKEN}/***TOKEN***/g"
+  ```
+  `sed` в конце обязателен — иначе токен попадает в вывод команды дословно.
+
 ---
 
 ## 9. Отчитываться честно
@@ -272,3 +290,10 @@ npx pnpm -r test --run
   решение владельца проекта.
 - Не переписывать историю своих ошибок и не извиняться по кругу: исправить,
   назвать одной фразой, идти дальше.
+- **Кончается контекст или время посреди многоэтапной задачи** («доведи весь
+  план до конца») — это не повод резать проверку по живому вводу или
+  контрактным тестам, чтобы формально закрыть побольше пунктов. Честная
+  остановка на середине с понятной точкой продолжения в
+  `docs/migration-plan.md` — правильный результат, поверхностно закрытые
+  этапы без настоящей проверки — нет. Про сам факт остановки — сказать прямо,
+  тем же правилом, что и выше.
