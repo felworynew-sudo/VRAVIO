@@ -181,7 +181,15 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
     const afterText: RasterTextData = { ...beforeText, transform: multiplyTextTransform(delta, beforeText.transform ?? identityTextTransform()) };
     const afterDoc = cloneRasterState(beforeDoc);
     const target = afterDoc.layers.find((item) => item.id === pending.layerId);
-    if (target) { target.text = structuredClone(afterText); target.pixels = renderTextLayerPixels(target.text, afterDoc.width, afterDoc.height); }
+    // setLayerPixels, not a direct assignment: it trims the full-canvas buffer
+    // renderTextLayerPixels returns down to the layer's own opaque bounds and
+    // updates `target.bounds` to match — the invariant the compositor's
+    // non-wholeCanvas path relies on (render.ts reads `layer.pixels` as if it
+    // were already sized to `layer.bounds`). Assigning the untrimmed buffer
+    // straight to `target.pixels` leaves `target.bounds` at its pre-transform
+    // (smaller) rectangle while `pixels` is document-sized, so the compositor
+    // indexes into it with the wrong stride and the layer renders as empty.
+    if (target) { target.text = structuredClone(afterText); setLayerPixels(target, renderTextLayerPixels(target.text, afterDoc.width, afterDoc.height), afterDoc.width, afterDoc.height); }
     void context.commitDocument(beforeDoc, afterDoc, "Transform Type Layer (Трансформация текстового слоя)");
     return;
   }
