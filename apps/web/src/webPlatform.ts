@@ -1,4 +1,4 @@
-import type { CodecPort, FileSystemPort, FontPort, GPUContext, MLPort, OpenFileOptions, Platform, PlatformCapabilities, PlatformFile, SaveFileOptions, SaveFileResult } from "@vravio/kernel";
+import type { ClipboardImage, ClipboardPort, CodecPort, FileSystemPort, FontPort, GPUContext, MLPort, OpenFileOptions, Platform, PlatformCapabilities, PlatformFile, SaveFileOptions, SaveFileResult } from "@vravio/kernel";
 import { OpfsStorageAdapter, type ModelStore } from "@vravio/kernel";
 import { createOnnxRuntime } from "./onnxRuntime";
 
@@ -68,6 +68,48 @@ class WebFonts implements FontPort {
   }
 }
 
+/**
+ * The browser clipboard.
+ *
+ * Writing an image is `ClipboardItem` with a PNG blob — the one format every
+ * browser agrees to accept, which is why the caller is asked for PNG rather
+ * than given a choice.
+ *
+ * Reading is deliberately forgiving. `navigator.clipboard.read` rejects when
+ * the user declines the permission prompt, when the document is not focused,
+ * and when the clipboard holds nothing it will admit to — none of which is an
+ * error the user wants reported. All of them mean the same thing to a Paste
+ * command: there is no image to paste.
+ */
+class WebClipboard implements ClipboardPort {
+  readonly canReadImages = typeof navigator !== "undefined" && typeof navigator.clipboard?.read === "function";
+
+  async writeImage(image: Blob): Promise<void> {
+    await navigator.clipboard.write([new ClipboardItem({ [image.type || "image/png"]: image })]);
+  }
+
+  async readImage(): Promise<ClipboardImage> {
+    if (!this.canReadImages) return { kind: "denied" };
+    try {
+      for (const item of await navigator.clipboard.read()) {
+        const type = item.types.find((candidate) => candidate.startsWith("image/"));
+        if (type) return { kind: "image", image: await item.getType(type) };
+      }
+      return { kind: "empty" };
+    } catch (error) {
+      // `NotAllowedError` is the permission being refused, and it is the one
+      // failure worth telling the user about — every other rejection here
+      // (unfocused document, nothing readable) is indistinguishable from an
+      // empty clipboard and is treated as one.
+      return error instanceof Error && error.name === "NotAllowedError" ? { kind: "denied" } : { kind: "empty" };
+    }
+  }
+
+  async writeText(text: string): Promise<void> {
+    await navigator.clipboard.writeText(text);
+  }
+}
+
 export function createWebPlatform(gpu: GPUContext, models: ModelStore): Platform {
   const capabilities: PlatformCapabilities = {
     persistentFileHandles: Boolean(browserWindow.showOpenFilePicker && browserWindow.showSaveFilePicker),
@@ -78,5 +120,5 @@ export function createWebPlatform(gpu: GPUContext, models: ModelStore): Platform
     nativeThreads: false,
   };
   const ml: MLPort = createOnnxRuntime({ gpu, models });
-  return { kind: "web", fs: new WebFileSystem(), codecs: new WebCodecs(), fonts: new WebFonts(), ml, gpu, capabilities };
+  return { kind: "web", fs: new WebFileSystem(), codecs: new WebCodecs(), fonts: new WebFonts(), clipboard: new WebClipboard(), ml, gpu, capabilities };
 }

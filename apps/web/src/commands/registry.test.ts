@@ -10,7 +10,7 @@ import type { CommandSurface } from "./types";
 describe("the command catalogue", () => {
   it("found the definition files", () => {
     // A glob that matches nothing would make every other check here pass.
-    expect(commandDefinitions.length).toBe(85);
+    expect(commandDefinitions.length).toBe(88);
   });
 
   it("gives every command its own id", () => {

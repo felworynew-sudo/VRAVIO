@@ -26,7 +26,11 @@ import { localized } from "../i18n";
  */
 const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "app.settings|||Edit",
+  // Stage 11: copy/cut/paste, the first users of the platform's clipboard port.
+  "edit.copy|Mod+C||Edit",
+  "edit.cut|Mod+X||Edit",
   "edit.freeTransform|Mod+T||Edit",
+  "edit.paste|Mod+V||Edit",
   "edit.redo|Mod+Shift+Z||Edit",
   "edit.undo|Mod+Z||Edit",
   "file.close|Mod+W||File",
