@@ -91,24 +91,18 @@ describe("vector document", () => {
   });
 
   /**
-   * docs/vector-plan.md §2.1 names this as a real, measured bug: `shapeBounds`
-   * for a path does `Math.min(...xs, 0)`, so the zero in the list stretches
-   * every path's bounds to the origin. This test pins the current *wrong*
-   * answer on purpose — it is the canary stage 3 of that plan is supposed to
-   * kill. When bounds are fixed to actually track the path's own points, this
-   * test starts failing; that failure is stage 3 succeeding, and the fix is to
-   * delete this test and replace it with the correct-bounds one the plan
-   * calls for, not to update the expectation to match new wrong output.
+   * The canary this replaced (git history: "path bounds stretch to the
+   * origin — the bug docs/vector-plan.md §2.1 describes") pinned
+   * `shapeBounds`'s old `Math.min(...xs, 0)` bug on purpose, so that fixing
+   * it in stage 3 would make that test fail — which it did, which was the
+   * point. This is the correct-bounds test the plan called for in its place.
    */
-  it("path bounds stretch to the origin — the bug docs/vector-plan.md §2.1 describes", () => {
+  it("path bounds track the path's own points, not the origin (docs/vector-plan.md §2.1, fixed in stage 3)", () => {
     const state = createVectorDocument();
     const path = createShape("path", 500, 500);
     path.points = [{ x: 500, y: 500 }, { x: 600, y: 500 }, { x: 600, y: 600 }];
     addShape(state, path);
 
-    // A correct bounds for this 100x100 path would be {x:500, y:500,
-    // width:100, height:100}. This asserts the bug's actual output instead —
-    // see the doc comment above for why.
-    expect(shapeBounds(path)).toEqual({ x: 0, y: 0, width: 600, height: 600 });
+    expect(shapeBounds(path)).toEqual({ x: 500, y: 500, width: 100, height: 100 });
   });
 });

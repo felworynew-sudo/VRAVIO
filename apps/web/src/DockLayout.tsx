@@ -20,6 +20,7 @@ import { windowById, windowsFor } from "./windows/registry";
 import { windowTitle } from "./windows/types";
 import { PANEL_REQUEST_EVENT, persistVisiblePanelIds, readVisiblePanelIds, type PanelVisibilityDetail } from "./windows/runtime";
 import { isVectorDocumentState, shapeBounds, updateShape, vectorShapeRows, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { vectorTextMeasurer } from "./vector-text-metrics";
 import { changeVectorDocument, deleteActiveVectorShapes, duplicateActiveVectorShape, groupActiveVectorShapes, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
 import { useContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { luminanceHistogram } from "./raster-adjustments/histogram";
@@ -79,7 +80,7 @@ function InspectorPanel({ params }: IDockviewPanelProps<{ kind?: string }>) {
     const vectorState = document.state;
     const shape = vectorState.shapes.find((item) => item.id === vectorState.activeShapeId);
     if (shape) {
-      const bounds = shapeBounds(shape);
+      const bounds = shapeBounds(shape, vectorTextMeasurer);
       const commit = (patch: Partial<VectorShape>) => void changeVectorDocument(document.id, "Edit Shape (Изменить фигуру)", (state) => { updateShape<VectorShape>(state, shape.id, patch); return true; });
       const commitStyle = (patch: Partial<VectorShape["style"]>) => commit({ style: { ...shape.style, ...patch } } as Partial<VectorShape>);
       return <div className="dock-panel-body property-stack vector-properties">
@@ -516,7 +517,7 @@ function LayersPanel() {
         <button onClick={(event) => { event.stopPropagation(); toggleVisible(shape.id); }} aria-label={text(language, "Toggle visibility", "Переключить видимость")}><img src={shape.visible ? "/ГЛАЗ ОТКРЫТ.svg" : "/ГЛАЗ ЗАКРЫТ.svg"} alt=""/></button>
         <span className="layer-hierarchy-space"/>
         {shape.kind === "group" && <span className="layer-disclosure" onClick={(event) => { event.stopPropagation(); toggleExpanded(shape.id); }}>{shape.expanded ? "▾" : "▸"}</span>}
-        <span className="layer-row-text"><b>{shape.name}</b><small>{shape.kind === "group" ? text(language, "Group", "Группа") : `${shape.kind} · ${Math.round(shapeBounds(shape).width)}×${Math.round(shapeBounds(shape).height)}`}</small></span>
+        <span className="layer-row-text"><b>{shape.name}</b><small>{shape.kind === "group" ? text(language, "Group", "Группа") : `${shape.kind} · ${Math.round(shapeBounds(shape, vectorTextMeasurer).width)}×${Math.round(shapeBounds(shape, vectorTextMeasurer).height)}`}</small></span>
         <button onClick={(event) => { event.stopPropagation(); toggleLocked(shape.id); }} aria-label={text(language, "Toggle lock", "Переключить блокировку")} className={shape.locked ? "active" : ""}>{shape.locked ? "🔒" : "🔓"}</button>
       </div>)}
         {!rows.length && <div className="empty-row">{text(language, "No shapes yet — draw one with a tool", "Пока нет фигур — нарисуйте что-нибудь инструментом")}</div>}

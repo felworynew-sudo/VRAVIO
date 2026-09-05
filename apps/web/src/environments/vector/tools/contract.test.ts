@@ -98,17 +98,29 @@ function drive(
   return { effects, document };
 }
 
-/** A press, a drag and a release — the vector counterpart of raster's own
+/**
+ * A press, a drag and a release — the vector counterpart of raster's own
  * `fullGesture`, ending away from the start point so a tool that only reads
  * its start (a click) and one that reads the whole drag (a resize) both have
  * something to show. `vector.pen` never commits on a single click-drag alone
  * (a path stays open until finished), so it is explicitly finished here —
- * the same shape as raster's own per-tool exceptions in its `fullGesture`. */
+ * the same shape as raster's own per-tool exceptions in its `fullGesture`.
+ *
+ * The press lands inside the fixture's rectangle, deliberately: `vector.select`
+ * and `vector.nodes`' shared fallback (`beginSelectDrag`) only starts a drag
+ * when `shapeAt` finds something under the pointer, and (10, 10) — this
+ * gesture's start before stage 3 of docs/vector-plan.md — only "hit" because
+ * of the very bug that stage fixed (§2.1's `Math.min(...xs, 0)` stretched the
+ * fixture path's bounds all the way to the origin). Fixed bounds made that
+ * start point a genuine miss, which is correct, and broke this test's
+ * unstated assumption — the fix belongs here, in the fixture, not in the
+ * geometry that got more honest.
+ */
 const fullGesture = (context: ToolContext<unknown>, tool: VectorToolDefinition<unknown>) => {
-  tool.onPointerDown?.(context, pointerAt(10, 10));
-  tool.onPointerMove?.(context, pointerAt(40, 10));
-  tool.onPointerMove?.(context, pointerAt(60, 50));
-  tool.onGestureEnd?.(context, pointerAt(60, 50));
+  tool.onPointerDown?.(context, pointerAt(100, 80));
+  tool.onPointerMove?.(context, pointerAt(130, 80));
+  tool.onPointerMove?.(context, pointerAt(150, 120));
+  tool.onGestureEnd?.(context, pointerAt(150, 120));
   if (tool.id === "vector.pen") finishPath(context as ToolContext<import("./definitions/pen").PenState>);
 };
 

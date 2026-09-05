@@ -11,6 +11,7 @@ import { text } from "./i18n";
 import { vectorToolById } from "./environments/vector/tools/registry";
 import { closePath, deleteLastPoint, deletePath, finishPath, hasDraft, type PenState } from "./environments/vector/tools/definitions/pen";
 import type { ToolContext, ToolPointer } from "./environments/vector/tools/types";
+import { vectorTextMeasurer } from "./vector-text-metrics";
 
 /**
  * Stage 5 of docs/migration-plan.md: the vector counterpart of
@@ -263,7 +264,7 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
     }
     const workspace = workspaceRef.current;
     const point = workspace ? toDocumentPoint(event, workspace, viewport, state.width, state.height) : null;
-    const hit = point ? shapeAt(state, point.x, point.y) : null;
+    const hit = point ? shapeAt(state, point.x, point.y, vectorTextMeasurer) : null;
     if (hit?.kind === "image") {
       kernel.documents.update<VectorDocumentState>(document.id, (draftState) => { draftState.activeShapeId = hit.id; draftState.selection = [hit.id]; });
       contextMenu.open(event, [
@@ -280,7 +281,7 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   // World bounds, not local: an active shape sitting inside a rotated group
   // needs its selection box drawn where it actually appears on screen, not
   // where it would sit if it had no parent.
-  const bounds = active ? shapeWorldBounds(active, state.shapes) : null;
+  const bounds = active ? shapeWorldBounds(active, state.shapes, vectorTextMeasurer) : null;
   const stageStyle = { width: state.width, height: state.height, transform: `translate(-50%, -50%) translate(${viewport.panX}px, ${viewport.panY}px) rotate(${viewport.rotation}deg) scale(${viewport.zoom})` } as CSSProperties;
 
   const handleWheel = (event: React.WheelEvent) => {
