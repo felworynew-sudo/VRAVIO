@@ -165,6 +165,45 @@ export function readInpaintOutput(tensor: MLTensor, model: InpaintModelDefinitio
 }
 
 /**
+ * The opacity the filled area should end up with.
+ *
+ * The models know nothing about transparency — they were trained on opaque
+ * photographs and return three channels. Carrying the original alpha through
+ * unchanged is right for a photo and useless for a layer: marking a black
+ * stroke on an empty layer gave the model a black surround, so it dutifully
+ * filled the hole with black, and with the alpha kept at 255 the stroke stayed
+ * exactly as visible as before. The brush appeared to do nothing.
+ *
+ * What the surroundings are is the answer. Alpha is inpainted the crudest
+ * honest way — the mean opacity of the region's *unmarked* pixels — because
+ * that is what "continue the surroundings" means for a channel the model
+ * cannot see. On a photograph every neighbour is opaque and nothing changes;
+ * on an empty layer every neighbour is transparent, so the marked pixels
+ * become transparent and the stroke is gone.
+ */
+function surroundingAlpha(original: Uint8ClampedArray, width: number, height: number, mask: Uint8ClampedArray, region: InpaintRegion): number {
+  let total = 0, counted = 0;
+  for (let y = 0; y < region.height; y += 1) {
+    const at = region.y + y;
+    if (at < 0 || at >= height) continue;
+    for (let x = 0; x < region.width; x += 1) {
+      const ax = region.x + x;
+      if (ax < 0 || ax >= width) continue;
+      const index = at * width + ax;
+      // Only pixels the user did not mark: the marked ones are what is being
+      // replaced, and averaging them in would drag the answer back towards
+      // the thing being removed.
+      if (mask[index]! > 0) continue;
+      total += original[index * 4 + 3]!;
+      counted += 1;
+    }
+  }
+  // A mark covering its whole region has no surroundings to speak of; leaving
+  // the alpha alone is the least surprising thing to do.
+  return counted ? total / counted : -1;
+}
+
+/**
  * Puts the filled region back, inside the mark and nowhere else.
  *
  * These models return a whole new picture, not a patch: every pixel differs a
@@ -185,6 +224,7 @@ export function compositeInpaint(
 ): Uint8ClampedArray {
   const scaled = resampleRgba(filledRegion, region.width, region.height, region.width, region.height);
   const out = original.slice();
+  const targetAlpha = surroundingAlpha(original, width, height, mask, region);
   for (let y = 0; y < region.height; y += 1) {
     const targetY = region.y + y;
     if (targetY < 0 || targetY >= height) continue;
@@ -197,6 +237,7 @@ export function compositeInpaint(
       for (let channel = 0; channel < 3; channel += 1) {
         out[to + channel] = Math.round(out[to + channel]! + (scaled[from + channel]! - out[to + channel]!) * coverage);
       }
+      if (targetAlpha >= 0) out[to + 3] = Math.round(out[to + 3]! + (targetAlpha - out[to + 3]!) * coverage);
     }
   }
   return out;

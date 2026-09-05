@@ -220,7 +220,45 @@ describe("putting the answer back", () => {
     expect(out[(3 * W + 3) * 4]).toBeCloseTo(50, -1);
   });
 
+  it("makes the filled area transparent when its surroundings are", () => {
+    // Found on the deployed site: a black stroke on an empty layer gave the
+    // model a black surround, so it filled the hole with black — and with the
+    // alpha carried over unchanged the stroke stayed exactly as visible as
+    // before. The brush appeared to do nothing at all. Alpha has to follow the
+    // surroundings, because the models cannot see it.
+    const original = square(W, 0, 0, 0, 0);
+    const at = (3 * W + 3) * 4;
+    original[at + 3] = 255; // the stroke: one opaque pixel on an empty layer
+    const filled = square(region.width, 0, 0, 0);
+    const mask = new Uint8ClampedArray(W * H);
+    mask[3 * W + 3] = 255;
+
+    const out = compositeInpaint(original, W, H, filled, mask, region);
+
+    expect(out[at + 3], "the marked pixel stayed opaque on an empty layer").toBe(0);
+  });
+
+  it("keeps the filled area opaque when its surroundings are", () => {
+    // The other half of the same rule, and the case the models were trained
+    // for: on a photograph every neighbour is opaque and nothing should change.
+    const original = square(W, 10, 20, 30, 255);
+    const filled = square(region.width, 200, 200, 200);
+    const mask = new Uint8ClampedArray(W * H);
+    mask[3 * W + 3] = 255;
+
+    expect(compositeInpaint(original, W, H, filled, mask, region)[(3 * W + 3) * 4 + 3]).toBe(255);
+  });
+
+  it("leaves alpha alone when the mark covers everything, having nothing to go on", () => {
+    const original = square(W, 10, 10, 10, 200);
+    const filled = square(region.width, 50, 50, 50);
+    const mask = new Uint8ClampedArray(W * H).fill(255);
+
+    expect(compositeInpaint(original, W, H, filled, mask, region)[(3 * W + 3) * 4 + 3]).toBe(200);
+  });
+
   it("leaves alpha as it was", () => {
+    // Uniform alpha everywhere, so the surroundings say "77" and nothing moves.
     const original = square(W, 10, 10, 10, 77);
     const filled = square(region.width, 200, 200, 200, 255);
     const mask = new Uint8ClampedArray(W * H);
