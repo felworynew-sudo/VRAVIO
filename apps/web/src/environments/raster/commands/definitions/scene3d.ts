@@ -19,7 +19,7 @@ const commands: readonly CommandDefinition[] = [
     id: "layer.new3DExtrude",
     label: { en: "New 3D Extrusion from Layer", ru: "Экструдировать слой в 3D" },
     category: CATEGORY_3D,
-    surfaces: ["menu", "palette", "layer-context"],
+    surfaces: ["menu", "palette"],
     isEnabled: ({ activeDocumentId }) => {
       const document = kernel.documents.get<RasterDocumentState>(activeDocumentId ?? "");
       return Boolean(document && isRasterDocumentState(document.state) && document.state.activeLayerId);

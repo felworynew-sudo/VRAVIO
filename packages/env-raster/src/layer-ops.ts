@@ -209,7 +209,25 @@ export function ungroupLayer(state: RasterDocumentState, groupId: string): boole
   for (const child of children) child.parentId = parentId;
   reorderSiblings([...peers.slice(0, at), ...children, ...peers.slice(at + 1)]);
   state.layers = state.layers.filter((layer) => layer.id !== group.id);
-  state.activeLayerId = children[children.length - 1]?.id ?? state.activeLayerId;
+
+  // The group is gone, so nothing may be left pointing at it. Falling back to
+  // `state.activeLayerId` used to do exactly that whenever the group was the
+  // active layer and had no children to inherit the selection — which is not a
+  // rare shape at all: the layer panel's own "New Group" button makes an empty
+  // group and selects it, so grouping and immediately ungrouping left
+  // `activeLayerId` naming a layer that no longer existed, and the workspace
+  // throws "Active raster layer is missing" on that and renders nothing.
+  // A neighbour of the group inherits instead.
+  if (state.activeLayerId === group.id) {
+    state.activeLayerId = children[children.length - 1]?.id
+      ?? peers[at + 1]?.id ?? peers[at - 1]?.id
+      // Nothing at the group's own level either: any surviving layer will do.
+      // If the group was the document's only layer there is nothing to point
+      // at, and an empty document is a separate problem — `removeLayer`'s
+      // callers re-seed one, and this is not that path.
+      ?? state.layers[state.layers.length - 1]?.id
+      ?? state.activeLayerId;
+  }
   return true;
 }
 

@@ -32,7 +32,7 @@ const commands: readonly CommandDefinition[] = [
     id: "select.opaque",
     label: { en: "Select Layer Content", ru: "Выделить содержимое слоя" },
     category: CATEGORY_SELECT,
-    surfaces: ["menu", "palette", "layer-context"],
+    surfaces: ["menu", "palette"],
     isEnabled: isRasterActive,
     execute: async ({ activeDocumentId }) => { if (activeDocumentId) await changeRasterSelection(activeDocumentId, "Select Layer Content (Выделить содержимое слоя)", (state) => selectOpaquePixels(layerDocumentPixels(activeRasterLayer(state), state.width, state.height), state.width, state.height)); },
   },

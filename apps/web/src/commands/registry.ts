@@ -51,6 +51,13 @@ export function registerCatalogueCommands(): void {
   registered = true;
 
   for (const definition of commandDefinitions) {
+    // The kernel throws on a duplicate id, and in development this module can
+    // be re-evaluated by hot reload while the kernel — a singleton in another
+    // module — keeps the commands from the previous evaluation, so the guard
+    // above resets while the registry does not. Skipping what is already there
+    // makes that survivable. It cannot hide a genuine duplicate in the
+    // catalogue: `registry.test.ts` fails on repeated ids before this runs.
+    if (kernel.commands.get(definition.id)) continue;
     kernel.commands.register({
       id: definition.id,
       label: legacyBilingualLabel(definition.label),

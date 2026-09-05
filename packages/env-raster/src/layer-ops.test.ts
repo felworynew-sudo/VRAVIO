@@ -209,6 +209,24 @@ describe("grouping", () => {
     expect(names(state)).toEqual(["Top", "Two", "One", "Bottom"]);
   });
 
+  it("leaves the selection on a layer that still exists when the group was empty", () => {
+    // The layer panel's own "New Group" button makes an empty group and selects
+    // it, so this is the shape a user reaches by grouping and immediately
+    // ungrouping — not a contrived one. Handing the selection to
+    // `state.activeLayerId` unchanged pointed it at the group that had just
+    // been deleted, and the workspace throws "Active raster layer is missing"
+    // on a dangling id and renders nothing at all.
+    const state = doc();
+    const keep = add(state, "Keep");
+    const group = createRasterGroup(W, H, "Empty");
+    appendLayer(state, group);
+    state.activeLayerId = group.id;
+
+    expect(ungroupLayer(state, group.id)).toBe(true);
+    expect(state.layers.map((layer) => layer.id)).toEqual([keep.id]);
+    expect(state.layers.some((layer) => layer.id === state.activeLayerId), "activeLayerId points at a layer that no longer exists").toBe(true);
+  });
+
   it("refuses to ungroup something that is not a group", () => {
     const state = doc();
     const layer = add(state, "Plain");

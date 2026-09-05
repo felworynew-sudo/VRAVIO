@@ -3,7 +3,7 @@ import type { EnvironmentKind } from "@vravio/kernel";
 import { kernel } from "../../../../kernel";
 import { useShellStore } from "../../../../store";
 import { CATEGORY_LAYER } from "../../../../commands/categories";
-import { isRasterActive } from "../../../../commands/shared";
+import { activeRasterState, isRasterActive } from "../../../../commands/shared";
 import type { CommandDefinition } from "../../../../commands/types";
 import { changeRasterDocument } from "../document-edits";
 
@@ -40,7 +40,7 @@ const restack = ([id, en, ru, shortcut, move]: readonly [string, string, string,
   label: { en, ru },
   category: CATEGORY_LAYER,
   shortcut,
-  surfaces: ["menu", "palette", "layer-context"],
+  surfaces: ["menu", "palette"],
   isEnabled: isRasterActive,
   // The history label keeps the concatenated shape it had, because that is
   // what the history panel shows and it is not a catalogue definition field.
@@ -53,7 +53,7 @@ const commands: readonly CommandDefinition[] = [
     label: { en: "New Layer", ru: "Новый слой" },
     category: CATEGORY_LAYER,
     shortcut: "Mod+Shift+N",
-    surfaces: ["menu", "palette", "layer-context"],
+    surfaces: ["menu", "palette"],
     isEnabled: isRasterActive,
     execute: ({ activeDocumentId }) => {
       if (!activeDocumentId) return;
@@ -81,7 +81,11 @@ const commands: readonly CommandDefinition[] = [
     id: "layer.delete",
     label: { en: "Delete Layer", ru: "Удалить слой" },
     category: CATEGORY_LAYER,
-    surfaces: ["menu", "palette", "layer-context"],
+    surfaces: ["menu", "palette"],
+    // Not on "layer-context": the layer panel's own Delete also retargets mask
+    // editing and moves the panel selection to the survivor, which this command
+    // does not do yet. The panel keeps supplying that entry until it does —
+    // named here rather than left as a silent difference between two Deletes.
     isEnabled: isRasterActive,
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void edit(activeDocumentId, "Delete Layer (Удалить слой)", (state) => removeLayer(state, state.activeLayerId)); },
   },
@@ -90,7 +94,7 @@ const commands: readonly CommandDefinition[] = [
     label: { en: "Layer via Cut", ru: "Вырезать на новый слой" },
     category: CATEGORY_LAYER,
     shortcut: "Mod+Shift+J",
-    surfaces: ["menu", "palette", "layer-context"],
+    surfaces: ["menu", "palette"],
     isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && kernel.documents.get<RasterDocumentState>(activeDocumentId)?.state.selection),
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void edit(activeDocumentId, "Layer via Cut (Слой вырезанием)", (state) => Boolean(layerFromSelection(state, state.activeLayerId, state.selection, true))); },
   },
@@ -117,7 +121,7 @@ const commands: readonly CommandDefinition[] = [
     label: { en: "Stamp Visible", ru: "Отпечаток видимых" },
     category: CATEGORY_LAYER,
     shortcut: "Mod+Shift+Alt+E",
-    surfaces: ["menu", "palette", "layer-context"],
+    surfaces: ["menu", "palette"],
     isEnabled: isRasterActive,
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void edit(activeDocumentId, "Stamp Visible (Отпечаток видимых)", (state) => Boolean(stampVisibleLayers(state))); },
   },
@@ -126,7 +130,9 @@ const commands: readonly CommandDefinition[] = [
     label: { en: "Group Layers", ru: "Сгруппировать слои" },
     category: CATEGORY_LAYER,
     shortcut: "Mod+G",
-    surfaces: ["menu", "palette", "layer-context"],
+    surfaces: ["menu", "palette"],
+    // Not on "layer-context" for the same reason as `layer.delete`: the panel's
+    // own Group selects the group it just made, and this command does not.
     isEnabled: isRasterActive,
     execute: ({ activeDocumentId }) => {
       if (!activeDocumentId) return;
@@ -142,7 +148,14 @@ const commands: readonly CommandDefinition[] = [
     category: CATEGORY_LAYER,
     shortcut: "Mod+Shift+G",
     surfaces: ["menu", "palette", "layer-context"],
-    isEnabled: isRasterActive,
+    // Only a group can be ungrouped. The layer panel's own right-click menu
+    // knew that and greyed the entry out; the command did not, so the palette
+    // offered it on any layer and it quietly did nothing. Now that the menu is
+    // generated from the command, the command is where the knowledge belongs.
+    isEnabled: ({ activeDocumentId }) => {
+      const state = activeRasterState(activeDocumentId);
+      return Boolean(state && state.layers.find((layer) => layer.id === state.activeLayerId)?.kind === "group");
+    },
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void edit(activeDocumentId, "Ungroup Layers (Разгруппировать слои)", (state) => ungroupLayer(state, state.activeLayerId)); },
   },
   restack(["layer.bringForward", "Bring Forward", "Переложить вперёд", "Mod+]", "up"]),
@@ -153,7 +166,7 @@ const commands: readonly CommandDefinition[] = [
     id: "layer.openElsewhere",
     label: { en: "Edit Layer in Its Own Tab", ru: "Открыть слой в отдельной вкладке" },
     category: CATEGORY_LAYER,
-    surfaces: ["menu", "palette", "layer-context"],
+    surfaces: ["menu", "palette"],
     isEnabled: isRasterActive,
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void openTargetElsewhere(activeDocumentId, "raster", false); },
   },
@@ -161,7 +174,7 @@ const commands: readonly CommandDefinition[] = [
     id: "layer.openElsewhereBranch",
     label: { en: "Edit Layer as a Copy", ru: "Открыть слой копией" },
     category: CATEGORY_LAYER,
-    surfaces: ["menu", "palette", "layer-context"],
+    surfaces: ["menu", "palette"],
     isEnabled: isRasterActive,
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void openTargetElsewhere(activeDocumentId, "raster", true); },
   },
