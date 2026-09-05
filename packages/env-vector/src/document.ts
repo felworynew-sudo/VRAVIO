@@ -1,5 +1,6 @@
 import { defaultVectorStyle } from "./appearance";
 import { IDENTITY_MATRIX } from "./matrix";
+import type { GeometryModifier } from "./modifiers/types";
 import type { LengthUnit } from "./units";
 import type { Artboard, VectorDocumentState, VectorShape, VectorShapeKind, VectorStyle } from "./types";
 
@@ -10,7 +11,7 @@ export interface VectorDocumentOptions {
 
 export function createVectorDocument(width = 1280, height = 720, options: VectorDocumentOptions = {}): VectorDocumentState {
   return {
-    kind: "vector", schemaVersion: 4, width, height,
+    kind: "vector", schemaVersion: 5, width, height,
     artboards: [], resolution: options.resolution ?? 72, displayUnit: options.displayUnit ?? "px",
     shapes: [], activeShapeId: null, selection: [],
   };
@@ -42,13 +43,13 @@ const UNASSIGNED_ORDER_KEY = "unassigned";
  * needs bytes to point at. */
 export function createImageShape(x: number, y: number, width: number, height: number, pixelAssetId: string, name: string): VectorShape {
   const id = nextId("image");
-  return { id, kind: "image", visible: true, locked: false, style: defaultVectorStyle(), x, y, width, height, pixelAssetId, name, parentId: null, orderKey: UNASSIGNED_ORDER_KEY, transform: IDENTITY_MATRIX };
+  return { id, kind: "image", visible: true, locked: false, style: defaultVectorStyle(), x, y, width, height, pixelAssetId, name, parentId: null, orderKey: UNASSIGNED_ORDER_KEY, transform: IDENTITY_MATRIX, geometry: [] };
 }
 
 /** Creates a shape at a canonical size, for a click-to-place default (a drag then resizes it in place). */
 export function createShape(kind: VectorShapeKind, x: number, y: number, style: VectorStyle = defaultVectorStyle()): VectorShape {
   const id = nextId(kind);
-  const base = { id, visible: true, locked: false, style, parentId: null as string | null, orderKey: UNASSIGNED_ORDER_KEY, transform: IDENTITY_MATRIX };
+  const base = { id, visible: true, locked: false, style, parentId: null as string | null, orderKey: UNASSIGNED_ORDER_KEY, transform: IDENTITY_MATRIX, geometry: [] as GeometryModifier[] };
   if (kind === "rectangle") return { ...base, kind, x, y, width: 160, height: 100, cornerRadius: 0, name: `Rectangle (Прямоугольник) ${id}` };
   if (kind === "ellipse") return { ...base, kind, x, y, width: 160, height: 100, name: `Ellipse (Эллипс) ${id}` };
   if (kind === "line") return { ...base, kind, x1: x, y1: y, x2: x + 160, y2: y, name: `Line (Линия) ${id}` };

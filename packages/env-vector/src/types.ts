@@ -1,5 +1,6 @@
 import { cssToColor } from "@vravio/kernel";
 import { solidFill, solidStroke, type VectorStyle } from "./appearance";
+import type { GeometryModifier } from "./modifiers/types";
 import type { LengthUnit } from "./units";
 import { IDENTITY_MATRIX, type Matrix, rotationMatrixAround } from "./matrix";
 
@@ -47,6 +48,17 @@ interface VectorShapeBase {
    * document with no groups and no rotation behaves exactly as before.
    */
   transform: Matrix;
+  /**
+   * Stage 9 of docs/vector-plan.md: non-destructive geometry modifiers,
+   * back to front — index 0 runs first, against the shape's own base
+   * outline (`modifiers/base-path.ts`), and each later entry runs against
+   * the previous one's result. Empty for every shape that has never had a
+   * modifier added, which is every shape a pre-Stage-9 document ever
+   * stored — see `migrateVectorDocumentState`'s v4→v5 step. Only
+   * `rectangle`, `ellipse`, and `path` shapes have a base outline for this
+   * to act on (`basePathFor`); a stack on any other kind is simply inert.
+   */
+  geometry: GeometryModifier[];
 }
 
 export type VectorShape =
@@ -95,7 +107,7 @@ export interface Artboard {
 
 export interface VectorDocumentState {
   readonly kind: "vector";
-  readonly schemaVersion: 4;
+  readonly schemaVersion: 5;
   width: number;
   height: number;
   artboards: Artboard[];
@@ -116,8 +128,8 @@ export interface VectorDocumentState {
  * stop-the-world conversion — the same contract
  * `packages/env-raster/src/document.ts`'s `migrateRasterDocumentState` keeps.
  * One function carries a document from whatever version it was saved at
- * (2, 3 or 4) up to current, in order, rather than one function per step —
- * a v2 document run through this once ends up fully on v4, not stuck at v3
+ * (2 through 5) up to current, in order, rather than one function per step —
+ * a v2 document run through this once ends up fully on v5, not stuck at v3
  * waiting for a second pass nothing would ever trigger.
  *
  * What changes at each step:
@@ -134,6 +146,10 @@ export interface VectorDocumentState {
  *   factories a user adding a fill from the properties panel gets, so a
  *   migrated shape's appearance stack looks exactly like one built by hand
  *   to match it.
+ * - v4 → v5 (stage 9): every shape gets an empty `geometry: []` modifier
+ *   stack if it doesn't already have one — an empty stack behaves exactly
+ *   like no stack at all (`applyModifierStack` just returns the base path
+ *   unchanged), so this step is purely additive.
  */
 export function migrateVectorDocumentState(state: VectorDocumentState): VectorDocumentState {
   const candidate = state as unknown as {
@@ -159,6 +175,7 @@ export function migrateVectorDocumentState(state: VectorDocumentState): VectorDo
       }
     }
     delete shape.rotation;
+    if (!Array.isArray(shape.geometry)) shape.geometry = [];
 
     const style = shape.style as { fill?: unknown; stroke?: unknown; strokeWidth?: unknown; opacity?: unknown; fills?: unknown; strokes?: unknown } | undefined;
     if (!style) return;
@@ -176,7 +193,7 @@ export function migrateVectorDocumentState(state: VectorDocumentState): VectorDo
     }
   });
 
-  (state as { schemaVersion: number }).schemaVersion = 4;
+  (state as { schemaVersion: number }).schemaVersion = 5;
   return state;
 }
 
@@ -193,7 +210,7 @@ export function isVectorDocumentState(value: unknown): value is VectorDocumentSt
   if (!value || typeof value !== "object") return false;
   const state = value as { kind?: unknown; shapes?: unknown; schemaVersion?: unknown };
   if (state.kind !== "vector" || !Array.isArray(state.shapes)) return false;
-  if (state.schemaVersion !== 2 && state.schemaVersion !== 3 && state.schemaVersion !== 4) return false;
+  if (![2, 3, 4, 5].includes(state.schemaVersion as number)) return false;
   migrateVectorDocumentState(value as VectorDocumentState);
   return true;
 }

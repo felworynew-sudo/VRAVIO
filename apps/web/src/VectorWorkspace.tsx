@@ -12,6 +12,7 @@ import { vectorToolById } from "./environments/vector/tools/registry";
 import { closePath, deleteLastPoint, deletePath, finishPath, hasDraft, type PenState } from "./environments/vector/tools/definitions/pen";
 import type { ToolContext, ToolPointer } from "./environments/vector/tools/types";
 import { vectorTextMeasurer } from "./vector-text-metrics";
+import { useModifierResults } from "./vector-modifiers";
 
 /**
  * Stage 5 of docs/migration-plan.md: the vector counterpart of
@@ -123,12 +124,28 @@ function renderGradientDef({ id, gradient }: GradientDef): ReactNode {
 
 const blendStyle = (mode: string): CSSProperties | undefined => mode === "normal" ? undefined : { mixBlendMode: mode as CSSProperties["mixBlendMode"] };
 
-function renderShape(shape: VectorShape): ReactNode {
+/**
+ * A shape's own geometry, unless it has a non-empty modifier stack AND that
+ * stack's result has already resolved (`modifiedPath`) — in which case the
+ * whole shape renders as a single `<path>` instead of its native
+ * `<rect>`/`<ellipse>`/etc, since a modifier's output (offset, rounded
+ * corners, a boolean with another shape) is not, in general, still a
+ * rectangle or an ellipse. Falling back to the plain geometry while
+ * `modifiedPath` is still resolving (see `vector-modifiers.ts`) means a
+ * shape never flashes blank or stale while its WASM-backed modifiers catch
+ * up to a fast edit.
+ */
+function geometryOrModified(shape: Exclude<VectorShape, { kind: "image" } | { kind: "group" }>, modifiedPath: string | undefined): { Tag: GeometryTag; props: Record<string, unknown> } {
+  if (shape.geometry.length > 0 && modifiedPath !== undefined) return { Tag: "path", props: { d: modifiedPath } };
+  return geometryFor(shape);
+}
+
+function renderShape(shape: VectorShape, modifiedPath: string | undefined): ReactNode {
   if (!shape.visible) return null;
   if (shape.kind === "image") return <VectorImageShape key={shape.id} shape={shape}/>;
   if (shape.kind === "group") return null; // a group has no visual of its own — see renderShapeTree, which wraps its children in a transformed <g> instead of calling this
 
-  const { Tag, props } = geometryFor(shape);
+  const { Tag, props } = geometryOrModified(shape, modifiedPath);
   const resolved = resolveAppearance(shape.style, shape.id);
   const textValue = shape.kind === "text" ? shape.value : undefined;
 
@@ -154,11 +171,11 @@ function renderShape(shape: VectorShape): ReactNode {
  * render tree; `shapeAt`/`shapeWorldBounds` walk the flat `parentId` chain
  * instead because pointer math has no DOM to lean on.
  */
-function renderShapeTree(shapes: readonly VectorShape[], parentId: string | null): ReactNode[] {
+function renderShapeTree(shapes: readonly VectorShape[], parentId: string | null, modifierResults: ReadonlyMap<string, string>): ReactNode[] {
   return siblingsOf(shapes, parentId).map((shape) => {
     if (!shape.visible) return null;
-    if (shape.kind === "group") return <g key={shape.id} transform={shapeTransform(shape)}>{renderShapeTree(shapes, shape.id)}</g>;
-    return renderShape(shape);
+    if (shape.kind === "group") return <g key={shape.id} transform={shapeTransform(shape)}>{renderShapeTree(shapes, shape.id, modifierResults)}</g>;
+    return renderShape(shape, modifierResults.get(shape.id));
   });
 }
 
@@ -181,6 +198,11 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   // one-time O(n) cost of building it (~12ms at 10,000 shapes, see
   // performance.bench.test.ts) is paid once per edit, not once per query.
   const spatialIndex = useMemo(() => buildShapeSpatialIndex(state.shapes, vectorTextMeasurer), [document.revision]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Stage 9: every shape with a non-empty geometry modifier stack, resolved
+  // async (offset/simplify/boolean go through WASM) and cached by revision
+  // — see vector-modifiers.ts's own doc comment.
+  const modifierResults = useModifierResults(state, document.revision);
 
   // docs/vector-plan.md stage 5: what a drag should snap to, read straight
   // from live Settings (Guides & Grid) so a tool never has to know those
@@ -394,7 +416,7 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   return <div ref={workspaceRef} className="vector-workspace" data-active-tool={activeToolId} onWheel={handleWheel} onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
     <div className="vector-stage" style={stageStyle}>
       <svg width={state.width} height={state.height} viewBox={`0 0 ${state.width} ${state.height}`} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerUp} onContextMenu={onCanvasContextMenu}>
-        {renderShapeTree(state.shapes, null)}
+        {renderShapeTree(state.shapes, null, modifierResults)}
         {bounds && <rect className="vector-selection" x={bounds.x} y={bounds.y} width={bounds.width} height={bounds.height} vectorEffect="non-scaling-stroke"/>}
         {bounds && [[bounds.x, bounds.y], [bounds.x + bounds.width, bounds.y], [bounds.x, bounds.y + bounds.height], [bounds.x + bounds.width, bounds.y + bounds.height]].map(([x, y]) => <circle className="vector-handle" key={`${x}-${y}`} cx={x} cy={y} r={5 / viewport.zoom} vectorEffect="non-scaling-stroke"/>)}
         {catalogueTool?.Overlay && <catalogueTool.Overlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>} context={toolContextFor(catalogueTool.id)}/>}

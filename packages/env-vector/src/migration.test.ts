@@ -14,7 +14,7 @@ import type { VectorDocumentState } from "./types";
  * its own v1→v2 migration — calling it is what a real document load does,
  * not a hand-picked shortcut into the migration function, and it carries a
  * document all the way from whatever version it was saved at up to current
- * in one pass (v2 → v3 → v4), not one migration per stage a load has to
+ * in one pass (v2 → v3 → v4 → v5), not one migration per stage a load has to
  * happen to run through separately.
  */
 function v2Document(): unknown {
@@ -36,11 +36,11 @@ function v2Document(): unknown {
   };
 }
 
-describe("vector document v2 → v4 migration", () => {
+describe("vector document v2 → v5 migration", () => {
   it("accepts a v2 document as valid and upgrades it all the way to the current schemaVersion", () => {
     const raw = v2Document();
     expect(isVectorDocumentState(raw)).toBe(true);
-    expect((raw as VectorDocumentState).schemaVersion).toBe(4);
+    expect((raw as VectorDocumentState).schemaVersion).toBe(5);
   });
 
   it("turns the boolean artboards flag into an empty array, not a truthy/falsy re-encoding of it", () => {
@@ -138,6 +138,13 @@ describe("vector document v2 → v4 migration", () => {
     const rect = state.shapes.find((shape) => shape.id === "rect-1")!;
     expect(rect.style.opacity).toBe(1);
     expect(rect.style.blendMode).toBe("normal");
+  });
+
+  it("gives every shape an empty geometry modifier stack (stage 9)", () => {
+    const raw = v2Document();
+    isVectorDocumentState(raw);
+    const state = raw as VectorDocumentState;
+    for (const shape of state.shapes) expect(shape.geometry).toEqual([]);
   });
 
   it("is idempotent — migrating an already-migrated document changes nothing further", () => {

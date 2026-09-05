@@ -1,7 +1,8 @@
 import type { AssetId, AssetStore, DocumentStore, Environment, ExportOptions, ExtractOptions, ExtractedAsset, ParentTarget, VravioDocument } from "@vravio/kernel";
 import { colorToCss } from "@vravio/kernel";
 import { RASTER_ASSET_MIME, decodeRasterAsset, encodeRasterAsset, isRasterAsset } from "@vravio/env-raster";
-import { createImageShape, createVectorDocument, isShapeEffectivelyVisible, pathData, shapeBounds, worldTransform, type FillLayer, type Paint, type StrokeLayer, type VectorBounds, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { applyModifierStack, basePathFor, createImageShape, createVectorDocument, isShapeEffectivelyVisible, pathData, shapeBounds, worldTransform, type FillLayer, type ModifierContext, type Paint, type StrokeLayer, type VectorBounds, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { createWasmCurvePort, createWasmGeometryPort } from "./vector-geometry-wasm";
 
 export interface VectorEnvironmentOptions {
   readonly documents: DocumentStore;
@@ -94,6 +95,19 @@ export class VectorEnvironment implements Environment<VectorDocumentState> {
     const context = canvas.getContext("2d");
     if (!context) throw new Error("2D canvas context is unavailable");
 
+    // Stage 9: resolved once per export, not cached across calls the way
+    // `VectorWorkspace.tsx`'s live render is — an export runs once, so
+    // there is nothing to invalidate later; it just awaits every modifier
+    // stack up front, same WASM ports, same `resolveShapePath` contract.
+    const modifierContext: ModifierContext = {
+      curvePort: createWasmCurvePort(),
+      geometryPort: createWasmGeometryPort(),
+      resolveShapePath: (shapeId) => {
+        const other = state.shapes.find((item) => item.id === shapeId);
+        return other ? basePathFor(other) : null;
+      },
+    };
+
     for (const shape of state.shapes) {
       // A group paints nothing of its own; its children are separate entries
       // in this same flat list, each carrying its own transform below —
@@ -118,7 +132,8 @@ export class VectorEnvironment implements Environment<VectorDocumentState> {
           bitmap.close();
         }
       } else {
-        paintShape(context, shape);
+        const modifiedPathD = shape.geometry.length > 0 ? (await applyModifierStack(shape, shape.geometry, modifierContext)) ?? undefined : undefined;
+        paintShape(context, shape, modifiedPathD);
       }
       context.restore();
     }
@@ -162,7 +177,11 @@ export class VectorEnvironment implements Environment<VectorDocumentState> {
  * through their own canvas calls instead (a line has no fillable area, and
  * canvas text has no `Path2D` constructor of its own), so this returns
  * `null` for those rather than a path nothing would use. */
-function pathFor(shape: VectorShape): Path2D | null {
+function pathFor(shape: VectorShape, modifiedPathD?: string): Path2D | null {
+  // Stage 9: a shape with a resolved modifier stack paints as that path
+  // instead of its own native rect/ellipse/points — the export-side
+  // counterpart of `VectorWorkspace.tsx`'s `geometryOrModified`.
+  if (modifiedPathD !== undefined) return new Path2D(modifiedPathD);
   if (shape.kind === "rectangle") {
     const path = new Path2D();
     if (shape.cornerRadius > 0) path.roundRect(shape.x, shape.y, shape.width, shape.height, shape.cornerRadius);
@@ -211,10 +230,10 @@ function canvasPaint(context: CanvasRenderingContext2D, paint: Paint, bounds: Ve
  * whole shape against everything already on the canvas, exactly what
  * `globalCompositeOperation` already means.
  */
-export function paintShape(context: CanvasRenderingContext2D, shape: VectorShape): void {
+export function paintShape(context: CanvasRenderingContext2D, shape: VectorShape, modifiedPathD?: string): void {
   if (shape.kind === "group" || shape.kind === "image") return;
   const bounds = shapeBounds(shape);
-  const path = pathFor(shape);
+  const path = pathFor(shape, modifiedPathD);
   const baseAlpha = shape.style.opacity;
   context.globalCompositeOperation = shape.style.blendMode === "normal" ? "source-over" : (shape.style.blendMode as GlobalCompositeOperation);
 

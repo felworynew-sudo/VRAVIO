@@ -11,7 +11,7 @@ export function createVectorGroup(name = "Group (Группа)"): VectorShape {
   return {
     id: nextGroupId(), kind: "group", name, visible: true, locked: false,
     style: emptyVectorStyle(), // a group paints nothing of its own — see shapeBounds/renderShape's own reasoning
-    parentId: null, orderKey: makeVectorOrderKey(0), transform: IDENTITY_MATRIX, expanded: true,
+    parentId: null, orderKey: makeVectorOrderKey(0), transform: IDENTITY_MATRIX, expanded: true, geometry: [],
   };
 }
 

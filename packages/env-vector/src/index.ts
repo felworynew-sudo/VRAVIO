@@ -12,3 +12,7 @@ export * from "./snapping/registry";
 export * from "./units";
 export * from "./tree";
 export * from "./group-ops";
+export * from "./modifiers/types";
+export * from "./modifiers/base-path";
+export * from "./modifiers/apply";
+export * from "./modifiers/registry";
