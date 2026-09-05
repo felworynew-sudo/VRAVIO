@@ -239,6 +239,10 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .gradient-stop-row input[type="number"]{width:52px!important}
 .gradient-stop-remove{width:22px;height:22px;flex:none;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2);color:var(--danger);cursor:pointer}
 .gradient-stop-remove:disabled{opacity:.35;cursor:default}
+.modifier-row{flex-direction:column;align-items:stretch;gap:4px;padding:6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface)}
+.modifier-kind-label{flex:1;font-size:12px}
+.modifier-params{padding-left:24px}
+.modifier-params select,.modifier-params input{width:auto!important}
 .export-estimate{margin-top:auto;display:grid;gap:3px;padding:11px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2)}
 .export-estimate b{font-size:17px}
 .export-estimate small{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

@@ -29,6 +29,7 @@ import { pickCommands } from "./commands/surface";
 import { importModelAsLayer, updateScene3DLayer } from "./scene3d-commands";
 import type { ReversibleOperation } from "@vravio/kernel";
 import { AppearancePanel } from "./environments/vector/AppearancePanel";
+import { GeometryModifiersPanel } from "./environments/vector/GeometryModifiersPanel";
 import "dockview-react/dist/styles/dockview.css";
 
 /**
@@ -102,6 +103,8 @@ function InspectorPanel({ params }: IDockviewPanelProps<{ kind?: string }>) {
         </>}
         {shape.kind === "image" && <button className="secondary-action" onClick={() => void kernel.commands.execute("image.openElsewhere", { activeDocumentId: document.id })}>{text(language, "Edit in Raster Environment…", "Открыть в растровой среде…")}</button>}
         {shape.kind !== "image" && <AppearancePanel style={shape.style} language={language} onChange={(style) => commitStyle(style)}/>}
+        {(shape.kind === "rectangle" || shape.kind === "ellipse" || shape.kind === "path") &&
+          <GeometryModifiersPanel shape={shape} allShapes={vectorState.shapes} language={language} onChange={(geometry) => commit({ geometry } as Partial<VectorShape>)}/>}
       </div>;
     }
     return <div className="dock-panel-body"><p className="panel-hint">{text(language, "Select a shape to see its properties.", "Выберите фигуру, чтобы увидеть её свойства.")}</p></div>;
