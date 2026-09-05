@@ -46,6 +46,11 @@ export interface ShellPreferences {
   contextualBar: boolean;
   snapToGuides: boolean;
   smartGuides: boolean;
+  /** Grid snapping is its own on/off + spacing, separate from smartGuides —
+   * "align to other objects" and "align to a fixed grid" are different
+   * questions a user answers independently in every editor that has both. */
+  snapToGrid: boolean;
+  snapGridSize: number;
   showRulers: boolean;
   showGuides: boolean;
   guideColor: string;
@@ -61,7 +66,7 @@ const detectedConcurrency = typeof navigator === "undefined" || !navigator.hardw
 
 const defaultPreferences: ShellPreferences = {
   renderer: "auto", memoryBudgetMb: 1024, workerCount: Math.max(1, Math.min(8, detectedConcurrency - 1)),
-  dragZoom: true, showTooltips: true, contextualBar: true, showPerformanceOverlay: false, snapToGuides: true, smartGuides: true, showRulers: false, showGuides: true,
+  dragZoom: true, showTooltips: true, contextualBar: true, showPerformanceOverlay: false, snapToGuides: true, smartGuides: true, snapToGrid: false, snapGridSize: 20, showRulers: false, showGuides: true,
   guideColor: "#00a8ff", canvasSurround: "#2b2f36", focusColor: "#84a8ff",
   rasterColor: "#a100ff", vectorColor: "#0068ff", audioColor: "#ffb600", videoColor: "#ff0000",
 };

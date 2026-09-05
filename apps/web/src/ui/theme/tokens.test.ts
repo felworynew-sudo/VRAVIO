@@ -57,6 +57,7 @@ const ALLOWED: readonly { readonly match: string; readonly reason: string }[] = 
   { match: "patch-source-path", reason: "canvas overlay over artwork" },
   { match: "text-frame-draft", reason: "canvas overlay over artwork" },
   { match: "vector-handle", reason: "canvas overlay over artwork" },
+  { match: "vector-snap-guide", reason: "alignment-guide colour: legible over any artwork, not over a theme" },
   { match: "vector-node", reason: "canvas overlay over artwork" },
   { match: "curve-line", reason: "plotted data over its own graph" },
   { match: "curve-baseline", reason: "plotted data over its own graph" },

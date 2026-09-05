@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   IDENTITY_MATRIX, applyMatrix, invertMatrix, isIdentityMatrix,
-  multiplyMatrix, rotationMatrixAround, scaleMatrix, translationMatrix,
+  multiplyMatrix, rotationMatrixAround, scaleMatrix, transformVector, translationMatrix,
 } from "./matrix";
 
 const close = (a: number, b: number) => expect(Math.abs(a - b)).toBeLessThan(1e-9);
@@ -62,5 +62,19 @@ describe("Matrix", () => {
 
   it("a singular matrix (zero scale) has no inverse", () => {
     expect(invertMatrix(scaleMatrix(0, 1))).toBeNull();
+  });
+
+  it("transformVector drops translation — a pure translation matrix maps every vector to itself", () => {
+    closePoint(transformVector(translationMatrix(50, -30), { x: 4, y: 7 }), 4, 7);
+  });
+
+  it("transformVector applied to the difference of two points equals the difference of their applyMatrix images — the property the snap engine's local-space delta conversion depends on", () => {
+    const m = multiplyMatrix(rotationMatrixAround(37, 5, 5), scaleMatrix(2, 0.5));
+    const a = { x: 3, y: 8 }, b = { x: 10, y: -4 };
+    const viaVector = transformVector(m, { x: b.x - a.x, y: b.y - a.y });
+    const viaPoints = applyMatrix(m, b);
+    const aImage = applyMatrix(m, a);
+    close(viaVector.x, viaPoints.x - aImage.x);
+    close(viaVector.y, viaPoints.y - aImage.y);
   });
 });

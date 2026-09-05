@@ -62,6 +62,8 @@ export function SettingsDialog() {
             <ToggleRow title={text(language, "Show guides", "Показывать направляющие")} checked={store.preferences.showGuides} onChange={(showGuides) => store.updatePreferences({ showGuides })} />
             <ToggleRow title={text(language, "Snap to guides", "Привязка к направляющим")} checked={store.preferences.snapToGuides} onChange={(snapToGuides) => store.updatePreferences({ snapToGuides })} />
             <ToggleRow title={text(language, "Smart guides", "Быстрые направляющие")} checked={store.preferences.smartGuides} onChange={(smartGuides) => store.updatePreferences({ smartGuides })} />
+            <ToggleRow title={text(language, "Snap to grid", "Привязка к сетке")} checked={store.preferences.snapToGrid} onChange={(snapToGrid) => store.updatePreferences({ snapToGrid })} />
+            <SettingRow title={text(language, "Grid spacing", "Шаг сетки")} description={text(language, "In document units.", "В единицах документа.")}><NumberInput value={store.preferences.snapGridSize} min={1} max={500} suffix="px" onChange={(snapGridSize) => store.updatePreferences({ snapGridSize })} /></SettingRow>
             <SettingRow title={text(language, "Guide color", "Цвет направляющих")}><input type="color" value={store.preferences.guideColor} onChange={(event) => store.updatePreferences({ guideColor: event.target.value })} /></SettingRow>
           </>}
           {page === "shortcuts" && <ShortcutsPage language={language} />}

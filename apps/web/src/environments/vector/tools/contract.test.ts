@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addShape, createShape, createVectorDocument, type VectorDocumentState } from "@vravio/env-vector";
+import { addShape, buildShapeSpatialIndex, createShape, createVectorDocument, type VectorDocumentState } from "@vravio/env-vector";
 import { srgb } from "@vravio/kernel";
 import { vectorTools } from "./registry";
 import { toolById } from "../../../tools";
@@ -86,6 +86,14 @@ function drive(
     get activeShape() { return document.shapes.find((shape) => shape.id === document.activeShapeId) ?? null; },
     get selection() { return document.selection; },
     foregroundColor: "#101317",
+    // No sources/no grid — this file is about a tool committing something
+    // real, not about snapping (that has its own tests under
+    // packages/env-vector/src/snapping/), and a live snap could shift a
+    // gesture's landing position in a way that breaks an unrelated
+    // assertion elsewhere in this file for reasons that look like a tool
+    // bug rather than a fixture default.
+    get spatialIndex() { return buildShapeSpatialIndex(document.shapes); },
+    snapping: { sources: [], gridSpacing: null, radius: 0 },
     get state() { return effects.state; },
     setState: (next) => { effects.state = next; effects.stateHistory.push(next); },
     mutate: (fn) => fn(document),

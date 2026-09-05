@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { ShapeSpatialIndex, SnapSource } from "@vravio/env-vector";
 import type { VectorDocumentState, VectorShape } from "@vravio/env-vector";
 import type { DocumentViewport } from "../../../store";
 import type { VectorSnapshot } from "../../../vector-commands";
@@ -46,6 +47,25 @@ export interface ToolContext<TState> {
    * kind of mirror of it that raster.fill's turned out to be, not a separate
    * channel a tool reads on its own. */
   readonly foregroundColor: string;
+
+  /** Rebuilt once per document revision (see `VectorWorkspace.tsx`), not once
+   * per gesture — a tool that needs "what shape is at this point" uses this
+   * instead of calling the linear-scan `shapeAt` directly, the same fast
+   * path the canvas's own context-menu hit-test already goes through. */
+  readonly spatialIndex: ShapeSpatialIndex;
+  /**
+   * What a drag should snap to right now, assembled from live Settings
+   * preferences (Guides & Grid) — a tool stays decoupled from the store
+   * itself (no vector tool file imports `useShellStore`, and this keeps that
+   * true) by receiving the *already-resolved* answer instead. `sources` is
+   * `smartGuides`-filtered (empty when that preference is off) and
+   * `gridSpacing` is `null` unless `snapToGrid` is on — a tool that ignores
+   * both preferences entirely by construction, not by remembering to check
+   * a flag itself, which is exactly how docs/vector-plan.md's stage 5 avoids
+   * the "declared option nothing reads" bug `smartGuides`/`snapToGuides`
+   * turned out to already be before this stage wired them to anything.
+   */
+  readonly snapping: { readonly sources: readonly SnapSource[]; readonly gridSpacing: number | null; readonly radius: number };
 
   /** The tool's own state for the gesture in progress. */
   readonly state: TState;

@@ -71,3 +71,16 @@ export function rotationMatrixAround(degrees: number, cx: number, cy: number): M
  * attribute and a CSS `transform` property accept, so the renderer needs no
  * further branching between the two. */
 export const matrixToCss = (m: Matrix): string => `matrix(${m.a}, ${m.b}, ${m.c}, ${m.d}, ${m.e}, ${m.f})`;
+
+/** Maps a *displacement*, not a position — the `e`/`f` translation is
+ * deliberately dropped, since "how far to move" does not itself have a
+ * location for a translation to add to. This is what stage 5's snap engine
+ * needs to turn a correction computed in document space (a shape's dragged
+ * world bounds landed 3 units short of another shape's edge) into the
+ * shape's own local space before handing it to `translateShape`, which only
+ * ever moves a shape in its own local coordinates. Applying `applyMatrix` to
+ * two points and subtracting would give the same answer at the cost of
+ * computing (and discarding) the translation twice. */
+export function transformVector(m: Matrix, vector: { x: number; y: number }): { x: number; y: number } {
+  return { x: m.a * vector.x + m.c * vector.y, y: m.b * vector.x + m.d * vector.y };
+}

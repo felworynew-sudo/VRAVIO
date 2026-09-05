@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { addShape, buildShapeSpatialIndex, createImageShape, isIdentityMatrix, isVectorDocumentState, matrixToCss, pathData, removeShapes, shapeAtIndexed, shapeWorldBoundsIndexed, siblingsOf, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { addShape, buildShapeSpatialIndex, createImageShape, isIdentityMatrix, isVectorDocumentState, matrixToCss, pathData, removeShapes, shapeAtIndexed, shapeWorldBoundsIndexed, siblingsOf, snapSources, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
 import { RASTER_ASSET_MIME, decodeRasterAsset, encodeRasterAsset } from "@vravio/env-raster";
 import { colorToCss } from "@vravio/kernel";
 import type { AssetId, VravioDocument } from "@vravio/kernel";
@@ -144,6 +144,22 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   // performance.bench.test.ts) is paid once per edit, not once per query.
   const spatialIndex = useMemo(() => buildShapeSpatialIndex(state.shapes, vectorTextMeasurer), [document.revision]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // docs/vector-plan.md stage 5: what a drag should snap to, read straight
+  // from live Settings (Guides & Grid) so a tool never has to know those
+  // preferences exist — see ToolContext.snapping's own doc comment.
+  const smartGuides = useShellStore((shell) => shell.preferences.smartGuides);
+  const snapToGrid = useShellStore((shell) => shell.preferences.snapToGrid);
+  const snapGridSize = useShellStore((shell) => shell.preferences.snapGridSize);
+  const SNAP_RADIUS_SCREEN_PX = 8;
+  const snapping = {
+    sources: smartGuides ? snapSources : snapSources.filter((source) => source.id === "grid"),
+    gridSpacing: snapToGrid ? snapGridSize : null,
+    // Screen pixels, not document units (docs/vector-plan.md's own checklist
+    // item) — converted using the current zoom, the one thing a snap source
+    // or the engine has no way to know on its own.
+    radius: SNAP_RADIUS_SCREEN_PX / viewport.zoom,
+  };
+
   // One state slot per tool id, held here rather than inside a tool — the
   // same reason raster's RasterWorkspace does: a tool file stays a plain
   // object with no hooks of its own, and switching tools cannot leave a
@@ -180,6 +196,8 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
       activeShape: state.shapes.find((shape) => shape.id === state.activeShapeId) ?? null,
       selection: state.selection,
       foregroundColor,
+      spatialIndex,
+      snapping,
       state: current,
       setState: (next) => {
         toolStatesRef.current = { ...toolStatesRef.current, [toolId]: next };
