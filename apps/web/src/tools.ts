@@ -47,6 +47,20 @@ export const tools: readonly ToolDefinition[] = [
   { id: "raster.smudge", kind: "raster", icon: "≈", iconFile: "ПАЛЕЦ.svg", label: { en: "Smudge Tool", ru: "Палец" }, shortcut: "R", options: [...brushTipOptions, { id: "strength", label: { en: "Strength", ru: "Интенсивность" }, type: "number", min: 1, max: 100, step: 1, defaultValue: 50, unit: "%" }] },
   { id: "raster.dodge", kind: "raster", icon: "☉", iconFile: "ОСВЕТЛИТЕЛЬ.svg", label: { en: "Dodge Tool", ru: "Осветлитель" }, shortcut: "O", options: [...brushTipOptions, { id: "exposure", label: { en: "Exposure", ru: "Экспозиция" }, type: "number", min: 1, max: 100, step: 1, defaultValue: 50, unit: "%" }, { id: "range", label: { en: "Range", ru: "Диапазон" }, type: "select", defaultValue: "midtones", values: [{ value: "shadows", label: { en: "Shadows", ru: "Тени" } }, { value: "midtones", label: { en: "Midtones", ru: "Полутона" } }, { value: "highlights", label: { en: "Highlights", ru: "Света" } }] }] },
   { id: "raster.burn", kind: "raster", icon: "☾", iconFile: "ЗАТЕМНИТЕЛЬ.svg", label: { en: "Burn Tool", ru: "Затемнитель" }, shortcut: "O", options: [...brushTipOptions, { id: "exposure", label: { en: "Exposure", ru: "Экспозиция" }, type: "number", min: 1, max: 100, step: 1, defaultValue: 50, unit: "%" }, { id: "range", label: { en: "Range", ru: "Диапазон" }, type: "select", defaultValue: "midtones", values: [{ value: "shadows", label: { en: "Shadows", ru: "Тени" } }, { value: "midtones", label: { en: "Midtones", ru: "Полутона" } }, { value: "highlights", label: { en: "Highlights", ru: "Света" } }] }] },
+  {
+    id: "raster.inpaint", kind: "raster", icon: "✨", iconFile: "Точечная восстанавливающая.svg",
+    label: { en: "Remove Tool", ru: "Удаление объекта" }, shortcut: "J",
+    options: [
+      { id: "size", label: { en: "Size", ru: "Размер" }, type: "number", min: 1, max: 1000, step: 1, defaultValue: 48, unit: "px" },
+      // The model choice lives here, next to the brush, rather than in a
+      // settings page: which one to use is a decision per mark, not per
+      // installation. Values come from `ml/inpaint/definitions/`.
+      { id: "model", label: { en: "Model", ru: "Модель" }, type: "select", defaultValue: "mi-gan-512", values: [
+        { value: "mi-gan-512", label: { en: "MI-GAN 512 (fast)", ru: "MI-GAN 512 (быстрая)" } },
+        { value: "lama", label: { en: "LaMa (better)", ru: "LaMa (лучше)" } },
+      ] },
+    ],
+  },
   { id: "raster.fill", kind: "raster", icon: "◒", iconFile: "Заливка.svg", label: { en: "Paint Bucket Tool", ru: "Заливка" }, shortcut: "G", options: [color, { id: "tolerance", label: { en: "Tolerance", ru: "Допуск" }, type: "number", min: 0, max: 255, step: 1, defaultValue: 32 }] },
   { id: "raster.eyedropper", kind: "raster", icon: "⌁", iconFile: "Пипетка.svg", label: { en: "Eyedropper Tool", ru: "Пипетка" }, shortcut: "I", options: [{ id: "sample", label: { en: "Sample size", ru: "Размер образца" }, type: "select", defaultValue: "point", values: [{ value: "point", label: { en: "Point", ru: "Точка" } }, { value: "3", label: { en: "3 × 3 Average" } }, { value: "5", label: { en: "5 × 5 Average" } }, { value: "11", label: { en: "11 × 11 Average" } }] }, { id: "allLayers", label: { en: "Sample all layers", ru: "Все слои" }, type: "boolean", defaultValue: true }, { id: "loupe", label: { en: "Show loupe", ru: "Показывать лупу" }, type: "boolean", defaultValue: true }] },
   { id: "raster.text", kind: "raster", icon: "T", iconFile: "ТЕКСТ.svg", label: { en: "Type Tool", ru: "Текст" }, shortcut: "T", options: [{ id: "textMode", label: { en: "Mode", ru: "Режим" }, type: "select", defaultValue: "auto", values: [{ value: "auto", label: { en: "Point / Paragraph", ru: "Точечный / Блочный" } }, { value: "path", label: { en: "Text on Path", ru: "Текст по контуру" } }, { value: "dynamicCircle", label: { en: "Dynamic Circle", ru: "Динамический круг" } }, { value: "dynamicArch", label: { en: "Dynamic Arch", ru: "Динамическая дуга" } }, { value: "dynamicBow", label: { en: "Dynamic Bow", ru: "Динамический изгиб" } }] }, color, { id: "fontSize", label: { en: "Font size", ru: "Размер шрифта" }, type: "number", min: 1, max: 1000, step: 1, defaultValue: 48, unit: "px" }, { id: "fontFamily", label: { en: "Font", ru: "Шрифт" }, type: "select", defaultValue: "Arial", values: [{ value: "Arial", label: { en: "Arial" } }, { value: "Georgia", label: { en: "Georgia" } }, { value: "Verdana", label: { en: "Verdana" } }, { value: "monospace", label: { en: "Monospace", ru: "Моноширинный" } }] }] },
@@ -72,7 +86,7 @@ export const rasterToolGroups: readonly (readonly string[])[] = [
   // Photoshop keeps healing and cloning apart: the healing group is J, the
   // stamp is S. Folding them together hid the patch tool behind a flyout on a
   // tool it has nothing to do with.
-  ["raster.spotHeal", "raster.patch"],
+  ["raster.spotHeal", "raster.patch", "raster.inpaint"],
   ["raster.clone"],
   ["raster.dodge", "raster.burn"],
   ["raster.fill"],

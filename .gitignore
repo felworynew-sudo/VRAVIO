@@ -11,3 +11,10 @@ research/
 backup_*.ts
 backup_*.tsx
 .playwright-cli/
+
+# Model weights: tens of megabytes each, fetched rather than committed. Git
+# history is forever, and a 29 MB binary in it is 29 MB in every clone from
+# now on. `docs/migration-plan.md` (stage 10) records where they come from.
+# `icons/` is this app's Vite `publicDir` (see apps/web/vite.config.ts), so
+# anything served statically lives there — models included, despite the name.
+icons/models/*.onnx

@@ -527,6 +527,17 @@ describe("every tool in the catalogue keeps the contract", () => {
           // `raster.clone`'s `alignMode` above.
           if (tool.id === "raster.spotHeal" && option.id === "spacing") continue;
 
+          // raster.inpaint's "model" is the one option in the catalogue whose
+          // effect is asynchronous: the gesture ends by *starting* a model run
+          // and clearing its own state, so the difference between MI-GAN and
+          // LaMa appears seconds later, in a commit this harness has already
+          // stopped watching for. Structurally invisible here — but not
+          // untested: `ml/inpaint/prepare.test.ts` checks that the two models
+          // are fed differently, including the mask polarity that is opposite
+          // between them, which is where choosing the wrong one actually
+          // shows.
+          if (tool.id === "raster.inpaint" && option.id === "model") continue;
+
           // A value that is not the default, chosen by the option's own type.
           // "angle" is the one exception: an ellipse has 180°-rotational
           // symmetry, so max (180, for a -180..180 range) maps it onto
