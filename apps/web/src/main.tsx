@@ -1,9 +1,11 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
-import { diagnostic, installGlobalDiagnostics } from "./diagnostics";
+import { installGlobalDiagnostics } from "./diagnostics";
 import { installScriptRecorder } from "./scripts/store";
 import { kernel } from "./kernel";
+import { createLoadingWindow } from "./startup/LoadingWindow";
+import { runStartup } from "./startup/run";
 import { useShellStore } from "./store";
 
 const root = document.getElementById("root");
@@ -12,21 +14,13 @@ installGlobalDiagnostics();
 // Subscribed to the command registry itself, so a command reached by shortcut,
 // menu or panel button is recorded the same way (stage 9).
 installScriptRecorder();
-root.textContent = "Restoring session… (Восстановление сессии…)";
-
-try {
-  const restored = await kernel.sessionReady;
-  useShellStore.getState().adoptRestoredDocuments(restored.map((document) => document.id));
-  await kernel.assetsReady;
-  // A restored child carries its link to its parent as provenance, but the
-  // session around it was never saved. Without this it looks like an ordinary
-  // document: applying fails, and it follows revisions of the asset it exists
-  // to edit.
-  const links = kernel.roundtrip.adoptRestored();
-  if (restored.length) diagnostic("info", "autosave.restore", `Restored ${restored.length} document(s)${links.length ? `, ${links.length} linked` : ""}`);
-} catch (error) {
-  diagnostic("error", "autosave.restore", error instanceof Error ? error.message : String(error), error);
-}
+// A named stage at a time, on screen, instead of one line of text that stayed
+// put however long any of it took (stage 11 of docs/migration-plan.md). The
+// screen is plain DOM because it has to exist before React does — see
+// `LoadingWindow.ts`.
+const loading = createLoadingWindow(root, useShellStore.getState().language, useShellStore.getState().theme);
+await runStartup((outcomes) => loading.update(outcomes));
+loading.dispose();
 
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") void kernel.autosave.flush(); });
 window.addEventListener("beforeunload", () => { void kernel.autosave.flush(); });
