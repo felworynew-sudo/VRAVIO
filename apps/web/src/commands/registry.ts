@@ -1,7 +1,7 @@
 import { legacyBilingualLabel } from "../i18n";
 import { kernel } from "../kernel";
 import { applyShortcutOverrides, rememberDefaultShortcut } from "../shortcuts";
-import type { CommandDefinition, CommandModule } from "./types";
+import { coerceArgs, type CommandDefinition, type CommandModule } from "./types";
 
 /**
  * Every command in the application, discovered from its file.
@@ -65,7 +65,16 @@ export function registerCatalogueCommands(): void {
       ...(definition.shortcut ? { shortcut: definition.shortcut } : {}),
       ...(definition.scope ? { scope: definition.scope } : {}),
       ...(definition.isEnabled ? { isEnabled: definition.isEnabled.bind(definition) } : {}),
-      execute: definition.execute.bind(definition),
+      // Arguments are checked against the definition's schema on the way in, so
+      // a command never has to defend itself against a script that was edited
+      // by hand or recorded by an older build. `coerceArgs` also fills in
+      // defaults, which is why a command with a schema can read its arguments
+      // without a single `??`.
+      execute: (context, args) => {
+        const checked = coerceArgs(definition.args, args);
+        if (!checked) throw new Error(`Command "${definition.id}" was given arguments it cannot accept`);
+        return definition.execute(context, checked);
+      },
     });
   }
 

@@ -2,12 +2,16 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { diagnostic, installGlobalDiagnostics } from "./diagnostics";
+import { installScriptRecorder } from "./scripts/store";
 import { kernel } from "./kernel";
 import { useShellStore } from "./store";
 
 const root = document.getElementById("root");
 if (!root) throw new Error("VRAVIO root element is missing");
 installGlobalDiagnostics();
+// Subscribed to the command registry itself, so a command reached by shortcut,
+// menu or panel button is recorded the same way (stage 9).
+installScriptRecorder();
 root.textContent = "Restoring session… (Восстановление сессии…)";
 
 try {

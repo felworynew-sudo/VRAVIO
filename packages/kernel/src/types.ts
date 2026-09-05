@@ -63,8 +63,18 @@ export interface Command {
    */
   readonly scope?: string;
   isEnabled?(context: CommandContext): boolean;
-  execute(context: CommandContext): void | Promise<void>;
+  execute(context: CommandContext, args?: CommandArgs): void | Promise<void>;
 }
+
+/**
+ * The values a command was invoked with.
+ *
+ * Deliberately plain and JSON-shaped: these are what a recorded script stores
+ * and plays back, so anything that cannot survive a round trip through storage
+ * cannot be an argument. A command that takes none simply ignores the
+ * parameter, which is all of them until one declares an `args` schema.
+ */
+export type CommandArgs = Readonly<Record<string, string | number | boolean>>;
 
 /**
  * Why the history is releasing a step.

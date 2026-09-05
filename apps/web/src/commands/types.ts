@@ -1,4 +1,4 @@
-import type { CommandContext } from "@vravio/kernel";
+import type { CommandArgs, CommandContext } from "@vravio/kernel";
 import type { LocalizedText } from "../i18n";
 
 /**
@@ -19,12 +19,13 @@ export type CommandSurface = "menu" | "palette" | "layer-context" | "canvas-cont
 /**
  * One argument a command accepts.
  *
- * Read by nothing yet — this is the shape stage 9 records into a script and
- * plays back out of one, and it is defined here because that is where
- * docs/migration-plan.md section 4.3 puts it ("без схемы сценарий нечего
- * записывать и нечем воспроизводить"). A command that takes no arguments
- * simply omits `args`, which today is all of them; nothing in stage 7 pretends
- * to consume this.
+ * What a recorded script stores for a step and hands back on playback
+ * (docs/migration-plan.md 4.3: "без схемы сценарий нечего записывать и нечем
+ * воспроизводить"). The schema is also what `coerceArgs` checks a played-back
+ * step against, so a script edited by hand — or written by an older version —
+ * cannot feed a command something it never expected.
+ *
+ * A command that takes no arguments simply omits `args`.
  */
 export type ArgSpec =
   | { readonly kind: "number"; readonly label: LocalizedText; readonly min?: number; readonly max?: number; readonly step?: number; readonly default?: number }
@@ -60,8 +61,54 @@ export interface CommandDefinition {
    */
   readonly neverRecord?: boolean;
   isEnabled?(context: CommandContext): boolean;
-  execute(context: CommandContext): void | Promise<void>;
+  execute(context: CommandContext, args?: CommandArgs): void | Promise<void>;
 }
 
 /** What a definition file default-exports; a file may export several. */
 export type CommandModule = { default: CommandDefinition | readonly CommandDefinition[] };
+
+/**
+ * Reads a step's stored arguments against a command's schema.
+ *
+ * Returns the values a command can rely on, or `null` when the step cannot be
+ * satisfied — an argument missing with no default, a number outside its range,
+ * an enum value that is not one of the options. Playback stops on `null`
+ * rather than calling the command with something it never expected: a script
+ * is stored data, and stored data outlives the code that wrote it. A hand-
+ * edited script, or one recorded before an option's range changed, arrives
+ * here looking exactly like a fresh one.
+ */
+export function coerceArgs(schema: ArgSchema | undefined, args: CommandArgs | undefined): CommandArgs | null {
+  if (!schema) return args ?? {};
+  const out: Record<string, string | number | boolean> = {};
+
+  for (const [name, spec] of Object.entries(schema)) {
+    const given = args?.[name];
+    const value = given ?? spec.default;
+    if (value === undefined) return null;
+
+    switch (spec.kind) {
+      case "number": {
+        const number = typeof value === "number" ? value : Number(value);
+        if (!Number.isFinite(number)) return null;
+        if (spec.min !== undefined && number < spec.min) return null;
+        if (spec.max !== undefined && number > spec.max) return null;
+        out[name] = number;
+        break;
+      }
+      case "boolean":
+        if (typeof value !== "boolean") return null;
+        out[name] = value;
+        break;
+      case "enum":
+        if (typeof value !== "string" || !spec.options.includes(value)) return null;
+        out[name] = value;
+        break;
+      default:
+        if (typeof value !== "string") return null;
+        out[name] = value;
+        break;
+    }
+  }
+  return out;
+}

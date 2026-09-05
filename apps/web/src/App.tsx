@@ -7,6 +7,7 @@ import type { EnvironmentKind, RenderBackend } from "@vravio/kernel";
 import { DockLayout } from "./DockLayout";
 import { environmentMeta } from "./environment";
 import { toolById, toolsFor, type ToolDefinition, type ToolOption } from "./tools";
+import { smartCropRatios } from "./environments/raster/commands/definitions/smart-crop";
 import { readToolbarLayout, TOOLBAR_CHANGED_EVENT } from "./toolbar/layout";
 import { useDocuments } from "./useDocuments";
 import { activeCommandContext, ensureCommandsRegistered } from "./commands";
@@ -237,32 +238,6 @@ export function App() {
    * Runs on gradients and saturation rather than a model, so there is nothing to download and
    * it works on landscapes and product shots where face detection has nothing to find.
    */
-  const smartCrop = async (aspect: number, label: string) => {
-    if (!active || !isRasterDocumentState(active.state)) return;
-    const state = active.state;
-    // Compositing the document and scoring every region of it takes seconds on a
-    // large file, with nothing on screen to say so.
-    const { rect, score } = await withBusyPainted(
-      localized("Finding a crop (Подбор кадра)", store.language),
-      () => findSmartCrop(compositeRasterDocument(state), state.width, state.height, { aspect }),
-    );
-    if (rect.width < 8 || rect.height < 8) { diagnostic("warn", "smartcrop", "Suggested crop was too small to apply", { documentId: active.id }); return; }
-    diagnostic("info", "smartcrop", `${label}: ${rect.width}×${rect.height} at ${rect.x},${rect.y}`, { score: Math.round(score * 1000) / 1000 });
-    const history = kernel.historyByDocument.get(active.id);
-    if (!history) return;
-    const documentId = active.id;
-    const clone = (snapshot: RasterDocumentState): RasterDocumentState => ({
-      ...snapshot,
-      layers: snapshot.layers.map((layer) => ({ ...layer, pixels: layer.pixels.slice(), ...(layer.mask ? { mask: { ...layer.mask, pixels: layer.mask.pixels.slice() } } : {}) })),
-      selection: snapshot.selection ? { mask: snapshot.selection.mask.slice(), bounds: { ...snapshot.selection.bounds } } : null,
-      guides: snapshot.guides.map((guide) => ({ ...guide })),
-    });
-    const assign = (snapshot: RasterDocumentState): void => { kernel.documents.update<RasterDocumentState>(documentId, (current) => { Object.assign(current, clone(snapshot)); }); };
-    const before = clone(state), after = cropRasterDocument(before, rect);
-    void history.execute({ label: `Smart Crop (Умное кадрирование): ${label}`, redo: () => assign(after), undo: () => assign(before) });
-    store.setViewport(documentId, { mode: "fit", panX: 0, panY: 0 });
-  };
-
   const toggleActiveTextStyle = (key: "bold" | "italic" | "underline") => {
     if (!active || !isRasterDocumentState(active.state)) return;
     const state = active.state, layer = state.layers.find((item) => item.id === state.activeLayerId);
@@ -371,9 +346,9 @@ export function App() {
         <Menu label="Edit (Правка)" language={store.language} open={openMenu === "edit"} onToggle={() => setOpenMenu(openMenu === "edit" ? null : "edit")} items={[["Undo (Отменить)", "Ctrl+Z", () => void kernel.commands.execute("edit.undo", activeCommandContext())], ["Redo (Повторить)", "Ctrl+Shift+Z", () => void kernel.commands.execute("edit.redo", activeCommandContext())], ["Free Transform (Свободная трансформация)", "Ctrl+T", () => window.dispatchEvent(new Event("vravio-transform-start"))]]}/>
         {active?.kind === "raster" && <Menu label="Image (Изображение)" language={store.language} open={openMenu === "image"} onToggle={() => setOpenMenu(openMenu === "image" ? null : "image")} items={[
           { label: "Adjustments (Коррекция)", items: rasterAdjustments.map((definition) => [`${definition.name.en}… (${definition.name.ru}…)`, definition.shortcut ?? "", () => openImageAdjustment(definition), !activeRasterState || activeRasterState.layers.find((layer) => layer.id === activeRasterState.activeLayerId)?.kind !== "pixel"] as MainMenuItem) },
-          ["Smart Crop 1:1 (Умное кадрирование 1:1)", "", () => { void smartCrop(1, "1:1"); }, !active || !isRasterDocumentState(active.state)],
-          ["Smart Crop 16:9 (Умное кадрирование 16:9)", "", () => { void smartCrop(16 / 9, "16:9"); }, !active || !isRasterDocumentState(active.state)],
-          ["Smart Crop 4:5 (Умное кадрирование 4:5)", "", () => { void smartCrop(4 / 5, "4:5"); }, !active || !isRasterDocumentState(active.state)],
+          // One command with a `ratio` argument, one entry per ratio it offers:
+          // adding a fourth used to mean a fourth hand-wired menu line.
+          { label: "Smart Crop (Умное кадрирование)", items: Object.keys(smartCropRatios).map((ratio) => [ratio, "", () => { void kernel.commands.execute("image.smartCrop", activeCommandContext(), { ratio }); }, !active || !isRasterDocumentState(active.state)] as MainMenuItem) },
           ["Image Size… (Размер изображения…)", "Ctrl+Alt+I", () => {}, true],
           ["Canvas Size… (Размер холста…)", "Ctrl+Alt+C", () => {}, true],
         ]}/>}

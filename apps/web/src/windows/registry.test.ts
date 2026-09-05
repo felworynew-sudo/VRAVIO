@@ -15,13 +15,13 @@ describe("window catalogues", () => {
 
   it("discovers unique raster panels with components and themeable icons", () => {
     const panels = windowsFor("raster");
-    expect(panels.map((panel) => panel.id)).toEqual(["properties", "layers", "history", "assets", "color", "navigator", "effects"]);
+    expect(panels.map((panel) => panel.id)).toEqual(["properties", "layers", "history", "assets", "color", "navigator", "effects", "scripts"]);
     expect(new Set(panels.map((panel) => panel.component)).size).toBe(panels.length);
     expect(panels.every((panel) => panel.icon.endsWith(".svg"))).toBe(true);
   });
 
   it("discovers the vector panels", () => {
-    expect(windowsFor("vector").map((panel) => panel.id)).toEqual(["properties", "layers", "history", "color"]);
+    expect(windowsFor("vector").map((panel) => panel.id)).toEqual(["properties", "layers", "history", "color", "scripts"]);
   });
 
   it("keeps each environment's panels to itself", () => {
@@ -41,7 +41,9 @@ describe("window catalogues", () => {
     // and hiding its Colour panel deleted raster's remembered Colour panel as
     // well. The environment has to come from the document, not from the id.
     const shared = windowsFor("raster").map((panel) => panel.id).filter((id) => windowsFor("vector").some((panel) => panel.id === id));
-    expect(shared).toEqual(["properties", "layers", "history", "color"]);
+    // "scripts" joined them in stage 9 — scripts are shell-level work, but the
+    // window catalogue is per environment, so the panel is declared in both.
+    expect(shared).toEqual(["properties", "layers", "history", "color", "scripts"]);
   });
 
   it("answers for an environment that has no panels at all", () => {

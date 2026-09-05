@@ -13,6 +13,7 @@ import { localized, text } from "./i18n";
 import { renderTextLayerPixels } from "./textRender";
 import { ColorPanel } from "./ColorPanel";
 import { NavigatorPanel } from "./NavigatorPanel";
+import { ScriptsPanel } from "./scripts/ScriptsPanel";
 import type { Language } from "./store";
 import { rasterAdjustmentById, rasterAdjustments } from "./raster-adjustments/registry";
 import { windowById, windowsFor } from "./windows/registry";
@@ -558,6 +559,7 @@ const components = {
   effects: EffectsPanel,
   color: ColorPanel,
   navigator: NavigatorPanel,
+  scripts: ScriptsPanel,
 };
 
 /**

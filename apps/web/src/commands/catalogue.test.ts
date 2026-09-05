@@ -19,6 +19,10 @@ import { localized } from "../i18n";
  * Deliberately not a snapshot file: a snapshot that regenerates itself on
  * `-u` would have recorded whatever the refactor produced, which is precisely
  * the thing under test.
+ *
+ * A deliberate addition is edited in by hand, with a line saying why — which
+ * is the point. The list is meant to be tedious to change, so that changing it
+ * is always a decision rather than a keystroke.
  */
 const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "app.settings|||Edit",
@@ -43,6 +47,10 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "image.adjustment.levels|Mod+L||Image",
   "image.openElsewhereBranch|||Object",
   "image.openElsewhere|||Object",
+  // Added deliberately in stage 9: three hard-coded Smart Crop menu entries
+  // became one command with a `ratio` argument — the first command in the
+  // application to take one, and what stopped `args` being a field nobody read.
+  "image.smartCrop|||Image",
   "layer.bringForward|Mod+]||Layer",
   "layer.bringToFront|Mod+Shift+]||Layer",
   "layer.delete|||Layer",
@@ -62,6 +70,11 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "layer.viaCut|Mod+Shift+J||Layer",
   "roundtrip.apply|Mod+Shift+Enter||File",
   "roundtrip.detach|||File",
+  // Stage 9's four script commands, added deliberately.
+  "script.delete|||Scripts",
+  "script.play|||Scripts",
+  "script.record|||Scripts",
+  "script.stop|||Scripts",
   "select.all|Mod+A||Select",
   "select.feather|Shift+F6||Select",
   "select.hideEdges|Mod+H||View",
