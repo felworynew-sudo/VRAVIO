@@ -6,7 +6,8 @@ import { useShellStore, type Language } from "./store";
 import type { EnvironmentKind, RenderBackend } from "@vravio/kernel";
 import { DockLayout } from "./DockLayout";
 import { environmentMeta } from "./environment";
-import { rasterToolGroups, toolById, toolsFor, type ToolDefinition, type ToolOption } from "./tools";
+import { toolById, toolsFor, type ToolDefinition, type ToolOption } from "./tools";
+import { readToolbarLayout, TOOLBAR_CHANGED_EVENT } from "./toolbar/layout";
 import { useDocuments } from "./useDocuments";
 import { activeCommandContext, ensureCommandsRegistered } from "./commands";
 import { kernel } from "./kernel";
@@ -15,7 +16,7 @@ import { localized, resolveLabel, text } from "./i18n";
 import { OptionRow } from "./ui/molecules/OptionRow";
 import { SettingsDialog } from "./SettingsDialog";
 import { ModalHost } from "./modals/ModalHost";
-import { errorModal } from "./modals/runtime";
+import { errorModal, openModal } from "./modals/runtime";
 import { clearDiagnostics, diagnostic, readDiagnostics, type DiagnosticEntry } from "./diagnostics";
 import { FilterGalleryDialog } from "./FilterGalleryDialog";
 import { LiquifyDialog } from "./LiquifyDialog";
@@ -533,8 +534,32 @@ function ToolGlyph({ tool }: { tool: ToolDefinition }) {
 }
 
 function ToolPalette({ kind, language, activeToolId, openGroup, onOpenGroup, onSelect }: { kind: "raster" | "vector"; language: Language; activeToolId: string | undefined; openGroup: string | null; onOpenGroup(group: string | null): void; onSelect(toolId: string): void }) {
-  const available = toolsFor(kind);
-  const groups = kind === "raster" ? rasterToolGroups.map((ids) => ids.map((id) => toolById(id)).filter((tool): tool is ToolDefinition => Boolean(tool))) : available.map((tool) => [tool]);
+  // The arrangement, not the catalogue: which tools are in the palette, in
+  // what order, and grouped how, is the user's to change (stage 8). The
+  // default is still Photoshop's grouping out of `tools.ts`, so a palette
+  // nobody has rearranged looks exactly as it did.
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    const refresh = () => setRevision((value) => value + 1);
+    window.addEventListener(TOOLBAR_CHANGED_EVENT, refresh);
+    return () => window.removeEventListener(TOOLBAR_CHANGED_EVENT, refresh);
+  }, []);
+  const layout = useMemo(
+    () => readToolbarLayout(kind),
+    // `revision` is the dependency that matters: the layout lives in storage,
+    // not in React, so nothing else would tell this to read it again.
+    [kind, revision],
+  );
+  const groups = useMemo(() => layout.groups.map((ids) => ids.map((id) => toolById(id)).filter((tool): tool is ToolDefinition => Boolean(tool))), [layout]);
+  // A hidden tool keeps its shortcut — hiding declutters the palette, it does
+  // not take the tool away, and silently breaking a key the user knows would be
+  // worse than a crowded palette. But then pressing it leaves no slot lit, and
+  // a palette showing nothing selected while a tool is plainly active is a
+  // palette telling a lie. The edit button lights instead: it is both the
+  // honest answer to "which tool is this?" and exactly where you would go to
+  // put the tool back.
+  const activeIsHidden = Boolean(activeToolId && layout.hidden.includes(activeToolId));
+  const editLabel = text(language, "Customise toolbar", "Настроить панель инструментов");
   return <>{groups.map((group) => {
     if (!group.length) return null;
     const groupId = group.map((tool) => tool.id).join("|");
@@ -544,7 +569,16 @@ function ToolPalette({ kind, language, activeToolId, openGroup, onOpenGroup, onS
       {group.length > 1 && <button className="tool-group-arrow" aria-label={language === "ru" ? "Показать группу инструментов" : "Show tool group"} onClick={() => onOpenGroup(openGroup === groupId ? null : groupId)}>▾</button>}
       {openGroup === groupId && <div className="tool-flyout">{group.map((tool) => <button key={tool.id} className={tool.id === activeToolId ? "active" : ""} onClick={() => onSelect(tool.id)}><ToolGlyph tool={tool} /><span>{resolveLabel(tool.label, language)}</span><kbd>{tool.shortcut}</kbd></button>)}</div>}
     </div>;
-  })}</>;
+  })}
+    {/* Photoshop's own affordance, in Photoshop's own place: the palette says
+        what it holds, and this is where you change that. */}
+    <button
+      className={`toolbar-edit${activeIsHidden ? " active" : ""}`}
+      onClick={() => openModal("toolbar-editor", { kind })}
+      title={activeIsHidden ? `${resolveLabel(toolById(activeToolId)!.label, language)} — ${text(language, "hidden from the palette", "скрыт с панели")}` : editLabel}
+      aria-label={editLabel}
+    >…</button>
+  </>;
 }
 
 function WelcomeScreen({ language, requestNewDocument }: { language: Language; requestNewDocument(kind: EnvironmentKind): void }) {
