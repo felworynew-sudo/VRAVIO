@@ -9,6 +9,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run"
   },
+  "dependencies": {
+    "polygon-clipping": "0.15.7"
+  },
   "devDependencies": {
     "typescript": "7.0.2",
     "vitest": "4.1.11"

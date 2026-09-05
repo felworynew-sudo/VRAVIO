@@ -15,6 +15,8 @@ export * from "./platform";
 export * from "./roundtrip-manager";
 export * from "./storage-adapter";
 export * from "./types";
+export * from "./vector-geometry-port";
+export * from "./vector-geometry-reference";
 export * from "./worker-pool";
 export { createBufferRevisionOperation } from "./buffer-revisions";
 export type { BufferRevisionOptions } from "./buffer-revisions";

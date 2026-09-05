@@ -1,0 +1,5 @@
+# Cargo's own build cache — hundreds of MB, trivially rebuilt with `cargo
+# build`. pkg/ (wasm-pack's output) is deliberately NOT ignored here: see
+# docs/vector-plan.md's Stage 7 write-up for why it's committed instead of
+# built on every machine.
+/target

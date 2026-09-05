@@ -1,6 +1,11 @@
 packages:
   - "apps/*"
   - "packages/*"
+  # wasm-pack's build output for crates/vector-geometry (Stage 7 of
+  # docs/vector-plan.md) — its package.json lands one level under the crate
+  # itself, in pkg/, not at the crate root (which has no package.json, only
+  # Cargo.toml).
+  - "crates/*/pkg"
 allowBuilds:
   core-js: false
   # A transitive dependency of onnxruntime-web. Its postinstall only regenerates
