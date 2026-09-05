@@ -48,7 +48,7 @@ export const tools: readonly ToolDefinition[] = [
   { id: "raster.dodge", kind: "raster", icon: "☉", iconFile: "ОСВЕТЛИТЕЛЬ.svg", label: { en: "Dodge Tool", ru: "Осветлитель" }, shortcut: "O", options: [...brushTipOptions, { id: "exposure", label: { en: "Exposure", ru: "Экспозиция" }, type: "number", min: 1, max: 100, step: 1, defaultValue: 50, unit: "%" }, { id: "range", label: { en: "Range", ru: "Диапазон" }, type: "select", defaultValue: "midtones", values: [{ value: "shadows", label: { en: "Shadows", ru: "Тени" } }, { value: "midtones", label: { en: "Midtones", ru: "Полутона" } }, { value: "highlights", label: { en: "Highlights", ru: "Света" } }] }] },
   { id: "raster.burn", kind: "raster", icon: "☾", iconFile: "ЗАТЕМНИТЕЛЬ.svg", label: { en: "Burn Tool", ru: "Затемнитель" }, shortcut: "O", options: [...brushTipOptions, { id: "exposure", label: { en: "Exposure", ru: "Экспозиция" }, type: "number", min: 1, max: 100, step: 1, defaultValue: 50, unit: "%" }, { id: "range", label: { en: "Range", ru: "Диапазон" }, type: "select", defaultValue: "midtones", values: [{ value: "shadows", label: { en: "Shadows", ru: "Тени" } }, { value: "midtones", label: { en: "Midtones", ru: "Полутона" } }, { value: "highlights", label: { en: "Highlights", ru: "Света" } }] }] },
   {
-    id: "raster.inpaint", kind: "raster", icon: "✨", iconFile: "Точечная восстанавливающая.svg",
+    id: "raster.inpaint", kind: "raster", icon: "✨", iconFile: "УДАЛЕНИЕ ОБЪЕКТА.svg",
     label: { en: "Remove Tool", ru: "Удаление объекта" }, shortcut: "J",
     options: [
       { id: "size", label: { en: "Size", ru: "Размер" }, type: "number", min: 1, max: 1000, step: 1, defaultValue: 48, unit: "px" },
@@ -83,11 +83,15 @@ export const rasterToolGroups: readonly (readonly string[])[] = [
   ["raster.brush", "raster.pencil", "raster.highlighter"],
   ["raster.eraser"],
   ["raster.blur", "raster.smudge"],
-  // Photoshop keeps healing and cloning apart: the healing group is J, the
-  // stamp is S. Folding them together hid the patch tool behind a flyout on a
-  // tool it has nothing to do with.
-  ["raster.spotHeal", "raster.patch", "raster.inpaint"],
-  ["raster.clone"],
+  // One retouching slot: healing, patch, stamp and removal together. Photoshop
+  // keeps the stamp apart (healing is J, the stamp is S) and this project did
+  // too, on the grounds that folding them hid the patch tool behind a flyout
+  // on a tool it had nothing to do with — but with the removal brush added
+  // they are four ways of doing one thing, "make this go away", and the
+  // owner's call is that they belong together. Shortcuts are unaffected: the
+  // shortcut groups are built from each tool's own letter, not from this
+  // layout, so the stamp stays on S and the rest on J.
+  ["raster.spotHeal", "raster.patch", "raster.clone", "raster.inpaint"],
   ["raster.dodge", "raster.burn"],
   ["raster.fill"],
   ["raster.eyedropper"],
