@@ -1,4 +1,5 @@
 import { drawDab, drawQuadraticStrokeSegment, parseHexColor, sampleAverage, toHexColor, unionRect, type Point, type RasterRect } from "@vravio/env-raster";
+import { locksRefuse } from "./lock-guard";
 import type { PaintTarget, RasterToolDefinition, ToolContext, ToolPointer } from "./types";
 
 /**
@@ -137,7 +138,7 @@ export function createPaintStrokeTool(config: PaintStrokeConfig): RasterToolDefi
         }
         return;
       }
-      if (context.activeLayer?.locked) return;
+      if (locksRefuse(context, config.erase ? "erase" : "paint", config.id)) return;
       context.capturePointer(pointer.pointerId);
 
       const key = strokeKey(context.paintTarget);

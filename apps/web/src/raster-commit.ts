@@ -1,11 +1,13 @@
 import { useEffect, useRef, type RefObject } from "react";
 import {
-  activeRasterLayer, changedRenderRegion, clampRegionToDocument, cloneRasterState, compositeRasterDocument, compositeRasterRegion, confineToSelection,
-  DirtyRegion, layerRenderSignatures, mipForZoom, RasterTileCache, setLayerPixels, RASTER_ASSET_MIME,
+  activeRasterLayer, changedRenderRegion, clampRegionToDocument, cloneRasterState, compositeRasterDocument, compositeRasterRegion,
+  DirtyRegion, flattenRasterLayers, layerRenderSignatures, mipForZoom, RasterTileCache, setLayerPixels, RASTER_ASSET_MIME,
   type LayerRenderSignature, type PixelSelection, type RasterDocumentState, type RasterRect,
 } from "@vravio/env-raster";
 import { createBufferRevisionOperation, type AssetId, type VravioDocument } from "@vravio/kernel";
 import { kernel } from "./kernel";
+import { diagnostic } from "./diagnostics";
+import { applyRasterRules } from "./environments/raster/rules/registry";
 import { cropPixels, fromBytes, putPixels, putRegionPixels, rgbaToMask, stateDeltaBytes, toBytes, withActiveLayerPixels, withLayerMaskPixels } from "./raster-pixel-buffers";
 import type { DocumentViewport } from "./store";
 
@@ -173,7 +175,32 @@ export function useRasterCommit(params: {
    * start dropping undo depth after a dozen strokes.
    */
   const commitPixels = async (before: Uint8ClampedArray, after: Uint8ClampedArray, label: string, target: "pixels" | "mask" = "pixels", layerId = state.activeLayerId, bounds?: RasterRect | null) => {
-    if (bounds) documentDirty.current.add(bounds);
+    // Every pixel edit passes the rules before it passes anywhere else — this
+    // is the door section 4.4 of the plan is about. A rule may rewrite the
+    // edit (confine it to the selection) or refuse it outright (a locked
+    // layer), and the refusal ends the commit here: nothing is shown, nothing
+    // is stored, and no history step is recorded for an edit that never was.
+    const outcome = applyRasterRules(
+      { before, after, label, target, layerId, bounds: bounds ?? null },
+      { document: state, layer: flattenRasterLayers(state.layers).find((item) => item.id === layerId) ?? null },
+    );
+    if (!outcome.edit) {
+      diagnostic("info", "rules.veto", `Edit refused by rule "${outcome.vetoedBy}"`, { documentId: document.id, layerId, rule: outcome.vetoedBy });
+      // A gesture that gets this far already painted straight to the canvas
+      // via schedulePreview — outside React, ahead of ever knowing whether
+      // the edit would hold up (paint-stroke.ts's whole reason for existing).
+      // A veto leaves the document exactly as it was, but nobody told the
+      // canvas: document.revision never changes, so the tile-cache effect
+      // above never re-fires, and the refused stroke would sit there looking
+      // committed until some unrelated edit happened to repaint over it.
+      // Recompositing from `state` here is what makes the screen agree with
+      // the document it was just told to disagree with.
+      const canvas = canvasRef.current;
+      if (canvas) putPixels(canvas, compositeRasterDocument(state), state.width, state.height);
+      return;
+    }
+    const edit = outcome.edit;
+    if (edit.bounds) documentDirty.current.add(edit.bounds);
     const history = kernel.historyByDocument.get(document.id);
     if (!history) throw new Error(`History missing for ${document.id}`);
     const assign = (pixels: Uint8Array | Uint8ClampedArray): void => {
@@ -189,11 +216,10 @@ export function useRasterCommit(params: {
       });
     };
 
-    // A selection confines every tool, without exception. Each tool honours it
-    // while painting, but this is the guarantee: an edit that reached here
-    // having touched pixels outside the selection has them put back, so a tool
-    // added later cannot quietly escape it.
-    const confined = target === "pixels" && state.selection ? confineToSelection(before, after, state.selection.mask) : after;
+    // One buffer, from here to both consumers. The screen gets `confined` and
+    // so does the asset store; recomputing it for the second would be how the
+    // two quietly disagree, which is the bug section 4.4 was written after.
+    const confined = edit.after;
 
     // Show the result now; the gesture is over and the user is looking at it.
     assign(confined);

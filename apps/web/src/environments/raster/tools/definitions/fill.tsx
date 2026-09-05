@@ -1,5 +1,6 @@
 import { floodFill, parseHexColor } from "@vravio/env-raster";
 import type { RasterToolDefinition } from "../types";
+import { locksRefuse } from "../lock-guard";
 
 /**
  * The paint bucket: a contiguous flood fill from the pixel clicked.
@@ -31,7 +32,7 @@ const fill: RasterToolDefinition<null> = {
   createState: () => null,
 
   onPointerDown(context, pointer) {
-    if (context.activeLayer?.locked) return;
+    if (locksRefuse(context, "paint", "raster.fill")) return;
 
     const before = context.targetPixels();
     const after = before.slice();

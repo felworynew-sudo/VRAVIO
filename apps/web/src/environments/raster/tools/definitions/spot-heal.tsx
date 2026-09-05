@@ -1,5 +1,6 @@
 import { copyHealedRegion, spotHealApply, spotHealDab, spotHealStrokeSegment } from "@vravio/env-raster";
 import type { RasterToolDefinition, ToolContext } from "../types";
+import { locksRefuse } from "../lock-guard";
 
 /**
  * Spot healing: drag marks a region, and only on release is it actually
@@ -86,7 +87,7 @@ const spotHeal: RasterToolDefinition<SpotHealState> = {
 
   onPointerDown(context, pointer) {
     if (context.paintTarget.kind === "mask") return;
-    if (context.activeLayer?.locked) return;
+    if (locksRefuse(context, "paint", "raster.spotHeal")) return;
     context.capturePointer(pointer.pointerId);
     const before = context.layerPixels();
     const options = context.options;

@@ -322,8 +322,13 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       const pointer = toolPointerFrom(event);
       if (pointer) { catalogueTool.onPointerDown(toolContextFor(catalogueTool.id, canvas), pointer); return; }
     }
-    // Locks are checked once, here, rather than in each tool: every tool below
-    // this point either paints or moves, and a refusal has to be visible or the
+    // The lock check for every tool that has not moved into the catalogue yet:
+    // the dispatch above returns before this line, so a catalogue tool never
+    // reaches it and asks `locksRefuse` for itself instead (tools/lock-guard.ts
+    // — which is where the reasoning lives, including why the rules rather than
+    // this are the actual enforcement). This used to read "checked once, here,
+    // rather than in each tool", which stopped being true the moment the first
+    // tool moved above it. A refusal still has to be visible either way, or the
     // user is left wondering why the canvas stopped responding.
     if (!maskTarget && activeToolId) {
       const action = activeToolId === "raster.eraser" ? "erase" : "paint";

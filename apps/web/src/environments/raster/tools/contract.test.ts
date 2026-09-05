@@ -544,3 +544,29 @@ describe("the checks themselves catch what they are for", () => {
     expect(run({ anything: true })).toBe(run({ anything: false }));
   });
 });
+
+describe("locks reach every tool that paints into the active layer", () => {
+  /** Each tool definition's source, keyed by file name. */
+  const sources = Object.entries(
+    import.meta.glob<string>(["./definitions/*.ts*", "./*-stroke.ts"], { eager: true, query: "?raw", import: "default" }),
+  ).map(([path, text]) => [path.slice(path.lastIndexOf("/") + 1), text] as const);
+
+  it("found the tool sources this test reads", () => {
+    expect(sources.length).toBeGreaterThan(5);
+  });
+
+  it("leaves the raw `locked` flag to the one tool it is right for", () => {
+    // `locked` is Lock All by itself; a layer with only "lock pixels" set
+    // passes it. Every tool in the catalogue read it that way until this was
+    // found live: the stroke painted to the canvas, the rules refused it at the
+    // commit door, and the user watched it vanish. `locksRefuse` asks
+    // `layerAccepts` instead. Stage 5 caused this by moving the tools above the
+    // workspace's own lock check, which returns too late to ever see them.
+    const offenders = sources.filter(([, text]) => /activeLayer\?\.locked|activeLayer\.locked/.test(text)).map(([name]) => name);
+
+    // shape.tsx is the exception, and stays one: it appends a layer of its own
+    // rather than writing into the active one, so a lock on whatever happens to
+    // be selected has no bearing on it beyond Lock All.
+    expect(offenders).toEqual(["shape.tsx"]);
+  });
+});

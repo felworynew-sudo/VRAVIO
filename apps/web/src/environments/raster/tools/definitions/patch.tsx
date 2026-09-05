@@ -1,5 +1,6 @@
 import { combineSelections, createPolygonSelection, patchFromSelection, selectionOutlinePath, type Point } from "@vravio/env-raster";
 import type { RasterToolDefinition, ToolContext } from "../types";
+import { locksRefuse } from "../lock-guard";
 
 /**
  * The patch tool: drag a selected region elsewhere on the canvas and it is
@@ -56,7 +57,7 @@ const patch: RasterToolDefinition<PatchState> = {
 
   onPointerDown(context, pointer) {
     if (context.paintTarget.kind === "mask") return;
-    if (context.activeLayer?.locked) return;
+    if (locksRefuse(context, "paint", "raster.patch")) return;
     context.capturePointer(pointer.pointerId);
     if (!context.selection) {
       context.setState({ fallbackLasso: { pointerId: pointer.pointerId, points: [pointer.point] }, stroke: null });

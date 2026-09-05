@@ -1,5 +1,6 @@
 import { blurDab, blurStrokeSegment, dodgeBurnDab, dodgeBurnStrokeSegment, sampleAverage, smudgeStrokeSegment, toHexColor, unionRect, type DodgeBurnRange, type Point, type RasterRect } from "@vravio/env-raster";
 import type { RasterToolDefinition, ToolContext, ToolPointer } from "./types";
+import { locksRefuse } from "./lock-guard";
 
 /**
  * The dragged-stroke shape blur, smudge, dodge and burn share.
@@ -114,7 +115,7 @@ export function createTonalStrokeTool(config: TonalStrokeConfig): RasterToolDefi
         }
         return;
       }
-      if (context.activeLayer?.locked) return;
+      if (locksRefuse(context, "paint", config.id)) return;
       // Nothing tonal to adjust in a mask's black-and-white threshold.
       if (context.paintTarget.kind === "mask") return;
       context.capturePointer(pointer.pointerId);

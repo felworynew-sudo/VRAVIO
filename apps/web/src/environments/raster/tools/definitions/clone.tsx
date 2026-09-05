@@ -1,5 +1,6 @@
 import { cloneDab, cloneStrokeSegment, unionRect, type Point, type RasterRect } from "@vravio/env-raster";
 import type { RasterToolDefinition, ToolContext } from "../types";
+import { locksRefuse } from "../lock-guard";
 
 /**
  * The clone stamp: Alt-click sets where it reads from, then every stroke
@@ -81,7 +82,7 @@ const clone: RasterToolDefinition<CloneState> = {
       context.setCloneOffset(null);
       return;
     }
-    if (context.activeLayer?.locked) return;
+    if (locksRefuse(context, "paint", "raster.clone")) return;
     const source = context.cloneSource;
     if (!source) return;
     context.capturePointer(pointer.pointerId);
