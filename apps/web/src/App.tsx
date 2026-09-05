@@ -13,6 +13,7 @@ import { readToolbarLayout, TOOLBAR_CHANGED_EVENT } from "./toolbar/layout";
 import { useDocuments } from "./useDocuments";
 import { activeCommandContext, ensureCommandsRegistered } from "./commands";
 import { kernel } from "./kernel";
+import { closeWindow, isDesktop, minimizeWindow, toggleMaximizeWindow } from "./desktop-window";
 import { EnvironmentIcon } from "./EnvironmentIcon";
 import { localized, resolveLabel, text } from "./i18n";
 import { OptionRow } from "./ui/molecules/OptionRow";
@@ -329,7 +330,7 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [store, active]);
 
-  return <div className="app" data-theme={store.theme} style={themeStyle}>
+  return <div className="app" data-theme={store.theme} data-has-toolbar={active?.kind === "raster" || active?.kind === "vector"} style={themeStyle}>
     <header className="menu-bar">
       <strong className={active ? "brand compact" : "brand full"}><img src={active ? "/логотип цветная плашка.svg" : "/логотип белый.svg"} alt="VRAVIO" /></strong>
       <nav aria-label={store.language === "ru" ? "Главное меню" : "Main menu"}>
@@ -342,6 +343,7 @@ export function App() {
           ["Save a Copy… (Сохранить копию…)", "Ctrl+Alt+S", () => void saveProject(false), !active],
           ["Export… (Экспортировать…)", "Ctrl+Shift+E", () => setExportOpen(true), !active || !isRasterDocumentState(active.state)],
           ["Print… (Печать…)", "Ctrl+P", () => window.print(), !active],
+          ["Settings… (Настройки…)", "", () => store.setSettingsOpen(true)],
           ["Close (Закрыть)", "Ctrl+W", () => active && store.closeDocument(active.id), !active],
         ]}/>
         <Menu label="Edit (Правка)" language={store.language} open={openMenu === "edit"} onToggle={() => setOpenMenu(openMenu === "edit" ? null : "edit")} items={[["Undo (Отменить)", "Ctrl+Z", () => void kernel.commands.execute("edit.undo", activeCommandContext())], ["Redo (Повторить)", "Ctrl+Shift+Z", () => void kernel.commands.execute("edit.redo", activeCommandContext())], ["Free Transform (Свободная трансформация)", "Ctrl+T", () => window.dispatchEvent(new Event("vravio-transform-start"))]]}/>
@@ -399,10 +401,37 @@ export function App() {
         <Menu label="Window (Окно)" language={store.language} open={openMenu === "window"} onToggle={() => setOpenMenu(openMenu === "window" ? null : "window")} items={[...windowMenuItems(active?.kind, store.language), ["Settings (Настройки)", "", () => store.setSettingsOpen(true)], ["Command Palette (Палитра команд)", "Ctrl+K", () => store.setPaletteOpen(true)]]}/>
         <Menu label="Help (Справка)" language={store.language} open={openMenu === "help"} onToggle={() => setOpenMenu(openMenu === "help" ? null : "help")} items={[["Diagnostics log (Журнал диагностики)", "", () => setDiagnosticsOpen(true)], ["About VRAVIO (О VRAVIO)", "", () => window.alert("VRAVIO — local-first creative suite")]]}/>
       </nav>
+      <button className="settings-button" onClick={() => store.setSettingsOpen(true)} aria-label={store.language === "ru" ? "Настройки" : "Settings"} title={store.language === "ru" ? "Настройки" : "Settings"}><img src="/НАСТРОЙКИ.svg" alt=""/></button>
+      {/* Fills the gap between the menu and the window controls (or, on the
+          web build, just trailing space) — its own element rather than relying
+          on <nav>'s width, so there is always a real draggable strip here
+          regardless of how many menus fit. Inert on the web build: the
+          attribute means nothing without Tauri's injected drag handler. */}
+      <div className="titlebar-drag" data-tauri-drag-region="true"/>
       <input ref={openImageRef} hidden type="file" accept={`image/png,image/jpeg,image/webp,image/gif,image/avif,image/svg+xml,.svg,.psd,.psb,${rawFileExtensions.map((extension) => `.${extension}`).join(",")}`} onChange={(event) => { const file = event.target.files?.[0]; if (file) void importImage(file); event.currentTarget.value = ""; }}/>
       <button className="palette-button" onClick={() => store.setPaletteOpen(true)}>⌘ {store.language === "ru" ? "Команды" : "Commands"} <kbd>Ctrl K</kbd></button>
-      <button className="settings-button" onClick={() => store.setSettingsOpen(true)} aria-label={store.language === "ru" ? "Настройки" : "Settings"} title={store.language === "ru" ? "Настройки" : "Settings"}>⚙</button>
+      {/* Native window chrome, folded into the same row as the menu — the
+          OS title bar is switched off entirely (tauri.conf.json's
+          decorations: false), so without this the window would have no way
+          to minimize, maximize or close at all. Absent on the web build,
+          where the browser's own chrome already does this job. */}
+      {isDesktop && <div className="window-controls">
+        <button aria-label={store.language === "ru" ? "Свернуть" : "Minimize"} onClick={() => void minimizeWindow()}>
+          <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><line x1="1" y1="5" x2="9" y2="5" stroke="currentColor" strokeWidth="1"/></svg>
+        </button>
+        <button aria-label={store.language === "ru" ? "Развернуть" : "Maximize"} onClick={() => void toggleMaximizeWindow()}>
+          <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><rect x="1.5" y="1.5" width="7" height="7" fill="none" stroke="currentColor" strokeWidth="1"/></svg>
+        </button>
+        <button className="window-close" aria-label={store.language === "ru" ? "Закрыть" : "Close"} onClick={() => void closeWindow()}>
+          <svg viewBox="0 0 10 10" width="10" height="10" aria-hidden="true"><line x1="1" y1="1" x2="9" y2="9" stroke="currentColor" strokeWidth="1"/><line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" strokeWidth="1"/></svg>
+        </button>
+      </div>}
     </header>
+
+    {(active?.kind === "raster" || active?.kind === "vector") && <aside className="toolbar" aria-label="Tools (Инструменты)">
+      <ToolPalette kind={active.kind} language={store.language} activeToolId={activeToolId} openGroup={openToolGroup} onOpenGroup={setOpenToolGroup} onSelect={(toolId) => { store.setTool(active.id, toolId); setOpenToolGroup(null); }} />
+      {active.kind === "raster" && <ColorWells foreground={effectiveForegroundColor} background={effectiveBackgroundColor} monochrome={Boolean(editingMaskLayerId)} onForeground={(color) => editingMaskLayerId ? store.setMaskForegroundWhite(active.id, color.toLowerCase() !== "#000000") : store.setForegroundColor(color)} onBackground={(color) => editingMaskLayerId ? store.setMaskForegroundWhite(active.id, color.toLowerCase() === "#000000") : store.setBackgroundColor(color)} onSwap={() => editingMaskLayerId ? store.swapMaskColors(active.id) : store.swapColors()} onReset={() => editingMaskLayerId ? store.setMaskForegroundWhite(active.id, false) : store.resetColors()} />}
+    </aside>}
 
     {documents.length > 1 && <div className="document-tabs" role="tablist" aria-label="Documents (Документы)">
       {documents.map((document) => <div className="tab-wrap" key={document.id} data-kind={document.kind} data-linked={document.provenance ? "" : undefined}>
@@ -419,11 +448,7 @@ export function App() {
 
     <OptionsBar language={store.language} tool={activeTool} pixelsPerInch={active && isRasterDocumentState(active.state) ? active.state.resolution : undefined} values={activeTool ? { ...(store.toolOptions[activeTool.id] ?? {}), ...(activeTool.options.some((option) => option.id === "color") ? { color: effectiveForegroundColor } : {}) } : {}} transform={transformMetrics} onTransformCommit={() => window.dispatchEvent(new Event("vravio-transform-commit"))} onTransformCancel={() => window.dispatchEvent(new Event("vravio-transform-cancel"))} onChange={(id, value) => { if (!activeTool) return; store.setToolOption(activeTool.id, id, value); if (id === "color") { if (editingMaskLayerId && active) store.setMaskForegroundWhite(active.id, String(value).toLowerCase() !== "#000000"); else store.setForegroundColor(String(value)); } }} alignSelectionCount={active && isRasterDocumentState(active.state) ? (selectedLayerIds.length || 1) : 0} onAlign={(edge) => alignOrDistributeLayers("align", edge)} onDistribute={(edge) => alignOrDistributeLayers("distribute", edge)} />
 
-    <main className="workspace" data-has-toolbar={active?.kind === "raster" || active?.kind === "vector"}>
-      {(active?.kind === "raster" || active?.kind === "vector") && <aside className="toolbar" aria-label="Tools (Инструменты)">
-        <ToolPalette kind={active.kind} language={store.language} activeToolId={activeToolId} openGroup={openToolGroup} onOpenGroup={setOpenToolGroup} onSelect={(toolId) => { store.setTool(active.id, toolId); setOpenToolGroup(null); }} />
-        {active.kind === "raster" && <ColorWells foreground={effectiveForegroundColor} background={effectiveBackgroundColor} monochrome={Boolean(editingMaskLayerId)} onForeground={(color) => editingMaskLayerId ? store.setMaskForegroundWhite(active.id, color.toLowerCase() !== "#000000") : store.setForegroundColor(color)} onBackground={(color) => editingMaskLayerId ? store.setMaskForegroundWhite(active.id, color.toLowerCase() === "#000000") : store.setBackgroundColor(color)} onSwap={() => editingMaskLayerId ? store.swapMaskColors(active.id) : store.swapColors()} onReset={() => editingMaskLayerId ? store.setMaskForegroundWhite(active.id, false) : store.resetColors()} />}
-      </aside>}
+    <main className="workspace">
       {active ? <DockLayout /> : <WelcomeScreen language={store.language} requestNewDocument={store.requestNewDocument} />}
     </main>
     <footer className="status-bar"><span>{active ? resolveLabel(environmentMeta[active.kind].label, store.language) : text(store.language, "Ready", "Готово")}</span><span>{active ? `${Math.round((store.viewports[active.id]?.zoom ?? 1) * 100)}% · ` : ""}sRGB · {renderBackend ?? "detecting"}</span></footer>
