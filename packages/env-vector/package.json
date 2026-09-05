@@ -13,10 +13,12 @@
   },
   "devDependencies": {
     "typescript": "7.0.2",
-    "vitest": "4.1.11"
+    "vitest": "4.1.11",
+    "@types/rbush": "^3.0.4"
   },
   "dependencies": {
     "@vravio/kernel": "workspace:*",
-    "@vravio/env-raster": "workspace:*"
+    "@vravio/env-raster": "workspace:*",
+    "rbush": "^4.0.1"
   }
 }

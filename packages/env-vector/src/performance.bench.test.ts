@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createShape, createVectorDocument } from "./document";
 import { shapeAt } from "./shape-ops";
+import { buildShapeSpatialIndex, shapeAtIndexed } from "./spatial-index";
 import { makeVectorOrderKey } from "./types";
 import type { VectorDocumentState } from "./types";
 
@@ -108,6 +109,56 @@ describe("performance floor (stage 1 of the vector plan)", () => {
     // stage 4's spatial index exists to bring down by visiting far fewer
     // shapes per query.
     expect(elapsed).toBeLessThan(4 * THRESHOLD_MULTIPLIER);
+  });
+
+  /**
+   * Stage 4: `shapeAtIndexed` over `buildShapeSpatialIndex`, re-measured
+   * against this same 10,000-shape fixture. The result is not uniformly
+   * good news, and both halves are worth recording rather than only the
+   * flattering one.
+   *
+   * A **miss** — the common case in real use, since most pointer positions
+   * are not exactly on a shape — went from ~3.4ms (linear scan) to
+   * ~0.002ms: effectively independent of shape count, which is the whole
+   * point of an index.
+   *
+   * A **hit** barely improved (~1.4ms linear vs ~1.0ms indexed) on *this*
+   * fixture specifically, and the reason is the fixture, not the index:
+   * 10,000 160x100 rectangles scattered across an 1800x1000 area overlap
+   * enormously — hundreds deep at any given point — so disambiguating "which
+   * of these many candidates is topmost" still costs real per-shape work
+   * even once the R-tree has narrowed the field. A real document is not
+   * this densely stacked; this number is an honest worst case, not the
+   * typical one, and is recorded so a future stage does not have to
+   * rediscover it.
+   *
+   * Building the index costs ~12ms at 10,000 shapes — a real, one-time
+   * (per document revision) expense a caller pays once and reuses across
+   * many pointer moves, not once per query. Its own threshold exists so
+   * that cost cannot silently grow unbounded either.
+   */
+  it("shapeAtIndexed misses on 10,000 shapes in time independent of shape count", () => {
+    const state = scatteredDocument(10000);
+    const index = buildShapeSpatialIndex(state.shapes);
+
+    const elapsed = fastestOf(() => { shapeAtIndexed(index, state.shapes, MISS_X, MISS_Y); });
+
+    // Measured on this fixture: ~0.002ms. A generous absolute floor rather
+    // than a multiple of that (0.002 * 6 = 0.012ms) — a number this close to
+    // timer resolution is noisy in a way a multiplier does not help with;
+    // what matters is staying near-zero, not the third decimal place.
+    expect(elapsed).toBeLessThan(0.5);
+  });
+
+  it("building the spatial index over 10,000 shapes stays bounded", () => {
+    const state = scatteredDocument(10000);
+
+    const elapsed = fastestOf(() => { buildShapeSpatialIndex(state.shapes); });
+
+    // Measured on this fixture: ~12.3ms. Paid once per document revision by
+    // a caller that memoises the index (see VectorWorkspace.tsx), not once
+    // per pointer move — still a real cost, so it gets its own floor.
+    expect(elapsed).toBeLessThan(12.3 * THRESHOLD_MULTIPLIER);
   });
 
   it("serializes a 1,000-shape document — the cost autosave and session restore pay", () => {

@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { addShape, createImageShape, isIdentityMatrix, isVectorDocumentState, matrixToCss, pathData, removeShapes, shapeAt, shapeWorldBounds, siblingsOf, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { addShape, buildShapeSpatialIndex, createImageShape, isIdentityMatrix, isVectorDocumentState, matrixToCss, pathData, removeShapes, shapeAtIndexed, shapeWorldBoundsIndexed, siblingsOf, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
 import { RASTER_ASSET_MIME, decodeRasterAsset, encodeRasterAsset } from "@vravio/env-raster";
 import { colorToCss } from "@vravio/kernel";
 import type { AssetId, VravioDocument } from "@vravio/kernel";
@@ -136,6 +136,14 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   const workspaceRef = useRef<HTMLDivElement>(null);
   const contextMenu = useContextMenu();
 
+  // Rebuilt only when the document actually changes (its revision counter,
+  // incremented by every kernel.documents.update call — see
+  // packages/kernel/src/document-store.ts) rather than on every render or
+  // every pointer move, which is what makes stage 4's index a net win: the
+  // one-time O(n) cost of building it (~12ms at 10,000 shapes, see
+  // performance.bench.test.ts) is paid once per edit, not once per query.
+  const spatialIndex = useMemo(() => buildShapeSpatialIndex(state.shapes, vectorTextMeasurer), [document.revision]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // One state slot per tool id, held here rather than inside a tool — the
   // same reason raster's RasterWorkspace does: a tool file stays a plain
   // object with no hooks of its own, and switching tools cannot leave a
@@ -264,7 +272,7 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
     }
     const workspace = workspaceRef.current;
     const point = workspace ? toDocumentPoint(event, workspace, viewport, state.width, state.height) : null;
-    const hit = point ? shapeAt(state, point.x, point.y, vectorTextMeasurer) : null;
+    const hit = point ? shapeAtIndexed(spatialIndex, state.shapes, point.x, point.y, vectorTextMeasurer) : null;
     if (hit?.kind === "image") {
       kernel.documents.update<VectorDocumentState>(document.id, (draftState) => { draftState.activeShapeId = hit.id; draftState.selection = [hit.id]; });
       contextMenu.open(event, [
@@ -280,8 +288,11 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   const active = state.shapes.find((shape) => shape.id === state.activeShapeId) ?? null;
   // World bounds, not local: an active shape sitting inside a rotated group
   // needs its selection box drawn where it actually appears on screen, not
-  // where it would sit if it had no parent.
-  const bounds = active ? shapeWorldBounds(active, state.shapes, vectorTextMeasurer) : null;
+  // where it would sit if it had no parent. Read from the index rather than
+  // recomputed — buildShapeSpatialIndex already walked every shape's
+  // ancestor chain once this revision; a second walk here would just repeat
+  // that work every render.
+  const bounds = active ? (shapeWorldBoundsIndexed(spatialIndex, active.id) ?? null) : null;
   const stageStyle = { width: state.width, height: state.height, transform: `translate(-50%, -50%) translate(${viewport.panX}px, ${viewport.panY}px) rotate(${viewport.rotation}deg) scale(${viewport.zoom})` } as CSSProperties;
 
   const handleWheel = (event: React.WheelEvent) => {

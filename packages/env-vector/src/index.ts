@@ -4,6 +4,7 @@ export * from "./shape-ops";
 export * from "./path-data";
 export * from "./matrix";
 export * from "./geometry";
+export * from "./spatial-index";
 export * from "./units";
 export * from "./tree";
 export * from "./group-ops";
