@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import type { EnvironmentKind } from "@vravio/kernel";
 import { EnvironmentIcon } from "./EnvironmentIcon";
 import { environmentMeta } from "./environment";
 import { resolveLabel, text } from "./i18n";
@@ -48,9 +49,19 @@ function pixelsPerInch(resolution: number, unit: "ppi" | "ppcm"): number { retur
 function toPixels(value: number, unit: Unit, ppi: number): number { return unit === "px" ? value : value * ppi / (unit === "in" ? 1 : unit === "cm" ? 2.54 : 25.4); }
 function fromPixels(value: number, unit: Unit, ppi: number): number { return unit === "px" ? value : value / ppi * (unit === "in" ? 1 : unit === "cm" ? 2.54 : 25.4); }
 
-export function NewDocumentDialog() {
+/**
+ * Which kind of document is being composed is this dialog's own business.
+ *
+ * It used to be `newDocumentKind` in the shell store, which is where the
+ * dialog's *visibility* lived too — the field was both "is the dialog open"
+ * and "which tab is selected", so switching tabs went through the store and
+ * `openDocument` closed the dialog by clearing it. Opening by id
+ * (`openModal("new-document")`, stage 7) takes the visibility half away, and
+ * the remaining half is local state: nothing outside these tabs reads it.
+ */
+export function NewDocumentDialog({ initialKind, close }: { initialKind: EnvironmentKind; close: () => void }) {
   const store = useShellStore();
-  const kind = store.newDocumentKind;
+  const [kind, setKind] = useState<EnvironmentKind>(initialKind);
   const language = store.language;
   const [category, setCategory] = useState<PresetCategory>("recent");
   const [name, setName] = useState("");
@@ -86,7 +97,7 @@ export function NewDocumentDialog() {
     setUnit(next); setWidth(Number(fromPixels(currentWidthPx, next, currentPpi).toFixed(next === "px" ? 0 : 3))); setHeight(Number(fromPixels(currentHeightPx, next, currentPpi).toFixed(next === "px" ? 0 : 3)));
   };
   const applyPreset = (preset: Preset) => { setUnit("px"); setWidth(preset.width); setHeight(preset.height); setResolution(preset.resolution); setResolutionUnit("ppi"); };
-  const create = () => store.openDocument(kind, { ...(name.trim() ? { name: name.trim() } : {}), width: widthPx, height: heightPx, resolution, resolutionUnit, backgroundColor, pixelAspectRatio, artboards, frameRate, sampleRate, channels, audioBitDepth });
+  const create = () => { close(); store.openDocument(kind, { ...(name.trim() ? { name: name.trim() } : {}), width: widthPx, height: heightPx, resolution, resolutionUnit, backgroundColor, pixelAspectRatio, artboards, frameRate, sampleRate, channels, audioBitDepth }); };
   const environmentKinds = ["raster", "vector", "audio", "video"] as const;
 
   const allCategories: readonly [PresetCategory, string][] = [
@@ -98,10 +109,10 @@ export function NewDocumentDialog() {
   // or "Mobile" tab with nothing inside it is worse than not showing the tab at all.
   const categories = allCategories.filter(([id]) => id === "recent" || kindPresets.some((preset) => preset.category === id));
 
-  return <div className="dialog-backdrop new-document-backdrop" onMouseDown={store.cancelNewDocument}>
+  return <div className="dialog-backdrop new-document-backdrop" onMouseDown={close}>
     <section className="new-document-dialog" role="dialog" aria-modal="true" aria-labelledby="new-document-title" onMouseDown={(event) => event.stopPropagation()}>
-      <header><div className="new-document-title"><EnvironmentIcon kind={kind} /><div><small>{text(language, "NEW DOCUMENT", "НОВЫЙ ДОКУМЕНТ")}</small><h2 id="new-document-title">{text(language, "Create", "Создать")} {resolveLabel(meta.label, language)}</h2></div></div><button onClick={store.cancelNewDocument} aria-label={text(language, "Close", "Закрыть")}>×</button></header>
-      <div className="new-document-environments" role="tablist" aria-label={text(language, "Document type", "Тип документа")}>{environmentKinds.map((environmentKind) => <button role="tab" aria-selected={kind === environmentKind} className={kind === environmentKind ? "active" : ""} data-kind={environmentKind} key={environmentKind} onClick={() => store.requestNewDocument(environmentKind)}><EnvironmentIcon kind={environmentKind}/><span>{resolveLabel(environmentMeta[environmentKind].label, language)}</span></button>)}</div>
+      <header><div className="new-document-title"><EnvironmentIcon kind={kind} /><div><small>{text(language, "NEW DOCUMENT", "НОВЫЙ ДОКУМЕНТ")}</small><h2 id="new-document-title">{text(language, "Create", "Создать")} {resolveLabel(meta.label, language)}</h2></div></div><button onClick={close} aria-label={text(language, "Close", "Закрыть")}>×</button></header>
+      <div className="new-document-environments" role="tablist" aria-label={text(language, "Document type", "Тип документа")}>{environmentKinds.map((environmentKind) => <button role="tab" aria-selected={kind === environmentKind} className={kind === environmentKind ? "active" : ""} data-kind={environmentKind} key={environmentKind} onClick={() => setKind(environmentKind)}><EnvironmentIcon kind={environmentKind}/><span>{resolveLabel(environmentMeta[environmentKind].label, language)}</span></button>)}</div>
       <div className="new-document-body">
         {kind === "audio" ? <>
           <aside/>
@@ -128,7 +139,7 @@ export function NewDocumentDialog() {
           </div>
         </>}
       </div>
-      <footer><button onClick={store.cancelNewDocument}>{text(language, "Cancel", "Отмена")}</button><button className="primary" style={{ "--accent": `var(--${kind})`, "--accent-ink": kind === "audio" ? "#1a1204" : "#fff" } as CSSProperties} disabled={!valid} onClick={create}>{text(language, "Create", "Создать")}</button></footer>
+      <footer><button onClick={close}>{text(language, "Cancel", "Отмена")}</button><button className="primary" style={{ "--accent": `var(--${kind})`, "--accent-ink": kind === "audio" ? "#1a1204" : "#fff" } as CSSProperties} disabled={!valid} onClick={create}>{text(language, "Create", "Создать")}</button></footer>
     </section>
   </div>;
 }

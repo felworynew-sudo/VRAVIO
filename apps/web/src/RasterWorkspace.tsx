@@ -12,6 +12,8 @@ import type { PaintTarget, ToolContext, ToolPointer } from "./environments/raste
 import { commitPending, empty as moveToolEmpty, pendingBounds, startPendingTransform, type MoveState } from "./environments/raster/tools/definitions/move";
 import { defaultViewport, useShellStore, type DocumentViewport } from "./store";
 import { beginBusy } from "./busy";
+import { text } from "./i18n";
+import { confirmModal } from "./modals/runtime";
 import { diagnostic } from "./diagnostics";
 import { pointFromNativeEvent } from "./raster-coordinates";
 import { maskToRgba, putPixels } from "./raster-pixel-buffers";
@@ -20,7 +22,6 @@ import { useBrushCursor } from "./raster-brush-cursor";
 import { useRasterRulerGuides } from "./raster-ruler-guides";
 import { useRasterCommit } from "./raster-commit";
 import { useRasterContextMenus } from "./raster-context-menus";
-import { RasterizeConfirmDialog } from "./RasterizeConfirmDialog";
 import { RasterBrushTipPopup } from "./RasterBrushTipPopup";
 
 /** Tools that mutate a layer's pixel buffer directly. A non-"pixel" layer (text, and later 3D) must be
@@ -43,7 +44,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const lastBrushPointRef = useRef<{ toolId: string; layerId: string; point: Point } | null>(null);
   const [brushPopup, setBrushPopup] = useState<{ left: number; top: number; detailed: boolean } | null>(null);
   const [preciseCursor, setPreciseCursor] = useState(false);
-  const [rasterizeConfirm, setRasterizeConfirm] = useState<{ layerId: string; layerName: string } | null>(null);
   const language = useShellStore((shell) => shell.language);
   const activeToolId = useShellStore((state) => state.activeToolByDocument[document.id]);
   const toolOptions = useShellStore((state) => state.toolOptions);
@@ -106,15 +106,35 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     return () => window.removeEventListener("keydown", keyDown);
   }, []);
 
-  const confirmRasterize = () => {
-    if (!rasterizeConfirm) return;
+  /**
+   * Offers to turn a text or adjustment layer into pixels, and does it if the
+   * user agrees.
+   *
+   * The question is asked through the modal catalogue by id
+   * (`confirmModal` → "confirm"), so this no longer needs a piece of state
+   * holding "a dialog is open, and here is what to do when it is answered",
+   * nor a dialog component of its own to import — the whole point of stage 7's
+   * `modals/`. The *decision* of when to ask still lives here, since it
+   * depends on which tool is active and what layer it is about to touch.
+   */
+  const offerRasterize = async (layerId: string, layerName: string) => {
+    const confirmed = await confirmModal({
+      title: text(language, "This tool needs pixels", "Этому инструменту нужны пиксели"),
+      message: text(
+        language,
+        `"${layerName}" is a text layer and has no pixels to edit yet. Rasterize it into a normal pixel layer first?`,
+        `Слой «${layerName}» — текстовый, у него ещё нет пикселей для редактирования. Растрировать его в обычный слой с пикселями?`,
+      ),
+      confirmLabel: text(language, "Rasterize Layer", "Растрировать слой"),
+    });
+    if (!confirmed) return;
+
     const done = beginBusy("Rasterising layer (Растеризация слоя)");
     try {
-    const before = cloneRasterState(state), after = cloneRasterState(state);
-    const target = after.layers.find((item) => item.id === rasterizeConfirm.layerId);
-    if (target) { target.kind = "pixel"; delete target.text; delete target.adjustment; }
-    setRasterizeConfirm(null);
-    void commitDocumentState(before, after, "Rasterize Layer (Растрировать слой)");
+      const before = cloneRasterState(state), after = cloneRasterState(state);
+      const target = after.layers.find((item) => item.id === layerId);
+      if (target) { target.kind = "pixel"; delete target.text; delete target.adjustment; }
+      void commitDocumentState(before, after, "Rasterize Layer (Растрировать слой)");
     } finally { done(); }
   };
 
@@ -316,7 +336,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       // always pixels regardless of the layer's own kind, which is why
       // maskTarget exempts it.
       if (!maskTarget && catalogueTool.requiresRasterized && layer.kind !== "pixel") {
-        setRasterizeConfirm({ layerId: layer.id, layerName: layer.name });
+        void offerRasterize(layer.id, layer.name);
         return;
       }
       const pointer = toolPointerFrom(event);
@@ -338,7 +358,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       }
     }
     if (!maskTarget && activeToolId && layer.kind !== "pixel" && RASTER_ONLY_TOOLS.has(activeToolId)) {
-      setRasterizeConfirm({ layerId: layer.id, layerName: layer.name });
+      void offerRasterize(layer.id, layer.name);
       return;
     }
   };
@@ -427,7 +447,6 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     {brushPopup && brushLike && activeToolId && <RasterBrushTipPopup activeToolId={activeToolId} brushOptions={brushOptions} position={brushPopup} detailed={brushPopup.detailed} onToggleDetailed={() => setBrushPopup({ ...brushPopup, detailed: !brushPopup.detailed })} onClose={() => setBrushPopup(null)} setToolOption={setToolOption}/>}
     {movePending && <div className="pending-transform-hint">Enter — Apply (Применить) · Esc — Cancel (Отменить)</div>}
     <div className="canvas-badge">{state.width} × {state.height} · {Math.round(viewport.zoom * 100)}% · {Math.round(viewport.rotation * 10) / 10}° · sRGB · {state.layers.length} layer(s)</div>
-    {rasterizeConfirm && <RasterizeConfirmDialog layerName={rasterizeConfirm.layerName} language={language} onCancel={() => setRasterizeConfirm(null)} onConfirm={confirmRasterize}/>}
     {selectionContextMenu.node}
     {transformContextMenu.node}
   </div>;

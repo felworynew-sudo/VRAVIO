@@ -5,7 +5,7 @@ import { kernel } from "./kernel";
 describe("shell store", () => {
   beforeEach(() => {
     for (const document of kernel.documents.list()) kernel.documents.close(document.id);
-    useShellStore.setState({ documentIds: [], activeDocumentId: null, mruOrder: [], activeToolByDocument: {}, viewports: {}, foregroundColor: "#000000", backgroundColor: "#ffffff", toolOptions: {}, paletteOpen: false, newDocumentKind: null, theme: "dark" });
+    useShellStore.setState({ documentIds: [], activeDocumentId: null, mruOrder: [], activeToolByDocument: {}, viewports: {}, foregroundColor: "#000000", backgroundColor: "#ffffff", toolOptions: {}, paletteOpen: false, theme: "dark" });
   });
 
   it("opens all environment kinds as independent document tabs", () => {
@@ -34,12 +34,13 @@ describe("shell store", () => {
   });
 
   it("creates a raster document from exact dialog parameters", () => {
-    useShellStore.getState().requestNewDocument("raster");
+    // `requestNewDocument` opens the dialog through the modal catalogue now, so
+    // there is no `newDocumentKind` flag left to assert has been cleared; what
+    // the dialog produces is still exactly this.
     useShellStore.getState().openDocument("raster", { name: "Poster", width: 2480, height: 3508, resolution: 300, resolutionUnit: "ppi", backgroundColor: "#ffffff", pixelAspectRatio: 1 });
     const document = kernel.documents.list()[0];
     expect(document?.name).toBe("Poster");
     expect(document?.state).toMatchObject({ width: 2480, height: 3508, resolution: 300, backgroundColor: "#ffffff" });
-    expect(useShellStore.getState().newDocumentKind).toBeNull();
   });
 
   it("keeps independent viewport transforms per document and removes them on close", () => {

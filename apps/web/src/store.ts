@@ -4,6 +4,7 @@ import { createVectorDocument } from "@vravio/env-vector";
 import { create } from "zustand";
 import { kernel } from "./kernel";
 import { defaultTool, toolById } from "./tools";
+import { openModal } from "./modals/runtime";
 
 export type Theme = "dark" | "light" | "contrast";
 export type Language = "en" | "ru" | "uk" | "es" | "de" | "ja" | "zh";
@@ -97,7 +98,6 @@ interface ShellState {
   /** Marching ants hidden with Cmd/Ctrl+H; the selection itself is untouched. */
   selectionEdgesHidden: boolean;
   settingsOpen: boolean;
-  newDocumentKind: EnvironmentKind | null;
   theme: Theme;
   language: Language;
   preferences: ShellPreferences;
@@ -106,7 +106,6 @@ interface ShellState {
   /** Give a tab to a document the kernel created, such as a round-trip child. */
   adoptDocument(id: string): void;
   requestNewDocument(kind: EnvironmentKind): void;
-  cancelNewDocument(): void;
   activateDocument(id: string): void;
   closeDocument(id: string): void;
   setTool(documentId: string, toolId: string): void;
@@ -147,7 +146,7 @@ const createHistory = (memoryBudgetMb: number) => {
 };
 
 export const useShellStore = create<ShellState>((set) => ({
-  documentIds: [], activeDocumentId: null, mruOrder: [], activeToolByDocument: {}, selectedLayerIdsByDocument: {}, editingMaskLayerIdByDocument: {}, maskForegroundIsWhiteByDocument: {}, viewports: {}, foregroundColor: "#000000", backgroundColor: "#ffffff", toolOptions: {}, paletteOpen: false, selectionEdgesHidden: false, settingsOpen: false, newDocumentKind: null,
+  documentIds: [], activeDocumentId: null, mruOrder: [], activeToolByDocument: {}, selectedLayerIdsByDocument: {}, editingMaskLayerIdByDocument: {}, maskForegroundIsWhiteByDocument: {}, viewports: {}, foregroundColor: "#000000", backgroundColor: "#ffffff", toolOptions: {}, paletteOpen: false, selectionEdgesHidden: false, settingsOpen: false,
   theme: readPreference("vravio.theme", ["dark", "light", "contrast"] as const, "dark"),
   language: readPreference("vravio.language", ["en", "ru", "uk", "es", "de", "ja", "zh"] as const, "ru"),
   preferences: readPreferences(),
@@ -160,7 +159,7 @@ export const useShellStore = create<ShellState>((set) => ({
     const document = kernel.documents.create(kind, options?.name?.trim() || names[kind], initialState);
     kernel.historyByDocument.set(document.id, createHistory(state.preferences.memoryBudgetMb));
     const tool = defaultTool(kind);
-    return { documentIds: [...state.documentIds, document.id], activeDocumentId: document.id, mruOrder: [document.id, ...state.mruOrder], newDocumentKind: null, viewports: { ...state.viewports, [document.id]: { ...defaultViewport } }, activeToolByDocument: tool ? { ...state.activeToolByDocument, [document.id]: tool } : state.activeToolByDocument };
+    return { documentIds: [...state.documentIds, document.id], activeDocumentId: document.id, mruOrder: [document.id, ...state.mruOrder], viewports: { ...state.viewports, [document.id]: { ...defaultViewport } }, activeToolByDocument: tool ? { ...state.activeToolByDocument, [document.id]: tool } : state.activeToolByDocument };
   }),
   adoptRestoredDocuments: (documentIds) => set((state) => {
     if (!documentIds.length) return state;
@@ -190,8 +189,10 @@ export const useShellStore = create<ShellState>((set) => ({
       activeToolByDocument: tool ? { ...state.activeToolByDocument, [id]: tool } : state.activeToolByDocument,
     };
   }),
-  requestNewDocument: (newDocumentKind) => set({ newDocumentKind }),
-  cancelNewDocument: () => set({ newDocumentKind: null }),
+  // Opened by id through the modal catalogue rather than by raising a flag
+  // here for `App.tsx` to notice: the shell store no longer carries "a dialog
+  // is open" for this one dialog (stage 7 of docs/migration-plan.md).
+  requestNewDocument: (kind) => { openModal("new-document", { initialKind: kind }); },
   activateDocument: (id) => set((state) => ({ activeDocumentId: id, mruOrder: [id, ...state.mruOrder.filter((item) => item !== id)] })),
   closeDocument: (id) => set((state) => {
     kernel.documents.close(id);

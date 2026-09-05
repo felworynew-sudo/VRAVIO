@@ -14,7 +14,8 @@ import { EnvironmentIcon } from "./EnvironmentIcon";
 import { localized, resolveLabel, text } from "./i18n";
 import { OptionRow } from "./ui/molecules/OptionRow";
 import { SettingsDialog } from "./SettingsDialog";
-import { NewDocumentDialog } from "./NewDocumentDialog";
+import { ModalHost } from "./modals/ModalHost";
+import { errorModal } from "./modals/runtime";
 import { clearDiagnostics, diagnostic, readDiagnostics, type DiagnosticEntry } from "./diagnostics";
 import { FilterGalleryDialog } from "./FilterGalleryDialog";
 import { LiquifyDialog } from "./LiquifyDialog";
@@ -74,7 +75,15 @@ export function App() {
   const importPsd = async (file: File) => {
     const bytes = new Uint8Array(await file.arrayBuffer());
     let result: ReturnType<typeof decodePsd>;
-    try { result = decodePsd(bytes); } catch (error) { diagnostic("error", "file.import", `Could not decode ${file.name}: ${error instanceof Error ? error.message : String(error)}`); return; }
+    try { result = decodePsd(bytes); } catch (error) {
+      // Recorded *and* said out loud. Recording alone meant dropping a corrupt
+      // PSD on the window did nothing visible at all: no document, no message,
+      // and the reason only in a log behind the Help menu.
+      const because = error instanceof Error ? error.message : String(error);
+      diagnostic("error", "file.import", `Could not decode ${file.name}: ${because}`);
+      errorModal({ title: text(store.language, "Could not open the file", "Не удалось открыть файл"), message: text(store.language, `"${file.name}" is not a Photoshop file this build can read.`, `«${file.name}» — не тот файл Photoshop, который эта сборка умеет читать.`), detail: because });
+      return;
+    }
     for (const warning of result.warnings) diagnostic("warn", "file.import", warning);
     store.openDocument("raster", { name: file.name, width: result.document.width, height: result.document.height, resolution: 72, resolutionUnit: "ppi", backgroundColor: null, pixelAspectRatio: 1 });
     const id = useShellStore.getState().activeDocumentId; if (!id) return;
@@ -89,7 +98,11 @@ export function App() {
     }
     if (extension === "psd" || extension === "psb") { await importPsd(file); return; }
     const source = await decodeImportedImage(file);
-    if (!source) { diagnostic("error", "file.import", `Could not decode ${file.name}`); return; }
+    if (!source) {
+      diagnostic("error", "file.import", `Could not decode ${file.name}`);
+      errorModal({ title: text(store.language, "Could not open the file", "Не удалось открыть файл"), message: text(store.language, `"${file.name}" is not an image this build can read.`, `«${file.name}» — не то изображение, которое эта сборка умеет читать.`) });
+      return;
+    }
     store.openDocument("raster", { name: file.name, width: source.width, height: source.height, resolution: 72, resolutionUnit: "ppi", backgroundColor: null, pixelAspectRatio: 1 });
     const id = useShellStore.getState().activeDocumentId; if (!id) return;
     const surface = window.document.createElement("canvas"); surface.width = source.width; surface.height = source.height; const context = surface.getContext("2d"); if (!context) return; context.drawImage(source.image, 0, 0, source.width, source.height); source.release();
@@ -104,7 +117,13 @@ export function App() {
     try {
       await kernel.platform.fs.saveFile({ name: projectFileName(active.name), mime: "application/json", data: projectBlob() });
       if (markClean) kernel.documents.markSaved(active.id);
-    } catch (error) { diagnostic("error", "file.save", error instanceof Error ? error.message : String(error), error); }
+    } catch (error) {
+      const because = error instanceof Error ? error.message : String(error);
+      diagnostic("error", "file.save", because, error);
+      // A save that failed silently is the worst of the three: the user walks
+      // away believing the work is on disk.
+      errorModal({ title: text(store.language, "Could not save", "Не удалось сохранить"), message: text(store.language, "The project was not written to disk. Nothing has been lost — try saving again, or to a different location.", "Проект не записан на диск. Ничего не потеряно — попробуйте сохранить ещё раз или в другое место."), detail: because });
+    }
   };
   const applyFilter = (pixels: Uint8ClampedArray, label: string) => { if (!active || !isRasterDocumentState(active.state)) return; const id=active.id,layerId=active.state.activeLayerId,state0=active.state,target=state0.layers.find((item)=>item.id===layerId);if(!target)return;
     // Filters run over the layer's own buffer, but the selection mask is in
@@ -318,7 +337,7 @@ export function App() {
       }
       if (!editing && modifier && (key === "+" || key === "=")) { event.preventDefault(); void kernel.commands.execute("view.zoomIn", activeCommandContext()); }
       if (!editing && modifier && key === "-") { event.preventDefault(); void kernel.commands.execute("view.zoomOut", activeCommandContext()); }
-      if (event.key === "Escape") { store.setPaletteOpen(false); store.setSettingsOpen(false); store.cancelNewDocument(); }
+      if (event.key === "Escape") { store.setPaletteOpen(false); store.setSettingsOpen(false); }
       if (!modifier && !editing && active) {
         if (key === "d") { event.preventDefault(); if (editingMaskLayerId) store.setMaskForegroundWhite(active.id, false); else store.resetColors(); return; }
         if (key === "x") { event.preventDefault(); if (editingMaskLayerId) store.swapMaskColors(active.id); else store.swapColors(); return; }
@@ -430,6 +449,7 @@ export function App() {
     </div>}
 
     <SettingsDialog />
+    <ModalHost />
     <BusyCursor />
     <BusyAnnouncement />
     {diagnosticsOpen && <div className="dialog-backdrop" onMouseDown={() => setDiagnosticsOpen(false)}><section className="diagnostics-dialog" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><header><strong>Diagnostics log (Журнал диагностики)</strong><button onClick={() => setDiagnosticsOpen(false)}>×</button></header><div className="diagnostics-list">{diagnostics.length ? [...diagnostics].reverse().map((entry, index) => <article data-level={entry.level} key={`${entry.time}-${index}`}><time>{new Date(entry.time).toLocaleTimeString()}</time><b>{entry.area}</b><span>{entry.message}</span>{entry.detail && <pre>{entry.detail}</pre>}</article>) : <p>No events recorded (Событий пока нет).</p>}</div><footer><button onClick={() => { clearDiagnostics(); setDiagnostics([]); }}>Clear (Очистить)</button><button onClick={() => { const blob = new Blob([JSON.stringify(diagnostics, null, 2)], { type: "application/json" }); download(blob, `vravio-diagnostics-${Date.now()}.json`); }}>Export JSON (Экспорт JSON)</button></footer></section></div>}
@@ -461,7 +481,6 @@ export function App() {
     />}
     {exportOpen && active && isRasterDocumentState(active.state) && <ExportDialog state={active.state} documentName={active.name} language={store.language} onCancel={() => setExportOpen(false)} onExport={async (blob, fileName) => { download(blob, fileName); setExportOpen(false); }}/>}
     {adjustmentDialog && (() => { const document = kernel.documents.get<RasterDocumentState>(adjustmentDialog.documentId), definition = rasterAdjustmentById.get(adjustmentDialog.definitionId), layer = document?.state.layers.find((item) => item.id === adjustmentDialog.layerId); if (!document || !definition || !layer) return null; return <AdjustmentDialog definition={definition} initialValue={adjustmentDialog.initialValue} language={store.language} histogram={luminanceHistogram(layerDocumentPixels(layer, document.state.width, document.state.height))} onPreview={previewImageAdjustment} onCancel={() => { previewImageAdjustment(null); setAdjustmentDialog(null); }} onApply={applyImageAdjustment}/>; })()}
-    {store.newDocumentKind && <NewDocumentDialog key={store.newDocumentKind} />}
   </div>;
 }
 
