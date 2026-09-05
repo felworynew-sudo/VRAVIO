@@ -12,8 +12,10 @@ import type { PaintTarget, ToolContext, ToolPointer } from "./environments/raste
 import { commitPending, empty as moveToolEmpty, pendingBounds, startPendingTransform, type MoveState } from "./environments/raster/tools/definitions/move";
 import { defaultViewport, useShellStore, type DocumentViewport } from "./store";
 import { beginBusy } from "./busy";
-import { text } from "./i18n";
-import { confirmModal } from "./modals/runtime";
+import { pluginById } from "./plugins/registry";
+import { runPlugin } from "./plugins/host";
+import { resolveLabel, text } from "./i18n";
+import { confirmModal, errorModal } from "./modals/runtime";
 import { diagnostic } from "./diagnostics";
 import { pointFromNativeEvent } from "./raster-coordinates";
 import { maskToRgba, putPixels } from "./raster-pixel-buffers";
@@ -294,6 +296,46 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     const cancel = () => withPending((context) => { context.setState(moveToolEmpty); context.previewWithLayerHidden(null); });
     window.addEventListener("vravio-transform-start", start); window.addEventListener("vravio-transform-commit", commit); window.addEventListener("vravio-transform-cancel", cancel);
     return () => { window.removeEventListener("vravio-transform-start", start); window.removeEventListener("vravio-transform-commit", commit); window.removeEventListener("vravio-transform-cancel", cancel); };
+  });
+
+  /**
+   * Running a plugin, and the reason it lives here rather than in `App.tsx`
+   * beside the filters.
+   *
+   * A plugin's result reaches the document through `commitPixels` — the same
+   * door every tool uses — so the rules engine applies to it without a branch
+   * of its own: the selection confines it, a locked layer refuses it, a text
+   * layer refuses it. That is section 4.7's "правила применяются к плагину
+   * автоматически", and it is only true if the plugin uses the real door.
+   * `applyFilter` in the shell is not that door: it re-implements selection
+   * confinement itself and knows nothing about the locks.
+   */
+  useEffect(() => {
+    const run = (raw: Event) => {
+      const detail = (raw as CustomEvent<{ pluginId: string }>).detail;
+      const entry = pluginById(detail?.pluginId);
+      if (!entry) { diagnostic("warn", "plugin.run", `No plugin registered as "${detail?.pluginId}"`); return; }
+
+      const layer = activeRasterLayer(state);
+      const before = canvasPixels(layer);
+      void (async () => {
+        const done = beginBusy(resolveLabel(entry.manifest.label, language));
+        try {
+          const outcome = await runPlugin(entry.manifest, { pixels: before, width: state.width, height: state.height }, entry.spawn);
+          if (outcome.error) {
+            diagnostic("error", "plugin.run", `${entry.manifest.id}: ${outcome.error}`);
+            errorModal({
+              title: text(language, "The plugin could not finish", "Плагин не смог завершить работу"),
+              message: `${resolveLabel(entry.manifest.label, language)}: ${outcome.error}`,
+            });
+            return;
+          }
+          if (outcome.pixels) void commitPixels(before, outcome.pixels, `Plugin: ${resolveLabel(entry.manifest.label, "en")}`, "pixels", layer.id);
+        } finally { done(); }
+      })();
+    };
+    window.addEventListener("vravio-plugin-run", run);
+    return () => window.removeEventListener("vravio-plugin-run", run);
   });
 
   // Picking a different layer in the Layers panel (not a canvas click, which the Move tool

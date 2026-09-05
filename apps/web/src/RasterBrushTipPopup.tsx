@@ -1,4 +1,7 @@
 import { useRef } from "react";
+import { brushPresets } from "./assets-library/brushes/registry";
+import { resolveLabel } from "./i18n";
+import { useShellStore } from "./store";
 
 /**
  * The right-click brush tip editor — angle/roundness handles on a dial, size
@@ -17,6 +20,7 @@ export function RasterBrushTipPopup({ activeToolId, brushOptions, position, deta
   onClose: () => void;
   setToolOption: (toolId: string, optionId: string, value: string | number | boolean) => void;
 }) {
+  const language = useShellStore((state) => state.language);
   const tipDragMode = useRef<"angle" | "roundness" | null>(null);
   const tipAngle = Number(brushOptions.angle ?? 0), tipRoundness = Number(brushOptions.roundness ?? 100);
   const tipRadians = tipAngle * Math.PI / 180, tipShortRadius = 48 * tipRoundness / 100;
@@ -45,9 +49,13 @@ export function RasterBrushTipPopup({ activeToolId, brushOptions, position, deta
       </div>
     </div>
     <div className="brush-presets">
-      <button onClick={() => { setToolOption(activeToolId, "hardness", 100); setToolOption(activeToolId, "roundness", 100); }}>●<small>Hard Round (Жёсткая круглая)</small></button>
-      <button onClick={() => { setToolOption(activeToolId, "hardness", 0); setToolOption(activeToolId, "roundness", 100); }}>◉<small>Soft Round (Мягкая круглая)</small></button>
-      <button onClick={() => { setToolOption(activeToolId, "hardness", 100); setToolOption(activeToolId, "roundness", 22); setToolOption(activeToolId, "angle", -25); }}>▬<small>Calligraphy (Каллиграфия)</small></button>
+      {/* From the catalogue, not written out here: a fourth preset is a fourth
+          file, and a preset cannot quietly set an option the brush does not
+          have — `registry.test.ts` checks every one against `tools.ts`. */}
+      {brushPresets.map((preset) => <button
+        key={preset.id}
+        onClick={() => { for (const [option, value] of Object.entries(preset.options)) setToolOption(activeToolId, option, value); }}
+      >{preset.glyph}<small>{resolveLabel(preset.label, language)}</small></button>)}
     </div>
     <button className="brush-details-toggle" onClick={onToggleDetailed}>{detailed ? "Hide Brush Settings (Скрыть настройки)" : "Brush Settings… (Настройки кисти…)"}</button>
     {detailed && <div className="brush-detail-fields">

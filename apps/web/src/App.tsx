@@ -8,6 +8,7 @@ import { DockLayout } from "./DockLayout";
 import { environmentMeta } from "./environment";
 import { toolById, toolsFor, type ToolDefinition, type ToolOption } from "./tools";
 import { smartCropRatios } from "./environments/raster/commands/definitions/smart-crop";
+import { plugins } from "./plugins/registry";
 import { readToolbarLayout, TOOLBAR_CHANGED_EVENT } from "./toolbar/layout";
 import { useDocuments } from "./useDocuments";
 import { activeCommandContext, ensureCommandsRegistered } from "./commands";
@@ -382,6 +383,15 @@ export function App() {
         ]}/>}
         {active?.kind === "raster" && <Menu label="Filter (Фильтр)" language={store.language} open={openMenu === "filter"} onToggle={() => setOpenMenu(openMenu === "filter" ? null : "filter")} items={[["Filter Gallery… (Галерея фильтров…)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Camera Raw Filter… (Фильтр Camera Raw…)", "", () => setCameraRawFilterOpen(true), !active || !isRasterDocumentState(active.state)], ["Reprocess Original RAW… (Переобработать исходный RAW…)", "", () => void openCameraRawReprocess(), !activeRawOrigin], ["Liquify… (Пластика…)", "Ctrl+Shift+X", () => setLiquifyOpen(true), !active || !isRasterDocumentState(active.state)], ["Blur Gallery (Галерея размытия)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Sharpen (Усиление резкости)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Noise (Шум)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Stylize (Стилизация)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"]]}/>}
         <Menu label="Plugins (Плагины)" language={store.language} open={openMenu === "plugins"} onToggle={() => setOpenMenu(openMenu === "plugins" ? null : "plugins")} items={[
+          // Every registered plugin, run through the raster workspace so its
+          // result goes in by the same door a tool's does (see the plugin
+          // effect in RasterWorkspace.tsx).
+          ...plugins.map((entry) => [
+            resolveLabel(entry.manifest.label, store.language),
+            "",
+            () => window.dispatchEvent(new CustomEvent("vravio-plugin-run", { detail: { pluginId: entry.manifest.id } })),
+            !active || !isRasterDocumentState(active.state),
+          ] as MainMenuItem),
           ["Manage Plugins… (Управление плагинами…)", "", () => {}, true],
         ]}/>
         <Menu label="Window (Окно)" language={store.language} open={openMenu === "window"} onToggle={() => setOpenMenu(openMenu === "window" ? null : "window")} items={[...windowMenuItems(active?.kind, store.language), ["Settings (Настройки)", "", () => store.setSettingsOpen(true)], ["Command Palette (Палитра команд)", "Ctrl+K", () => store.setPaletteOpen(true)]]}/>
