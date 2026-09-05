@@ -1,7 +1,7 @@
 import type { AssetId, AssetStore, DocumentStore, Environment, ExportOptions, ExtractOptions, ExtractedAsset, ParentTarget, VravioDocument } from "@vravio/kernel";
 import { colorToCss } from "@vravio/kernel";
 import { RASTER_ASSET_MIME, decodeRasterAsset, encodeRasterAsset, isRasterAsset } from "@vravio/env-raster";
-import { createImageShape, createVectorDocument, isShapeEffectivelyVisible, pathData, worldTransform, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { createImageShape, createVectorDocument, isShapeEffectivelyVisible, pathData, shapeBounds, worldTransform, type FillLayer, type Paint, type StrokeLayer, type VectorBounds, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
 
 export interface VectorEnvironmentOptions {
   readonly documents: DocumentStore;
@@ -158,37 +158,88 @@ export class VectorEnvironment implements Environment<VectorDocumentState> {
   }
 }
 
-function paintShape(context: CanvasRenderingContext2D, shape: VectorShape): void {
-  context.fillStyle = shape.style.fill ? colorToCss(shape.style.fill) : "transparent";
-  context.strokeStyle = shape.style.stroke ? colorToCss(shape.style.stroke) : "transparent";
-  context.lineWidth = shape.style.strokeWidth;
+/** A `Path2D` for every shape kind that has one — `line` and `text` paint
+ * through their own canvas calls instead (a line has no fillable area, and
+ * canvas text has no `Path2D` constructor of its own), so this returns
+ * `null` for those rather than a path nothing would use. */
+function pathFor(shape: VectorShape): Path2D | null {
   if (shape.kind === "rectangle") {
     const path = new Path2D();
     if (shape.cornerRadius > 0) path.roundRect(shape.x, shape.y, shape.width, shape.height, shape.cornerRadius);
     else path.rect(shape.x, shape.y, shape.width, shape.height);
-    if (shape.style.fill) context.fill(path);
-    if (shape.style.stroke) context.stroke(path);
-  } else if (shape.kind === "ellipse") {
+    return path;
+  }
+  if (shape.kind === "ellipse") {
     const path = new Path2D();
     path.ellipse(shape.x + shape.width / 2, shape.y + shape.height / 2, shape.width / 2, shape.height / 2, 0, 0, Math.PI * 2);
-    if (shape.style.fill) context.fill(path);
-    if (shape.style.stroke) context.stroke(path);
-  } else if (shape.kind === "line") {
-    context.beginPath();
-    context.moveTo(shape.x1, shape.y1);
-    context.lineTo(shape.x2, shape.y2);
-    if (shape.style.stroke) context.stroke();
-  } else if (shape.kind === "path") {
-    const path = new Path2D(pathData(shape.points, shape.closed));
-    if (shape.style.fill) context.fill(path);
-    if (shape.style.stroke) context.stroke(path);
-  } else if (shape.kind === "text") {
-    context.font = `${shape.fontSize}px ${shape.fontFamily}`;
-    context.textAlign = shape.align === "center" ? "center" : shape.align === "right" ? "right" : "left";
-    context.textBaseline = "alphabetic";
-    if (shape.style.fill) context.fillText(shape.value, shape.x, shape.y);
-    if (shape.style.stroke) context.strokeText(shape.value, shape.x, shape.y);
+    return path;
   }
+  if (shape.kind === "path") return new Path2D(pathData(shape.points, shape.closed));
+  return null;
+}
+
+/** A colour, or a canvas gradient built from the shape's own *local* bounds —
+ * canvas gradients need absolute coordinates, unlike SVG's
+ * `objectBoundingBox` gradients (`VectorWorkspace.tsx`'s `renderGradientDef`),
+ * so `Gradient`'s 0..1 `from`/`to` are scaled by `bounds` here instead of
+ * left to the renderer to interpret for free. */
+function canvasPaint(context: CanvasRenderingContext2D, paint: Paint, bounds: VectorBounds): string | CanvasGradient {
+  if (paint.kind === "color") return colorToCss(paint.color);
+  const { gradient } = paint;
+  const fromX = bounds.x + gradient.from.x * bounds.width, fromY = bounds.y + gradient.from.y * bounds.height;
+  const toX = bounds.x + gradient.to.x * bounds.width, toY = bounds.y + gradient.to.y * bounds.height;
+  const canvasGradient = gradient.kind === "linear"
+    ? context.createLinearGradient(fromX, fromY, toX, toY)
+    : context.createRadialGradient(fromX, fromY, 0, fromX, fromY, Math.hypot(toX - fromX, toY - fromY) || 0.0001);
+  for (const stop of gradient.stops) canvasGradient.addColorStop(Math.min(1, Math.max(0, stop.offset)), colorToCss(stop.color));
+  return canvasGradient;
+}
+
+/**
+ * Every visible fill, then every visible stroke, each drawn with its own
+ * paint/opacity — the offline-export counterpart of `VectorWorkspace.tsx`'s
+ * `renderShape`, computing the same "which layers actually paint" answer a
+ * second way (a `Path2D`/canvas calls, not stacked SVG elements) because a
+ * canvas has no `<g>` to stack elements inside.
+ *
+ * Per-layer blend mode is **not** applied here, unlike the SVG renderer's
+ * `mix-blend-mode` — compositing a blend mode correctly against only the
+ * layers *below it within this one shape* (not the whole canvas so far)
+ * needs an isolated offscreen canvas per shape, which this export path does
+ * not have. The shape's own object-level blend mode is applied via
+ * `globalCompositeOperation`, since that one is unambiguous — it blends the
+ * whole shape against everything already on the canvas, exactly what
+ * `globalCompositeOperation` already means.
+ */
+export function paintShape(context: CanvasRenderingContext2D, shape: VectorShape): void {
+  if (shape.kind === "group" || shape.kind === "image") return;
+  const bounds = shapeBounds(shape);
+  const path = pathFor(shape);
+  const baseAlpha = shape.style.opacity;
+  context.globalCompositeOperation = shape.style.blendMode === "normal" ? "source-over" : (shape.style.blendMode as GlobalCompositeOperation);
+
+  const paintFill = (fill: FillLayer) => {
+    if (!fill.visible) return;
+    context.globalAlpha = baseAlpha * fill.opacity;
+    context.fillStyle = canvasPaint(context, fill.paint, bounds);
+    if (shape.kind === "text") { context.font = `${shape.fontSize}px ${shape.fontFamily}`; context.textAlign = shape.align === "center" ? "center" : shape.align === "right" ? "right" : "left"; context.textBaseline = "alphabetic"; context.fillText(shape.value, shape.x, shape.y); }
+    else if (path) context.fill(path);
+  };
+  const paintStroke = (stroke: StrokeLayer) => {
+    if (!stroke.visible) return;
+    context.globalAlpha = baseAlpha * stroke.opacity;
+    context.strokeStyle = canvasPaint(context, stroke.paint, bounds);
+    context.lineWidth = stroke.width;
+    context.setLineDash([...stroke.dash]);
+    context.lineCap = stroke.cap;
+    context.lineJoin = stroke.join;
+    if (shape.kind === "line") { context.beginPath(); context.moveTo(shape.x1, shape.y1); context.lineTo(shape.x2, shape.y2); context.stroke(); }
+    else if (shape.kind === "text") { context.font = `${shape.fontSize}px ${shape.fontFamily}`; context.textAlign = shape.align === "center" ? "center" : shape.align === "right" ? "right" : "left"; context.textBaseline = "alphabetic"; context.strokeText(shape.value, shape.x, shape.y); }
+    else if (path) context.stroke(path);
+  };
+
+  for (const fill of shape.style.fills) paintFill(fill);
+  for (const stroke of shape.style.strokes) paintStroke(stroke);
 }
 
 async function imageBitmapFromPixels(pixels: Uint8ClampedArray, width: number, height: number): Promise<ImageBitmap> {

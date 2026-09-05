@@ -1,4 +1,4 @@
-import { srgb } from "@vravio/kernel";
+import { defaultVectorStyle } from "./appearance";
 import { IDENTITY_MATRIX } from "./matrix";
 import type { LengthUnit } from "./units";
 import type { Artboard, VectorDocumentState, VectorShape, VectorShapeKind, VectorStyle } from "./types";
@@ -10,13 +10,11 @@ export interface VectorDocumentOptions {
 
 export function createVectorDocument(width = 1280, height = 720, options: VectorDocumentOptions = {}): VectorDocumentState {
   return {
-    kind: "vector", schemaVersion: 3, width, height,
+    kind: "vector", schemaVersion: 4, width, height,
     artboards: [], resolution: options.resolution ?? 72, displayUnit: options.displayUnit ?? "px",
     shapes: [], activeShapeId: null, selection: [],
   };
 }
-
-export const defaultVectorStyle = (): VectorStyle => ({ fill: srgb(0x5b, 0xe0, 0xb3), stroke: null, strokeWidth: 2, opacity: 1 });
 
 let artboardCounter = 0;
 export function createArtboard(x: number, y: number, width: number, height: number, name?: string): Artboard {

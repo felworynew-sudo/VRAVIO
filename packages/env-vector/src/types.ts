@@ -1,14 +1,9 @@
-import { type Color, cssToColor } from "@vravio/kernel";
+import { cssToColor } from "@vravio/kernel";
+import { solidFill, solidStroke, type VectorStyle } from "./appearance";
 import type { LengthUnit } from "./units";
 import { IDENTITY_MATRIX, type Matrix, rotationMatrixAround } from "./matrix";
 
-export interface VectorStyle {
-  /** `null` means no fill, matching Illustrator/Figma's "none" swatch rather than a hidden color. */
-  fill: Color | null;
-  stroke: Color | null;
-  strokeWidth: number;
-  opacity: number;
-}
+export type { VectorStyle } from "./appearance";
 
 export interface VectorPoint {
   x: number;
@@ -100,7 +95,7 @@ export interface Artboard {
 
 export interface VectorDocumentState {
   readonly kind: "vector";
-  readonly schemaVersion: 3;
+  readonly schemaVersion: 4;
   width: number;
   height: number;
   artboards: Artboard[];
@@ -117,21 +112,28 @@ export interface VectorDocumentState {
 }
 
 /**
- * In-place and idempotent, so a restored v2 session stays editable without a
+ * In-place and idempotent, so a restored session stays editable without a
  * stop-the-world conversion — the same contract
  * `packages/env-raster/src/document.ts`'s `migrateRasterDocumentState` keeps.
+ * One function carries a document from whatever version it was saved at
+ * (2, 3 or 4) up to current, in order, rather than one function per step —
+ * a v2 document run through this once ends up fully on v4, not stuck at v3
+ * waiting for a second pass nothing would ever trigger.
  *
- * Two things happen here that are not just "add a default":
+ * What changes at each step:
  *
- * - Rectangle, ellipse and image used to carry their own `rotation: number`.
- *   That degree value is baked into `transform` as a rotation around the
- *   shape's own center — the same pivot the old field visually meant — and
- *   the field itself is dropped, so there is exactly one way a shape's
- *   rotation is stored going forward, not two that could disagree.
- * - `fill`/`stroke` were `string | null`; a stored hex or `rgba()` string
- *   becomes a `Color` via `cssToColor`, which is the same parser
- *   `<input type="color">`'s change handler feeds through going forward, so a
- *   migrated document's colours render identically to how they always did.
+ * - v2 → v3: rectangle/ellipse/image's own `rotation: number` is baked into
+ *   `transform` as a rotation around the shape's own center (the same pivot
+ *   the field visually meant), and dropped — one way to store rotation, not
+ *   two that could disagree. A stored hex/`rgba()` fill or stroke string
+ *   becomes a `Color` via `cssToColor`.
+ * - v3 → v4 (stage 6): `style` was `{fill, stroke, strokeWidth, opacity}` —
+ *   one fill, one stroke. Becomes `{fills: FillLayer[], strokes:
+ *   StrokeLayer[], opacity, blendMode}` — a non-null `fill`/`stroke`
+ *   becomes a one-entry stack via the same `solidFill`/`solidStroke`
+ *   factories a user adding a fill from the properties panel gets, so a
+ *   migrated shape's appearance stack looks exactly like one built by hand
+ *   to match it.
  */
 export function migrateVectorDocumentState(state: VectorDocumentState): VectorDocumentState {
   const candidate = state as unknown as {
@@ -157,14 +159,24 @@ export function migrateVectorDocumentState(state: VectorDocumentState): VectorDo
       }
     }
     delete shape.rotation;
-    const style = shape.style as { fill?: unknown; stroke?: unknown } | undefined;
-    if (style) {
-      if (typeof style.fill === "string") style.fill = cssToColor(style.fill);
-      if (typeof style.stroke === "string") style.stroke = cssToColor(style.stroke);
+
+    const style = shape.style as { fill?: unknown; stroke?: unknown; strokeWidth?: unknown; opacity?: unknown; fills?: unknown; strokes?: unknown } | undefined;
+    if (!style) return;
+    if (typeof style.fill === "string") style.fill = cssToColor(style.fill);
+    if (typeof style.stroke === "string") style.stroke = cssToColor(style.stroke);
+    if (!style.fills || !style.strokes) {
+      const oldFill = style.fill as ReturnType<typeof cssToColor> | null | undefined;
+      const oldStroke = style.stroke as ReturnType<typeof cssToColor> | null | undefined;
+      const oldStrokeWidth = typeof style.strokeWidth === "number" ? style.strokeWidth : 2;
+      style.fills = oldFill ? [solidFill(oldFill)] : [];
+      style.strokes = oldStroke ? [solidStroke(oldStroke, oldStrokeWidth)] : [];
+      style.opacity ??= 1;
+      (style as { blendMode?: string }).blendMode ??= "normal";
+      delete style.fill; delete style.stroke; delete style.strokeWidth;
     }
   });
 
-  (state as { schemaVersion: number }).schemaVersion = 3;
+  (state as { schemaVersion: number }).schemaVersion = 4;
   return state;
 }
 
@@ -181,7 +193,7 @@ export function isVectorDocumentState(value: unknown): value is VectorDocumentSt
   if (!value || typeof value !== "object") return false;
   const state = value as { kind?: unknown; shapes?: unknown; schemaVersion?: unknown };
   if (state.kind !== "vector" || !Array.isArray(state.shapes)) return false;
-  if (state.schemaVersion !== 2 && state.schemaVersion !== 3) return false;
+  if (state.schemaVersion !== 2 && state.schemaVersion !== 3 && state.schemaVersion !== 4) return false;
   migrateVectorDocumentState(value as VectorDocumentState);
   return true;
 }

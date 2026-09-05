@@ -1,3 +1,4 @@
+export * from "./appearance";
 export * from "./types";
 export * from "./document";
 export * from "./shape-ops";

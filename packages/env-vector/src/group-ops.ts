@@ -1,3 +1,4 @@
+import { emptyVectorStyle } from "./appearance";
 import { IDENTITY_MATRIX, multiplyMatrix } from "./matrix";
 import { appendShapeAt, reorderSiblings, siblingsOf } from "./tree";
 import { makeVectorOrderKey } from "./types";
@@ -9,7 +10,7 @@ function nextGroupId(): string { counter += 1; return `group-${counter}`; }
 export function createVectorGroup(name = "Group (Группа)"): VectorShape {
   return {
     id: nextGroupId(), kind: "group", name, visible: true, locked: false,
-    style: { fill: null, stroke: null, strokeWidth: 0, opacity: 1 },
+    style: emptyVectorStyle(), // a group paints nothing of its own — see shapeBounds/renderShape's own reasoning
     parentId: null, orderKey: makeVectorOrderKey(0), transform: IDENTITY_MATRIX, expanded: true,
   };
 }

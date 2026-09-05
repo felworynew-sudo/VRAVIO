@@ -7,12 +7,15 @@ import type { VectorDocumentState } from "./types";
 
 /**
  * A v2 document exactly as one would have come out of session storage before
- * this stage: boolean artboards, per-kind `rotation`, string fill/stroke, no
- * `parentId`/`orderKey`/`transform` at all. `isVectorDocumentState` is the
- * same load-time gate `packages/env-raster/src/document.ts`'s
- * `isRasterDocumentState` uses for its own v1→v2 migration — calling it is
- * what a real document load does, not a hand-picked shortcut into the
- * migration function.
+ * stage 2: boolean artboards, per-kind `rotation`, string fill/stroke, no
+ * `parentId`/`orderKey`/`transform` at all, and the pre-stage-6 single
+ * fill/stroke style. `isVectorDocumentState` is the same load-time gate
+ * `packages/env-raster/src/document.ts`'s `isRasterDocumentState` uses for
+ * its own v1→v2 migration — calling it is what a real document load does,
+ * not a hand-picked shortcut into the migration function, and it carries a
+ * document all the way from whatever version it was saved at up to current
+ * in one pass (v2 → v3 → v4), not one migration per stage a load has to
+ * happen to run through separately.
  */
 function v2Document(): unknown {
   return {
@@ -33,11 +36,11 @@ function v2Document(): unknown {
   };
 }
 
-describe("vector document v2 → v3 migration", () => {
-  it("accepts a v2 document as valid and upgrades it to schemaVersion 3", () => {
+describe("vector document v2 → v4 migration", () => {
+  it("accepts a v2 document as valid and upgrades it all the way to the current schemaVersion", () => {
     const raw = v2Document();
     expect(isVectorDocumentState(raw)).toBe(true);
-    expect((raw as VectorDocumentState).schemaVersion).toBe(3);
+    expect((raw as VectorDocumentState).schemaVersion).toBe(4);
   });
 
   it("turns the boolean artboards flag into an empty array, not a truthy/falsy re-encoding of it", () => {
@@ -92,24 +95,49 @@ describe("vector document v2 → v3 migration", () => {
     expect(path.transform).toEqual({ a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 });
   });
 
-  it("converts a stored hex fill and rgba() stroke into Color, rendering identically to before", () => {
+  it("converts a stored hex fill and rgba() stroke into a one-entry fill/stroke stack, rendering identically to before", () => {
     const raw = v2Document();
     isVectorDocumentState(raw);
     const state = raw as VectorDocumentState;
     const rect = state.shapes.find((shape) => shape.id === "rect-1")!;
 
-    expect(rect.style.fill).toEqual({ space: "srgb", components: [0x5b, 0xe0, 0xb3], alpha: 1 });
-    expect(colorToCss(rect.style.fill!)).toBe("rgba(91, 224, 179, 1)");
-    expect(rect.style.stroke).toEqual({ space: "srgb", components: [10, 20, 30], alpha: 0.5 });
+    expect(rect.style.fills).toHaveLength(1);
+    expect(rect.style.fills[0]!.paint).toEqual({ kind: "color", color: { space: "srgb", components: [0x5b, 0xe0, 0xb3], alpha: 1 } });
+    expect(colorToCss(rect.style.fills[0]!.paint.color)).toBe("rgba(91, 224, 179, 1)");
+    expect(rect.style.strokes).toHaveLength(1);
+    expect(rect.style.strokes[0]!.paint).toEqual({ kind: "color", color: { space: "srgb", components: [10, 20, 30], alpha: 0.5 } });
+    // The old strokeWidth: 2 lands on the migrated stroke layer, not lost.
+    expect(rect.style.strokes[0]!.width).toBe(2);
+    expect(rect.style.fills[0]!.visible).toBe(true);
+    expect(rect.style.strokes[0]!.visible).toBe(true);
   });
 
-  it("a null fill/stroke stays null, not converted into some Color", () => {
+  it("a null fill/stroke becomes an empty stack, not a stack with a null entry in it", () => {
     const raw = v2Document();
     isVectorDocumentState(raw);
     const state = raw as VectorDocumentState;
     const path = state.shapes.find((shape) => shape.id === "path-1")!;
-    expect(path.style.fill).toBeNull();
-    expect(path.style.stroke).toBeNull();
+    expect(path.style.fills).toEqual([]);
+    expect(path.style.strokes).toEqual([]);
+  });
+
+  it("the old fill/stroke/strokeWidth fields are gone after migration, not left dangling alongside the new stacks", () => {
+    const raw = v2Document();
+    isVectorDocumentState(raw);
+    const state = raw as VectorDocumentState;
+    const rect = state.shapes.find((shape) => shape.id === "rect-1")!;
+    expect("fill" in rect.style).toBe(false);
+    expect("stroke" in rect.style).toBe(false);
+    expect("strokeWidth" in rect.style).toBe(false);
+  });
+
+  it("adds object-level opacity and blendMode defaults", () => {
+    const raw = v2Document();
+    isVectorDocumentState(raw);
+    const state = raw as VectorDocumentState;
+    const rect = state.shapes.find((shape) => shape.id === "rect-1")!;
+    expect(rect.style.opacity).toBe(1);
+    expect(rect.style.blendMode).toBe("normal");
   });
 
   it("is idempotent — migrating an already-migrated document changes nothing further", () => {

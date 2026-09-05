@@ -215,6 +215,30 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .export-field>i{font-style:normal}
 .export-slider>output{min-width:26px;text-align:right;color:var(--text)}
 .export-check{display:flex;align-items:center;gap:8px;color:var(--text);font-size:11px}
+.appearance-panel{display:flex;flex-direction:column;gap:12px}
+.appearance-section{display:flex;flex-direction:column;gap:4px}
+.appearance-section-header{display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+.appearance-section-header button{width:22px;height:22px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2);color:var(--text);cursor:pointer;line-height:1}
+.appearance-row{display:flex;align-items:center;gap:6px}
+.appearance-row-stroke{flex-direction:column;align-items:stretch;gap:4px;padding:6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface)}
+.appearance-stroke-details{gap:4px}
+.appearance-stroke-details label{display:flex;align-items:center;gap:3px;color:var(--muted);font-size:10px}
+.appearance-stroke-details label input{width:44px!important}
+.appearance-row button{width:22px;height:22px;flex:none;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2);color:var(--text);cursor:pointer;line-height:1}
+.appearance-row button:disabled{opacity:.35;cursor:default}
+.appearance-row-remove{color:var(--danger)!important}
+.appearance-opacity{width:48px!important;flex:none}
+.appearance-empty{margin:0;color:var(--muted);font-size:11px}
+.paint-editor{display:flex;align-items:center;gap:6px;flex:1;min-width:0}
+.paint-editor>select{flex:none;width:auto!important}
+.paint-editor>input[type="color"]{flex:none;width:30px!important;padding:1px}
+.gradient-editor{display:flex;flex-direction:column;gap:6px;flex:1;min-width:0}
+.gradient-preview{flex:1;height:20px;border:1px solid var(--border);border-radius:var(--radius-sm)}
+.gradient-stop-row{display:flex;align-items:center;gap:6px}
+.gradient-stop-row input[type="color"]{width:30px!important;padding:1px}
+.gradient-stop-row input[type="number"]{width:52px!important}
+.gradient-stop-remove{width:22px;height:22px;flex:none;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2);color:var(--danger);cursor:pointer}
+.gradient-stop-remove:disabled{opacity:.35;cursor:default}
 .export-estimate{margin-top:auto;display:grid;gap:3px;padding:11px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2)}
 .export-estimate b{font-size:17px}
 .export-estimate small{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

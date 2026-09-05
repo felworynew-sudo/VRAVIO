@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { srgb } from "@vravio/kernel";
+import { solidFill } from "./appearance";
 import { createShape, createVectorDocument } from "./document";
 import { createVectorGroup, groupShapes } from "./group-ops";
 import { rotationMatrixAround } from "./matrix";
@@ -24,9 +26,7 @@ function randomDocument(shapeCount: number, seed: number): VectorDocumentState {
   const state = createVectorDocument(2000, 2000);
   for (let i = 0; i < shapeCount; i += 1) {
     const kind = random() < 0.5 ? "rectangle" : "ellipse";
-    const shape = createShape(kind, random() * 1900, random() * 1900, {
-      fill: { space: "srgb", components: [0, 0, 0], alpha: 1 }, stroke: null, strokeWidth: 2, opacity: 1,
-    });
+    const shape = createShape(kind, random() * 1900, random() * 1900, { fills: [solidFill(srgb(0, 0, 0))], strokes: [], opacity: 1, blendMode: "normal" });
     if (shape.kind === "rectangle" || shape.kind === "ellipse") {
       shape.width = 10 + random() * 150;
       shape.height = 10 + random() * 150;
@@ -65,7 +65,7 @@ describe("shapeAtIndexed agrees with the linear scan shapeAt — the property th
 
   it("agrees on the exact edge of a shape, not just its interior", () => {
     const state = createVectorDocument();
-    const shape = createShape("rectangle", 100, 100, { fill: { space: "srgb", components: [0, 0, 0], alpha: 1 }, stroke: null, strokeWidth: 2, opacity: 1 });
+    const shape = createShape("rectangle", 100, 100, { fills: [solidFill(srgb(0, 0, 0))], strokes: [], opacity: 1, blendMode: "normal" });
     addShape(state, shape);
     const index = buildShapeSpatialIndex(state.shapes);
     for (const [x, y] of [[100, 100], [260, 100], [100, 200], [260, 200], [180, 150]]) {

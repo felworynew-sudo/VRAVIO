@@ -27,7 +27,8 @@ import { luminanceHistogram } from "./raster-adjustments/histogram";
 import { changeRasterDocument } from "./commands";
 import { pickCommands } from "./commands/surface";
 import { importModelAsLayer, updateScene3DLayer } from "./scene3d-commands";
-import { colorToHex, cssToColor, srgb, type ReversibleOperation } from "@vravio/kernel";
+import type { ReversibleOperation } from "@vravio/kernel";
+import { AppearancePanel } from "./environments/vector/AppearancePanel";
 import "dockview-react/dist/styles/dockview.css";
 
 /**
@@ -100,13 +101,7 @@ function InspectorPanel({ params }: IDockviewPanelProps<{ kind?: string }>) {
           <label>{text(language, "Font size", "Размер шрифта")}<input type="number" min={1} value={shape.fontSize} onChange={(event) => commit({ fontSize: Math.max(1, event.target.valueAsNumber) })} /></label>
         </>}
         {shape.kind === "image" && <button className="secondary-action" onClick={() => void kernel.commands.execute("image.openElsewhere", { activeDocumentId: document.id })}>{text(language, "Edit in Raster Environment…", "Открыть в растровой среде…")}</button>}
-        {shape.kind !== "image" && <>
-          <label className="export-check"><input type="checkbox" checked={shape.style.fill !== null} onChange={(event) => commitStyle({ fill: event.target.checked ? (shape.style.fill ?? srgb(0x5b, 0xe0, 0xb3)) : null })}/>{text(language, "Fill", "Заливка")}</label>
-          {shape.style.fill !== null && <input type="color" value={colorToHex(shape.style.fill)} onChange={(event) => commitStyle({ fill: cssToColor(event.target.value) })} />}
-          <label className="export-check"><input type="checkbox" checked={shape.style.stroke !== null} onChange={(event) => commitStyle({ stroke: event.target.checked ? (shape.style.stroke ?? srgb(0, 0, 0)) : null })}/>{text(language, "Stroke", "Обводка")}</label>
-          {shape.style.stroke !== null && <><input type="color" value={colorToHex(shape.style.stroke)} onChange={(event) => commitStyle({ stroke: cssToColor(event.target.value) })} /><label>{text(language, "Stroke width", "Толщина обводки")}<input type="number" min={0} value={shape.style.strokeWidth} onChange={(event) => commitStyle({ strokeWidth: Math.max(0, event.target.valueAsNumber) })} /></label></>}
-        </>}
-        <label>{text(language, "Opacity", "Непрозрачность")}<input type="range" min={0} max={100} value={Math.round(shape.style.opacity * 100)} onChange={(event) => commitStyle({ opacity: event.target.valueAsNumber / 100 })} /></label>
+        {shape.kind !== "image" && <AppearancePanel style={shape.style} language={language} onChange={(style) => commitStyle(style)}/>}
       </div>;
     }
     return <div className="dock-panel-body"><p className="panel-hint">{text(language, "Select a shape to see its properties.", "Выберите фигуру, чтобы увидеть её свойства.")}</p></div>;

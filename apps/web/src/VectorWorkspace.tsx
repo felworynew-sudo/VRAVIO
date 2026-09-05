@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { addShape, buildShapeSpatialIndex, createImageShape, isIdentityMatrix, isVectorDocumentState, matrixToCss, pathData, removeShapes, shapeAtIndexed, shapeWorldBoundsIndexed, siblingsOf, snapSources, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { addShape, buildShapeSpatialIndex, createImageShape, isIdentityMatrix, isVectorDocumentState, matrixToCss, pathData, removeShapes, resolveAppearance, shapeAtIndexed, shapeWorldBoundsIndexed, siblingsOf, snapSources, type GradientDef, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
 import { RASTER_ASSET_MIME, decodeRasterAsset, encodeRasterAsset } from "@vravio/env-raster";
 import { colorToCss } from "@vravio/kernel";
 import type { AssetId, VravioDocument } from "@vravio/kernel";
@@ -94,17 +94,55 @@ function VectorImageShape({ shape }: { shape: Extract<VectorShape, { kind: "imag
   return <image key={shape.id} href={url} x={shape.x} y={shape.y} width={shape.width} height={shape.height} opacity={shape.style.opacity} preserveAspectRatio="none" transform={transform}/>;
 }
 
+/** Geometry attributes only — no paint. Stage 6 draws a shape's geometry
+ * once per visible fill/stroke layer (the same shape, restyled and stacked,
+ * is how "two fills, three strokes" on one object actually renders), so
+ * paint had to stop being baked into each kind's own JSX branch. */
+type GeometryTag = "rect" | "ellipse" | "line" | "path" | "text";
+function geometryFor(shape: Exclude<VectorShape, { kind: "image" } | { kind: "group" }>): { Tag: GeometryTag; props: Record<string, unknown> } {
+  if (shape.kind === "rectangle") return { Tag: "rect", props: { x: shape.x, y: shape.y, width: shape.width, height: shape.height, rx: shape.cornerRadius } };
+  if (shape.kind === "ellipse") return { Tag: "ellipse", props: { cx: shape.x + shape.width / 2, cy: shape.y + shape.height / 2, rx: shape.width / 2, ry: shape.height / 2 } };
+  if (shape.kind === "line") return { Tag: "line", props: { x1: shape.x1, y1: shape.y1, x2: shape.x2, y2: shape.y2 } };
+  if (shape.kind === "text") return { Tag: "text", props: { x: shape.x, y: shape.y, fontSize: shape.fontSize, fontFamily: shape.fontFamily, textAnchor: shape.align === "center" ? "middle" : shape.align === "right" ? "end" : "start" } };
+  return { Tag: "path", props: { d: pathData(shape.points, shape.closed) } };
+}
+
+/** `<linearGradient>`/`<radialGradient>` from a `GradientDef` — `from`/`to`
+ * are already 0..1 against the shape's own bounding box (see `Gradient`'s
+ * own doc comment), which is exactly what `gradientUnits="objectBoundingBox"`
+ * expects, so no extra conversion happens here at all. A radial gradient's
+ * radius is the plain distance between the two normalized points; a
+ * same-point gradient (radius 0) is nudged to a hair above zero, since SVG
+ * treats an exact 0 radius as "paint nothing" rather than "one solid colour". */
+function renderGradientDef({ id, gradient }: GradientDef): ReactNode {
+  const stops = gradient.stops.map((stop, index) => <stop key={index} offset={stop.offset} stopColor={colorToCss(stop.color)}/>);
+  if (gradient.kind === "linear") return <linearGradient key={id} id={id} gradientUnits="objectBoundingBox" x1={gradient.from.x} y1={gradient.from.y} x2={gradient.to.x} y2={gradient.to.y}>{stops}</linearGradient>;
+  const radius = Math.hypot(gradient.to.x - gradient.from.x, gradient.to.y - gradient.from.y) || 0.0001;
+  return <radialGradient key={id} id={id} gradientUnits="objectBoundingBox" cx={gradient.from.x} cy={gradient.from.y} r={radius}>{stops}</radialGradient>;
+}
+
+const blendStyle = (mode: string): CSSProperties | undefined => mode === "normal" ? undefined : { mixBlendMode: mode as CSSProperties["mixBlendMode"] };
+
 function renderShape(shape: VectorShape): ReactNode {
   if (!shape.visible) return null;
   if (shape.kind === "image") return <VectorImageShape key={shape.id} shape={shape}/>;
   if (shape.kind === "group") return null; // a group has no visual of its own — see renderShapeTree, which wraps its children in a transformed <g> instead of calling this
-  const fill = shape.style.fill ? colorToCss(shape.style.fill) : "none", stroke = shape.style.stroke ? colorToCss(shape.style.stroke) : "none";
-  const common = { fill, stroke, strokeWidth: shape.style.strokeWidth, opacity: shape.style.opacity, transform: shapeTransform(shape) };
-  if (shape.kind === "rectangle") return <rect key={shape.id} {...common} x={shape.x} y={shape.y} width={shape.width} height={shape.height} rx={shape.cornerRadius}/>;
-  if (shape.kind === "ellipse") return <ellipse key={shape.id} {...common} cx={shape.x + shape.width / 2} cy={shape.y + shape.height / 2} rx={shape.width / 2} ry={shape.height / 2}/>;
-  if (shape.kind === "line") return <line key={shape.id} {...common} x1={shape.x1} y1={shape.y1} x2={shape.x2} y2={shape.y2}/>;
-  if (shape.kind === "text") return <text key={shape.id} {...common} x={shape.x} y={shape.y} fontSize={shape.fontSize} fontFamily={shape.fontFamily} textAnchor={shape.align === "center" ? "middle" : shape.align === "right" ? "end" : "start"} stroke="none">{shape.value}</text>;
-  return <path key={shape.id} {...common} d={pathData(shape.points, shape.closed)}/>;
+
+  const { Tag, props } = geometryFor(shape);
+  const resolved = resolveAppearance(shape.style, shape.id);
+  const textValue = shape.kind === "text" ? shape.value : undefined;
+
+  return <g key={shape.id} transform={shapeTransform(shape)} opacity={shape.style.opacity} style={blendStyle(shape.style.blendMode)}>
+    {resolved.gradientDefs.length > 0 && <defs>{resolved.gradientDefs.map(renderGradientDef)}</defs>}
+    {resolved.fills.filter((fill) => fill.layer.visible).map((fill, index) => (
+      <Tag key={`fill-${index}`} {...props} fill={fill.css} stroke="none" opacity={fill.layer.opacity} style={blendStyle(fill.layer.blendMode)}>{textValue}</Tag>
+    ))}
+    {resolved.strokes.filter((stroke) => stroke.layer.visible).map((stroke, index) => (
+      <Tag key={`stroke-${index}`} {...props} fill="none" stroke={stroke.css} strokeWidth={stroke.layer.width}
+        strokeDasharray={stroke.layer.dash.length ? stroke.layer.dash.join(" ") : undefined} strokeLinecap={stroke.layer.cap} strokeLinejoin={stroke.layer.join}
+        opacity={stroke.layer.opacity} style={blendStyle(stroke.layer.blendMode)}>{textValue}</Tag>
+    ))}
+  </g>;
 }
 
 /**

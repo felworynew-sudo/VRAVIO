@@ -1,3 +1,4 @@
+import { hasVisibleFill, maxVisibleStrokeWidth } from "./appearance";
 import {
   distanceToPolyline, ellipseOutline, flattenPathOutline, pathSegmentBounds, pointInPolygon, roundedRectOutline,
   type Point,
@@ -70,8 +71,9 @@ function shapeFillBounds(shape: VectorShape, measurer?: TextMeasurer): VectorBou
 }
 
 function padForStroke(bounds: VectorBounds, shape: VectorShape): VectorBounds {
-  if (shape.kind === "group" || shape.kind === "image" || !shape.style.stroke) return bounds;
-  const pad = shape.style.strokeWidth / 2;
+  if (shape.kind === "group" || shape.kind === "image") return bounds;
+  const pad = maxVisibleStrokeWidth(shape.style) / 2;
+  if (pad === 0) return bounds;
   return { x: bounds.x - pad, y: bounds.y - pad, width: bounds.width + pad * 2, height: bounds.height + pad * 2 };
 }
 
@@ -123,16 +125,17 @@ export function hitTestShape(shape: VectorShape, x: number, y: number, measurer?
   if (shape.kind === "group") return false;
   if (shape.kind === "image") { const b = shapeBounds(shape); return x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height; }
   if (shape.kind === "text") { const b = shapeBounds(shape, measurer); return x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height; } // real glyph outlines are stage 11's job
+  const strokeWidth = maxVisibleStrokeWidth(shape.style);
   if (shape.kind === "line") {
-    if (!shape.style.stroke) return false; // nothing to click on — a line has no fill
-    const tolerance = Math.max(shape.style.strokeWidth / 2, MIN_LINE_HIT_TOLERANCE);
+    if (strokeWidth === 0) return false; // nothing to click on — a line has no fill
+    const tolerance = Math.max(strokeWidth / 2, MIN_LINE_HIT_TOLERANCE);
     return distanceToPolyline([{ x: shape.x1, y: shape.y1 }, { x: shape.x2, y: shape.y2 }], point, false) <= tolerance;
   }
   const outline = shape.kind === "rectangle" ? roundedRectOutline(shape.x, shape.y, shape.width, shape.height, shape.cornerRadius)
     : shape.kind === "ellipse" ? ellipseOutline(shape.x + shape.width / 2, shape.y + shape.height / 2, shape.width / 2, shape.height / 2)
     : flattenPathOutline(shape.points, true); // a fill hit-tests the same closed region a renderer fills, whether or not the path itself is closed
-  if (shape.style.fill && pointInPolygon(outline, point)) return true;
-  if (shape.style.stroke) {
+  if (hasVisibleFill(shape.style) && pointInPolygon(outline, point)) return true;
+  if (strokeWidth > 0) {
     const strokeOutline = shape.kind === "path" ? flattenPathOutline(shape.points, shape.closed) : outline;
     // roundedRectOutline/ellipseOutline are bare vertex lists with no
     // embedded closing edge, so distanceToPolyline needs closed:true for
@@ -140,7 +143,7 @@ export function hitTestShape(shape: VectorShape, x: number, y: number, measurer?
     // `closed` is true, so its own result is passed with closed:false here —
     // see flattenPathOutline's doc comment.
     const closed = shape.kind !== "path";
-    if (distanceToPolyline(strokeOutline, point, closed) <= shape.style.strokeWidth / 2) return true;
+    if (distanceToPolyline(strokeOutline, point, closed) <= strokeWidth / 2) return true;
   }
   return false;
 }
