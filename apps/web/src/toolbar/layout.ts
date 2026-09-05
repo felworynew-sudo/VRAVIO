@@ -17,7 +17,24 @@ export interface ToolbarLayout {
   readonly hidden: readonly string[];
 }
 
-const storageKey = (kind: EnvironmentKind | string): string => `vravio.${kind}-toolbar.v1`;
+/**
+ * The stored arrangement, and the version that lets a changed default reach
+ * everyone.
+ *
+ * A stored layout deliberately survives changes to the catalogue —
+ * `reconcileLayout` adds and removes tools without disturbing what the user
+ * arranged. That is right for a tool appearing or vanishing, and wrong for a
+ * change to the *grouping* that everyone is meant to get: those users would
+ * keep the old arrangement forever and never know a better one existed.
+ *
+ * Raising this number is how such a change is delivered. It discards
+ * customisation once, for everyone, which is a real cost and the reason it is
+ * a deliberate act rather than something that happens whenever the defaults
+ * move. Only raise it when the new default is one existing users should have.
+ *
+ * v2: healing, patch, stamp and the removal brush became one retouching slot.
+ */
+const storageKey = (kind: EnvironmentKind | string): string => `vravio.${kind}-toolbar.v2`;
 
 export const TOOLBAR_CHANGED_EVENT = "vravio-toolbar-layout-changed";
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultLayout, reconcileLayout, sameLayout, type ToolbarLayout } from "./layout";
+import { defaultLayout, readToolbarLayout, reconcileLayout, sameLayout, type ToolbarLayout } from "./layout";
 import { rasterToolGroups, toolsFor } from "../tools";
 
 /**
@@ -90,6 +90,46 @@ describe("a stored arrangement against a catalogue that has moved", () => {
     const layout = defaultLayout("raster");
 
     expect(reconcileLayout(layout, "raster")).toEqual(layout);
+  });
+});
+
+describe("delivering a changed default to people who already have a layout", () => {
+  it("gives the retouching tools one slot", () => {
+    // The grouping this version bump exists to deliver: healing, patch, stamp
+    // and removal are four ways of doing one thing.
+    const retouching = defaultLayout("raster").groups.find((group) => group.includes("raster.spotHeal"));
+
+    expect(retouching).toEqual(["raster.spotHeal", "raster.patch", "raster.clone", "raster.inpaint"]);
+  });
+
+  it("reads from a versioned key, so raising the version supersedes old layouts", () => {
+    // A stored layout survives catalogue changes on purpose — which is exactly
+    // why a changed *default* needs a way past it. The version in the key is
+    // that way, and this is what stops it being removed as noise.
+    //
+    // There is no `localStorage` outside a browser, so the test supplies the
+    // smallest thing that behaves like one.
+    const store = new Map<string, string>();
+    (globalThis as { localStorage?: unknown }).localStorage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value); },
+      removeItem: (key: string) => { store.delete(key); },
+    };
+    try {
+      const staleGrouping: ToolbarLayout = { groups: [["raster.spotHeal", "raster.patch"], ["raster.clone"]], hidden: [] };
+      store.set("vravio.raster-toolbar.v1", JSON.stringify(staleGrouping));
+
+      // The v1 layout is not read at all: v2 has nothing stored, so the default
+      // answers — and the default is the new grouping.
+      expect(readToolbarLayout("raster").groups.find((group) => group.includes("raster.spotHeal"))).toContain("raster.clone");
+
+      // And a layout stored under the *current* version is still honoured, so
+      // the bump supersedes the old one without disabling storage itself.
+      store.set("vravio.raster-toolbar.v2", JSON.stringify(staleGrouping));
+      expect(readToolbarLayout("raster").groups.find((group) => group.includes("raster.spotHeal"))).not.toContain("raster.clone");
+    } finally {
+      delete (globalThis as { localStorage?: unknown }).localStorage;
+    }
   });
 });
 
