@@ -1,5 +1,6 @@
 export * from "./asset-store";
 export * from "./autosave-manager";
+export * from "./color";
 export * from "./command-registry";
 export * from "./document-store";
 export * from "./document-snapshot-store";

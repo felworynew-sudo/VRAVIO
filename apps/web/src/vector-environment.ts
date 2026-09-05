@@ -1,6 +1,7 @@
 import type { AssetId, AssetStore, DocumentStore, Environment, ExportOptions, ExtractOptions, ExtractedAsset, ParentTarget, VravioDocument } from "@vravio/kernel";
+import { colorToCss } from "@vravio/kernel";
 import { RASTER_ASSET_MIME, decodeRasterAsset, encodeRasterAsset, isRasterAsset } from "@vravio/env-raster";
-import { createImageShape, createVectorDocument, pathData, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { createImageShape, createVectorDocument, isShapeEffectivelyVisible, pathData, worldTransform, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
 
 export interface VectorEnvironmentOptions {
   readonly documents: DocumentStore;
@@ -94,9 +95,20 @@ export class VectorEnvironment implements Environment<VectorDocumentState> {
     if (!context) throw new Error("2D canvas context is unavailable");
 
     for (const shape of state.shapes) {
-      if (!shape.visible) continue;
+      // A group paints nothing of its own; its children are separate entries
+      // in this same flat list, each carrying its own transform below —
+      // there is no children[] to recurse into here, unlike the SVG
+      // renderer's <g> nesting, because a flat list is what worldTransform
+      // (an ancestor-chain compose) is for.
+      if (shape.kind === "group") continue;
+      // An ancestor's own visible:false hides everything inside it, even if
+      // this shape's own flag says otherwise — the same rule
+      // shapeAt/renderShapeTree already apply.
+      if (!isShapeEffectivelyVisible(shape, state.shapes)) continue;
       context.save();
       context.globalAlpha = shape.style.opacity;
+      const world = worldTransform(shape, state.shapes);
+      context.transform(world.a, world.b, world.c, world.d, world.e, world.f);
       if (shape.kind === "image") {
         const bytes = await this.#assets.read(shape.pixelAssetId as AssetId);
         if (bytes) {
@@ -147,8 +159,8 @@ export class VectorEnvironment implements Environment<VectorDocumentState> {
 }
 
 function paintShape(context: CanvasRenderingContext2D, shape: VectorShape): void {
-  context.fillStyle = shape.style.fill ?? "transparent";
-  context.strokeStyle = shape.style.stroke ?? "transparent";
+  context.fillStyle = shape.style.fill ? colorToCss(shape.style.fill) : "transparent";
+  context.strokeStyle = shape.style.stroke ? colorToCss(shape.style.stroke) : "transparent";
   context.lineWidth = shape.style.strokeWidth;
   if (shape.kind === "rectangle") {
     const path = new Path2D();

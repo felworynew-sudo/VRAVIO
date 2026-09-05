@@ -19,14 +19,14 @@ import { rasterAdjustmentById, rasterAdjustments } from "./raster-adjustments/re
 import { windowById, windowsFor } from "./windows/registry";
 import { windowTitle } from "./windows/types";
 import { PANEL_REQUEST_EVENT, persistVisiblePanelIds, readVisiblePanelIds, type PanelVisibilityDetail } from "./windows/runtime";
-import { isVectorDocumentState, shapeBounds, updateShape, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
-import { changeVectorDocument, deleteActiveVectorShapes, duplicateActiveVectorShape, reorderActiveVectorShape } from "./vector-commands";
+import { isVectorDocumentState, shapeBounds, updateShape, vectorShapeRows, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { changeVectorDocument, deleteActiveVectorShapes, duplicateActiveVectorShape, groupActiveVectorShapes, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
 import { useContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { luminanceHistogram } from "./raster-adjustments/histogram";
 import { changeRasterDocument } from "./commands";
 import { pickCommands } from "./commands/surface";
 import { importModelAsLayer, updateScene3DLayer } from "./scene3d-commands";
-import type { ReversibleOperation } from "@vravio/kernel";
+import { colorToHex, cssToColor, srgb, type ReversibleOperation } from "@vravio/kernel";
 import "dockview-react/dist/styles/dockview.css";
 
 /**
@@ -100,10 +100,10 @@ function InspectorPanel({ params }: IDockviewPanelProps<{ kind?: string }>) {
         </>}
         {shape.kind === "image" && <button className="secondary-action" onClick={() => void kernel.commands.execute("image.openElsewhere", { activeDocumentId: document.id })}>{text(language, "Edit in Raster Environment…", "Открыть в растровой среде…")}</button>}
         {shape.kind !== "image" && <>
-          <label className="export-check"><input type="checkbox" checked={shape.style.fill !== null} onChange={(event) => commitStyle({ fill: event.target.checked ? (shape.style.fill ?? "#5be0b3") : null })}/>{text(language, "Fill", "Заливка")}</label>
-          {shape.style.fill !== null && <input type="color" value={shape.style.fill} onChange={(event) => commitStyle({ fill: event.target.value })} />}
-          <label className="export-check"><input type="checkbox" checked={shape.style.stroke !== null} onChange={(event) => commitStyle({ stroke: event.target.checked ? (shape.style.stroke ?? "#000000") : null })}/>{text(language, "Stroke", "Обводка")}</label>
-          {shape.style.stroke !== null && <><input type="color" value={shape.style.stroke} onChange={(event) => commitStyle({ stroke: event.target.value })} /><label>{text(language, "Stroke width", "Толщина обводки")}<input type="number" min={0} value={shape.style.strokeWidth} onChange={(event) => commitStyle({ strokeWidth: Math.max(0, event.target.valueAsNumber) })} /></label></>}
+          <label className="export-check"><input type="checkbox" checked={shape.style.fill !== null} onChange={(event) => commitStyle({ fill: event.target.checked ? (shape.style.fill ?? srgb(0x5b, 0xe0, 0xb3)) : null })}/>{text(language, "Fill", "Заливка")}</label>
+          {shape.style.fill !== null && <input type="color" value={colorToHex(shape.style.fill)} onChange={(event) => commitStyle({ fill: cssToColor(event.target.value) })} />}
+          <label className="export-check"><input type="checkbox" checked={shape.style.stroke !== null} onChange={(event) => commitStyle({ stroke: event.target.checked ? (shape.style.stroke ?? srgb(0, 0, 0)) : null })}/>{text(language, "Stroke", "Обводка")}</label>
+          {shape.style.stroke !== null && <><input type="color" value={colorToHex(shape.style.stroke)} onChange={(event) => commitStyle({ stroke: cssToColor(event.target.value) })} /><label>{text(language, "Stroke width", "Толщина обводки")}<input type="number" min={0} value={shape.style.strokeWidth} onChange={(event) => commitStyle({ strokeWidth: Math.max(0, event.target.valueAsNumber) })} /></label></>}
         </>}
         <label>{text(language, "Opacity", "Непрозрачность")}<input type="range" min={0} max={100} value={Math.round(shape.style.opacity * 100)} onChange={(event) => commitStyle({ opacity: event.target.valueAsNumber / 100 })} /></label>
       </div>;
@@ -467,28 +467,63 @@ function LayersPanel() {
   }
   if (active && isVectorDocumentState(active.state)) {
     const state = active.state;
-    // Front to back, matching how the raster panel lists its top layer first — shapes.at(-1)
-    // is what a click on the canvas picks first, so it belongs at the top of this list too.
-    const ordered = [...state.shapes].reverse();
+    // Topmost-first, groups nested with their own children indented under
+    // them and skipped entirely once collapsed — the tree stage 2 of
+    // docs/vector-plan.md added, in place of the flat list this panel used
+    // to draw straight from state.shapes (which had no nesting to show).
+    const rows = vectorShapeRows(state.shapes);
     const selectShape = (id: string) => kernel.documents.update<VectorDocumentState>(active.id, (current) => { current.activeShapeId = id; current.selection = [id]; });
+    // Same shift-range / ctrl-toggle convention as the raster panel's
+    // clickLayer above, over this row order (a group and its children count
+    // as adjacent for a shift-range the way they visually are).
+    const clickShape = (id: string, event: React.MouseEvent) => {
+      const order = rows.map((row) => row.shape.id);
+      if (event.shiftKey && state.selection.length) {
+        const anchor = state.selection[state.selection.length - 1] ?? state.activeShapeId;
+        const from = order.indexOf(anchor ?? ""), to = order.indexOf(id);
+        if (from >= 0 && to >= 0) {
+          const [start, end] = from < to ? [from, to] : [to, from];
+          const range = order.slice(start, end + 1);
+          kernel.documents.update<VectorDocumentState>(active.id, (current) => { current.activeShapeId = id; current.selection = range; });
+          return;
+        }
+      }
+      if (event.metaKey || event.ctrlKey) {
+        kernel.documents.update<VectorDocumentState>(active.id, (current) => {
+          current.selection = current.selection.includes(id) ? current.selection.filter((item) => item !== id) : [...current.selection, id];
+          current.activeShapeId = id;
+        });
+        return;
+      }
+      selectShape(id);
+    };
     const toggleVisible = (id: string) => void changeVectorDocument(active.id, "Toggle Visibility (Переключить видимость)", (current) => { const shape = current.shapes.find((item) => item.id === id); if (!shape) return false; updateShape<VectorShape>(current, id, { visible: !shape.visible } as Partial<VectorShape>); return true; });
     const toggleLocked = (id: string) => void changeVectorDocument(active.id, "Toggle Lock (Переключить блокировку)", (current) => { const shape = current.shapes.find((item) => item.id === id); if (!shape) return false; updateShape<VectorShape>(current, id, { locked: !shape.locked } as Partial<VectorShape>); return true; });
+    const toggleExpanded = (id: string) => kernel.documents.update<VectorDocumentState>(active.id, (current) => { const shape = current.shapes.find((item) => item.id === id); if (shape?.kind === "group") shape.expanded = !shape.expanded; });
+    const canGroup = state.selection.length >= 2;
+    const canUngroup = state.activeShapeId ? state.shapes.find((shape) => shape.id === state.activeShapeId)?.kind === "group" : false;
     return <div className="dock-panel-body">
-      <div className="layer-list">{ordered.map((shape) => <div key={shape.id} className={["layer-row", shape.id === state.activeShapeId ? "active" : ""].filter(Boolean).join(" ")} onClick={() => selectShape(shape.id)} onContextMenu={(event) => { selectShape(shape.id); contextMenu.open(event, [
+      <div className="layer-list">{rows.map(({ shape, depth }) => <div key={shape.id} className={["layer-row", shape.id === state.activeShapeId ? "active" : "", state.selection.includes(shape.id) ? "selected" : "", shape.kind === "group" ? "group" : ""].filter(Boolean).join(" ")} style={{ "--layer-depth": depth } as CSSProperties} onClick={(event) => clickShape(shape.id, event)} onContextMenu={(event) => { if (!state.selection.includes(shape.id)) selectShape(shape.id); contextMenu.open(event, [
         { label: text(language, "Duplicate", "Дублировать"), onSelect: () => duplicateActiveVectorShape(active.id) },
         { label: text(language, "Delete", "Удалить"), onSelect: () => deleteActiveVectorShapes(active.id), danger: true },
+        { label: text(language, "Group", "Сгруппировать"), onSelect: () => groupActiveVectorShapes(active.id), separatorBefore: true, disabled: !canGroup },
+        { label: text(language, "Ungroup", "Разгруппировать"), onSelect: () => ungroupActiveVectorGroup(active.id), disabled: !canUngroup },
         { label: text(language, "Bring to Front", "На передний план"), onSelect: () => reorderActiveVectorShape(active.id, "front"), separatorBefore: true },
         { label: text(language, "Bring Forward", "Переместить выше"), onSelect: () => reorderActiveVectorShape(active.id, "forward") },
         { label: text(language, "Send Backward", "Переместить ниже"), onSelect: () => reorderActiveVectorShape(active.id, "backward") },
         { label: text(language, "Send to Back", "На задний план"), onSelect: () => reorderActiveVectorShape(active.id, "back") },
       ]); }}>
         <button onClick={(event) => { event.stopPropagation(); toggleVisible(shape.id); }} aria-label={text(language, "Toggle visibility", "Переключить видимость")}><img src={shape.visible ? "/ГЛАЗ ОТКРЫТ.svg" : "/ГЛАЗ ЗАКРЫТ.svg"} alt=""/></button>
-        <span className="layer-row-text"><b>{shape.name}</b><small>{shape.kind} · {Math.round(shapeBounds(shape).width)}×{Math.round(shapeBounds(shape).height)}</small></span>
+        <span className="layer-hierarchy-space"/>
+        {shape.kind === "group" && <span className="layer-disclosure" onClick={(event) => { event.stopPropagation(); toggleExpanded(shape.id); }}>{shape.expanded ? "▾" : "▸"}</span>}
+        <span className="layer-row-text"><b>{shape.name}</b><small>{shape.kind === "group" ? text(language, "Group", "Группа") : `${shape.kind} · ${Math.round(shapeBounds(shape).width)}×${Math.round(shapeBounds(shape).height)}`}</small></span>
         <button onClick={(event) => { event.stopPropagation(); toggleLocked(shape.id); }} aria-label={text(language, "Toggle lock", "Переключить блокировку")} className={shape.locked ? "active" : ""}>{shape.locked ? "🔒" : "🔓"}</button>
       </div>)}
-        {!ordered.length && <div className="empty-row">{text(language, "No shapes yet — draw one with a tool", "Пока нет фигур — нарисуйте что-нибудь инструментом")}</div>}
+        {!rows.length && <div className="empty-row">{text(language, "No shapes yet — draw one with a tool", "Пока нет фигур — нарисуйте что-нибудь инструментом")}</div>}
       </div>
       <div className="layer-actions">
+        <button disabled={!canGroup} onClick={() => groupActiveVectorShapes(active.id)} title={text(language, "Group", "Сгруппировать")}><img src="/ГРУППА.svg" alt=""/></button>
+        <button disabled={!canUngroup} onClick={() => ungroupActiveVectorGroup(active.id)} title={text(language, "Ungroup", "Разгруппировать")}><img src="/ГРУППА.svg" alt="" style={{ opacity: 0.6 }}/></button>
         <button disabled={!state.activeShapeId} onClick={() => duplicateActiveVectorShape(active.id)} title={text(language, "Duplicate", "Дублировать")}><img src="/ПАНЕЛЬ-СЛОИ.svg" alt="" width={16} height={16}/></button>
         <button disabled={!state.selection.length} data-role="trash" onClick={() => deleteActiveVectorShapes(active.id)} title={text(language, "Delete shape", "Удалить фигуру")}><img src="/КОРЗИНА.svg" alt=""/></button>
       </div>

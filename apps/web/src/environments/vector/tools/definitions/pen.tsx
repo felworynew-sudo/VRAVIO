@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { addShape, createShape, type VectorDocumentState } from "@vravio/env-vector";
+import { cssToColor } from "@vravio/kernel";
 import type { VectorSnapshot } from "../../../../vector-commands";
 import type { ToolContext, ToolPointer, VectorToolDefinition } from "../types";
 
@@ -108,7 +109,7 @@ const pen: VectorToolDefinition<PenState> = {
     // option already promised now actually lands on the shape, ready for
     // the moment a stroke colour is turned on, rather than always "2".
     const strokeWidth = typeof context.options.strokeWidth === "number" ? context.options.strokeWidth : 2;
-    const shape = createShape("path", pointer.point.x, pointer.point.y, { fill: context.foregroundColor, stroke: null, strokeWidth, opacity: 1 });
+    const shape = createShape("path", pointer.point.x, pointer.point.y, { fill: cssToColor(context.foregroundColor), stroke: null, strokeWidth, opacity: 1 });
     context.setState({ draft: { shapeId: shape.id, before }, handle: { shapeId: shape.id, pointIndex: 0, anchor: pointer.point } });
     context.mutate((document: VectorDocumentState) => addShape(document, shape));
   },

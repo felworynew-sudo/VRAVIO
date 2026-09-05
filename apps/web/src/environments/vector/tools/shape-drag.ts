@@ -1,4 +1,5 @@
 import { addShape, createShape, updateShape, type VectorShapeKind } from "@vravio/env-vector";
+import { cssToColor } from "@vravio/kernel";
 import type { VectorSnapshot } from "../../../vector-commands";
 import type { ToolContext, ToolPointer, VectorToolDefinition } from "./types";
 
@@ -24,7 +25,7 @@ export function createShapeDragTool(id: string, kind: VectorShapeKind): VectorTo
 
     onPointerDown(context: ToolContext<ShapeDragState>, pointer: ToolPointer) {
       const before = context.snapshot();
-      const shape = createShape(kind, pointer.point.x, pointer.point.y, { fill: context.foregroundColor, stroke: null, strokeWidth: 2, opacity: 1 });
+      const shape = createShape(kind, pointer.point.x, pointer.point.y, { fill: cssToColor(context.foregroundColor), stroke: null, strokeWidth: 2, opacity: 1 });
       // "radius" only exists on vector.rectangle's option schema; a shape of
       // any other kind never reads it. Read here rather than left at
       // createShape's canonical default — otherwise the option is declared

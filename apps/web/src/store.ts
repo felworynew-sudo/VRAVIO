@@ -1,6 +1,6 @@
 import { HistoryManager, type EnvironmentKind } from "@vravio/kernel";
 import { createRasterDocument } from "@vravio/env-raster";
-import { createVectorDocument } from "@vravio/env-vector";
+import { createArtboard, createVectorDocument } from "@vravio/env-vector";
 import { create } from "zustand";
 import { kernel } from "./kernel";
 import { defaultTool, toolById } from "./tools";
@@ -154,7 +154,17 @@ export const useShellStore = create<ShellState>((set) => ({
     const initialState = kind === "raster"
       ? createRasterDocument(options?.width, options?.height, options ? { resolution: options.resolution, resolutionUnit: options.resolutionUnit, backgroundColor: options.backgroundColor, pixelAspectRatio: options.pixelAspectRatio } : {})
       : kind === "vector"
-      ? createVectorDocument(options?.width, options?.height, options?.artboards !== undefined ? { artboards: options.artboards } : {})
+      ? (() => {
+          // The New Document dialog's "artboards" toggle is a boolean
+          // ("include artboards or not"), but the document itself now holds
+          // a list of them (docs/vector-plan.md §7.1) rather than a boolean
+          // flag — a document with artboards enabled starts with one, sized
+          // to the canvas, the same way Illustrator's own New Document
+          // dialog seeds the first artboard from the size you just chose.
+          const vectorState = createVectorDocument(options?.width, options?.height);
+          if (options?.artboards) vectorState.artboards.push(createArtboard(0, 0, vectorState.width, vectorState.height));
+          return vectorState;
+        })()
       : { kind, schemaVersion: 1, ...(options ? { canvas: { width: options.width, height: options.height, resolution: options.resolution, resolutionUnit: options.resolutionUnit, artboards: options.artboards ?? false }, ...(kind === "video" ? { timeline: { frameRate: options.frameRate ?? 30, width: options.width, height: options.height } } : {}), ...(kind === "audio" ? { audio: { sampleRate: options.sampleRate ?? 48000, channels: options.channels ?? 2, bitDepth: options.audioBitDepth ?? 24 } } : {}) } : {}) };
     const document = kernel.documents.create(kind, options?.name?.trim() || names[kind], initialState);
     kernel.historyByDocument.set(document.id, createHistory(state.preferences.memoryBudgetMb));

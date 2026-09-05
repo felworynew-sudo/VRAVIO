@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createShape, createVectorDocument } from "./document";
 import { shapeAt } from "./shape-ops";
+import { makeVectorOrderKey } from "./types";
 import type { VectorDocumentState } from "./types";
 
 /**
@@ -42,7 +43,14 @@ function scatteredDocument(count: number): VectorDocumentState {
   const state = createVectorDocument(1920, 1080);
   for (let index = 0; index < count; index += 1) {
     const x = (index * 227) % 1800, y = (index * 311) % 1000;
-    state.shapes.push(createShape("rectangle", x, y));
+    const shape = createShape("rectangle", x, y);
+    // A direct orderKey assignment rather than addShape/appendShapeAt: both of
+    // those scan existing siblings on every call, which would make this setup
+    // loop itself O(n²) at 10,000 shapes. What this benchmark needs from the
+    // fixture is realistic, distinct order keys — not the general insertion
+    // path, which has its own tests in group-ops.test.ts and vector.test.ts.
+    (shape as { orderKey: string }).orderKey = makeVectorOrderKey(index);
+    state.shapes.push(shape);
   }
   return state;
 }
@@ -54,6 +62,20 @@ function scatteredDocument(count: number): VectorDocumentState {
 const MISS_X = 5000, MISS_Y = 5000;
 
 describe("performance floor (stage 1 of the vector plan)", () => {
+  /**
+   * These three thresholds were re-measured after stage 2 added transform
+   * composition to `shapeAt` — 100/1,000/10,000 shapes went from
+   * ~0.008/0.008/0.09ms (stage 1's numbers, a plain bounds check) to
+   * ~0.17/0.81/3.4ms. That is a real, deliberate cost, not a regression to
+   * chase down: every shape a miss walks past now gets `worldTransform`
+   * (an ancestor-chain matrix multiply) and a matrix inversion before its
+   * bounds are even tested, because correctness for a shape sitting inside a
+   * rotated group requires it (see `shapeAt`'s own doc comment). Stage 4's
+   * spatial index removes most of this work for a miss by not visiting most
+   * shapes at all, which is the number that should come back down — lowering
+   * these thresholds is that stage's job, not a reason to avoid correct
+   * transform handling now.
+   */
   it("shapeAt misses on 100 shapes — the linear scan this stage is a floor under", () => {
     const state = scatteredDocument(100);
 
@@ -61,8 +83,8 @@ describe("performance floor (stage 1 of the vector plan)", () => {
     // an index (stage 4) is meant to fix.
     const elapsed = fastestOf(() => { shapeAt(state, MISS_X, MISS_Y); });
 
-    // Measured on this fixture: ~0.008ms.
-    expect(elapsed).toBeLessThan(0.1 * THRESHOLD_MULTIPLIER);
+    // Measured on this fixture: ~0.17ms.
+    expect(elapsed).toBeLessThan(0.2 * THRESHOLD_MULTIPLIER);
   });
 
   it("shapeAt misses on 1,000 shapes", () => {
@@ -70,11 +92,8 @@ describe("performance floor (stage 1 of the vector plan)", () => {
 
     const elapsed = fastestOf(() => { shapeAt(state, MISS_X, MISS_Y); });
 
-    // Measured on this fixture: ~0.008ms — indistinguishable from 100 shapes
-    // at this size, because 1,000 iterations of a bounds check is still far
-    // below where anything but timer resolution shows up. The scan only
-    // starts costing something visible at the next size.
-    expect(elapsed).toBeLessThan(0.1 * THRESHOLD_MULTIPLIER);
+    // Measured on this fixture: ~0.81ms.
+    expect(elapsed).toBeLessThan(0.9 * THRESHOLD_MULTIPLIER);
   });
 
   it("shapeAt misses on 10,000 shapes", () => {
@@ -82,12 +101,13 @@ describe("performance floor (stage 1 of the vector plan)", () => {
 
     const elapsed = fastestOf(() => { shapeAt(state, MISS_X, MISS_Y); });
 
-    // Measured on this fixture: ~0.09ms — visibly above the 100/1,000-shape
-    // numbers, which is the linear scan finally showing up. Still comfortably
-    // under a frame budget on this fixture; the number stage 4's spatial
-    // index exists to keep from growing the moment a document gets larger
-    // than this one.
-    expect(elapsed).toBeLessThan(1 * THRESHOLD_MULTIPLIER);
+    // Measured on this fixture: ~3.4ms — comfortably under a frame budget
+    // still, but ten times the shapes for roughly four times the time (rather
+    // than ten) suggests the per-shape matrix work, not the O(n) scan itself,
+    // now dominates at these sizes. Either way, this is exactly the number
+    // stage 4's spatial index exists to bring down by visiting far fewer
+    // shapes per query.
+    expect(elapsed).toBeLessThan(4 * THRESHOLD_MULTIPLIER);
   });
 
   it("serializes a 1,000-shape document — the cost autosave and session restore pay", () => {

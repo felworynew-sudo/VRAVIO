@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from "react";
-import { addShape, createImageShape, isVectorDocumentState, pathData, removeShapes, shapeAt, shapeBounds, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { useEffect, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { addShape, createImageShape, isIdentityMatrix, isVectorDocumentState, matrixToCss, pathData, removeShapes, shapeAt, shapeWorldBounds, siblingsOf, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
 import { RASTER_ASSET_MIME, decodeRasterAsset, encodeRasterAsset } from "@vravio/env-raster";
+import { colorToCss } from "@vravio/kernel";
 import type { AssetId, VravioDocument } from "@vravio/kernel";
 import { kernel } from "./kernel";
 import { changeVectorDocument, commitVectorDrag, snapshotVector } from "./vector-commands";
@@ -77,24 +78,49 @@ function useAssetBitmapUrl(assetId: string, rev: number): string | null {
   return url;
 }
 
+/** `undefined` rather than the identity matrix's own string so an untransformed
+ * shape (every shape a v2 document ever had, and most new ones) renders with
+ * no `transform` attribute at all — cheaper for the browser and, more
+ * importantly, what the DOM already looked like before this stage, so a
+ * document with no groups and no rotation is pixel-identical to before. */
+const shapeTransform = (shape: VectorShape): string | undefined => isIdentityMatrix(shape.transform) ? undefined : matrixToCss(shape.transform);
+
 function VectorImageShape({ shape }: { shape: Extract<VectorShape, { kind: "image" }> }) {
   const rev = kernel.assets.get(shape.pixelAssetId as AssetId)?.head ?? 0;
   const url = useAssetBitmapUrl(shape.pixelAssetId, rev);
-  const transform = shape.rotation ? `rotate(${shape.rotation} ${shape.x + shape.width / 2} ${shape.y + shape.height / 2})` : undefined;
+  const transform = shapeTransform(shape);
   if (!url) return <rect key={shape.id} x={shape.x} y={shape.y} width={shape.width} height={shape.height} opacity={shape.style.opacity} className="vector-image-placeholder" transform={transform}/>;
   return <image key={shape.id} href={url} x={shape.x} y={shape.y} width={shape.width} height={shape.height} opacity={shape.style.opacity} preserveAspectRatio="none" transform={transform}/>;
 }
 
-function renderShape(shape: VectorShape) {
+function renderShape(shape: VectorShape): ReactNode {
   if (!shape.visible) return null;
   if (shape.kind === "image") return <VectorImageShape key={shape.id} shape={shape}/>;
-  const fill = shape.style.fill ?? "none", stroke = shape.style.stroke ?? "none";
-  const common = { fill, stroke, strokeWidth: shape.style.strokeWidth, opacity: shape.style.opacity };
-  if (shape.kind === "rectangle") return <rect key={shape.id} {...common} x={shape.x} y={shape.y} width={shape.width} height={shape.height} rx={shape.cornerRadius} transform={shape.rotation ? `rotate(${shape.rotation} ${shape.x + shape.width / 2} ${shape.y + shape.height / 2})` : undefined}/>;
-  if (shape.kind === "ellipse") return <ellipse key={shape.id} {...common} cx={shape.x + shape.width / 2} cy={shape.y + shape.height / 2} rx={shape.width / 2} ry={shape.height / 2} transform={shape.rotation ? `rotate(${shape.rotation} ${shape.x + shape.width / 2} ${shape.y + shape.height / 2})` : undefined}/>;
+  if (shape.kind === "group") return null; // a group has no visual of its own — see renderShapeTree, which wraps its children in a transformed <g> instead of calling this
+  const fill = shape.style.fill ? colorToCss(shape.style.fill) : "none", stroke = shape.style.stroke ? colorToCss(shape.style.stroke) : "none";
+  const common = { fill, stroke, strokeWidth: shape.style.strokeWidth, opacity: shape.style.opacity, transform: shapeTransform(shape) };
+  if (shape.kind === "rectangle") return <rect key={shape.id} {...common} x={shape.x} y={shape.y} width={shape.width} height={shape.height} rx={shape.cornerRadius}/>;
+  if (shape.kind === "ellipse") return <ellipse key={shape.id} {...common} cx={shape.x + shape.width / 2} cy={shape.y + shape.height / 2} rx={shape.width / 2} ry={shape.height / 2}/>;
   if (shape.kind === "line") return <line key={shape.id} {...common} x1={shape.x1} y1={shape.y1} x2={shape.x2} y2={shape.y2}/>;
   if (shape.kind === "text") return <text key={shape.id} {...common} x={shape.x} y={shape.y} fontSize={shape.fontSize} fontFamily={shape.fontFamily} textAnchor={shape.align === "center" ? "middle" : shape.align === "right" ? "end" : "start"} stroke="none">{shape.value}</text>;
   return <path key={shape.id} {...common} d={pathData(shape.points, shape.closed)}/>;
+}
+
+/**
+ * Walks the shape tree in paint order, wrapping each group in a `<g
+ * transform>` around its own children — nested groups nest `<g>`s the same
+ * way, and the browser composes the transforms for free, exactly the reason
+ * `Matrix` was designed to hand straight to SVG (see matrix.ts's own doc
+ * comment). This is the one place group nesting actually has to exist in the
+ * render tree; `shapeAt`/`shapeWorldBounds` walk the flat `parentId` chain
+ * instead because pointer math has no DOM to lean on.
+ */
+function renderShapeTree(shapes: readonly VectorShape[], parentId: string | null): ReactNode[] {
+  return siblingsOf(shapes, parentId).map((shape) => {
+    if (!shape.visible) return null;
+    if (shape.kind === "group") return <g key={shape.id} transform={shapeTransform(shape)}>{renderShapeTree(shapes, shape.id)}</g>;
+    return renderShape(shape);
+  });
 }
 
 export function VectorWorkspace({ document }: { document: VravioDocument }) {
@@ -251,7 +277,10 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   };
 
   const active = state.shapes.find((shape) => shape.id === state.activeShapeId) ?? null;
-  const bounds = active ? shapeBounds(active) : null;
+  // World bounds, not local: an active shape sitting inside a rotated group
+  // needs its selection box drawn where it actually appears on screen, not
+  // where it would sit if it had no parent.
+  const bounds = active ? shapeWorldBounds(active, state.shapes) : null;
   const stageStyle = { width: state.width, height: state.height, transform: `translate(-50%, -50%) translate(${viewport.panX}px, ${viewport.panY}px) rotate(${viewport.rotation}deg) scale(${viewport.zoom})` } as CSSProperties;
 
   const handleWheel = (event: React.WheelEvent) => {
@@ -297,7 +326,7 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   return <div ref={workspaceRef} className="vector-workspace" data-active-tool={activeToolId} onWheel={handleWheel} onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
     <div className="vector-stage" style={stageStyle}>
       <svg width={state.width} height={state.height} viewBox={`0 0 ${state.width} ${state.height}`} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerUp} onContextMenu={onCanvasContextMenu}>
-        {state.shapes.map(renderShape)}
+        {renderShapeTree(state.shapes, null)}
         {bounds && <rect className="vector-selection" x={bounds.x} y={bounds.y} width={bounds.width} height={bounds.height} vectorEffect="non-scaling-stroke"/>}
         {bounds && [[bounds.x, bounds.y], [bounds.x + bounds.width, bounds.y], [bounds.x, bounds.y + bounds.height], [bounds.x + bounds.width, bounds.y + bounds.height]].map(([x, y]) => <circle className="vector-handle" key={`${x}-${y}`} cx={x} cy={y} r={5 / viewport.zoom} vectorEffect="non-scaling-stroke"/>)}
         {catalogueTool?.Overlay && <catalogueTool.Overlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>} context={toolContextFor(catalogueTool.id)}/>}

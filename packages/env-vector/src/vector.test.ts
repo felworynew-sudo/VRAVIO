@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createShape, createVectorDocument } from "./document";
 import { addShape, duplicateShape, moveShapeInStack, removeShapes, shapeAt, shapeBounds, translateShape, updateShape } from "./shape-ops";
+import { flattenVectorShapes } from "./tree";
 
 describe("vector document", () => {
   it("creates an empty document with the requested size", () => {
@@ -46,13 +47,27 @@ describe("vector document", () => {
   });
 
   it("reorders the stack front/back/forward/backward", () => {
+    // Paint order is derived from parentId+orderKey (flattenVectorShapes),
+    // not the raw state.shapes array — the same convention
+    // packages/env-raster/src/layer-tree.ts uses for layers, adopted here in
+    // stage 2 of docs/vector-plan.md so a shape's position among siblings
+    // survives being reparented into and out of a group without an O(n)
+    // array splice at every level. Checking state.shapes directly (as this
+    // test did before that change) would be checking an implementation
+    // detail that carries no ordering meaning any more.
     const state = createVectorDocument();
     const a = createShape("rectangle", 0, 0), b = createShape("rectangle", 0, 0), c = createShape("rectangle", 0, 0);
     addShape(state, a); addShape(state, b); addShape(state, c);
+    const order = () => flattenVectorShapes(state.shapes).map((shape) => shape.id);
+
     moveShapeInStack(state, a.id, "front");
-    expect(state.shapes.map((shape) => shape.id)).toEqual([b.id, c.id, a.id]);
+    expect(order()).toEqual([b.id, c.id, a.id]);
     moveShapeInStack(state, a.id, "back");
-    expect(state.shapes.map((shape) => shape.id)).toEqual([a.id, b.id, c.id]);
+    expect(order()).toEqual([a.id, b.id, c.id]);
+    moveShapeInStack(state, a.id, "forward");
+    expect(order()).toEqual([b.id, a.id, c.id]);
+    moveShapeInStack(state, c.id, "backward");
+    expect(order()).toEqual([b.id, c.id, a.id]);
   });
 
   it("duplicates a shape with a fresh id right above the source", () => {

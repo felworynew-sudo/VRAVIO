@@ -1,4 +1,5 @@
 import { addShape, createShape } from "@vravio/env-vector";
+import { cssToColor } from "@vravio/kernel";
 import type { ToolContext, ToolPointer, VectorToolDefinition } from "../types";
 
 /**
@@ -14,7 +15,7 @@ const vectorText: VectorToolDefinition<null> = {
   createState: () => null,
 
   onPointerDown(context: ToolContext<null>, pointer: ToolPointer) {
-    const shape = createShape("text", pointer.point.x, pointer.point.y, { fill: context.foregroundColor, stroke: null, strokeWidth: 2, opacity: 1 });
+    const shape = createShape("text", pointer.point.x, pointer.point.y, { fill: cssToColor(context.foregroundColor), stroke: null, strokeWidth: 2, opacity: 1 });
     // "fontSize" is declared on vector.text's own option schema (default
     // 48, tools.ts) but the pre-port code never read it — createShape's own
     // canonical 32px stuck regardless of what the panel showed, the

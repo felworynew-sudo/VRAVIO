@@ -36,7 +36,7 @@ import { adjustedPixels } from "./raster-adjustments/apply";
 import { windowsFor } from "./windows/registry";
 import { windowTitle } from "./windows/types";
 import { PANEL_CHANGED_EVENT, readVisiblePanelIds, requestPanelVisibility } from "./windows/runtime";
-import { duplicateActiveVectorShape, deleteActiveVectorShapes, reorderActiveVectorShape } from "./vector-commands";
+import { duplicateActiveVectorShape, deleteActiveVectorShapes, groupActiveVectorShapes, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
 import { isVectorDocumentState } from "@vravio/env-vector";
 import { luminanceHistogram } from "./raster-adjustments/histogram";
 import "./styles.css";
@@ -366,6 +366,8 @@ export function App() {
         {active?.kind === "vector" && <Menu label="Object (Объект)" language={store.language} open={openMenu === "object"} onToggle={() => setOpenMenu(openMenu === "object" ? null : "object")} items={[
           ["Duplicate (Дублировать)", "Ctrl+J", () => active && duplicateActiveVectorShape(active.id)],
           ["Delete (Удалить)", "Delete", () => active && deleteActiveVectorShapes(active.id)],
+          ["Group (Сгруппировать)", "Ctrl+G", () => active && groupActiveVectorShapes(active.id)],
+          ["Ungroup (Разгруппировать)", "Ctrl+Shift+G", () => active && ungroupActiveVectorGroup(active.id)],
           ["Bring to Front (На передний план)", "", () => active && reorderActiveVectorShape(active.id, "front")],
           ["Bring Forward (Переместить выше)", "", () => active && reorderActiveVectorShape(active.id, "forward")],
           ["Send Backward (Переместить ниже)", "", () => active && reorderActiveVectorShape(active.id, "backward")],

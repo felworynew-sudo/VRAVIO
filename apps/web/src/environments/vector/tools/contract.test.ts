@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { addShape, createShape, createVectorDocument, type VectorDocumentState } from "@vravio/env-vector";
+import { srgb } from "@vravio/kernel";
 import { vectorTools } from "./registry";
 import { toolById } from "../../../tools";
 import { finishPath } from "./definitions/pen";
@@ -24,12 +25,12 @@ import type { ToolContext, ToolPointer, VectorToolDefinition } from "./types";
 
 function documentFixture(): VectorDocumentState {
   const state = createVectorDocument(400, 300);
-  const rectangle = createShape("rectangle", 40, 40, { fill: "#5be0b3", stroke: null, strokeWidth: 2, opacity: 1 });
+  const rectangle = createShape("rectangle", 40, 40, { fill: srgb(0x5b, 0xe0, 0xb3), stroke: null, strokeWidth: 2, opacity: 1 });
   addShape(state, rectangle);
   // A path with one handled point, so vector.nodes has a real anchor+handle
   // to hit-test against — without one, every gesture falls through to its
   // select-tool tail and the node-specific branches never run at all.
-  const path = createShape("path", 200, 150, { fill: null, stroke: "#000000", strokeWidth: 2, opacity: 1 });
+  const path = createShape("path", 200, 150, { fill: null, stroke: srgb(0, 0, 0), strokeWidth: 2, opacity: 1 });
   if (path.kind === "path") path.points = [{ x: 200, y: 150, handleOut: { x: 20, y: 0 }, handleIn: { x: -20, y: 0 } }, { x: 260, y: 150 }];
   addShape(state, path);
   state.activeShapeId = path.id;

@@ -1,4 +1,4 @@
-import { duplicateShape, moveShapeInStack, removeShapes, type VectorDocumentState, type VectorShape, type ZOrderMove } from "@vravio/env-vector";
+import { duplicateShape, groupShapes, moveShapeInStack, removeShapes, ungroupShapes, type VectorDocumentState, type VectorShape, type ZOrderMove } from "@vravio/env-vector";
 import { kernel } from "./kernel";
 
 export interface VectorSnapshot { shapes: VectorShape[]; activeShapeId: string | null; selection: readonly string[] }
@@ -80,4 +80,24 @@ export function reorderActiveVectorShape(documentId: string, move: ZOrderMove): 
   const id = document?.state.activeShapeId;
   if (!id) return;
   void changeVectorDocument(documentId, zOrderLabels[move], (state) => { moveShapeInStack(state, id, move); return true; });
+}
+
+/** Wraps the current selection in a new group — Cmd/Ctrl+G, mirroring Photoshop's own Group
+ * Layers. Fewer than two shapes selected is a no-op rather than a pointless single-member group:
+ * `groupShapes` already returns null for an empty selection, and grouping a lone shape produces
+ * nothing a user asked for, only an extra level to immediately have to see through. */
+export function groupActiveVectorShapes(documentId: string): void {
+  const document = kernel.documents.get<VectorDocumentState>(documentId);
+  const ids = document?.state.selection;
+  if (!ids || ids.length < 2) return;
+  void changeVectorDocument(documentId, "Group (Сгруппировать)", (state) => Boolean(groupShapes(state, ids)));
+}
+
+/** Dissolves the active group, Cmd/Ctrl+Shift+G — a no-op on anything that is not a group,
+ * the same guard `ungroupShapes` itself already has. */
+export function ungroupActiveVectorGroup(documentId: string): void {
+  const document = kernel.documents.get<VectorDocumentState>(documentId);
+  const id = document?.state.activeShapeId;
+  if (!id) return;
+  void changeVectorDocument(documentId, "Ungroup (Разгруппировать)", (state) => ungroupShapes(state, id));
 }
