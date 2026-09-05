@@ -15,6 +15,7 @@ export * from "./platform";
 export * from "./roundtrip-manager";
 export * from "./storage-adapter";
 export * from "./types";
+export * from "./vector-curve-port";
 export * from "./vector-geometry-port";
 export * from "./vector-geometry-reference";
 export * from "./worker-pool";

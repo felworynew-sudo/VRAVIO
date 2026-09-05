@@ -1,7 +1,7 @@
 {
   "name": "@vravio/vector-geometry",
   "type": "module",
-  "description": "Boolean polygon operations for VRAVIO's vector environment (Stage 7 of docs/vector-plan.md) — the WASM side of VectorGeometryPort, cross-checked against the TS reference implementation in @vravio/kernel.",
+  "description": "Boolean polygon operations (Stage 7) and curve operations (Stage 8) for VRAVIO's vector environment, docs/vector-plan.md — the WASM side of VectorGeometryPort, cross-checked against the TS reference implementation in @vravio/kernel.",
   "version": "0.0.1",
   "license": "UNLICENSED",
   "files": [

@@ -18,6 +18,112 @@ export function boolean_op(kind, subject, clip) {
     wasm.__wbindgen_free(ret[0], ret[1] * 8, 8);
     return v4;
 }
+
+/**
+ * Grows (positive `amount`) or shrinks (negative) a filled shape by a
+ * uniform distance — the "offset path" bullet. `tolerance` is Kurbo's own
+ * accuracy knob for how closely the (possibly curved) joins approximate
+ * the true offset curve; it is not a node-count knob the way `simplify`'s
+ * `accuracy` is.
+ * @param {string} d
+ * @param {number} amount
+ * @param {string} join
+ * @param {number} tolerance
+ * @returns {string}
+ */
+export function offset_path(d, amount, join, tolerance) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(d, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(join, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.offset_path(ptr0, len0, amount, ptr1, len1, tolerance);
+        deferred3_0 = ret[0];
+        deferred3_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
+
+/**
+ * Reduces the number of nodes in a path while staying within `accuracy` of
+ * the original shape — genuinely redundant points (near-collinear runs, a
+ * hand-drawn path with far more samples than its actual curvature needs)
+ * collapse a lot; a real corner never does, on purpose (`SimplifyOptions`'
+ * default angle threshold treats any non-negligible turn as an intentional
+ * corner to preserve exactly, not noise to smooth away).
+ *
+ * That preserve-corners default is *not* enough, on its own, to satisfy
+ * this stage's other bullet — turning `boolean_op`'s straight-line polygon
+ * output back into curves. A flattened circle is, vertex-for-vertex,
+ * indistinguishable from a polygon someone drew on purpose with that many
+ * sides: every turn between its ~5° segments reads as "corner," so this
+ * function barely reduces it (measured: a 64-gon circle stayed at 65 path
+ * commands from accuracy 0.01 all the way to 10 — 10% of its own radius —
+ * and a hand-tuned wider angle threshold only got a union-of-two-circles
+ * output down to the tens, not the single digits the plan's own measurement
+ * goal asks for). Real reverse-curve-fitting needs least-squares Bezier
+ * fitting through the point sequence (Kurbo's `fit_to_bezpath` via a custom
+ * `ParamCurveFit`), not corner-preserving simplification — deferred; see
+ * `vector-geometry.curves.test.ts` and vector-plan.md's Stage 8 write-up
+ * for the measured numbers this leaves honestly unresolved.
+ * @param {string} d
+ * @param {number} accuracy
+ * @returns {string}
+ */
+export function simplify_path(d, accuracy) {
+    let deferred2_0;
+    let deferred2_1;
+    try {
+        const ptr0 = passStringToWasm0(d, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.simplify_path(ptr0, len0, accuracy);
+        deferred2_0 = ret[0];
+        deferred2_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+    }
+}
+
+/**
+ * Turns a stroked line into the filled shape it would visually paint as —
+ * the "stroke to path" bullet. Once this runs, "stroke" is no longer a
+ * live style property of the result; the width/cap/join/dash have all been
+ * baked into geometry, same as Illustrator's own "Outline Stroke".
+ * @param {string} d
+ * @param {number} width
+ * @param {string} cap
+ * @param {string} join
+ * @param {number} miter_limit
+ * @param {Float64Array} dash
+ * @param {number} dash_offset
+ * @param {number} tolerance
+ * @returns {string}
+ */
+export function stroke_to_fill(d, width, cap, join, miter_limit, dash, dash_offset, tolerance) {
+    let deferred5_0;
+    let deferred5_1;
+    try {
+        const ptr0 = passStringToWasm0(d, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(cap, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(join, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ptr3 = passArrayF64ToWasm0(dash, wasm.__wbindgen_malloc);
+        const len3 = WASM_VECTOR_LEN;
+        const ret = wasm.stroke_to_fill(ptr0, len0, width, ptr1, len1, ptr2, len2, miter_limit, ptr3, len3, dash_offset, tolerance);
+        deferred5_0 = ret[0];
+        deferred5_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
+    }
+}
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
@@ -48,6 +154,10 @@ function getFloat64ArrayMemory0() {
         cachedFloat64ArrayMemory0 = new Float64Array(wasm.memory.buffer);
     }
     return cachedFloat64ArrayMemory0;
+}
+
+function getStringFromWasm0(ptr, len) {
+    return decodeText(ptr >>> 0, len);
 }
 
 let cachedUint8ArrayMemory0 = null;
@@ -100,6 +210,20 @@ function passStringToWasm0(arg, malloc, realloc) {
 
     WASM_VECTOR_LEN = offset;
     return ptr;
+}
+
+let cachedTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true, fatal: true });
+cachedTextDecoder.decode();
+const MAX_SAFARI_DECODE_BYTES = 2146435072;
+let numBytesDecoded = 0;
+function decodeText(ptr, len) {
+    numBytesDecoded += len;
+    if (numBytesDecoded >= MAX_SAFARI_DECODE_BYTES) {
+        cachedTextDecoder = new TextDecoder('utf-8', { ignoreBOM: true, fatal: true });
+        cachedTextDecoder.decode();
+        numBytesDecoded = len;
+    }
+    return cachedTextDecoder.decode(getUint8ArrayMemory0().subarray(ptr, ptr + len));
 }
 
 const cachedTextEncoder = new TextEncoder();

@@ -2,7 +2,7 @@
 name = "vector-geometry"
 version = "0.0.1"
 edition = "2021"
-description = "Boolean polygon operations for VRAVIO's vector environment (Stage 7 of docs/vector-plan.md) — the WASM side of VectorGeometryPort, cross-checked against the TS reference implementation in @vravio/kernel."
+description = "Boolean polygon operations (Stage 7) and curve operations (Stage 8) for VRAVIO's vector environment, docs/vector-plan.md — the WASM side of VectorGeometryPort, cross-checked against the TS reference implementation in @vravio/kernel."
 license = "UNLICENSED"
 publish = false
 
@@ -13,6 +13,7 @@ crate-type = ["cdylib", "rlib"]
 wasm-bindgen = "0.2"
 geo-types = "0.6"
 geo-booleanop = "0.3"
+kurbo = "0.13"
 
 [profile.release]
 opt-level = "s"

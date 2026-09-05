@@ -1,12 +1,15 @@
-import type { BooleanOpKind, FlatPolygon, VectorGeometryPort } from "@vravio/kernel";
+import type { BooleanOpKind, FlatPolygon, VectorCurvePort, VectorGeometryPort, StrokeToFillStyle } from "@vravio/kernel";
 
 /**
- * The lazy-loaded half of Stage 7's `VectorGeometryPort` (docs/vector-plan.md)
- * — `@vravio/kernel` only defines the contract and the slow TS reference,
- * since it has no bundler of its own to fetch a `.wasm` file with; loading
- * one is squarely an `apps/web` (Vite) concern, the same reason
- * `env-vector`'s own catalogues are hand-assembled instead of
- * `import.meta.glob`'d.
+ * The lazy-loaded half of Stage 7's `VectorGeometryPort` and Stage 8's
+ * `VectorCurvePort` (docs/vector-plan.md) — `@vravio/kernel` only defines
+ * the contracts (and, for Stage 7 only, the slow TS reference), since it
+ * has no bundler of its own to fetch a `.wasm` file with; loading one is
+ * squarely an `apps/web` (Vite) concern, the same reason `env-vector`'s own
+ * catalogues are hand-assembled instead of `import.meta.glob`'d. Both
+ * ports share the one lazily-loaded `crates/vector-geometry` module below —
+ * one Rust crate, one `.wasm` fetch, regardless of which of the two gets
+ * used first.
  *
  * `init()` is only called once module-level `boolean_op` is first awaited
  * (dynamic `import()` below), not at app startup — nothing pays for the
@@ -75,6 +78,24 @@ export function createWasmGeometryPort(): VectorGeometryPort {
     async booleanOp(kind: BooleanOpKind, subject: FlatPolygon, clip: FlatPolygon): Promise<FlatPolygon[]> {
       const mod = await loadModule();
       return decodeMulti(mod.boolean_op(kind, subject, clip));
+    },
+  };
+}
+
+export function createWasmCurvePort(): VectorCurvePort {
+  return {
+    name: "wasm",
+    async offsetPath(d, amount, join, tolerance) {
+      const mod = await loadModule();
+      return mod.offset_path(d, amount, join, tolerance);
+    },
+    async strokeToFill(d, style: StrokeToFillStyle, tolerance) {
+      const mod = await loadModule();
+      return mod.stroke_to_fill(d, style.width, style.cap, style.join, style.miterLimit, new Float64Array(style.dash), style.dashOffset, tolerance);
+    },
+    async simplifyPath(d, accuracy) {
+      const mod = await loadModule();
+      return mod.simplify_path(d, accuracy);
     },
   };
 }
