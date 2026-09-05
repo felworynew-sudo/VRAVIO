@@ -1,26 +1,45 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import type React from "react";
 import { clampZoom, spaceZoomFrom, zoomAroundClient } from "./raster-coordinates";
+import { rasterToolById } from "./environments/raster/tools/registry";
+import type { NavigationContext, NavigationGesture } from "./environments/raster/tools/types";
 import { useShellStore, type DocumentViewport } from "./store";
 
 /**
- * Pan/zoom/rotate for `RasterWorkspace.tsx`'s canvas — split out purely to
- * bring the host component's own line count down (docs/migration-plan.md
- * §8), not because any of this changed: the gesture (capture-phase pointer
- * handlers on the workspace element, so navigation wins before a tool's own
- * canvas handlers see the event), the space-bar-as-temporary-hand-tool
- * behaviour and its Photoshop-style zoom-modifier reading, and the
- * click-to-zoom-without-drag fallback are all read verbatim off the
- * pre-extraction code.
+ * The navigation layer: capture-phase pointer handlers on the *workspace*
+ * element, so a view gesture claims the pointer before the canvas underneath
+ * sees it.
+ *
+ * That is deliberate and is why `hand`, `zoom` and `rotateView` could not join
+ * the tool catalogue with the rest of stage 5: dragging the grey surround
+ * around the canvas has to pan too, and the canvas's own handlers never fire
+ * out there. They are catalogue tools now, driven through `NavigationHooks`
+ * (see environments/raster/tools/types.ts) rather than through the canvas
+ * bridge — what used to be a chain of `activeToolId === "…"` tests here is a
+ * lookup, and what each of them *does* lives in its own file.
+ *
+ * What stays here is everything that is not the active tool: the space bar and
+ * the middle mouse button as a temporary hand, space-plus-modifier as a
+ * temporary zoom, the wheel, and "fit to window". None of those are a tool
+ * being chosen — they override whichever tool is. They run the same hooks, so
+ * "space is a temporary hand tool" is not an imitation of the hand tool; it is
+ * the hand tool.
  */
 
-interface NavigationGesture {
-  readonly kind: "pan" | "rotate" | "zoom";
+/** How far the pointer must travel before a press counts as a drag. */
+const DRAG_THRESHOLD = 3;
+
+/** A view gesture in progress, and which tool's hooks are driving it. */
+interface ActiveNavigation {
+  readonly toolId: string;
   readonly pointerId: number;
   readonly startX: number;
   readonly startY: number;
   readonly initial: DocumentViewport;
-  readonly alt: boolean;
+  /** Overrides the tool's own options while the host is driving it — see the
+   * space-zoom note in `beginNavigation`. */
+  readonly options: Readonly<Record<string, string | number | boolean>>;
+  readonly altKey: boolean;
   moved: boolean;
 }
 
@@ -35,7 +54,7 @@ export function useCanvasNavigation(params: {
 }) {
   const { documentId, workspaceRef, viewport, activeToolId, toolOptions, documentWidth, documentHeight } = params;
   const setViewport = useShellStore((shell) => shell.setViewport);
-  const navigationGesture = useRef<NavigationGesture | null>(null);
+  const navigationGesture = useRef<ActiveNavigation | null>(null);
   const [navigating, setNavigating] = useState(false);
   const [spaceHeld, setSpaceHeld] = useState(false);
   /** "in" or "out" while space and a modifier turn the pointer into a zoom tool. */
@@ -104,23 +123,59 @@ export function useCanvasNavigation(params: {
     return () => { window.removeEventListener("keydown", keyDown); window.removeEventListener("keyup", keyUp); };
   }, []);
 
-  const beginNavigation = (event: React.PointerEvent<HTMLDivElement>) => {
-    const temporaryHand = (spaceHeld && !spaceZoom) || event.button === 1;
-    const kind = spaceZoom ? "zoom" : temporaryHand || activeToolId === "raster.hand" ? "pan" : activeToolId === "raster.rotateView" ? "rotate" : activeToolId === "raster.zoom" ? "zoom" : null;
-    if (!kind) return;
-    event.preventDefault(); event.stopPropagation();
-    const scrubbyZoom = Boolean(toolOptions["raster.zoom"]?.dragZoom ?? useShellStore.getState().preferences.dragZoom);
-    if (kind === "zoom" && (spaceZoom || !scrubbyZoom)) {
+  /** Builds the context a navigation tool is given. `zoomAround` is a method
+   * so the tool never has to know the workspace element exists. */
+  const contextFor = (options: Readonly<Record<string, string | number | boolean>>): NavigationContext => ({
+    viewport,
+    options,
+    setViewport: (patch) => setViewport(documentId, patch),
+    zoomAround: (zoom, clientX, clientY, from) => {
       const workspace = workspaceRef.current;
-      if (workspace) {
-        const out = spaceZoom === "out" || (!spaceZoom && event.altKey);
-        const zoom = clampZoom(viewport.zoom * (out ? 0.8 : 1.25));
-        setViewport(documentId, zoomAroundClient(workspace, viewport, zoom, event.clientX, event.clientY));
-      }
-      return;
-    }
+      if (workspace) setViewport(documentId, zoomAroundClient(workspace, from ?? viewport, zoom, clientX, clientY));
+    },
+  });
+
+  const gestureFrom = (current: ActiveNavigation, event: { clientX: number; clientY: number; altKey: boolean; shiftKey: boolean }): NavigationGesture => ({
+    pointerId: current.pointerId,
+    startX: current.startX,
+    startY: current.startY,
+    clientX: event.clientX,
+    clientY: event.clientY,
+    dx: event.clientX - current.startX,
+    dy: event.clientY - current.startY,
+    moved: current.moved,
+    // The gesture keeps the Alt it started with: releasing Alt mid-drag must
+    // not turn a zoom-out into a zoom-in halfway through.
+    altKey: current.altKey,
+    shiftKey: event.shiftKey,
+    initial: current.initial,
+  });
+
+  const beginNavigation = (event: React.PointerEvent<HTMLDivElement>) => {
+    // Which tool drives this gesture. The temporary overrides come first
+    // because they are exactly that — they beat whatever tool is selected.
+    const temporaryHand = (spaceHeld && !spaceZoom) || event.button === 1;
+    const toolId = spaceZoom ? "raster.zoom" : temporaryHand ? "raster.hand" : activeToolId;
+    const hooks = toolId ? rasterToolById.get(toolId)?.navigation : undefined;
+    if (!hooks) return;
+
+    event.preventDefault(); event.stopPropagation();
+
+    // A temporary zoom is always a click zoom, never a scrubby drag: a
+    // modifier held down with the space bar is a momentary thing. Handing the
+    // tool `dragZoom: false` says that in the tool's own language rather than
+    // forking its behaviour out here — and `altKey` carries the direction the
+    // modifier chose, which is the same question the tool already asks.
+    const options = spaceZoom
+      ? { dragZoom: false }
+      : { ...toolOptions[toolId!], ...(toolOptions[toolId!]?.dragZoom === undefined ? { dragZoom: useShellStore.getState().preferences.dragZoom } : {}) };
+    const altKey = spaceZoom ? spaceZoom === "out" : event.altKey;
+
+    const current: ActiveNavigation = { toolId: toolId!, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, initial: { ...viewport }, options, altKey, moved: false };
+    if (hooks.begin(contextFor(options), gestureFrom(current, { ...event, altKey })) === "done") return;
+
     event.currentTarget.setPointerCapture(event.pointerId);
-    navigationGesture.current = { kind, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, initial: { ...viewport }, alt: event.altKey, moved: false };
+    navigationGesture.current = current;
     setNavigating(true);
   };
 
@@ -128,31 +183,15 @@ export function useCanvasNavigation(params: {
     const current = navigationGesture.current;
     if (!current || current.pointerId !== event.pointerId) return;
     event.preventDefault(); event.stopPropagation();
-    const dx = event.clientX - current.startX, dy = event.clientY - current.startY;
-    current.moved ||= Math.hypot(dx, dy) > 3;
-    if (current.kind === "pan") setViewport(documentId, { panX: current.initial.panX + dx, panY: current.initial.panY + dy, mode: "custom" });
-    else if (current.kind === "rotate") {
-      const raw = current.initial.rotation + dx * 0.3;
-      setViewport(documentId, { rotation: event.shiftKey ? Math.round(raw / 15) * 15 : raw, mode: "custom" });
-    } else {
-      const workspace = workspaceRef.current;
-      if (!workspace) return;
-      const zoom = clampZoom(current.initial.zoom * Math.exp(dx * 0.01));
-      setViewport(documentId, zoomAroundClient(workspace, current.initial, zoom, current.startX, current.startY));
-    }
+    current.moved ||= Math.hypot(event.clientX - current.startX, event.clientY - current.startY) > DRAG_THRESHOLD;
+    rasterToolById.get(current.toolId)?.navigation?.move?.(contextFor(current.options), gestureFrom(current, event));
   };
 
   const endNavigation = (event: React.PointerEvent<HTMLDivElement>) => {
     const current = navigationGesture.current;
     if (!current || current.pointerId !== event.pointerId) return;
     event.preventDefault(); event.stopPropagation();
-    if (current.kind === "zoom" && !current.moved) {
-      const workspace = workspaceRef.current;
-      if (workspace) {
-        const zoom = clampZoom(current.initial.zoom * (current.alt ? 0.8 : 1.25));
-        setViewport(documentId, zoomAroundClient(workspace, current.initial, zoom, event.clientX, event.clientY));
-      }
-    }
+    rasterToolById.get(current.toolId)?.navigation?.end?.(contextFor(current.options), gestureFrom(current, event));
     navigationGesture.current = null;
     setNavigating(false);
   };

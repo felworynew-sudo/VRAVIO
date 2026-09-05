@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { appendLayer, createRasterDocument, createRasterLayer, setLayerPixels, type PixelSelection, type RasterDocumentState } from "@vravio/env-raster";
 import { rasterTools } from "./registry";
 import { toolById } from "../../../tools";
-import type { RasterToolDefinition, ToolContext, ToolPointer } from "./types";
+import type { NavigationContext, NavigationGesture, RasterToolDefinition, ToolContext, ToolPointer } from "./types";
+import type { DocumentViewport } from "../../../store";
 
 /**
  * Stage 4 of docs/migration-plan.md: one test every tool in the catalogue has
@@ -272,6 +273,41 @@ function pixelsOf(state: RasterDocumentState): string {
   return `${layers}#${selection}`;
 }
 
+
+/**
+ * Runs a whole navigation gesture against a recording context.
+ *
+ * Navigation tools do not go through `drive`: they have no canvas hooks at
+ * all, so driving them that way does nothing and every check passes for the
+ * wrong reason — which is exactly what happened when these three joined the
+ * catalogue, and what the option check below caught.
+ *
+ * The `"done"` contract is honoured here the way the host honours it: a tool
+ * that says it has finished is not then asked to drag.
+ */
+function driveNavigation(tool: RasterToolDefinition<unknown>, options: Record<string, string | number | boolean>, drag: { dx: number; dy: number }) {
+  const viewport: DocumentViewport = { mode: "custom", zoom: 1, panX: 0, panY: 0, rotation: 0 };
+  const calls: string[] = [];
+  const context: NavigationContext = {
+    viewport,
+    options,
+    setViewport: (patch) => calls.push(`setViewport ${JSON.stringify(patch)}`),
+    zoomAround: (zoom, x, y) => calls.push(`zoomAround ${zoom.toFixed(4)} @${x},${y}`),
+  };
+  const at = (dx: number, dy: number, moved: boolean): NavigationGesture => ({
+    pointerId: 1, startX: 100, startY: 100, clientX: 100 + dx, clientY: 100 + dy,
+    dx, dy, moved, altKey: false, shiftKey: false, initial: viewport,
+  });
+
+  const hooks = tool.navigation!;
+  const outcome = hooks.begin(context, at(0, 0, false));
+  if (outcome === "drag") {
+    hooks.move?.(context, at(drag.dx, drag.dy, true));
+    hooks.end?.(context, at(drag.dx, drag.dy, true));
+  }
+  return { outcome, calls };
+}
+
 describe("every tool in the catalogue keeps the contract", () => {
   it("has tools to check", () => {
     // Guards against the whole suite passing because the registry glob
@@ -282,6 +318,44 @@ describe("every tool in the catalogue keeps the contract", () => {
   for (const tool of rasterTools) {
     const descriptor = toolById(tool.id);
     const options = Object.fromEntries((descriptor?.options ?? []).map((option) => [option.id, option.defaultValue]));
+
+    if (tool.navigation) {
+      describe(tool.id, () => {
+        it("is described in tools.ts, so the toolbar can show it", () => {
+          expect(descriptor, `${tool.id} has no entry in tools.ts`).toBeDefined();
+        });
+
+        it("drives the view and nothing else", () => {
+          // A navigation tool has the view and only the view. Pointer hooks on
+          // one would never run anyway — navigation claims the gesture in the
+          // capture phase, before the canvas bridge sees it — so a tool
+          // carrying both is a tool with half its behaviour silently dead.
+          expect(tool.onPointerDown, `${tool.id} has canvas hooks as well as navigation ones`).toBeUndefined();
+          expect(tool.onPointerMove).toBeUndefined();
+          expect(tool.onGestureEnd).toBeUndefined();
+        });
+
+        it("does something with the view when dragged", () => {
+          // Guards the rest of these checks against a tool whose hooks are
+          // present but inert, which would make every comparison below pass.
+          const { calls } = driveNavigation(tool, options, { dx: 40, dy: 25 });
+          expect(calls.length, `${tool.id} moved the view in no way at all`).toBeGreaterThan(0);
+        });
+
+        for (const option of descriptor?.options ?? []) {
+          it(`has no option that leaves the result unchanged: ${option.id}`, () => {
+            const changed = typeof option.defaultValue === "boolean" ? !option.defaultValue
+              : typeof option.defaultValue === "number" ? Number(option.defaultValue) + 1
+              : `${option.defaultValue}-other`;
+            const base = driveNavigation(tool, options, { dx: 40, dy: 25 });
+            const variant = driveNavigation(tool, { ...options, [option.id]: changed }, { dx: 40, dy: 25 });
+
+            expect(JSON.stringify(variant), `${tool.id}: option "${option.id}" changed nothing`).not.toBe(JSON.stringify(base));
+          });
+        }
+      });
+      continue;
+    }
 
     describe(tool.id, () => {
       it("is described in tools.ts, so the toolbar can show it", () => {
