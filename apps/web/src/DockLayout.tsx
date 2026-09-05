@@ -15,11 +15,9 @@ import { ColorPanel } from "./ColorPanel";
 import { NavigatorPanel } from "./NavigatorPanel";
 import type { Language } from "./store";
 import { rasterAdjustmentById, rasterAdjustments } from "./raster-adjustments/registry";
-import { rasterCorePanelById, rasterCorePanels } from "./raster-core-panels/registry";
-import { corePanelTitle } from "./raster-core-panels/types";
-import { PANEL_REQUEST_EVENT, persistVisiblePanelIds, readVisiblePanelIds } from "./raster-core-panels/runtime";
-import { vectorCorePanelById, vectorCorePanels } from "./vector-core-panels/registry";
-import { PANEL_REQUEST_EVENT as VECTOR_PANEL_REQUEST_EVENT, persistVisiblePanelIds as persistVisibleVectorPanelIds, readVisiblePanelIds as readVisibleVectorPanelIds } from "./vector-core-panels/runtime";
+import { windowById, windowsFor } from "./windows/registry";
+import { windowTitle } from "./windows/types";
+import { PANEL_REQUEST_EVENT, persistVisiblePanelIds, readVisiblePanelIds, type PanelVisibilityDetail } from "./windows/runtime";
 import { isVectorDocumentState, shapeBounds, updateShape, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
 import { changeVectorDocument, deleteActiveVectorShapes, duplicateActiveVectorShape, reorderActiveVectorShape } from "./vector-commands";
 import { useContextMenu, type ContextMenuItem } from "./ContextMenu";
@@ -571,7 +569,7 @@ const components = {
  * different things. They are used as CSS masks, so the colour comes from the
  * theme and not from the file.
  */
-const panelIcons: Record<string, string> = Object.fromEntries(rasterCorePanels.map((panel) => [panel.id, panel.icon]));
+const panelIcons: Record<string, string> = Object.fromEntries(windowsFor("raster").map((panel) => [panel.id, panel.icon]));
 panelIcons.viewport = "/РАДИО.svg";
 function PanelTab({ api }: IDockviewPanelHeaderProps) {
   return <div className="panel-tab" title={api.title}><i aria-hidden="true" style={{ "--panel-mask": `url("${panelIcons[api.id] ?? "/ПАРАМЕТРЫ.svg"}")` } as CSSProperties}/><span>{api.title}</span></div>;
@@ -586,39 +584,31 @@ function createDefaultLayout(event: DockviewReadyEvent, language: Language): voi
   event.api.addPanel({ id: "viewport", component: "viewport", title: text(language, "Canvas", "Холст"), position: { referenceGroup: viewportGroup, direction: "within" } });
   const sideGroup = event.api.addEdgeGroup("right", { id: "right-panels", initialSize: 280, minimumSize: 220, collapsedSize: 43, autoHide: true });
   sideGroup.setHeaderPosition("top");
-  const visible = readVisiblePanelIds();
-  for (const panel of rasterCorePanels) if (visible.has(panel.id)) event.api.addPanel({ id: panel.id, component: panel.component, title: corePanelTitle(panel, language), position: { referenceGroup: sideGroup.id, direction: "within" } });
+  const visible = readVisiblePanelIds("raster");
+  for (const panel of windowsFor("raster")) if (visible.has(panel.id)) event.api.addPanel({ id: panel.id, component: panel.component, title: windowTitle(panel, language), position: { referenceGroup: sideGroup.id, direction: "within" } });
 }
 
 export function DockLayout() {
   const language = useShellStore((state) => state.language);
   const apiRef = useRef<DockviewReadyEvent["api"] | null>(null);
   useEffect(() => {
+    // One handler, not one per environment: these two were byte-identical
+    // apart from which of the duplicated registries they looked the panel up
+    // in, and the event now carries the environment it belongs to.
     const handle = (raw: Event) => {
-      const event = raw as CustomEvent<{ id: string; visible: boolean }>;
-      const api = apiRef.current, definition = rasterCorePanelById.get(event.detail.id); if (!api || !definition) return;
+      const { kind, id, visible } = (raw as CustomEvent<PanelVisibilityDetail>).detail;
+      const api = apiRef.current, definition = windowById(kind, id);
+      if (!api || !definition) return;
       const existing = api.getPanel(definition.id);
-      if (!event.detail.visible && existing) { api.removePanel(existing); return; }
-      if (event.detail.visible && !existing) {
+      if (!visible && existing) { api.removePanel(existing); return; }
+      if (visible && !existing) {
         let groupId = api.getGroup("right-panels")?.id;
         if (!groupId) { const group = api.addEdgeGroup("right", { id: "right-panels", initialSize: 280, minimumSize: 220, collapsedSize: 43, autoHide: true }); group.setHeaderPosition("top"); groupId = group.id; }
-        api.addPanel({ id: definition.id, component: definition.component, title: corePanelTitle(definition, language), position: { referenceGroup: groupId, direction: "within" } });
-      }
-    };
-    const handleVector = (raw: Event) => {
-      const event = raw as CustomEvent<{ id: string; visible: boolean }>;
-      const api = apiRef.current, definition = vectorCorePanelById.get(event.detail.id); if (!api || !definition) return;
-      const existing = api.getPanel(definition.id);
-      if (!event.detail.visible && existing) { api.removePanel(existing); return; }
-      if (event.detail.visible && !existing) {
-        let groupId = api.getGroup("right-panels")?.id;
-        if (!groupId) { const group = api.addEdgeGroup("right", { id: "right-panels", initialSize: 280, minimumSize: 220, collapsedSize: 43, autoHide: true }); group.setHeaderPosition("top"); groupId = group.id; }
-        api.addPanel({ id: definition.id, component: definition.component, title: corePanelTitle(definition, language), position: { referenceGroup: groupId, direction: "within" } });
+        api.addPanel({ id: definition.id, component: definition.component, title: windowTitle(definition, language), position: { referenceGroup: groupId, direction: "within" } });
       }
     };
     window.addEventListener(PANEL_REQUEST_EVENT, handle);
-    window.addEventListener(VECTOR_PANEL_REQUEST_EVENT, handleVector);
-    return () => { window.removeEventListener(PANEL_REQUEST_EVENT, handle); window.removeEventListener(VECTOR_PANEL_REQUEST_EVENT, handleVector); };
+    return () => { window.removeEventListener(PANEL_REQUEST_EVENT, handle); };
   }, [language]);
   const onReady = useCallback((event: DockviewReadyEvent) => {
     apiRef.current = event.api;
@@ -636,9 +626,18 @@ export function DockLayout() {
     if (!restored) createDefaultLayout(event, language);
     event.api.onDidLayoutChange(() => {
       localStorage.setItem(storageKey, JSON.stringify(event.api.toJSON()));
-      const ids = event.api.panels.map((panel) => panel.id);
-      persistVisiblePanelIds(ids.filter((id) => rasterCorePanelById.has(id)));
-      persistVisibleVectorPanelIds(ids.filter((id) => vectorCorePanelById.has(id)));
+      // Only the environment the dock is actually showing. Filtering the open
+      // panels by "does this environment have a panel with that id" looks
+      // equivalent and is not: raster and vector both name a panel
+      // `properties`, `layers`, `history` and `color`, so a vector document's
+      // four panels matched raster's catalogue too and were written over
+      // raster's list — turning off vector's Colour panel silently deleted the
+      // raster one. Which environment the dock belongs to is a fact about the
+      // active document, not something to infer from ids that collide.
+      const activeId = useShellStore.getState().activeDocumentId;
+      const kind = activeId ? kernel.documents.get(activeId)?.kind : null;
+      if (!kind) return;
+      persistVisiblePanelIds(kind, event.api.panels.map((panel) => panel.id).filter((id) => windowById(kind, id)));
     });
   }, [language]);
 

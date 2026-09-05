@@ -29,10 +29,9 @@ import { AdjustmentDialog } from "./raster-adjustments/AdjustmentDialog";
 import { rasterAdjustmentById, rasterAdjustments } from "./raster-adjustments/registry";
 import type { RasterAdjustmentDefinition } from "./raster-adjustments/types";
 import { adjustedPixels } from "./raster-adjustments/apply";
-import { rasterCorePanels } from "./raster-core-panels/registry";
-import { PANEL_CHANGED_EVENT, readVisiblePanelIds, requestPanelVisibility } from "./raster-core-panels/runtime";
-import { vectorCorePanels } from "./vector-core-panels/registry";
-import { PANEL_CHANGED_EVENT as VECTOR_PANEL_CHANGED_EVENT, readVisiblePanelIds as readVisibleVectorPanelIds, requestPanelVisibility as requestVectorPanelVisibility } from "./vector-core-panels/runtime";
+import { windowsFor } from "./windows/registry";
+import { windowTitle } from "./windows/types";
+import { PANEL_CHANGED_EVENT, readVisiblePanelIds, requestPanelVisibility } from "./windows/runtime";
 import { duplicateActiveVectorShape, deleteActiveVectorShapes, reorderActiveVectorShape } from "./vector-commands";
 import { isVectorDocumentState } from "@vravio/env-vector";
 import { luminanceHistogram } from "./raster-adjustments/histogram";
@@ -267,7 +266,7 @@ export function App() {
     return () => window.removeEventListener("vravio-diagnostics-change", refresh);
   }, []);
 
-  useEffect(() => { const refresh = () => setPanelRevision((value) => value + 1); window.addEventListener(PANEL_CHANGED_EVENT, refresh); window.addEventListener(VECTOR_PANEL_CHANGED_EVENT, refresh); return () => { window.removeEventListener(PANEL_CHANGED_EVENT, refresh); window.removeEventListener(VECTOR_PANEL_CHANGED_EVENT, refresh); }; }, []);
+  useEffect(() => { const refresh = () => setPanelRevision((value) => value + 1); window.addEventListener(PANEL_CHANGED_EVENT, refresh); return () => window.removeEventListener(PANEL_CHANGED_EVENT, refresh); }, []);
 
   useEffect(() => {
     const save = () => void saveProject();
@@ -390,14 +389,7 @@ export function App() {
         <Menu label="Plugins (Плагины)" language={store.language} open={openMenu === "plugins"} onToggle={() => setOpenMenu(openMenu === "plugins" ? null : "plugins")} items={[
           ["Manage Plugins… (Управление плагинами…)", "", () => {}, true],
         ]}/>
-        <Menu label="Window (Окно)" language={store.language} open={openMenu === "window"} onToggle={() => setOpenMenu(openMenu === "window" ? null : "window")} items={[...(
-          active?.kind === "vector" ? vectorCorePanels.map((panel) => { const visible = readVisibleVectorPanelIds().has(panel.id); return [`${visible ? "✓ " : ""}${panel.title.en} (${panel.title.ru})`, "", () => requestVectorPanelVisibility(panel.id, !visible)] as MainMenuItem; })
-          : active?.kind === "raster" ? rasterCorePanels.map((panel) => { const visible = readVisiblePanelIds().has(panel.id); return [`${visible ? "✓ " : ""}${panel.title.en} (${panel.title.ru})`, "", () => requestPanelVisibility(panel.id, !visible)] as MainMenuItem; })
-          // Audio/video's MediaWorkspace is a self-contained editor (bin, transport, clip
-          // inspector all built in) with nothing yet wired to the dockable side panels, so
-          // there is genuinely no panel catalog to offer here — an empty list, not raster's.
-          : []
-        ), ["Settings (Настройки)", "", () => store.setSettingsOpen(true)], ["Command Palette (Палитра команд)", "Ctrl+K", () => store.setPaletteOpen(true)]]}/>
+        <Menu label="Window (Окно)" language={store.language} open={openMenu === "window"} onToggle={() => setOpenMenu(openMenu === "window" ? null : "window")} items={[...windowMenuItems(active?.kind, store.language), ["Settings (Настройки)", "", () => store.setSettingsOpen(true)], ["Command Palette (Палитра команд)", "Ctrl+K", () => store.setPaletteOpen(true)]]}/>
         <Menu label="Help (Справка)" language={store.language} open={openMenu === "help"} onToggle={() => setOpenMenu(openMenu === "help" ? null : "help")} items={[["Diagnostics log (Журнал диагностики)", "", () => setDiagnosticsOpen(true)], ["About VRAVIO (О VRAVIO)", "", () => window.alert("VRAVIO — local-first creative suite")]]}/>
       </nav>
       <input ref={openImageRef} hidden type="file" accept={`image/png,image/jpeg,image/webp,image/gif,image/avif,image/svg+xml,.svg,.psd,.psb,${rawFileExtensions.map((extension) => `.${extension}`).join(",")}`} onChange={(event) => { const file = event.target.files?.[0]; if (file) void importImage(file); event.currentTarget.value = ""; }}/>
@@ -482,6 +474,32 @@ export function physicalShortcutKey(event: KeyboardEvent): string {
   if (event.code === "Minus" || event.code === "NumpadSubtract") return "-";
   if (event.code === "Semicolon") return ";";
   return event.key.toLocaleLowerCase();
+}
+
+/**
+ * The Window menu's panel list — one per environment, ticked when the panel is
+ * on screen.
+ *
+ * Comes from that environment's own `windows/` catalogue, so a new panel
+ * appears here by existing rather than by being listed a second time. An
+ * environment with no catalogue gets an empty list, which is the honest answer
+ * for audio and video: `MediaWorkspace` is a self-contained editor (bin,
+ * transport, clip inspector all built in) with nothing wired to the dockable
+ * side panels, so there is genuinely nothing to offer — not raster's list.
+ */
+function windowMenuItems(kind: string | undefined, language: Language): readonly MainMenuItem[] {
+  if (!kind) return [];
+  const visible = readVisiblePanelIds(kind);
+  return windowsFor(kind).map((panel) => [
+    // Resolved to one language here rather than handed over as
+    // "English (Русский)" for `localized()` to split: the tick used to be
+    // prefixed to the combined string, and `localized()` returns only the
+    // parenthesised half, so in Russian it was parsed away and the list had no
+    // checkmarks at all — the one thing this list exists to show.
+    `${visible.has(panel.id) ? "✓ " : ""}${windowTitle(panel, language)}`,
+    "",
+    () => requestPanelVisibility(kind, panel.id, !visible.has(panel.id)),
+  ] as MainMenuItem);
 }
 
 type MainMenuItem = readonly [label: string, shortcut: string, action: () => void, disabled?: boolean];
