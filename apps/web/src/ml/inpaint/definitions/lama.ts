@@ -16,7 +16,8 @@ export default {
   label: { en: "LaMa (better, 208 MB)", ru: "LaMa (лучше, 208 МБ)" },
   spec: {
     id: "lama-fp32",
-    url: "/models/lama-fp32.onnx",
+    // See the note on MI-GAN's url: fetched, not shipped.
+    url: "https://huggingface.co/Carve/LaMa-ONNX/resolve/main/lama_fp32.onnx",
     sizeBytes: 208_044_816,
     inputShape: [1, 3, 512, 512],
     licence: "Apache-2.0 (export); big-lama weights are non-commercial",

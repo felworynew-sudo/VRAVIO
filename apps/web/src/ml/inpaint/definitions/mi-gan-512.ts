@@ -17,7 +17,16 @@ export default {
   label: { en: "MI-GAN 512 (fast)", ru: "MI-GAN 512 (быстрая)" },
   spec: {
     id: "mi-gan-512-places2",
-    url: "/models/migan-512-places2.onnx",
+    // Fetched rather than shipped. `ModelStore` was built for this: it asks
+    // consent before pulling tens of megabytes, reports progress, and caches
+    // the result in Cache Storage so it happens once per browser.
+    //
+    // Not a preference — a constraint. Anything in `publicDir` is copied
+    // verbatim into `dist`, which took the build from 78 MB to 315 MB; and
+    // GitHub refuses any file over 100 MB, so the 208 MB LaMa weights could
+    // never be served from Pages at all. A desktop build can bundle them and
+    // point this at a local path instead.
+    url: "https://huggingface.co/lxfater/inpaint-web/resolve/main/migan.onnx",
     sizeBytes: 29_541_096,
     inputShape: [1, 4, 512, 512],
     licence: "MIT (Picsart AI Research)",
