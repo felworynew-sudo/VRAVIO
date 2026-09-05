@@ -1,0 +1,80 @@
+# Десктопные сборки под Windows и macOS.
+#
+# Существует ради macOS: собрать `.app` можно только на macOS, а её у владельца
+# нет. Раннеры GitHub для публичного репозитория бесплатны, поэтому сборка под
+# мак стоит ноль и не требует железа.
+#
+# Подписи нет намеренно. Она стоит от $99 в год и нужна, только когда программу
+# начнут раздавать чужим людям; как открыть неподписанное приложение на маке —
+# написано в docs/desktop.md.
+name: Десктопные сборки
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      # Чтобы падение одной платформы не отменяло сборку второй: чаще всего
+      # ломается что-то платформенное, и вторая сборка — это ровно та цифра,
+      # которая говорит, платформенное оно или общее.
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS
+            platform: macos-latest
+            # Одна сборка на Apple Silicon и на Intel сразу.
+            target: universal-apple-darwin
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - name: Windows
+            platform: windows-latest
+            target: ""
+            rust-targets: ""
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-targets }}
+
+      # Первая сборка Rust с нуля — около десяти минут. Кеш превращает
+      # последующие в минуту.
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          # Подписи «на месте»: без неё бинарник под Apple Silicon не запустится
+          # вообще, потому что arm64 требует хоть какую-то подпись. Она ничего
+          # не удостоверяет и ничего не стоит — Gatekeeper всё равно спросит
+          # разрешения при первом запуске.
+          APPLE_SIGNING_IDENTITY: ${{ matrix.platform == 'macos-latest' && '-' || '' }}
+        with:
+          projectPath: apps/desktop
+          args: ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VRAVIO-${{ matrix.name }}
+          retention-days: 30
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/msi/*.msi
+            apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
+            apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg
