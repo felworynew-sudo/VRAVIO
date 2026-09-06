@@ -56,9 +56,19 @@ export interface PenState {
    * the draft ever stopped existing.
    */
   readonly nodeEdit: { readonly shapeId: string; readonly pointIndex: number; readonly part: NodePart; readonly before: VectorSnapshot } | null;
+  /**
+   * Precise numeric coordinate entry for the path's own last point —
+   * docs/vector-plan.md section 9, third priority ("Точный числовой ввод
+   * координаты при размещении точки"). Opened by typing a digit, `-`, or
+   * `.` while a path is being drawn (the same "just start typing a number"
+   * convention several editors use, rather than a dedicated menu item to
+   * find first) — `text` accumulates raw keystrokes as `"x, y"`, parsed
+   * only on Enter, so a half-typed value never silently moves the point.
+   */
+  readonly coordinateInput: { readonly text: string } | null;
 }
 
-const empty: PenState = { draft: null, handle: null, cursor: null, nodeEdit: null };
+const empty: PenState = { draft: null, handle: null, cursor: null, nodeEdit: null, coordinateInput: null };
 
 /** Rounds `angle` (radians) to the nearest multiple of 45° — `Shift`'s
  * constraint, both for a handle drag and for placing a new point, per
@@ -216,7 +226,7 @@ const pen: VectorToolDefinition<PenState> = {
         const target = document.shapes.find((item) => item.id === shapeId);
         if (target?.kind === "path") { target.points = [...target.points, { x: placedPoint.x, y: placedPoint.y }]; pointIndex = target.points.length - 1; }
       });
-      if (pointIndex >= 0) context.setState({ draft, handle: { shapeId, pointIndex, anchor: placedPoint }, cursor: placedPoint, nodeEdit: null });
+      if (pointIndex >= 0) context.setState({ draft, handle: { shapeId, pointIndex, anchor: placedPoint }, cursor: placedPoint, nodeEdit: null, coordinateInput: null });
       // A double-click finishes the path — the same `event.detail >= 2` test
       // the pre-port code read straight off the native PointerEvent.
       if (pointer.detail >= 2) finishPath(context);
@@ -288,7 +298,7 @@ const pen: VectorToolDefinition<PenState> = {
       // other already-placed point does.
       const lastIndex = continuation.points.length - 1;
       const lastPoint = continuation.points[lastIndex]!;
-      context.setState({ draft: { shapeId: continuation.id, before }, handle: { shapeId: continuation.id, pointIndex: lastIndex, anchor: { x: lastPoint.x, y: lastPoint.y } }, cursor: { x: lastPoint.x, y: lastPoint.y }, nodeEdit: null });
+      context.setState({ draft: { shapeId: continuation.id, before }, handle: { shapeId: continuation.id, pointIndex: lastIndex, anchor: { x: lastPoint.x, y: lastPoint.y } }, cursor: { x: lastPoint.x, y: lastPoint.y }, nodeEdit: null, coordinateInput: null });
       return;
     }
 
@@ -330,7 +340,7 @@ const pen: VectorToolDefinition<PenState> = {
       fills: [solidFill(cssToColor(context.foregroundColor))],
       strokes: [{ ...solidStroke(cssToColor(context.foregroundColor), strokeWidth), visible: false }],
     });
-    context.setState({ draft: { shapeId: shape.id, before }, handle: { shapeId: shape.id, pointIndex: 0, anchor: pointer.point }, cursor: pointer.point, nodeEdit: null });
+    context.setState({ draft: { shapeId: shape.id, before }, handle: { shapeId: shape.id, pointIndex: 0, anchor: pointer.point }, cursor: pointer.point, nodeEdit: null, coordinateInput: null });
     context.mutate((document: VectorDocumentState) => addShape(document, shape));
   },
 
@@ -437,12 +447,28 @@ const pen: VectorToolDefinition<PenState> = {
     useEffect(() => {
       if (!state.draft) return;
       const onKeyDown = (event: KeyboardEvent) => {
+        // The coordinate-input popup (below) owns Escape/Enter itself while
+        // open — its own `onKeyDown` runs first for a focused `<input>`,
+        // but this capture-phase listener still sees the event afterward,
+        // so it must not *also* discard the whole path on the same Escape.
+        if (state.coordinateInput) return;
+        const target = event.target as HTMLElement | null;
+        const alreadyTyping = target?.tagName === "INPUT" || target?.tagName === "TEXTAREA";
+        // Typing a digit/`-`/`.` opens precise numeric entry for the path's
+        // own last point — docs/vector-plan.md section 9, third priority
+        // ("Точный числовой ввод координаты при размещении точки"), the
+        // same "just start typing a number" convention several editors use
+        // rather than a menu item to hunt for first.
+        if (!alreadyTyping && /^[0-9.-]$/.test(event.key)) {
+          context.setState({ ...context.state, coordinateInput: { text: event.key } });
+          return;
+        }
         if (event.key !== "Escape") return;
         deletePath(context);
       };
       window.addEventListener("keydown", onKeyDown, true);
       return () => window.removeEventListener("keydown", onKeyDown, true);
-    }, [state.draft, context]);
+    }, [state.draft, state.coordinateInput, context]);
 
     if (!state.draft || !state.cursor) return null;
     const shape = document.shapes.find((item) => item.id === state.draft!.shapeId);
@@ -457,7 +483,43 @@ const pen: VectorToolDefinition<PenState> = {
     const path = lastPoint.handleOut
       ? `M ${lastPoint.x} ${lastPoint.y} C ${lastPoint.x + lastPoint.handleOut.x} ${lastPoint.y + lastPoint.handleOut.y}, ${state.cursor.x} ${state.cursor.y}, ${state.cursor.x} ${state.cursor.y}`
       : `M ${lastPoint.x} ${lastPoint.y} L ${state.cursor.x} ${state.cursor.y}`;
-    return <path className="vector-pen-rubber-band" d={path} fill="none" strokeWidth={1 / zoom}/>;
+    return <>
+      <path className="vector-pen-rubber-band" d={path} fill="none" strokeWidth={1 / zoom}/>
+      {state.coordinateInput && <foreignObject x={lastPoint.x + 10 / zoom} y={lastPoint.y - 14 / zoom} width={140 / zoom} height={28 / zoom}>
+        {/* The `foreignObject` itself is already sized in document units
+            scaled by `1/zoom`, so it renders at a constant 140×28 screen
+            px regardless of zoom (the same convention every other unscaled
+            overlay element in this file uses) — the input inside it fills
+            that box at its native, un-transformed size, not a second,
+            redundant zoom correction on top of the first. */}
+        <input
+          className="vector-pen-coordinate-input"
+          autoFocus
+          value={state.coordinateInput.text}
+          placeholder="x, y"
+          onChange={(event) => context.setState({ ...context.state, coordinateInput: { text: event.target.value } })}
+          onKeyDown={(event) => {
+            event.stopPropagation();
+            if (event.key === "Escape") { context.setState({ ...context.state, coordinateInput: null }); return; }
+            if (event.key !== "Enter") return;
+            // "x, y" or "x y" — the only two separators typed coordinates
+            // realistically arrive in; anything else fails to parse two
+            // numbers and is discarded rather than guessed at.
+            const parts = state.coordinateInput!.text.split(/[,\s]+/).map(Number);
+            context.setState({ ...context.state, coordinateInput: null });
+            if (parts.length !== 2 || parts.some((value) => !Number.isFinite(value))) return;
+            const [x, y] = parts as [number, number];
+            void context.changeDocument("Move Point (Переместить точку)", (draft) => {
+              const target = draft.shapes.find((item) => item.id === shape.id);
+              if (target?.kind !== "path") return false;
+              const index = target.points.length - 1;
+              target.points = target.points.map((point, i) => i === index ? { ...point, x, y } : point);
+              return true;
+            });
+          }}
+        />
+      </foreignObject>}
+    </>;
   },
 };
 

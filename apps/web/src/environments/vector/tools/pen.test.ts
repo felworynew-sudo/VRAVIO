@@ -282,7 +282,7 @@ describe("vector.pen — gestures added for docs/vector-plan.md section 9", () =
     pen.onGestureEnd!(context, pointerAt(100, 100));
     pen.onPointerMove!(context, pointerAt(180, 140));
     finishPath(context);
-    expect(context.state).toEqual({ draft: null, handle: null, cursor: null, nodeEdit: null });
+    expect(context.state).toEqual({ draft: null, handle: null, cursor: null, nodeEdit: null, coordinateInput: null });
   });
 
   describe("Ctrl/Cmd — temporary Node Tool", () => {
