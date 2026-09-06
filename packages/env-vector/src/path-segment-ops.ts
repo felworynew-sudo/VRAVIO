@@ -142,6 +142,43 @@ export function insertPointOnPathSegment(points: readonly VectorPoint[], segment
  * average with, and inventing one would curve the path *outward* past its
  * own end, which is not what smoothing an endpoint means in any editor.
  */
+/**
+ * The tangent/handle-length heuristic itself, factored out of
+ * `toggleCornerSmooth` so `recomputeSmoothHandles` below (added for
+ * `vector.curvature`) can reapply it to every smooth point after the path's
+ * topology changes, not just the one point a manual corner→smooth toggle
+ * targets. Returns `undefined` handles for a point with neither neighbour
+ * (meaningless to smooth) — the caller decides what that means for its own
+ * point (`toggleCornerSmooth` leaves it a corner; `recomputeSmoothHandles`
+ * does the same).
+ */
+function smoothHandlesFor(points: readonly VectorPoint[], index: number, closed: boolean): { handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } } {
+  const point = points[index];
+  const prevIndex = index > 0 ? index - 1 : closed ? points.length - 1 : -1;
+  const nextIndex = index < points.length - 1 ? index + 1 : closed ? 0 : -1;
+  const prev = prevIndex >= 0 && prevIndex !== index ? points[prevIndex] : undefined;
+  const next = nextIndex >= 0 && nextIndex !== index ? points[nextIndex] : undefined;
+  if (!point || (!prev && !next)) return {};
+
+  let tangent = { x: 0, y: 0 };
+  if (prev && next) tangent = { x: next.x - prev.x, y: next.y - prev.y };
+  else if (next) tangent = { x: next.x - point.x, y: next.y - point.y };
+  else if (prev) tangent = { x: point.x - prev.x, y: point.y - prev.y };
+  const tangentLength = Math.hypot(tangent.x, tangent.y);
+  const unit = tangentLength > 0 ? { x: tangent.x / tangentLength, y: tangent.y / tangentLength } : { x: 1, y: 0 };
+
+  const result: { handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } } = {};
+  if (next) {
+    const distanceToNext = Math.hypot(next.x - point.x, next.y - point.y);
+    result.handleOut = { x: unit.x * distanceToNext / 3, y: unit.y * distanceToNext / 3 };
+  }
+  if (prev) {
+    const distanceToPrev = Math.hypot(point.x - prev.x, point.y - prev.y);
+    result.handleIn = { x: -unit.x * distanceToPrev / 3, y: -unit.y * distanceToPrev / 3 };
+  }
+  return result;
+}
+
 export function toggleCornerSmooth(points: readonly VectorPoint[], index: number, closed: boolean): VectorPoint[] {
   const point = points[index];
   if (!point) return points.slice();
@@ -151,29 +188,32 @@ export function toggleCornerSmooth(points: readonly VectorPoint[], index: number
     return points.map((current, i) => i === index ? corner : current);
   }
 
-  const prevIndex = index > 0 ? index - 1 : closed ? points.length - 1 : -1;
-  const nextIndex = index < points.length - 1 ? index + 1 : closed ? 0 : -1;
-  const prev = prevIndex >= 0 ? points[prevIndex] : undefined;
-  const next = nextIndex >= 0 ? points[nextIndex] : undefined;
-  if (!prev && !next) return points.slice();
+  const handles = smoothHandlesFor(points, index, closed);
+  if (!handles.handleIn && !handles.handleOut) return points.slice();
+  return points.map((current, i) => i === index ? { ...current, ...handles } : current);
+}
 
-  let tangent = { x: 0, y: 0 };
-  if (prev && next) tangent = { x: next.x - prev.x, y: next.y - prev.y };
-  else if (next) tangent = { x: next.x - point.x, y: next.y - point.y };
-  else if (prev) tangent = { x: point.x - prev.x, y: point.y - prev.y };
-  const tangentLength = Math.hypot(tangent.x, tangent.y);
-  const unit = tangentLength > 0 ? { x: tangent.x / tangentLength, y: tangent.y / tangentLength } : { x: 1, y: 0 };
-
-  const smoothed: VectorPoint = { ...point };
-  if (next) {
-    const distanceToNext = Math.hypot(next.x - point.x, next.y - point.y);
-    smoothed.handleOut = { x: unit.x * distanceToNext / 3, y: unit.y * distanceToNext / 3 };
-  }
-  if (prev) {
-    const distanceToPrev = Math.hypot(point.x - prev.x, point.y - prev.y);
-    smoothed.handleIn = { x: -unit.x * distanceToPrev / 3, y: -unit.y * distanceToPrev / 3 };
-  }
-  return points.map((current, i) => i === index ? smoothed : current);
+/**
+ * Re-smooths every currently-smooth point of a path against its (possibly
+ * just-changed) neighbours — `vector.curvature`'s whole reason for existing
+ * as a genuinely different tool from `vector.pen`: Illustrator's Curvature
+ * Tool auto-recalculates the curve through *every* point whenever one is
+ * added, moved or removed (the spec's own "Кривая перестроится
+ * автоматически"), rather than a point's curvature being fixed once at the
+ * moment it was placed the way the Pen tool's manually-dragged handles are.
+ *
+ * A "smooth" point is exactly the same thing `toggleCornerSmooth` already
+ * uses to tell one from a corner: it currently carries a `handleIn` or
+ * `handleOut`. A corner point (placed with Alt, or converted by a double
+ * click) is left completely untouched — recomputing it would silently turn
+ * a deliberate corner back into a curve, which is the one thing this
+ * function must never do.
+ */
+export function recomputeSmoothHandles(points: readonly VectorPoint[], closed: boolean): VectorPoint[] {
+  return points.map((point, index) => {
+    if (!point.handleIn && !point.handleOut) return point;
+    return { ...point, ...smoothHandlesFor(points, index, closed) };
+  });
 }
 
 /**

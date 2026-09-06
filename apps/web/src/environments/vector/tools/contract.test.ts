@@ -4,6 +4,7 @@ import { srgb } from "@vravio/kernel";
 import { vectorTools } from "./registry";
 import { toolById } from "../../../tools";
 import { finishPath } from "./definitions/pen";
+import { finishCurvaturePath } from "./definitions/curvature";
 import type { NavigationContext, NavigationGesture, ToolContext, ToolPointer, VectorToolDefinition } from "./types";
 import type { DocumentViewport } from "../../../store";
 
@@ -131,6 +132,11 @@ const fullGesture = (context: ToolContext<unknown>, tool: VectorToolDefinition<u
   tool.onPointerMove?.(context, pointerAt(150, 120));
   tool.onGestureEnd?.(context, pointerAt(150, 120));
   if (tool.id === "vector.pen") finishPath(context as ToolContext<import("./definitions/pen").PenState>);
+  // Same reason as vector.pen just above: vector.curvature never commits
+  // mid-draft either (a curve is one "New Curve" step on finish, not one
+  // per point) — without this, fullGesture's press-drag-release would leave
+  // nothing for "commits something history can undo" to find.
+  if (tool.id === "vector.curvature") finishCurvaturePath(context as ToolContext<import("./definitions/curvature").CurvatureState>);
 };
 
 /**
@@ -168,8 +174,8 @@ describe("every tool in the vector catalogue keeps the contract", () => {
     expect(vectorTools.length).toBeGreaterThan(0);
   });
 
-  it("has all nine tools from the plan's inventory (six, plus stage 15's Artboard tool, plus Hand/Zoom)", () => {
-    expect(new Set(vectorTools.map((tool) => tool.id))).toEqual(new Set(["vector.select", "vector.nodes", "vector.pen", "vector.rectangle", "vector.ellipse", "vector.text", "vector.artboard", "vector.hand", "vector.zoom"]));
+  it("has all ten tools from the plan's inventory (six, plus stage 15's Artboard tool, plus Hand/Zoom, plus the Curvature tool)", () => {
+    expect(new Set(vectorTools.map((tool) => tool.id))).toEqual(new Set(["vector.select", "vector.nodes", "vector.pen", "vector.rectangle", "vector.ellipse", "vector.text", "vector.artboard", "vector.hand", "vector.zoom", "vector.curvature"]));
   });
 
   for (const tool of vectorTools) {

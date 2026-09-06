@@ -10,6 +10,7 @@ import { useContextMenu } from "./ContextMenu";
 import { text } from "./i18n";
 import { vectorToolById } from "./environments/vector/tools/registry";
 import { closePath, deleteLastPoint, deletePath, finishPath, hasDraft, type PenState } from "./environments/vector/tools/definitions/pen";
+import { closeCurvaturePath, deleteCurvaturePath, deleteLastCurvaturePoint, finishCurvaturePath, hasCurvatureDraft, type CurvatureState } from "./environments/vector/tools/definitions/curvature";
 import type { ToolContext, ToolPointer } from "./environments/vector/tools/types";
 import { vectorTextMeasurer } from "./vector-text-metrics";
 import { useModifierResults } from "./vector-modifiers";
@@ -555,6 +556,18 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
         { label: text(store.language, "Close Path", "Закрыть контур"), onSelect: () => closePath(penContext) },
         { label: text(store.language, "Delete Last Point", "Удалить последнюю точку"), onSelect: () => deleteLastPoint(penContext) },
         { label: text(store.language, "Delete Path", "Удалить контур"), onSelect: () => deletePath(penContext), danger: true, separatorBefore: true },
+      ]);
+      return;
+    }
+    // Same menu, vector.curvature's own equivalents — see that file's own
+    // doc comment for why it needs the same four escape hatches pen.tsx does.
+    const curvatureContext = toolContextFor("vector.curvature") as ToolContext<CurvatureState>;
+    if (activeToolId === "vector.curvature" && hasCurvatureDraft(curvatureContext)) {
+      contextMenu.open(event, [
+        { label: text(store.language, "Finish Path", "Завершить контур"), onSelect: () => finishCurvaturePath(curvatureContext) },
+        { label: text(store.language, "Close Path", "Закрыть контур"), onSelect: () => closeCurvaturePath(curvatureContext) },
+        { label: text(store.language, "Delete Last Point", "Удалить последнюю точку"), onSelect: () => deleteLastCurvaturePoint(curvatureContext) },
+        { label: text(store.language, "Delete Path", "Удалить контур"), onSelect: () => deleteCurvaturePath(curvatureContext), danger: true, separatorBefore: true },
       ]);
       return;
     }

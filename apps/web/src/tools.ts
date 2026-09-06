@@ -72,6 +72,13 @@ export const tools: readonly ToolDefinition[] = [
   { id: "vector.select", kind: "vector", icon: "↖", iconFile: "КУРСОР.svg", label: { en: "Selection Tool", ru: "Выделение" }, shortcut: "V", options: [{ id: "transform", label: { en: "Transform handles", ru: "Маркеры трансформации" }, type: "boolean", defaultValue: true }] },
   { id: "vector.nodes", kind: "vector", icon: "◇", iconFile: "ПЕРО_1.svg", label: { en: "Node Tool", ru: "Узлы" }, shortcut: "A", options: [{ id: "showHandles", label: { en: "Bézier handles", ru: "Ручки Безье" }, type: "boolean", defaultValue: true }] },
   { id: "vector.pen", kind: "vector", icon: "⌁", iconFile: "ПЕРО.svg", label: { en: "Pen Tool", ru: "Перо" }, shortcut: "P", options: [color, { id: "strokeWidth", label: { en: "Stroke", ru: "Обводка" }, type: "number", min: 0, max: 1000, step: 0.25, defaultValue: 2, unit: "px" }] },
+  // Illustrator's own shortcut is Shift+~, which this project's tool
+  // shortcuts (a single bare key each, checked across both catalogues) have
+  // no precedent for — "C" is free in the vector kind (raster.crop's "C" is
+  // a different kind's shortcut, scoped separately). No matching file in
+  // icons/ either, so a hand-picked glyph, the same reason vector.artboard
+  // has one below.
+  { id: "vector.curvature", kind: "vector", icon: "∿", label: { en: "Curvature Tool", ru: "Перо кривизны" }, shortcut: "C", options: [color, { id: "strokeWidth", label: { en: "Stroke", ru: "Обводка" }, type: "number", min: 0, max: 1000, step: 0.25, defaultValue: 2, unit: "px" }] },
   { id: "vector.rectangle", kind: "vector", icon: "□", iconFile: "КВАДРАТ.svg", label: { en: "Rectangle Tool", ru: "Прямоугольник" }, shortcut: "R", options: [color, { id: "radius", label: { en: "Corner radius", ru: "Радиус углов" }, type: "number", min: 0, max: 1000, step: 1, defaultValue: 0, unit: "px" }] },
   { id: "vector.ellipse", kind: "vector", icon: "○", iconFile: "ЭЛИПС.svg", label: { en: "Ellipse Tool", ru: "Эллипс" }, shortcut: "O", options: [color] },
   { id: "vector.text", kind: "vector", icon: "T", iconFile: "ТЕКСТ.svg", label: { en: "Type Tool", ru: "Текст" }, shortcut: "T", options: [color, { id: "fontSize", label: { en: "Font size", ru: "Размер шрифта" }, type: "number", min: 1, max: 1000, step: 1, defaultValue: 48, unit: "px" }] },
