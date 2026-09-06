@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeCanvasBounds, createArtboardAt, deleteArtboard, duplicateArtboard, moveArtboard, renameArtboard, shapesIntersectingRect } from "./artboard-ops";
+import { computeCanvasBounds, createArtboardAt, deleteArtboard, duplicateArtboard, moveArtboard, rearrangeArtboardsGrid, renameArtboard, reorderArtboard, shapesIntersectingRect } from "./artboard-ops";
 import { createShape, createVectorDocument } from "./document";
 import { addShape, shapeWorldBounds } from "./shape-ops";
 
@@ -146,5 +146,82 @@ describe("artboard-ops (stage 15 of docs/vector-plan.md)", () => {
 
     const after = shapeWorldBounds(state.shapes.find((item) => item.id === farAway.id)!, state.shapes);
     expect(after).toEqual({ x: 950, y: 950, width: 160, height: 100 });
+  });
+
+  it("reorderArtboard swaps list order without moving either rectangle", () => {
+    const state = createVectorDocument();
+    const a = createArtboardAt(state, 0, 0, 100, 100, "A");
+    const b = createArtboardAt(state, 200, 0, 100, 100, "B");
+
+    reorderArtboard(state, b.id, -1);
+
+    expect(state.artboards.map((artboard) => artboard.id)).toEqual([b.id, a.id]);
+    expect(state.artboards.find((artboard) => artboard.id === a.id)).toMatchObject({ x: 0, y: 0 });
+    expect(state.artboards.find((artboard) => artboard.id === b.id)).toMatchObject({ x: 200, y: 0 });
+  });
+
+  it("reorderArtboard past either end is a no-op, not an error", () => {
+    const state = createVectorDocument();
+    const only = createArtboardAt(state, 0, 0, 100, 100);
+    reorderArtboard(state, only.id, -1);
+    reorderArtboard(state, only.id, 1);
+    expect(state.artboards).toEqual([only]);
+  });
+
+  it("rearrangeArtboardsGrid (row layout) lays artboards out left-to-right, wrapping after `count` per row", () => {
+    const state = createVectorDocument();
+    // Scattered originally — the point of this command is to put them back
+    // into a predictable grid regardless of where they'd drifted to.
+    createArtboardAt(state, 900, 900, 100, 50, "0");
+    createArtboardAt(state, -300, 400, 200, 100, "1"); // the largest — sets the uniform cell size
+    createArtboardAt(state, 50, -50, 100, 50, "2");
+
+    rearrangeArtboardsGrid(state, 2, 20, "row", false);
+
+    const [a, b, c] = state.artboards;
+    const originX = -300, originY = -50; // the minimum x/y across the original scattered positions
+    const cellWidth = 200 + 20, cellHeight = 100 + 20; // the largest artboard's own size plus spacing
+    expect(a).toMatchObject({ x: originX, y: originY });
+    expect(b).toMatchObject({ x: originX + cellWidth, y: originY });
+    expect(c).toMatchObject({ x: originX, y: originY + cellHeight }); // wrapped to row 2 after 2 per row
+  });
+
+  it("rearrangeArtboardsGrid (column layout) fills top-to-bottom, wrapping after `count` per column", () => {
+    const state = createVectorDocument();
+    createArtboardAt(state, 0, 0, 100, 100, "0");
+    createArtboardAt(state, 0, 0, 100, 100, "1");
+    createArtboardAt(state, 0, 0, 100, 100, "2");
+
+    rearrangeArtboardsGrid(state, 2, 10, "column", false);
+
+    const [a, b, c] = state.artboards;
+    const cell = 100 + 10;
+    expect(a).toMatchObject({ x: 0, y: 0 });
+    expect(b).toMatchObject({ x: 0, y: cell }); // second in the first column
+    expect(c).toMatchObject({ x: cell, y: 0 }); // wrapped to the next column after 2 per column
+  });
+
+  it("rearrangeArtboardsGrid with Move Artwork carries overlapping shapes, without it leaves them exactly where they were", () => {
+    const state = createVectorDocument();
+    createArtboardAt(state, 0, 0, 100, 100, "first"); // stays put — the origin of the grid
+    const second = createArtboardAt(state, 500, 0, 100, 100, "second"); // will be pulled into row 1, col 1
+    const shape = createShape("rectangle", 510, 10); // overlaps only the second artboard
+    addShape(state, shape);
+    const before = shapeWorldBounds(shape, state.shapes);
+
+    rearrangeArtboardsGrid(state, 2, 20, "row", false);
+    expect(state.artboards.find((artboard) => artboard.id === second.id)).toMatchObject({ x: 120, y: 0 }); // pulled in from 500 to right next to the first cell
+    expect(shapeWorldBounds(state.shapes.find((item) => item.id === shape.id)!, state.shapes)).toEqual(before); // artwork left behind without the flag
+
+    // Put the artboard back out where it started, then repeat with the flag on.
+    moveArtboard(state, second.id, 500 - 120, 0, false);
+    rearrangeArtboardsGrid(state, 2, 20, "row", true);
+    expect(shapeWorldBounds(state.shapes.find((item) => item.id === shape.id)!, state.shapes)).not.toEqual(before);
+  });
+
+  it("rearrangeArtboardsGrid does nothing on an empty document", () => {
+    const state = createVectorDocument();
+    expect(() => rearrangeArtboardsGrid(state, 2, 20, "row", false)).not.toThrow();
+    expect(state.artboards).toHaveLength(0);
   });
 });

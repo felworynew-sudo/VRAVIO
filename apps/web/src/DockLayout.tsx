@@ -19,7 +19,7 @@ import { rasterAdjustmentById, rasterAdjustments } from "./raster-adjustments/re
 import { environmentsWithWindows, windowById, windowsFor } from "./windows/registry";
 import { windowTitle } from "./windows/types";
 import { PANEL_REQUEST_EVENT, persistVisiblePanelIds, readVisiblePanelIds, type PanelVisibilityDetail } from "./windows/runtime";
-import { addPaletteColor, deleteArtboard, duplicateArtboard, isVectorDocumentState, listSymbols, removePaletteColor, renameArtboard, renamePaletteColor, shapeBounds, updateShape, vectorShapeRows, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { addPaletteColor, deleteArtboard, duplicateArtboard, isVectorDocumentState, listSymbols, rearrangeArtboardsGrid, reorderArtboard, removePaletteColor, renameArtboard, renamePaletteColor, shapeBounds, updateShape, vectorShapeRows, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
 import { colorToCss, cssToColor } from "@vravio/kernel";
 import { vectorTextMeasurer } from "./vector-text-metrics";
 import { changeVectorDocument, createSymbolFromActiveSelection, deleteActiveVectorShapes, detachActiveVectorInstance, duplicateActiveVectorShape, groupActiveVectorShapes, placeVectorSymbolInstance, redefineSymbolFromActiveSelection, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
@@ -669,20 +669,39 @@ function ArtboardsPanel() {
     void kernel.platform.fs.saveFile({ name, mime: "image/svg+xml", data: new Blob([svg], { type: "image/svg+xml" }) });
   };
 
+  const rearrangeAll = () => {
+    const defaultCount = Math.max(1, Math.ceil(Math.sqrt(state.artboards.length)));
+    const countInput = window.prompt(text(language, "Artboards per row", "Областей в ряду"), String(defaultCount));
+    const count = countInput ? Math.max(1, Math.round(Number(countInput))) : NaN;
+    if (!Number.isFinite(count)) return;
+    const spacingInput = window.prompt(text(language, "Spacing", "Отступ между областями"), "40");
+    const spacing = spacingInput ? Math.max(0, Number(spacingInput)) : NaN;
+    if (!Number.isFinite(spacing)) return;
+    const moveArtwork = window.confirm(text(language, "Move artwork along with each artboard?", "Переносить артворк вместе с каждой областью?"));
+    void changeVectorDocument(active.id, "Rearrange All Artboards (Упорядочить все монтажные области)", (draft) => { rearrangeArtboardsGrid(draft, count, spacing, "row", moveArtwork); return true; });
+  };
+
   return <div className="dock-panel-body">
     {state.artboards.length === 0
       ? <div className="empty-row">{text(language, "No artboards yet — the document itself is the canvas.", "Монтажных областей пока нет — холст пока сам является документом.")}</div>
-      : <div className="layer-list">
-        {state.artboards.map((artboard) => <div className="artboard-row" key={artboard.id}>
-          <button className={artboard.id === state.activeArtboardId ? "active" : ""} onClick={() => fit(artboard.id)} title={text(language, "Fit in window", "Уместить в окне")}>
-            <span>{artboard.name}</span>
-          </button>
-          <button onClick={() => void changeVectorDocument(active.id, "Rename Artboard (Переименовать монтажную область)", (draft) => { const name = window.prompt(text(language, "Artboard name", "Название монтажной области"), artboard.name); if (!name?.trim()) return false; renameArtboard(draft, artboard.id, name.trim()); return true; })} title={text(language, "Rename", "Переименовать")}>✎</button>
-          <button onClick={() => exportArtboard(artboard)} title={text(language, "Export this artboard as SVG", "Экспортировать эту область как SVG")}>⇩</button>
-          <button onClick={() => void changeVectorDocument(active.id, "Duplicate Artboard (Дублировать монтажную область)", (draft) => Boolean(duplicateArtboard(draft, artboard.id)))} title={text(language, "Duplicate", "Дублировать")}>⧉</button>
-          <button onClick={() => void changeVectorDocument(active.id, "Delete Artboard (Удалить монтажную область)", (draft) => { deleteArtboard(draft, artboard.id); return true; })} title={text(language, "Delete (keeps the artwork)", "Удалить (артворк останется)")}>✕</button>
-        </div>)}
-      </div>}
+      : <>
+        <button className="panel-action" onClick={rearrangeAll} title={text(language, "Reposition every artboard into a grid (does not change their order)", "Расставить все области в сетку (не меняет их порядок)")}>
+          ⊞ {text(language, "Rearrange All", "Упорядочить все")}
+        </button>
+        <div className="layer-list">
+          {state.artboards.map((artboard, index) => <div className="artboard-row" key={artboard.id}>
+            <button className={artboard.id === state.activeArtboardId ? "active" : ""} onClick={() => fit(artboard.id)} title={text(language, "Fit in window", "Уместить в окне")}>
+              <span>{artboard.name}</span>
+            </button>
+            <button disabled={index === 0} onClick={() => void changeVectorDocument(active.id, "Reorder Artboard (Изменить порядок монтажной области)", (draft) => { reorderArtboard(draft, artboard.id, -1); return true; })} title={text(language, "Move earlier in export order", "Сдвинуть раньше в порядке экспорта")} aria-label="Move up">↑</button>
+            <button disabled={index === state.artboards.length - 1} onClick={() => void changeVectorDocument(active.id, "Reorder Artboard (Изменить порядок монтажной области)", (draft) => { reorderArtboard(draft, artboard.id, 1); return true; })} title={text(language, "Move later in export order", "Сдвинуть позже в порядке экспорта")} aria-label="Move down">↓</button>
+            <button onClick={() => void changeVectorDocument(active.id, "Rename Artboard (Переименовать монтажную область)", (draft) => { const name = window.prompt(text(language, "Artboard name", "Название монтажной области"), artboard.name); if (!name?.trim()) return false; renameArtboard(draft, artboard.id, name.trim()); return true; })} title={text(language, "Rename", "Переименовать")}>✎</button>
+            <button onClick={() => exportArtboard(artboard)} title={text(language, "Export this artboard as SVG", "Экспортировать эту область как SVG")}>⇩</button>
+            <button onClick={() => void changeVectorDocument(active.id, "Duplicate Artboard (Дублировать монтажную область)", (draft) => Boolean(duplicateArtboard(draft, artboard.id)))} title={text(language, "Duplicate", "Дублировать")}>⧉</button>
+            <button onClick={() => void changeVectorDocument(active.id, "Delete Artboard (Удалить монтажную область)", (draft) => { deleteArtboard(draft, artboard.id); return true; })} title={text(language, "Delete (keeps the artwork)", "Удалить (артворк останется)")}>✕</button>
+          </div>)}
+        </div>
+      </>}
   </div>;
 }
 
