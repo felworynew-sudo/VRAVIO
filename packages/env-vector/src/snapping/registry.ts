@@ -1,5 +1,6 @@
 import bounds from "./sources/bounds";
 import grid from "./sources/grid";
+import guides from "./sources/guides";
 import nodes from "./sources/nodes";
 import segmentMidpoints from "./sources/segment-midpoints";
 import type { SnapSource } from "./types";
@@ -12,9 +13,10 @@ import type { SnapSource } from "./types";
  * discovery with. Adding a new snap type is still "write the file, add one
  * line here" — not "find the right branch in a switch statement".
  *
- * Ruler guides, curve intersections, tangents, perpendiculars and equal
- * spacing are in docs/vector-plan.md's list for this stage and are not
- * here — see that plan's own writeup for why each was deferred rather than
- * stubbed in.
+ * Ruler guides were deferred at this stage's own first pass for want of a
+ * ruler/guide model at all — stage 15 built one, and `guides` above closes
+ * that gap. Curve intersections, tangents, perpendiculars and equal
+ * spacing are still not here — real geometry-of-curve-intersection work,
+ * a separate task from "there was no guide to snap to yet".
  */
-export const snapSources: readonly SnapSource[] = [bounds, grid, nodes, segmentMidpoints];
+export const snapSources: readonly SnapSource[] = [bounds, grid, guides, nodes, segmentMidpoints];

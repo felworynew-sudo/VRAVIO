@@ -5,6 +5,7 @@ import { addShape } from "../shape-ops";
 import { appendShapeAt } from "../tree";
 import bounds from "./sources/bounds";
 import grid from "./sources/grid";
+import guides from "./sources/guides";
 import nodes from "./sources/nodes";
 import segmentMidpoints from "./sources/segment-midpoints";
 import type { SnapContext } from "./types";
@@ -26,6 +27,32 @@ describe("grid source", () => {
     const yValues = lines.filter((line) => line.axis === "y").map((line) => line.value);
     expect(xValues).toEqual([0, 50, 100, 150, 200]);
     expect(yValues).toEqual([0, 50, 100]);
+  });
+});
+
+describe("guides source (stage 5, closed by stage 15's rulers/guides)", () => {
+  it("produces no lines when guides is missing or empty", () => {
+    expect(guides.collect(context())).toEqual([]);
+    expect(guides.collect(context({ guides: [] }))).toEqual([]);
+  });
+
+  it("a vertical guide constrains x, at its own position", () => {
+    const lines = guides.collect(context({ guides: [{ orientation: "vertical", position: 120, scope: null }] }));
+    expect(lines).toEqual([{ axis: "x", value: 120, kind: "guide" }]);
+  });
+
+  it("a horizontal guide constrains y, at its own position", () => {
+    const lines = guides.collect(context({ guides: [{ orientation: "horizontal", position: 80, scope: null }] }));
+    expect(lines).toEqual([{ axis: "y", value: 80, kind: "guide" }]);
+  });
+
+  it("does not filter by scope itself — the caller already resolved that via visibleGuides", () => {
+    // Passing a scoped guide straight through and asserting it still
+    // produces a line proves this source trusts `context.guides` as
+    // already-filtered, rather than re-deriving "is this guide visible"
+    // a second way that could disagree with `visibleGuides`.
+    const lines = guides.collect(context({ guides: [{ orientation: "vertical", position: 10, scope: "artboard-1" }] }));
+    expect(lines).toHaveLength(1);
   });
 });
 

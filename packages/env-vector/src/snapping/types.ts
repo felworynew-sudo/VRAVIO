@@ -1,5 +1,5 @@
 import type { TextMeasurer } from "../shape-ops";
-import type { VectorShape } from "../types";
+import type { VectorGuide, VectorShape } from "../types";
 
 /**
  * A snap target reduced to its simplest useful shape: a line perpendicular
@@ -42,6 +42,13 @@ export interface SnapContext {
   readonly documentWidth: number;
   readonly documentHeight: number;
   readonly measurer?: TextMeasurer;
+  /** Whichever guides are relevant right now — already resolved by the
+   * caller through `guide-ops.ts`'s `visibleGuides` (global plus the
+   * active artboard's own scoped ones), not every guide the document
+   * happens to store. Defaults to none for a caller (or a test) that
+   * doesn't pass it, the same "opt-in, not a surprise new snap target"
+   * shape `gridSpacing: null` already has above. */
+  readonly guides?: readonly VectorGuide[];
 }
 
 /**

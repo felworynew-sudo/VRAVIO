@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { addShape, closestPointOnPath, createShape, deletePointPreservingCurve, emptyVectorStyle, insertPointOnPathSegment, resolveSnapForBounds, solidFill, solidStroke, toggleCornerSmooth, type VectorDocumentState } from "@vravio/env-vector";
+import { addShape, closestPointOnPath, createShape, deletePointPreservingCurve, emptyVectorStyle, insertPointOnPathSegment, resolveSnapForBounds, solidFill, solidStroke, toggleCornerSmooth, visibleGuides, type VectorDocumentState } from "@vravio/env-vector";
 import { cssToColor } from "@vravio/kernel";
 import type { VectorSnapshot } from "../../../../vector-commands";
 import { applyNodeMove, hitTestNode, type NodePart } from "./nodes";
@@ -216,7 +216,7 @@ const pen: VectorToolDefinition<PenState> = {
         const zeroSizeBounds = { x: placedPoint.x, y: placedPoint.y, width: 0, height: 0 };
         const snap = resolveSnapForBounds(zeroSizeBounds, context.snapping.radius, context.snapping.sources, {
           shapes: context.document.shapes, excludeIds: new Set([shapeId]), gridSpacing: context.snapping.gridSpacing,
-          documentWidth: context.document.width, documentHeight: context.document.height,
+          documentWidth: context.document.width, documentHeight: context.document.height, guides: visibleGuides(context.document, context.document.activeArtboardId),
         });
         placedPoint = { x: placedPoint.x + snap.dx, y: placedPoint.y + snap.dy };
       }

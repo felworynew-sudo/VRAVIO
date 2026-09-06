@@ -1,4 +1,4 @@
-import { invertMatrix, resolveSnapForBounds, shapeAtIndexed, shapeWorldBounds, transformVector, translateShape, worldTransform, type SnapLine, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { invertMatrix, resolveSnapForBounds, shapeAtIndexed, shapeWorldBounds, transformVector, translateShape, visibleGuides, worldTransform, type SnapLine, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
 import type { VectorSnapshot } from "../../../../vector-commands";
 import type { ToolContext, ToolPointer, VectorToolDefinition } from "../types";
 
@@ -84,7 +84,7 @@ const select: VectorToolDefinition<SelectState> = {
       // lines on every tiny mouse movement.
       const snap = resolveSnapForBounds(projectedBounds, context.snapping.radius, context.snapping.sources, {
         shapes: draft.shapes, excludeIds, gridSpacing: context.snapping.gridSpacing,
-        documentWidth: draft.width, documentHeight: draft.height,
+        documentWidth: draft.width, documentHeight: draft.height, guides: visibleGuides(draft, draft.activeArtboardId),
       }, context.state.snapLines);
       snapLines = snap.lines;
 
