@@ -27,6 +27,36 @@ export function layout_text(text, font_size, max_width, script) {
         wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
     }
 }
+
+/**
+ * The same layout `layout_text` computes, but every glyph becomes a real
+ * SVG path (skrifa's own outline API run per shaped glyph) instead of a
+ * bare position/advance — "Convert to Outlines" (docs/vector-plan.md
+ * stage 11's own "text to curves"), the one honest gap that write-up
+ * named as needing "an implementation, not an investigation" over
+ * `skrifa::outline`.
+ * @param {string} text
+ * @param {number} font_size
+ * @param {number} max_width
+ * @param {string} script
+ * @returns {string}
+ */
+export function text_to_curves(text, font_size, max_width, script) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(script, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.text_to_curves(ptr0, len0, font_size, max_width, ptr1, len1);
+        deferred3_0 = ret[0];
+        deferred3_1 = ret[1];
+        return getStringFromWasm0(ret[0], ret[1]);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+    }
+}
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,

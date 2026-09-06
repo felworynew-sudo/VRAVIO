@@ -1,7 +1,8 @@
-import { addShape, createSymbolFromShapes, detachInstance, duplicateShape, groupShapes, moveShapeInStack, pathShapeFromPolygon, placeSymbolInstance, redefineSymbolFromShapes, removeShapes, shapeOutlineWorldPolygon, ungroupShapes, type Artboard, type PaletteColor, type VectorDocumentState, type VectorGuide, type VectorShape, type ZOrderMove } from "@vravio/env-vector";
+import { addShape, createShape, createSymbolFromShapes, detachInstance, duplicateShape, groupShapes, moveShapeInStack, pathShapeFromPolygon, placeSymbolInstance, redefineSymbolFromShapes, removeShapes, shapeOutlineWorldPolygon, subpathsToPoints, translationMatrix, ungroupShapes, type Artboard, type PaletteColor, type VectorDocumentState, type VectorGuide, type VectorShape, type ZOrderMove } from "@vravio/env-vector";
 import type { BooleanOpKind } from "@vravio/kernel";
 import { kernel } from "./kernel";
 import { createWasmGeometryPort } from "./vector-geometry-wasm";
+import { textToCurves } from "./vector-text-wasm";
 
 /**
  * `artboards`/`activeArtboardId` joined this snapshot in stage 15 of
@@ -233,6 +234,62 @@ export async function applyPathfinderOp(documentId: string, op: BooleanOpKind): 
     for (const result of results) addShape(draft, result);
     draft.selection = results.map((result) => result.id);
     draft.activeShapeId = results[0]?.id ?? null;
+    return true;
+  });
+}
+
+/**
+ * "Convert to Outlines" (Type menu) — stage 11's own "text to curves",
+ * the one gap that write-up named as needing "an implementation, not an
+ * investigation": `crates/vector-text`'s `text_to_curves` (skrifa's
+ * outline API run on each shaped glyph) exists now, this wires it to a
+ * real command. Each glyph becomes its own path shape (a glyph like "o"
+ * has two subpaths — an outer ring and an inner hole `VectorShape`'s own
+ * `path` kind has no room for in one shape, the same reason
+ * `importedShapesFromJson` splits an SVG import's multi-subpath nodes the
+ * same way), all wrapped in one new group so the result still selects and
+ * moves as the single object the text shape used to be.
+ *
+ * `align: "center"`/`"right"` shift every glyph the same way
+ * `shapeFillBounds`'s own text branch already computes a text shape's
+ * bounds for those alignments — the one other place in this codebase that
+ * has to answer "where does this text's own left edge actually sit."
+ *
+ * Async for the same reason `applyPathfinderOp` above is: the WASM call
+ * has no synchronous path, computed entirely before `changeVectorDocument`
+ * ever runs, so its own `mutate` callback stays a plain synchronous
+ * function over an already-known result.
+ */
+export async function convertActiveTextToOutlines(documentId: string): Promise<void> {
+  const document = kernel.documents.get<VectorDocumentState>(documentId);
+  const shape = document?.state.shapes.find((item) => item.id === document.state.activeShapeId);
+  if (!shape || shape.kind !== "text") return;
+
+  const outline = await textToCurves(shape.value, shape.fontSize, 0, "latin");
+  const offsetX = shape.align === "center" ? -outline.width / 2 : shape.align === "right" ? -outline.width : 0;
+  const transform = translationMatrix(shape.x + offsetX, shape.y);
+
+  const glyphShapes: VectorShape[] = [];
+  for (const line of outline.lines) {
+    for (const glyph of line.glyphs) {
+      for (const { points, closed } of subpathsToPoints(glyph.d)) {
+        if (points.length < 2) continue;
+        const pathShape = createShape("path", 0, 0, shape.style);
+        if (pathShape.kind !== "path") continue;
+        pathShape.points = points;
+        pathShape.closed = closed;
+        pathShape.transform = transform;
+        pathShape.name = `${shape.name} outline (контур)`;
+        glyphShapes.push(pathShape);
+      }
+    }
+  }
+  if (!glyphShapes.length) return; // e.g. an empty/whitespace-only text — nothing to convert, leave the text shape alone
+
+  await changeVectorDocument(documentId, "Convert to Outlines (Преобразовать в контуры)", (draft) => {
+    removeShapes(draft, [shape.id]);
+    for (const glyphShape of glyphShapes) addShape(draft, glyphShape);
+    groupShapes(draft, glyphShapes.map((glyphShape) => glyphShape.id), shape.name);
     return true;
   });
 }

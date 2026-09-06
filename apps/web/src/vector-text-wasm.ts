@@ -78,3 +78,37 @@ export async function layoutText(text: string, fontSize: number, maxWidth: numbe
     })),
   };
 }
+
+export interface OutlinedGlyph {
+  /** An SVG path `d` string, already positioned at this glyph's own
+   * resolved location on the line and flipped into the same y-down screen
+   * convention `ShapedGlyph.y` above uses — ready to become a path shape's
+   * points via `pathData.ts`'s own SVG-`d` parser, no further transform. */
+  readonly d: string;
+}
+
+export interface OutlinedLine {
+  readonly glyphs: readonly OutlinedGlyph[];
+}
+
+export interface OutlinedText {
+  readonly width: number;
+  readonly height: number;
+  readonly lines: readonly OutlinedLine[];
+}
+
+interface RawOutlineResult {
+  width: number;
+  height: number;
+  lines: { glyphs: { d: string }[] }[];
+}
+
+/** "Convert to Outlines" (docs/vector-plan.md stage 11's "text to curves")
+ * — the same layout as `layoutText`, but each glyph comes back as a real
+ * SVG path instead of a bare position, via skrifa's own outline API run on
+ * each shaped glyph. */
+export async function textToCurves(text: string, fontSize: number, maxWidth: number, script: TextScript = "latin"): Promise<OutlinedText> {
+  const mod = await loadModule();
+  const raw = JSON.parse(mod.text_to_curves(text, fontSize, maxWidth, script)) as RawOutlineResult;
+  return { width: raw.width, height: raw.height, lines: raw.lines.map((line) => ({ glyphs: line.glyphs.map((glyph) => ({ d: glyph.d })) })) };
+}

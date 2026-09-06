@@ -9,11 +9,22 @@
  */
 export function layout_text(text: string, font_size: number, max_width: number, script: string): string;
 
+/**
+ * The same layout `layout_text` computes, but every glyph becomes a real
+ * SVG path (skrifa's own outline API run per shaped glyph) instead of a
+ * bare position/advance — "Convert to Outlines" (docs/vector-plan.md
+ * stage 11's own "text to curves"), the one honest gap that write-up
+ * named as needing "an implementation, not an investigation" over
+ * `skrifa::outline`.
+ */
+export function text_to_curves(text: string, font_size: number, max_width: number, script: string): string;
+
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
     readonly layout_text: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+    readonly text_to_curves: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
     readonly __wbindgen_externrefs: WebAssembly.Table;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

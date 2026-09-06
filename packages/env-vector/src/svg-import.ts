@@ -68,8 +68,13 @@ function toStrokeLayer(style: ImportedStrokeStyle): StrokeLayer {
  * hole, an icon's several separate strokes) that `VectorShape`'s own
  * `path` kind has no room for in a single shape — so this, not
  * `import_svg`, is where one imported path node becomes N `VectorShape`s.
+ *
+ * Exported (stage 11's "Convert to Outlines") because `crates/vector-text`'s
+ * `text_to_curves` hands back the exact same SVG-path-`d` vocabulary for
+ * each glyph — one parser for "a `d` string becomes real bezier points",
+ * not a second copy living next to `apps/web/src/vector-text-to-shapes.ts`.
  */
-function subpathsToPoints(d: string): { points: { x: number; y: number; handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } }[]; closed: boolean }[] {
+export function subpathsToPoints(d: string): { points: { x: number; y: number; handleIn?: { x: number; y: number }; handleOut?: { x: number; y: number } }[]; closed: boolean }[] {
   const subpaths: string[] = [];
   const parts = d.split(/(?=M)/gi);
   for (const part of parts) if (part.trim()) subpaths.push(part.trim());

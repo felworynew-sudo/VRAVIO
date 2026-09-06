@@ -567,6 +567,7 @@ dependencies = [
  "parley",
  "serde",
  "serde_json",
+ "skrifa",
  "wasm-bindgen",
 ]
 
