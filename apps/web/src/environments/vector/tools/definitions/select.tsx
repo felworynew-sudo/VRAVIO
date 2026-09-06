@@ -105,7 +105,7 @@ const select: VectorToolDefinition<SelectState> = {
     context.setState(empty);
   },
 
-  Overlay({ state, document }) {
+  Overlay({ state, document, context }) {
     // Full-canvas lines at the matched value(s) — docs/vector-plan.md stage
     // 5's "подсветка того, к чему привязались": without this, a shape
     // snapping into place looks like the editor nudging it on its own for
@@ -113,10 +113,21 @@ const select: VectorToolDefinition<SelectState> = {
     // actually matched (`state.snapLines` is empty otherwise), same as
     // vector.nodes' handles only appear while there is a node to show them
     // for.
+    //
+    // `strokeWidth={1 / context.viewport.zoom}` rather than
+    // `vectorEffect="non-scaling-stroke"` alone (this file used to rely on
+    // that alone, and it was measurably wrong at high zoom) — dividing by
+    // zoom here means the CSS scale transform on `.vector-stage` multiplies
+    // it straight back to exactly 1 real screen pixel, which is arithmetic,
+    // not a browser feature that may or may not compensate for an ancestor's
+    // CSS transform (see `types.ts`'s own doc comment on `Overlay`, and
+    // `VectorWorkspace.tsx`'s selection handles, which already use this
+    // exact convention for the same reason).
     if (!state.drag || !state.snapLines.length) return null;
+    const strokeWidth = 1 / context.viewport.zoom;
     return <>{state.snapLines.map((line, index) => line.axis === "x"
-      ? <line key={index} className="vector-snap-guide" x1={line.value} y1={0} x2={line.value} y2={document.height} vectorEffect="non-scaling-stroke"/>
-      : <line key={index} className="vector-snap-guide" x1={0} y1={line.value} x2={document.width} y2={line.value} vectorEffect="non-scaling-stroke"/>)}</>;
+      ? <line key={index} className="vector-snap-guide" x1={line.value} y1={0} x2={line.value} y2={document.height} strokeWidth={strokeWidth}/>
+      : <line key={index} className="vector-snap-guide" x1={0} y1={line.value} x2={document.width} y2={line.value} strokeWidth={strokeWidth}/>)}</>;
   },
 };
 
