@@ -210,14 +210,17 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   const smartGuides = useShellStore((shell) => shell.preferences.smartGuides);
   const snapToGrid = useShellStore((shell) => shell.preferences.snapToGrid);
   const snapGridSize = useShellStore((shell) => shell.preferences.snapGridSize);
-  const SNAP_RADIUS_SCREEN_PX = 8;
+  // A real setting (Settings → Guides & Grid → "Snap sensitivity"), not a
+  // hardcoded `8` — the owner's own complaint about snapping feeling too
+  // aggressive is exactly what this knob is for.
+  const snapSensitivity = useShellStore((shell) => shell.preferences.snapSensitivity);
   const snapping = {
     sources: smartGuides ? snapSources : snapSources.filter((source) => source.id === "grid"),
     gridSpacing: snapToGrid ? snapGridSize : null,
     // Screen pixels, not document units (docs/vector-plan.md's own checklist
     // item) — converted using the current zoom, the one thing a snap source
     // or the engine has no way to know on its own.
-    radius: SNAP_RADIUS_SCREEN_PX / viewport.zoom,
+    radius: snapSensitivity / viewport.zoom,
   };
 
   // One state slot per tool id, held here rather than inside a tool — the

@@ -51,6 +51,13 @@ export interface ShellPreferences {
    * questions a user answers independently in every editor that has both. */
   snapToGrid: boolean;
   snapGridSize: number;
+  /** How close (in screen pixels, not document units — the same reason
+   * `VectorWorkspace.tsx`'s own radius conversion lives where it does: only
+   * the caller knows the current zoom) a drag has to land to a candidate
+   * line before it snaps at all. Was a hardcoded `8` in VectorWorkspace.tsx;
+   * now a real setting so "the magnetism is too aggressive" has an answer
+   * that isn't "edit the source." */
+  snapSensitivity: number;
   showRulers: boolean;
   showGuides: boolean;
   guideColor: string;
@@ -66,7 +73,7 @@ const detectedConcurrency = typeof navigator === "undefined" || !navigator.hardw
 
 const defaultPreferences: ShellPreferences = {
   renderer: "auto", memoryBudgetMb: 1024, workerCount: Math.max(1, Math.min(8, detectedConcurrency - 1)),
-  dragZoom: true, showTooltips: true, contextualBar: true, showPerformanceOverlay: false, snapToGuides: true, smartGuides: true, snapToGrid: false, snapGridSize: 20, showRulers: false, showGuides: true,
+  dragZoom: true, showTooltips: true, contextualBar: true, showPerformanceOverlay: false, snapToGuides: true, smartGuides: true, snapToGrid: false, snapGridSize: 20, snapSensitivity: 8, showRulers: false, showGuides: true,
   guideColor: "#00a8ff", canvasSurround: "#2b2f36", focusColor: "#84a8ff",
   rasterColor: "#a100ff", vectorColor: "#0068ff", audioColor: "#ffb600", videoColor: "#ff0000",
 };

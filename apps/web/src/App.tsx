@@ -499,7 +499,7 @@ export function App() {
       </div>)}
     </div>}
 
-    <OptionsBar language={store.language} tool={activeTool} pixelsPerInch={active && isRasterDocumentState(active.state) ? active.state.resolution : undefined} values={activeTool ? { ...(store.toolOptions[activeTool.id] ?? {}), ...(activeTool.options.some((option) => option.id === "color") ? { color: effectiveForegroundColor } : {}) } : {}} transform={transformMetrics} onTransformCommit={() => window.dispatchEvent(new Event("vravio-transform-commit"))} onTransformCancel={() => window.dispatchEvent(new Event("vravio-transform-cancel"))} onChange={(id, value) => { if (!activeTool) return; store.setToolOption(activeTool.id, id, value); if (id === "color") { if (editingMaskLayerId && active) store.setMaskForegroundWhite(active.id, String(value).toLowerCase() !== "#000000"); else store.setForegroundColor(String(value)); } }} alignSelectionCount={active && isRasterDocumentState(active.state) ? (selectedLayerIds.length || 1) : 0} onAlign={(edge) => alignOrDistributeLayers("align", edge)} onDistribute={(edge) => alignOrDistributeLayers("distribute", edge)} />
+    <OptionsBar language={store.language} tool={activeTool} pixelsPerInch={active && isRasterDocumentState(active.state) ? active.state.resolution : undefined} values={activeTool ? { ...(store.toolOptions[activeTool.id] ?? {}), ...(activeTool.options.some((option) => option.id === "color") ? { color: effectiveForegroundColor } : {}) } : {}} transform={transformMetrics} onTransformCommit={() => window.dispatchEvent(new Event("vravio-transform-commit"))} onTransformCancel={() => window.dispatchEvent(new Event("vravio-transform-cancel"))} onChange={(id, value) => { if (!activeTool) return; store.setToolOption(activeTool.id, id, value); if (id === "color") { if (editingMaskLayerId && active) store.setMaskForegroundWhite(active.id, String(value).toLowerCase() !== "#000000"); else store.setForegroundColor(String(value)); } }} alignSelectionCount={active && isRasterDocumentState(active.state) ? (selectedLayerIds.length || 1) : 0} onAlign={(edge) => alignOrDistributeLayers("align", edge)} onDistribute={(edge) => alignOrDistributeLayers("distribute", edge)} smartGuides={store.preferences.smartGuides} snapToGrid={store.preferences.snapToGrid} onToggleSmartGuides={(smartGuides) => store.updatePreferences({ smartGuides })} onToggleSnapToGrid={(snapToGrid) => store.updatePreferences({ snapToGrid })} />
 
     <main className="workspace">
       {active ? <DockLayout /> : <WelcomeScreen language={store.language} requestNewDocument={store.requestNewDocument} />}
@@ -695,9 +695,41 @@ function AlignDistributeBar({ selectionCount, onAlign, onDistribute }: { selecti
   </div>;
 }
 
-function OptionsBar({ language, tool, values, transform, pixelsPerInch, onTransformCommit, onTransformCancel, onChange, alignSelectionCount, onAlign, onDistribute }: { language: Language; tool: ReturnType<typeof toolById>; values: Record<string, string | number | boolean>; transform: { active: boolean; x: number; y: number; width: number; height: number; rotation: number } | null; pixelsPerInch?: number | undefined; onTransformCommit(): void; onTransformCancel(): void; onChange(id: string, value: string | number | boolean): void; alignSelectionCount: number; onAlign(edge: AlignEdge): void; onDistribute(edge: AlignEdge): void }) {
+/**
+ * Quick on/off for the two independent snap questions
+ * (`ShellPreferences.smartGuides`/`snapToGrid` — the single source of truth
+ * `VectorWorkspace.tsx` already reads and `SettingsDialog.tsx` already
+ * exposes in full) shown right in the tool options bar, not just buried in
+ * Settings — the owner's own ask, after finding the snapping too
+ * aggressive, was "somewhere I can reach without opening a dialog."
+ *
+ * The icons are hand-drawn inline SVG rather than files under `icons/` —
+ * that directory is Illustrator-exported artwork the owner manages
+ * separately (see this session's own standing rule not to touch it), and
+ * two small glyphs don't warrant asking for new ones there.
+ */
+function SnapControls({ language, smartGuides, snapToGrid, onToggleSmartGuides, onToggleSnapToGrid }: { language: Language; smartGuides: boolean; snapToGrid: boolean; onToggleSmartGuides(value: boolean): void; onToggleSnapToGrid(value: boolean): void }) {
+  return <div className="snap-controls">
+    <button className={smartGuides ? "active" : ""} aria-pressed={smartGuides} title={text(language, "Snap to objects (Smart Guides)", "Привязка к объектам (быстрые направляющие)")} onClick={() => onToggleSmartGuides(!smartGuides)}>
+      <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+        <path d="M4 1h4v6.2a2 2 0 1 0 4 0V1h-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+        <path d="M4 1v6.2a4 4 0 0 0 8 0" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+        <rect x="3" y="0.5" width="2.4" height="3" fill="currentColor"/>
+        <rect x="10.6" y="0.5" width="2.4" height="3" fill="currentColor"/>
+      </svg>
+    </button>
+    <button className={snapToGrid ? "active" : ""} aria-pressed={snapToGrid} title={text(language, "Snap to grid", "Привязка к сетке")} onClick={() => onToggleSnapToGrid(!snapToGrid)}>
+      <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+        <rect x="1" y="1" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.3"/>
+        <path d="M6 1v14M10 1v14M1 6h14M1 10h14" stroke="currentColor" strokeWidth="1"/>
+      </svg>
+    </button>
+  </div>;
+}
+
+function OptionsBar({ language, tool, values, transform, pixelsPerInch, onTransformCommit, onTransformCancel, onChange, alignSelectionCount, onAlign, onDistribute, smartGuides, snapToGrid, onToggleSmartGuides, onToggleSnapToGrid }: { language: Language; tool: ReturnType<typeof toolById>; values: Record<string, string | number | boolean>; transform: { active: boolean; x: number; y: number; width: number; height: number; rotation: number } | null; pixelsPerInch?: number | undefined; onTransformCommit(): void; onTransformCancel(): void; onChange(id: string, value: string | number | boolean): void; alignSelectionCount: number; onAlign(edge: AlignEdge): void; onDistribute(edge: AlignEdge): void; smartGuides: boolean; snapToGrid: boolean; onToggleSmartGuides(value: boolean): void; onToggleSnapToGrid(value: boolean): void }) {
   if (transform?.active) return <div className="options-bar transform-options"><strong>Free Transform (Свободная трансформация)</strong><label>X:<input value={Math.round(transform.x)} readOnly/></label><label>Y:<input value={Math.round(transform.y)} readOnly/></label><label>W:<input value={Math.round(transform.width)} readOnly/></label><label>H:<input value={Math.round(transform.height)} readOnly/></label><label>∠:<input value={`${Math.round(transform.rotation * 10) / 10}°`} readOnly/></label><button title="Cancel (Отмена)" onClick={onTransformCancel}>×</button><button className="commit" title="Commit (Подтвердить)" onClick={onTransformCommit}>✓</button></div>;
-  return <div className="options-bar"><strong>{tool ? resolveLabel(tool.label, language) : text(language, "Tool options", "Параметры инструмента")}</strong>{tool ? tool.options.map((option) => <OptionRow key={option.id} language={language} option={option} pixelsPerInch={pixelsPerInch} value={values[option.id] ?? option.defaultValue} onChange={(value) => onChange(option.id, value)} />) : <span className="muted">{language === "ru" ? "Выберите или создайте документ" : "Select or create a document"}</span>}{tool?.id === "raster.move" && <AlignDistributeBar selectionCount={alignSelectionCount} onAlign={onAlign} onDistribute={onDistribute}/>}</div>;
+  return <div className="options-bar"><strong>{tool ? resolveLabel(tool.label, language) : text(language, "Tool options", "Параметры инструмента")}</strong>{tool ? tool.options.map((option) => <OptionRow key={option.id} language={language} option={option} pixelsPerInch={pixelsPerInch} value={values[option.id] ?? option.defaultValue} onChange={(value) => onChange(option.id, value)} />) : <span className="muted">{language === "ru" ? "Выберите или создайте документ" : "Select or create a document"}</span>}{tool?.id === "raster.move" && <AlignDistributeBar selectionCount={alignSelectionCount} onAlign={onAlign} onDistribute={onDistribute}/>}{tool?.kind === "vector" && <SnapControls language={language} smartGuides={smartGuides} snapToGrid={snapToGrid} onToggleSmartGuides={onToggleSmartGuides} onToggleSnapToGrid={onToggleSnapToGrid}/>}</div>;
 }
 
 
