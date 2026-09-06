@@ -17,6 +17,7 @@ const tools: Array<[LiquifyTool, string, string]> = [
 export function LiquifyDialog({ layer, onApply, onClose, language }: { layer: RasterLayer; onApply(pixels: Uint8ClampedArray, label: string): void; onClose(): void; language: Language }) {
   const maxEdge = 640, scale = Math.min(1, maxEdge / Math.max(layer.width, layer.height));
   const displayWidth = Math.max(1, Math.round(layer.width * scale)), displayHeight = Math.max(1, Math.round(layer.height * scale));
+  const minBrushSize = 5, maxBrushSize = Math.max(20, Math.max(layer.width, layer.height));
   const [tool, setTool] = useState<LiquifyTool>("warp");
   const [brushSize, setBrushSize] = useState(80);
   const [pressure, setPressure] = useState(50);
@@ -114,6 +115,34 @@ export function LiquifyDialog({ layer, onApply, onClose, language }: { layer: Ra
     holdTimerRef.current = null;
   };
   useEffect(() => stopHoldTimer, []);
+  // Photoshop's own bracket-key brush resize, ported here since Liquify has
+  // no toolbar-level brush and so never picked up whatever binds `[`/`]`
+  // for the ordinary Brush tool. Step is a percentage of the current size
+  // rather than a fixed pixel amount, matching Photoshop's own behaviour of
+  // coarser steps at larger sizes — a fixed step would be imperceptible on
+  // an 800px brush or too jumpy on a 6px one.
+  //
+  // Reads `event.code` (physical key position: "BracketLeft"/"BracketRight"),
+  // not `event.key` — the same choice `App.tsx`'s `physicalShortcutKey`
+  // already makes, for the same reason: `.key` depends on the active
+  // keyboard layout, and this app defaults to a Russian layout where the
+  // bracket keys' physical position doesn't produce `.key === "]"`. Found
+  // live: dispatching a synthetic event with `key: "]"` moved the size
+  // slider, but the real `computer`-tool "]" keypress on the running app
+  // did nothing at all until switched to `.code`.
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== "BracketLeft" && event.code !== "BracketRight") return;
+      event.preventDefault();
+      setBrushSize((current) => {
+        const step = Math.max(1, Math.round(current * 0.1));
+        const next = event.code === "BracketLeft" ? current - step : current + step;
+        return Math.min(maxBrushSize, Math.max(minBrushSize, next));
+      });
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [maxBrushSize]);
   const onPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
     const point = toLayerCoords(event);
@@ -156,7 +185,7 @@ export function LiquifyDialog({ layer, onApply, onClose, language }: { layer: Ra
           </div>
         </main>
         <aside className="liquify-settings">
-          <label>{text(language, "Brush size", "Размер кисти")}<input type="range" min={5} max={Math.max(20, Math.max(layer.width, layer.height))} value={brushSize} onChange={(event) => setBrushSize(event.target.valueAsNumber)}/><output>{brushSize}px</output></label>
+          <label>{text(language, "Brush size", "Размер кисти")}<input type="range" min={minBrushSize} max={maxBrushSize} value={brushSize} onChange={(event) => setBrushSize(event.target.valueAsNumber)}/><output>{brushSize}px</output></label>
           <label>{text(language, "Pressure", "Нажим")}<input type="range" min={1} max={100} value={pressure} onChange={(event) => setPressure(event.target.valueAsNumber)}/><output>{pressure}%</output></label>
           <label>{text(language, "Density", "Плотность")}<input type="range" min={1} max={100} value={density} onChange={(event) => setDensity(event.target.valueAsNumber)}/><output>{density}%</output></label>
           <label className="liquify-check"><input type="checkbox" checked={showFreezeMask} onChange={(event) => setShowFreezeMask(event.target.checked)}/>{text(language, "Show freeze mask", "Показывать маску заморозки")}</label>
