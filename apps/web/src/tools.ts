@@ -86,6 +86,11 @@ export const tools: readonly ToolDefinition[] = [
   // needed. No matching icons/ file, hence the hand-picked glyph.
   { id: "vector.shape-builder", kind: "vector", icon: "◐", label: { en: "Shape Builder Tool", ru: "Создание фигур" }, shortcut: "X", options: [] },
   { id: "vector.rectangle", kind: "vector", icon: "□", iconFile: "КВАДРАТ.svg", label: { en: "Rectangle Tool", ru: "Прямоугольник" }, shortcut: "R", options: [color, { id: "radius", label: { en: "Corner radius", ru: "Радиус углов" }, type: "number", min: 0, max: 1000, step: 1, defaultValue: 0, unit: "px" }] },
+  // Illustrator's own shortcut for the Line Segment Tool — a bare "\",
+  // no remap needed (unlike vector.curvature/vector.shape-builder, which
+  // had no single-bare-key precedent to match). No matching icons/ file,
+  // hence the hand-picked glyph, same reason vector.artboard has one.
+  { id: "vector.line", kind: "vector", icon: "╱", label: { en: "Line Tool", ru: "Линия" }, shortcut: "\\", options: [color, { id: "strokeWidth", label: { en: "Stroke", ru: "Обводка" }, type: "number", min: 0, max: 1000, step: 0.25, defaultValue: 2, unit: "px" }] },
   { id: "vector.ellipse", kind: "vector", icon: "○", iconFile: "ЭЛИПС.svg", label: { en: "Ellipse Tool", ru: "Эллипс" }, shortcut: "O", options: [color] },
   { id: "vector.text", kind: "vector", icon: "T", iconFile: "ТЕКСТ.svg", label: { en: "Type Tool", ru: "Текст" }, shortcut: "T", options: [color, { id: "fontSize", label: { en: "Font size", ru: "Размер шрифта" }, type: "number", min: 1, max: 1000, step: 1, defaultValue: 48, unit: "px" }] },
   // Same icon files as raster.hand/raster.zoom (shared icons/ directory —

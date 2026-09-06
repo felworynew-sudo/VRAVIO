@@ -3,6 +3,7 @@ import { addShape, closestPointOnPath, createShape, deletePointPreservingCurve, 
 import { cssToColor } from "@vravio/kernel";
 import type { VectorSnapshot } from "../../../../vector-commands";
 import { applyNodeMove, hitTestNode, type NodePart } from "./nodes";
+import { constrainVectorTo45Degrees } from "../angle-constrain";
 import type { ToolContext, ToolPointer, VectorToolDefinition } from "../types";
 
 /**
@@ -70,25 +71,8 @@ export interface PenState {
 
 const empty: PenState = { draft: null, handle: null, cursor: null, nodeEdit: null, coordinateInput: null };
 
-/** Rounds `angle` (radians) to the nearest multiple of 45° — `Shift`'s
- * constraint, both for a handle drag and for placing a new point, per
- * `docs/vector-plan.md`'s own spec for this gesture (45°, not the 15° some
- * other editors use — taken as given from that document, not re-derived
- * here). */
-function snapAngleTo45Degrees(angle: number): number {
-  const step = Math.PI / 4;
-  return Math.round(angle / step) * step;
-}
-
-/** Applies `Shift`'s 45°-angle constraint to a vector `(dx, dy)`, keeping
- * its length unchanged — used both for the handle drag and for a new
- * point's placement relative to the path's last point. */
-function constrainVectorTo45Degrees(dx: number, dy: number): { x: number; y: number } {
-  const length = Math.hypot(dx, dy);
-  if (length === 0) return { x: 0, y: 0 };
-  const angle = snapAngleTo45Degrees(Math.atan2(dy, dx));
-  return { x: Math.cos(angle) * length, y: Math.sin(angle) * length };
-}
+// `constrainVectorTo45Degrees` moved to `../angle-constrain` once
+// `vector.line` needed the exact same `Shift`-angle math.
 
 /** Commits the in-progress path as-is — a right-click "Finish Path", but also
  * what `onDeactivate` falls back to: losing an in-progress path silently by

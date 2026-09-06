@@ -176,8 +176,8 @@ describe("every tool in the vector catalogue keeps the contract", () => {
     expect(vectorTools.length).toBeGreaterThan(0);
   });
 
-  it("has all eleven tools from the plan's inventory (six, plus stage 15's Artboard tool, plus Hand/Zoom, plus Curvature, plus Shape Builder)", () => {
-    expect(new Set(vectorTools.map((tool) => tool.id))).toEqual(new Set(["vector.select", "vector.nodes", "vector.pen", "vector.rectangle", "vector.ellipse", "vector.text", "vector.artboard", "vector.hand", "vector.zoom", "vector.curvature", "vector.shape-builder"]));
+  it("has all twelve tools from the plan's inventory (six, plus stage 15's Artboard tool, plus Hand/Zoom, plus Curvature, plus Shape Builder, plus Line)", () => {
+    expect(new Set(vectorTools.map((tool) => tool.id))).toEqual(new Set(["vector.select", "vector.nodes", "vector.pen", "vector.rectangle", "vector.ellipse", "vector.text", "vector.artboard", "vector.hand", "vector.zoom", "vector.curvature", "vector.shape-builder", "vector.line"]));
   });
 
   for (const tool of vectorTools) {

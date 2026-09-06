@@ -103,6 +103,7 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "tool.raster.v|V|raster|Tools",
   "tool.raster.w|W|raster|Tools",
   "tool.raster.z|Z|raster|Tools",
+  "tool.vector.\\|\\|vector|Tools", // the Line tool (vector.line) — Illustrator's own bare "\" shortcut for the Line Segment Tool, no remap needed.
   "tool.vector.a|A|vector|Tools",
   "tool.vector.b|B|vector|Tools", // stage 15 of docs/vector-plan.md: the Artboard tool, added after this list's own stage-7 snapshot — a real new command, not a migration artifact, so it belongs here too.
   "tool.vector.c|C|vector|Tools", // the Curvature Tool (vector.curvature) — Illustrator's own Shift+~, remapped to a free single-letter shortcut this project's tool shortcuts all use.
