@@ -1,0 +1,18 @@
+[package]
+name = "vector-color"
+version = "0.0.1"
+edition = "2021"
+description = "Real ICC-based colour management (qcms) for VRAVIO's vector environment — Stage 14 of docs/vector-plan.md."
+license = "UNLICENSED"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+qcms = "0.3"
+
+[profile.release]
+opt-level = "s"
+lto = true
