@@ -73,6 +73,56 @@ describe("resolveSnapForBounds", () => {
     expect(result.dx).toBeCloseTo(-3, 9); // snapped to `near`'s right edge (160), not `far`
   });
 
+  it("a previously-locked line keeps winning a near-tie, instead of flip-flopping to a marginally closer one", () => {
+    const state = createVectorDocument();
+    const lineA = createShape("rectangle", 0, 0); // right edge at 160
+    const lineB = createShape("rectangle", 160.5, 0); // left edge at 160.5 — half a unit from A
+    addShape(state, lineA); addShape(state, lineB);
+
+    // width 1 keeps the center/right probes (160.8/161.3) far enough from
+    // both lines to stay irrelevant — only the left probe (160.3) matters,
+    // 0.3 from A and 0.2 from B. With no memory of a previous frame,
+    // whichever is a hair closer wins — here that's B, by 0.1.
+    const dragged = { x: 160.3, y: 20, width: 1, height: 1 };
+    const noMemory = resolveSnapForBounds(dragged, 5, snapSources, context({ shapes: state.shapes }));
+    expect(noMemory.lines.find((line) => line.axis === "x")?.value).toBe(160.5);
+
+    // Same exact position, but the caller says "last frame we were locked
+    // to A (160)" — A keeps its seat even though B is still nominally
+    // closer (0.2 < 0.3), because the gap between them (0.1) isn't the
+    // "real margin" (more than half of A's own distance) a challenger needs.
+    const previousLines = [{ axis: "x" as const, value: 160, kind: "bounds" }];
+    const withMemory = resolveSnapForBounds(dragged, 5, snapSources, context({ shapes: state.shapes }), previousLines);
+    expect(withMemory.lines.find((line) => line.axis === "x")?.value).toBe(160);
+  });
+
+  it("stickiness doesn't keep a line locked once a real, non-tied challenger is genuinely closer", () => {
+    const state = createVectorDocument();
+    const lineA = createShape("rectangle", 0, 0); // right edge at 160
+    const lineB = createShape("rectangle", 180, 0); // left edge at 180
+    addShape(state, lineA); addShape(state, lineB);
+
+    // 178 is 18 from A, 2 from B — B wins by a wide, real margin even
+    // though the previous frame was locked to A.
+    const dragged = { x: 178, y: 20, width: 20, height: 20 };
+    const previousLines = [{ axis: "x" as const, value: 160, kind: "bounds" }];
+    const result = resolveSnapForBounds(dragged, 20, snapSources, context({ shapes: state.shapes }), previousLines);
+    expect(result.lines.find((line) => line.axis === "x")?.value).toBe(180);
+  });
+
+  it("stickiness is non-vacuous: removing the previousLines argument changes the result back to the tie-breaking winner", () => {
+    const state = createVectorDocument();
+    const lineA = createShape("rectangle", 0, 0);
+    const lineB = createShape("rectangle", 160.5, 0);
+    addShape(state, lineA); addShape(state, lineB);
+    const dragged = { x: 160.3, y: 20, width: 1, height: 1 };
+    const previousLines = [{ axis: "x" as const, value: 160, kind: "bounds" }];
+
+    const sticky = resolveSnapForBounds(dragged, 5, snapSources, context({ shapes: state.shapes }), previousLines);
+    const nonSticky = resolveSnapForBounds(dragged, 5, snapSources, context({ shapes: state.shapes }));
+    expect(sticky.dx).not.toBe(nonSticky.dx);
+  });
+
   it("grid lines are collected only when gridSpacing is set, and snap independently of other shapes", () => {
     const withoutGrid = resolveSnapForBounds({ x: 48, y: 48, width: 10, height: 10 }, 5, snapSources, context());
     expect(withoutGrid).toEqual({ dx: 0, dy: 0, lines: [] });

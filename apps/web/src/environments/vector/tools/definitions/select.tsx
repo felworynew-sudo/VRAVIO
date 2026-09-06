@@ -78,10 +78,14 @@ const select: VectorToolDefinition<SelectState> = {
       const projectedBounds = { x: currentWorldBounds.x + worldDelta.x, y: currentWorldBounds.y + worldDelta.y, width: currentWorldBounds.width, height: currentWorldBounds.height };
 
       const excludeIds = new Set([shape.id, ...ancestorIds(shape, draft.shapes)]);
+      // `drag.snapLines` (this same drag's previous frame) makes the snap
+      // sticky — see resolveSnapForBounds's own doc comment for why a
+      // dragged shape otherwise visibly jumps between near-tied candidate
+      // lines on every tiny mouse movement.
       const snap = resolveSnapForBounds(projectedBounds, context.snapping.radius, context.snapping.sources, {
         shapes: draft.shapes, excludeIds, gridSpacing: context.snapping.gridSpacing,
         documentWidth: draft.width, documentHeight: draft.height,
-      });
+      }, context.state.snapLines);
       snapLines = snap.lines;
 
       const totalWorldDelta = { x: worldDelta.x + snap.dx, y: worldDelta.y + snap.dy };
