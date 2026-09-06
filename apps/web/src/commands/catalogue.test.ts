@@ -104,6 +104,7 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "tool.raster.w|W|raster|Tools",
   "tool.raster.z|Z|raster|Tools",
   "tool.vector.a|A|vector|Tools",
+  "tool.vector.b|B|vector|Tools", // stage 15 of docs/vector-plan.md: the Artboard tool, added after this list's own stage-7 snapshot — a real new command, not a migration artifact, so it belongs here too.
   "tool.vector.o|O|vector|Tools",
   "tool.vector.p|P|vector|Tools",
   "tool.vector.r|R|vector|Tools",

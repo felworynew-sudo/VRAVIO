@@ -75,6 +75,10 @@ export const tools: readonly ToolDefinition[] = [
   { id: "vector.rectangle", kind: "vector", icon: "□", iconFile: "КВАДРАТ.svg", label: { en: "Rectangle Tool", ru: "Прямоугольник" }, shortcut: "R", options: [color, { id: "radius", label: { en: "Corner radius", ru: "Радиус углов" }, type: "number", min: 0, max: 1000, step: 1, defaultValue: 0, unit: "px" }] },
   { id: "vector.ellipse", kind: "vector", icon: "○", iconFile: "ЭЛИПС.svg", label: { en: "Ellipse Tool", ru: "Эллипс" }, shortcut: "O", options: [color] },
   { id: "vector.text", kind: "vector", icon: "T", iconFile: "ТЕКСТ.svg", label: { en: "Type Tool", ru: "Текст" }, shortcut: "T", options: [color, { id: "fontSize", label: { en: "Font size", ru: "Размер шрифта" }, type: "number", min: 1, max: 1000, step: 1, defaultValue: 48, unit: "px" }] },
+  // No `iconFile` — a hand-picked Unicode glyph instead, the same way a
+  // tool without a matching file in icons/ (off-limits to add to; every
+  // existing file there is an uncommitted Illustrator export) gets one.
+  { id: "vector.artboard", kind: "vector", icon: "▭", label: { en: "Artboard Tool", ru: "Монтажная область" }, shortcut: "B", options: [{ id: "moveArtwork", label: { en: "Move/Copy Artwork with Artboard", ru: "Двигать артворк вместе с артбордом" }, type: "boolean", defaultValue: false }] },
 ];
 
 export const rasterToolGroups: readonly (readonly string[])[] = [

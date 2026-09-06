@@ -36,11 +36,11 @@ function v2Document(): unknown {
   };
 }
 
-describe("vector document v2 → v5 migration", () => {
+describe("vector document v2 → v6 migration", () => {
   it("accepts a v2 document as valid and upgrades it all the way to the current schemaVersion", () => {
     const raw = v2Document();
     expect(isVectorDocumentState(raw)).toBe(true);
-    expect((raw as VectorDocumentState).schemaVersion).toBe(5);
+    expect((raw as VectorDocumentState).schemaVersion).toBe(6);
   });
 
   it("turns the boolean artboards flag into an empty array, not a truthy/falsy re-encoding of it", () => {

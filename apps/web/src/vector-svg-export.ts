@@ -82,7 +82,17 @@ function walk(shapes: readonly VectorShape[], parentId: string | null, gradientD
 /** The whole document as a standalone `.svg` string — `width`/`height` on
  * the root, one `<defs>` for every gradient any shape resolved to, then the
  * shape tree in paint order. */
-export function exportVectorDocumentToSvg(state: VectorDocumentState): string {
+/**
+ * `crop`, when given, exports one artboard's own rectangle (stage 15 of
+ * docs/vector-plan.md's "export by artboard") instead of the whole
+ * document — the `viewBox` moves to the artboard's own (x, y) and every
+ * shape keeps its real document-space coordinates (nothing is
+ * re-parented or re-positioned), the same "crop the view, not the
+ * content" a camera crop is. Anything outside the artboard's rectangle
+ * simply falls outside the exported `viewBox` — SVG's own default clip,
+ * not code this function has to write itself.
+ */
+export function exportVectorDocumentToSvg(state: VectorDocumentState, crop?: { x: number; y: number; width: number; height: number }): string {
   const gradientDefs: GradientDef[] = [];
   const usedSymbolIds = new Set<string>();
   const body = walk(state.shapes, null, gradientDefs, usedSymbolIds);
@@ -103,5 +113,6 @@ export function exportVectorDocumentToSvg(state: VectorDocumentState): string {
   }
 
   const defs = gradientDefs.length || symbolDefs ? `<defs>${symbolDefs}${gradientDefs.map(gradientDefMarkup).join("")}</defs>` : "";
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${state.width}" height="${state.height}" viewBox="0 0 ${state.width} ${state.height}">${defs}${body}</svg>`;
+  const box = crop ?? { x: 0, y: 0, width: state.width, height: state.height };
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${box.width}" height="${box.height}" viewBox="${box.x} ${box.y} ${box.width} ${box.height}">${defs}${body}</svg>`;
 }

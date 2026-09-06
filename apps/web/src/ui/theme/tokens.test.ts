@@ -66,6 +66,7 @@ const ALLOWED: readonly { readonly match: string; readonly reason: string }[] = 
 
   { match: "raster-stage", reason: "transparency checkerboard: a fixed convention, not a theme colour" },
   { match: "vector-stage", reason: "transparency checkerboard" },
+  { match: "vector-artboard-page", reason: "a page is paper — always white, the same fixed convention as the transparency checkerboard, not a theme colour" },
   { match: "navigator-stage", reason: "transparency checkerboard" },
   { match: "export-preview", reason: "transparency checkerboard" },
   { match: "layer-thumb", reason: "transparency checkerboard" },

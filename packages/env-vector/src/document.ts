@@ -11,8 +11,8 @@ export interface VectorDocumentOptions {
 
 export function createVectorDocument(width = 1280, height = 720, options: VectorDocumentOptions = {}): VectorDocumentState {
   return {
-    kind: "vector", schemaVersion: 5, width, height,
-    artboards: [], resolution: options.resolution ?? 72, displayUnit: options.displayUnit ?? "px",
+    kind: "vector", schemaVersion: 6, width, height,
+    artboards: [], activeArtboardId: null, resolution: options.resolution ?? 72, displayUnit: options.displayUnit ?? "px",
     shapes: [], activeShapeId: null, selection: [],
   };
 }

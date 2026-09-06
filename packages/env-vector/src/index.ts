@@ -13,6 +13,7 @@ export * from "./units";
 export * from "./tree";
 export * from "./group-ops";
 export * from "./symbol-ops";
+export * from "./artboard-ops";
 export * from "./modifiers/types";
 export * from "./modifiers/base-path";
 export * from "./modifiers/apply";

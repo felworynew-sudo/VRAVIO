@@ -1,0 +1,116 @@
+import { invertMatrix, transformVector } from "./matrix";
+import { type TextMeasurer, type VectorBounds, shapeWorldBounds, translateShape } from "./shape-ops";
+import { siblingsOf, worldTransform } from "./tree";
+import type { Artboard, VectorDocumentState, VectorShape } from "./types";
+
+/**
+ * Stage 15 of docs/vector-plan.md: "the real problem is that Canvas itself
+ * doesn't exist" — `state.width`/`state.height` used to be both "the
+ * document's own default export size" and "the hard edge nothing can
+ * render past" (`VectorWorkspace.tsx`'s `<svg viewBox="0 0 width height">`
+ * clips there), so a second artboard placed anywhere else was invisible
+ * and unreachable rather than merely off past the *active* artboard, the
+ * way Illustrator's own canvas behaves.
+ *
+ * This file does not introduce a fixed "canvas size" — research into how
+ * Penpot (an open-source, browser-based, SVG-rendered editor — the same
+ * shape this codebase already is) handles this landed on the same answer:
+ * its own canvas is "practically infinite", sized by what the content and
+ * viewport actually need rather than a constant. `computeCanvasBounds`
+ * mirrors that in the cheapest way this document model supports: the
+ * union of the legacy default area, every artboard, and every top-level
+ * shape's own world bounds, padded by a real margin so panning past the
+ * edge of the nearest content doesn't immediately hit a wall. It is real,
+ * grows with the document, and is not "literally infinite" — the
+ * dedicated tile-cached renderer that would make a *literally* unbounded
+ * canvas cheap to pan around (Penpot's own answer for very large
+ * documents) is out of scope for this pass; see this stage's own honest
+ * gaps in docs/vector-plan.md.
+ */
+const CANVAS_MARGIN = 400;
+
+export function computeCanvasBounds(state: VectorDocumentState, measurer?: TextMeasurer): VectorBounds {
+  const boxes: VectorBounds[] = [{ x: 0, y: 0, width: state.width, height: state.height }, ...state.artboards];
+  for (const shape of siblingsOf(state.shapes, null)) boxes.push(shapeWorldBounds(shape, state.shapes, measurer));
+
+  const minX = Math.min(...boxes.map((box) => box.x)), minY = Math.min(...boxes.map((box) => box.y));
+  const maxX = Math.max(...boxes.map((box) => box.x + box.width)), maxY = Math.max(...boxes.map((box) => box.y + box.height));
+  return { x: minX - CANVAS_MARGIN, y: minY - CANVAS_MARGIN, width: maxX - minX + CANVAS_MARGIN * 2, height: maxY - minY + CANVAS_MARGIN * 2 };
+}
+
+let artboardCounter = 0;
+
+/** Places a new artboard and makes it the active one — the Artboard
+ * tool's own "drag out a new one" gesture, and the Artboards panel's own
+ * "add" action, both funnel through this. */
+export function createArtboardAt(state: VectorDocumentState, x: number, y: number, width: number, height: number, name?: string): Artboard {
+  artboardCounter += 1;
+  const artboard: Artboard = { id: `artboard-${artboardCounter}`, name: name ?? `Artboard (Монтажная область) ${state.artboards.length + 1}`, x, y, width, height };
+  state.artboards.push(artboard);
+  state.activeArtboardId = artboard.id;
+  return artboard;
+}
+
+export function duplicateArtboard(state: VectorDocumentState, id: string): Artboard | null {
+  const source = state.artboards.find((artboard) => artboard.id === id);
+  if (!source) return null;
+  // Offset so the copy doesn't sit exactly on top of the original,
+  // unreachable underneath it — same "obviously a copy, not a ghost"
+  // convention `duplicateShape` already uses.
+  return createArtboardAt(state, source.x + 40, source.y + 40, source.width, source.height, `${source.name} copy (копия)`);
+}
+
+/** Removes the artboard's own rectangle — never the artwork sitting under
+ * it, which is the entire point of an artboard being metadata rather than
+ * a container (types.ts's own doc comment on `Artboard`). */
+export function deleteArtboard(state: VectorDocumentState, id: string): void {
+  state.artboards = state.artboards.filter((artboard) => artboard.id !== id);
+  if (state.activeArtboardId === id) state.activeArtboardId = null;
+}
+
+export function renameArtboard(state: VectorDocumentState, id: string, name: string): void {
+  const artboard = state.artboards.find((item) => item.id === id);
+  if (artboard) artboard.name = name;
+}
+
+/**
+ * Moves an artboard's own rectangle by `(dx, dy)` and, when
+ * `moveArtwork` is true, every top-level shape that spatially intersected
+ * it *before* the move — "Move Artwork with Artboard" (docs/vector-plan.md
+ * stage 15). Without the flag, the artboard's rectangle moves alone and
+ * every object stays exactly where it was, the ordinary case for a
+ * metadata rectangle that owns nothing.
+ *
+ * Each shape's own document-space delta is converted into its local space
+ * before calling `translateShape` (which only ever moves "in local
+ * space") — for the overwhelming common case, a top-level shape with an
+ * identity transform, local space already *is* document space and this is
+ * a no-op conversion; for one that has been rotated as a unit, it is not,
+ * the same reasoning `select.tsx`'s own drag handler already applies.
+ */
+export function moveArtboard(state: VectorDocumentState, id: string, dx: number, dy: number, moveArtwork: boolean, before?: readonly VectorShape[]): void {
+  const artboard = state.artboards.find((item) => item.id === id);
+  if (!artboard) return;
+  const movers = moveArtwork ? (before ?? shapesIntersectingRect(state, artboard)) : [];
+  artboard.x += dx;
+  artboard.y += dy;
+  for (const shape of movers) {
+    const live = state.shapes.find((item) => item.id === shape.id);
+    if (!live) continue;
+    const inverse = invertMatrix(worldTransform(live, state.shapes));
+    const local = inverse ? transformVector(inverse, { x: dx, y: dy }) : { x: dx, y: dy };
+    translateShape(state, live.id, local.x, local.y);
+  }
+}
+
+/** Every top-level shape whose world bounds intersect `rect` — what "Move
+ * Artwork with Artboard" moves along with the artboard, computed fresh at
+ * the *start* of a drag (a caller re-computing this mid-drag would instead
+ * pick up shapes the artboard has since moved onto, which is not what the
+ * option means). Only top-level shapes: a shape nested in a group moves
+ * with its group regardless, the same as every other multi-select move in
+ * this codebase. */
+export function shapesIntersectingRect(state: VectorDocumentState, rect: VectorBounds, measurer?: TextMeasurer): VectorShape[] {
+  const intersects = (box: VectorBounds) => box.x < rect.x + rect.width && box.x + box.width > rect.x && box.y < rect.y + rect.height && box.y + box.height > rect.y;
+  return siblingsOf(state.shapes, null).filter((shape) => intersects(shapeWorldBounds(shape, state.shapes, measurer)));
+}

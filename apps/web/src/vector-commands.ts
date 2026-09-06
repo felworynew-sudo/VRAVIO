@@ -1,10 +1,23 @@
-import { createSymbolFromShapes, detachInstance, duplicateShape, groupShapes, moveShapeInStack, placeSymbolInstance, redefineSymbolFromShapes, removeShapes, ungroupShapes, type VectorDocumentState, type VectorShape, type ZOrderMove } from "@vravio/env-vector";
+import { createSymbolFromShapes, detachInstance, duplicateShape, groupShapes, moveShapeInStack, placeSymbolInstance, redefineSymbolFromShapes, removeShapes, ungroupShapes, type Artboard, type VectorDocumentState, type VectorShape, type ZOrderMove } from "@vravio/env-vector";
 import { kernel } from "./kernel";
 
-export interface VectorSnapshot { shapes: VectorShape[]; activeShapeId: string | null; selection: readonly string[] }
+/**
+ * `artboards`/`activeArtboardId` joined this snapshot in stage 15 of
+ * docs/vector-plan.md — before that, undo/redo and `changeVectorDocument`'s
+ * own before/after diff only ever needed `shapes`/`activeShapeId`/
+ * `selection`, and every artboard command (create, move, duplicate,
+ * delete, rename) silently no-opped through here: `changeVectorDocument`
+ * built its own `after` from `working.shapes`/`activeShapeId`/`selection`
+ * alone, so a mutate callback that only touched `working.artboards` (every
+ * one of `artboard-ops.ts`'s own functions) had its entire effect thrown
+ * away the moment `assign` wrote back a snapshot that never mentioned
+ * artboards at all — caught live, not in a test: the Artboards panel's own
+ * delete button visibly did nothing.
+ */
+export interface VectorSnapshot { shapes: VectorShape[]; activeShapeId: string | null; selection: readonly string[]; artboards: Artboard[]; activeArtboardId: string | null }
 
 export function snapshotVector(state: VectorDocumentState): VectorSnapshot {
-  return { shapes: structuredClone(state.shapes), activeShapeId: state.activeShapeId, selection: state.selection };
+  return { shapes: structuredClone(state.shapes), activeShapeId: state.activeShapeId, selection: state.selection, artboards: structuredClone(state.artboards), activeArtboardId: state.activeArtboardId };
 }
 
 function assignVectorSnapshot(documentId: string, snapshot: VectorSnapshot): void {
@@ -12,6 +25,8 @@ function assignVectorSnapshot(documentId: string, snapshot: VectorSnapshot): voi
     state.shapes = structuredClone(snapshot.shapes);
     state.activeShapeId = snapshot.activeShapeId;
     state.selection = snapshot.selection;
+    state.artboards = structuredClone(snapshot.artboards);
+    state.activeArtboardId = snapshot.activeArtboardId;
   });
 }
 
@@ -43,18 +58,12 @@ export async function changeVectorDocument(documentId: string, label: string, mu
   const history = kernel.historyByDocument.get(documentId);
   if (!document || !history) return;
 
-  const before = { shapes: structuredClone(document.state.shapes), activeShapeId: document.state.activeShapeId, selection: document.state.selection };
-  const working: VectorDocumentState = { ...document.state, shapes: structuredClone(document.state.shapes) };
+  const before = snapshotVector(document.state);
+  const working: VectorDocumentState = { ...document.state, shapes: structuredClone(document.state.shapes), artboards: structuredClone(document.state.artboards) };
   if (!mutate(working)) return;
-  const after = { shapes: working.shapes, activeShapeId: working.activeShapeId, selection: working.selection };
+  const after: VectorSnapshot = { shapes: working.shapes, activeShapeId: working.activeShapeId, selection: working.selection, artboards: working.artboards, activeArtboardId: working.activeArtboardId };
 
-  const assign = (snapshot: typeof before): void => {
-    kernel.documents.update<VectorDocumentState>(documentId, (state) => {
-      state.shapes = structuredClone(snapshot.shapes);
-      state.activeShapeId = snapshot.activeShapeId;
-      state.selection = snapshot.selection;
-    });
-  };
+  const assign = (snapshot: VectorSnapshot): void => assignVectorSnapshot(documentId, snapshot);
   await history.execute({ label, memoryEstimate: 0, redo: () => assign(after), undo: () => assign(before) });
 }
 

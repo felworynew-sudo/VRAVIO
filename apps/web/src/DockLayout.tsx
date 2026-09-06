@@ -19,9 +19,10 @@ import { rasterAdjustmentById, rasterAdjustments } from "./raster-adjustments/re
 import { environmentsWithWindows, windowById, windowsFor } from "./windows/registry";
 import { windowTitle } from "./windows/types";
 import { PANEL_REQUEST_EVENT, persistVisiblePanelIds, readVisiblePanelIds, type PanelVisibilityDetail } from "./windows/runtime";
-import { isVectorDocumentState, listSymbols, shapeBounds, updateShape, vectorShapeRows, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { deleteArtboard, duplicateArtboard, isVectorDocumentState, listSymbols, renameArtboard, shapeBounds, updateShape, vectorShapeRows, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
 import { vectorTextMeasurer } from "./vector-text-metrics";
 import { changeVectorDocument, createSymbolFromActiveSelection, deleteActiveVectorShapes, detachActiveVectorInstance, duplicateActiveVectorShape, groupActiveVectorShapes, placeVectorSymbolInstance, redefineSymbolFromActiveSelection, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
+import { exportVectorDocumentToSvg } from "./vector-svg-export";
 import { useContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { luminanceHistogram } from "./raster-adjustments/histogram";
 import { changeRasterDocument } from "./commands";
@@ -638,6 +639,52 @@ function SymbolsPanel() {
   </div>;
 }
 
+/**
+ * Stage 15 of docs/vector-plan.md: the Artboards panel — parallel to the
+ * Layers panel, not a replacement for it (an artboard is metadata about
+ * the canvas, never a container a shape lives inside). "Fit" both makes
+ * the row's artboard active and switches the viewport to "fit" mode,
+ * which `VectorWorkspace.tsx`'s own fit effect then centres on whichever
+ * artboard just became active — the panel does not compute pan/zoom
+ * itself. Rename is a plain `window.prompt` — real and undoable, not
+ * a polished inline text field; that refinement is left for later.
+ */
+function ArtboardsPanel() {
+  const documents = useDocuments();
+  const activeDocumentId = useShellStore((state) => state.activeDocumentId);
+  const language = useShellStore((state) => state.language);
+  const setViewport = useShellStore((state) => state.setViewport);
+  const active = documents.find((document) => document.id === activeDocumentId);
+  if (!active || !isVectorDocumentState(active.state)) return <div className="dock-panel-body"><div className="empty-row">{text(language, "Open a vector document to use artboards.", "Откройте векторный документ, чтобы работать с монтажными областями.")}</div></div>;
+
+  const state = active.state;
+  const fit = (id: string) => {
+    kernel.documents.update<VectorDocumentState>(active.id, (current) => { current.activeArtboardId = id; });
+    setViewport(active.id, { mode: "fit" });
+  };
+  const exportArtboard = (artboard: { name: string; x: number; y: number; width: number; height: number }) => {
+    const svg = exportVectorDocumentToSvg(state, artboard);
+    const name = `${artboard.name.replace(/\s*\([^()]*\)\s*$/, "").trim() || "artboard"}.svg`;
+    void kernel.platform.fs.saveFile({ name, mime: "image/svg+xml", data: new Blob([svg], { type: "image/svg+xml" }) });
+  };
+
+  return <div className="dock-panel-body">
+    {state.artboards.length === 0
+      ? <div className="empty-row">{text(language, "No artboards yet — the document itself is the canvas.", "Монтажных областей пока нет — холст пока сам является документом.")}</div>
+      : <div className="layer-list">
+        {state.artboards.map((artboard) => <div className="artboard-row" key={artboard.id}>
+          <button className={artboard.id === state.activeArtboardId ? "active" : ""} onClick={() => fit(artboard.id)} title={text(language, "Fit in window", "Уместить в окне")}>
+            <span>{artboard.name}</span>
+          </button>
+          <button onClick={() => void changeVectorDocument(active.id, "Rename Artboard (Переименовать монтажную область)", (draft) => { const name = window.prompt(text(language, "Artboard name", "Название монтажной области"), artboard.name); if (!name?.trim()) return false; renameArtboard(draft, artboard.id, name.trim()); return true; })} title={text(language, "Rename", "Переименовать")}>✎</button>
+          <button onClick={() => exportArtboard(artboard)} title={text(language, "Export this artboard as SVG", "Экспортировать эту область как SVG")}>⇩</button>
+          <button onClick={() => void changeVectorDocument(active.id, "Duplicate Artboard (Дублировать монтажную область)", (draft) => Boolean(duplicateArtboard(draft, artboard.id)))} title={text(language, "Duplicate", "Дублировать")}>⧉</button>
+          <button onClick={() => void changeVectorDocument(active.id, "Delete Artboard (Удалить монтажную область)", (draft) => { deleteArtboard(draft, artboard.id); return true; })} title={text(language, "Delete (keeps the artwork)", "Удалить (артворк останется)")}>✕</button>
+        </div>)}
+      </div>}
+  </div>;
+}
+
 const components = {
   viewport: ViewportPanel,
   inspector: InspectorPanel,
@@ -649,6 +696,7 @@ const components = {
   navigator: NavigatorPanel,
   scripts: ScriptsPanel,
   symbols: SymbolsPanel,
+  artboards: ArtboardsPanel,
 };
 
 /**

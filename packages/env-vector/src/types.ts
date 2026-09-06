@@ -127,10 +127,19 @@ export interface Artboard {
 
 export interface VectorDocumentState {
   readonly kind: "vector";
-  readonly schemaVersion: 5;
+  readonly schemaVersion: 6;
   width: number;
   height: number;
   artboards: Artboard[];
+  /**
+   * Stage 15 of docs/vector-plan.md: which artboard "fit in window",
+   * artboard-scoped rulers/guides and per-artboard export act on — `null`
+   * when there are none, or none is current (deleting the active one, for
+   * instance). Not a form of ownership: a shape's relationship to an
+   * artboard is still purely spatial (`artboardsIntersecting`,
+   * `artboard-ops.ts`), never a stored reference on the shape itself.
+   */
+  activeArtboardId: string | null;
   /** Pixels per inch — the one number `units.ts`'s conversions need to make
    * `10мм` and `500px` both mean something on this document. */
   resolution: number;
@@ -170,15 +179,21 @@ export interface VectorDocumentState {
  *   stack if it doesn't already have one — an empty stack behaves exactly
  *   like no stack at all (`applyModifierStack` just returns the base path
  *   unchanged), so this step is purely additive.
+ * - v5 → v6 (stage 15): `activeArtboardId` defaults to `null` — every v5
+ *   document already behaved as if it had none (there was no canvas for a
+ *   second artboard to be reachable on at all), so `null` reproduces that
+ *   exactly rather than guessing at `artboards[0]?.id`.
  */
 export function migrateVectorDocumentState(state: VectorDocumentState): VectorDocumentState {
   const candidate = state as unknown as {
     artboards?: unknown;
+    activeArtboardId?: string | null;
     resolution?: number;
     displayUnit?: LengthUnit;
     shapes: Array<Record<string, unknown>>;
   };
   if (typeof candidate.artboards === "boolean" || candidate.artboards === undefined) candidate.artboards = [];
+  candidate.activeArtboardId ??= null;
   candidate.resolution ??= 72;
   candidate.displayUnit ??= "px";
 
@@ -213,7 +228,7 @@ export function migrateVectorDocumentState(state: VectorDocumentState): VectorDo
     }
   });
 
-  (state as { schemaVersion: number }).schemaVersion = 5;
+  (state as { schemaVersion: number }).schemaVersion = 6;
   return state;
 }
 
@@ -245,7 +260,7 @@ export function isVectorDocumentState(value: unknown): value is VectorDocumentSt
   if (!value || typeof value !== "object") return false;
   const state = value as { kind?: unknown; shapes?: unknown; schemaVersion?: unknown };
   if (state.kind !== "vector" || !Array.isArray(state.shapes)) return false;
-  if (![2, 3, 4, 5].includes(state.schemaVersion as number)) return false;
+  if (![2, 3, 4, 5, 6].includes(state.schemaVersion as number)) return false;
   migrateVectorDocumentState(value as VectorDocumentState);
   return true;
 }

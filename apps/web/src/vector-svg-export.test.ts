@@ -11,6 +11,24 @@ describe("exportVectorDocumentToSvg", () => {
     expect(svg).toContain('height="300"');
   });
 
+  it("stage 15: a crop exports one artboard's own rectangle, viewBox origin included", () => {
+    const state = createVectorDocument(400, 300);
+    const rect = createShape("rectangle", 700, 700, { ...emptyVectorStyle(), fills: [solidFill(srgb(10, 20, 30))] });
+    const outside = createShape("rectangle", 5000, 5000, { ...emptyVectorStyle(), fills: [solidFill(srgb(200, 0, 0))] });
+    state.shapes.push(rect, outside);
+
+    const svg = exportVectorDocumentToSvg(state, { x: 600, y: 600, width: 200, height: 200 });
+
+    expect(svg).toContain('width="200"');
+    expect(svg).toContain('height="200"');
+    expect(svg).toContain('viewBox="600 600 200 200"');
+    // The shape sitting inside the crop is still written (real document
+    // coordinates, not re-based to the crop's own origin) — SVG's own
+    // viewBox does the clipping, this function does not filter shapes out.
+    expect(svg).toContain("rgba(10, 20, 30, 1)");
+    expect(svg).toContain("rgba(200, 0, 0, 1)");
+  });
+
   it("a filled rectangle becomes a <rect> with the resolved fill colour", () => {
     const state = createVectorDocument(200, 200);
     const rect = createShape("rectangle", 10, 10, { ...emptyVectorStyle(), fills: [solidFill(srgb(255, 0, 0))] });

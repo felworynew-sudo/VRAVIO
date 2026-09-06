@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { addShape, buildShapeSpatialIndex, createImageShape, isIdentityMatrix, isVectorDocumentState, matrixToCss, pathData, removeShapes, resolveAppearance, shapeAtIndexed, shapesInRect, shapeWorldBoundsIndexed, siblingsOf, snapSources, type GradientDef, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { addShape, buildShapeSpatialIndex, computeCanvasBounds, createImageShape, isIdentityMatrix, isVectorDocumentState, matrixToCss, pathData, removeShapes, resolveAppearance, shapeAtIndexed, shapesInRect, shapeWorldBoundsIndexed, siblingsOf, snapSources, type GradientDef, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
 import { RASTER_ASSET_MIME, decodeRasterAsset, encodeRasterAsset } from "@vravio/env-raster";
 import { colorToCss } from "@vravio/kernel";
 import type { AssetId, VravioDocument } from "@vravio/kernel";
@@ -45,13 +45,24 @@ function clampZoom(zoom: number): number {
   return Math.max(0.01, Math.min(64, zoom));
 }
 
-/** Screen-space pointer coordinates into document space, undoing the stage's pan/zoom/rotate transform — the same math RasterWorkspace uses for its own canvas. */
-function toDocumentPoint(event: { clientX: number; clientY: number }, workspace: HTMLElement, viewport: { panX: number; panY: number; zoom: number; rotation: number }, width: number, height: number) {
+/**
+ * Screen-space pointer coordinates into document space, undoing the
+ * stage's pan/zoom/rotate transform — the same math RasterWorkspace uses
+ * for its own canvas. `stageBounds` is the document-space rectangle the
+ * scaled stage's own CSS box currently represents (stage 15's canvas
+ * bounds, `computeCanvasBounds` — not necessarily `state.width`/`height`
+ * or an origin at (0,0) any more, now that a second artboard can sit
+ * anywhere on a canvas larger than the document's own default area); the
+ * stage's own visual *centre* (what the existing `translate(-50%,-50%)`
+ * actually centres) is `stageBounds`'s centre, which is what this needs
+ * instead of assuming document space starts at the stage's own origin.
+ */
+function toDocumentPoint(event: { clientX: number; clientY: number }, workspace: HTMLElement, viewport: { panX: number; panY: number; zoom: number; rotation: number }, stageBounds: { x: number; y: number; width: number; height: number }) {
   const rect = workspace.getBoundingClientRect();
   const dx = event.clientX - rect.left - rect.width / 2 - viewport.panX;
   const dy = event.clientY - rect.top - rect.height / 2 - viewport.panY;
   const radians = -viewport.rotation * Math.PI / 180, cosine = Math.cos(radians), sine = Math.sin(radians);
-  return { x: (cosine * dx - sine * dy) / viewport.zoom + width / 2, y: (sine * dx + cosine * dy) / viewport.zoom + height / 2 };
+  return { x: (cosine * dx - sine * dy) / viewport.zoom + stageBounds.x + stageBounds.width / 2, y: (sine * dx + cosine * dy) / viewport.zoom + stageBounds.y + stageBounds.height / 2 };
 }
 
 /**
@@ -70,12 +81,12 @@ function toDocumentPoint(event: { clientX: number; clientY: number }, workspace:
  * shape does not visibly pop in only after it has already scrolled inside
  * the frame.
  */
-function visibleDocumentRect(workspaceSize: { width: number; height: number }, viewport: { panX: number; panY: number; zoom: number; rotation: number }, width: number, height: number) {
+function visibleDocumentRect(workspaceSize: { width: number; height: number }, viewport: { panX: number; panY: number; zoom: number; rotation: number }, stageBounds: { x: number; y: number; width: number; height: number }) {
   const radians = -viewport.rotation * Math.PI / 180, cosine = Math.cos(radians), sine = Math.sin(radians);
   const toDoc = (localX: number, localY: number) => {
     const dx = localX - workspaceSize.width / 2 - viewport.panX;
     const dy = localY - workspaceSize.height / 2 - viewport.panY;
-    return { x: (cosine * dx - sine * dy) / viewport.zoom + width / 2, y: (sine * dx + cosine * dy) / viewport.zoom + height / 2 };
+    return { x: (cosine * dx - sine * dy) / viewport.zoom + stageBounds.x + stageBounds.width / 2, y: (sine * dx + cosine * dy) / viewport.zoom + stageBounds.y + stageBounds.height / 2 };
   };
   const marginX = workspaceSize.width, marginY = workspaceSize.height;
   const corners = [toDoc(-marginX, -marginY), toDoc(workspaceSize.width + marginX, -marginY), toDoc(-marginX, workspaceSize.height + marginY), toDoc(workspaceSize.width + marginX, workspaceSize.height + marginY)];
@@ -263,6 +274,15 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   // performance.bench.test.ts) is paid once per edit, not once per query.
   const spatialIndex = useMemo(() => buildShapeSpatialIndex(state.shapes, vectorTextMeasurer), [document.revision]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Stage 15: the document-space rectangle the stage's own scaled CSS box
+  // now represents — real canvas bounds (content + a margin), not
+  // `state.width`/`state.height`, which used to also be the hard edge
+  // nothing could render past (`docs/vector-plan.md`'s own stage 15 write-
+  // up). Same revision-keyed memoisation as the spatial index, for the
+  // same reason: this walks every shape's world bounds once, not once per
+  // render.
+  const canvasBounds = useMemo(() => computeCanvasBounds(state, vectorTextMeasurer), [document.revision]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Stage 9: every shape with a non-empty geometry modifier stack, resolved
   // async (offset/simplify/boolean go through WASM) and cached by revision
   // — see vector-modifiers.ts's own doc comment.
@@ -318,15 +338,29 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
     if (!workspace || viewport.mode !== "fit") return;
     const fit = () => {
       const rect = workspace.getBoundingClientRect();
-      const zoom = clampZoom(Math.min(Math.max(1, rect.width - 80) / state.width, Math.max(1, rect.height - 80) / state.height));
+      // Stage 15: "fit" shows the active artboard (Illustrator's own
+      // default), or the first one if none is active, or the document's
+      // legacy default area for a document with no artboards at all —
+      // never the raw canvas bounds, which include a margin and every
+      // artboard and would otherwise zoom out further than any single
+      // page a user actually wants to see filling the window.
+      const fitTarget = state.artboards.find((artboard) => artboard.id === state.activeArtboardId) ?? state.artboards[0] ?? { x: 0, y: 0, width: state.width, height: state.height };
+      const zoom = clampZoom(Math.min(Math.max(1, rect.width - 80) / fitTarget.width, Math.max(1, rect.height - 80) / fitTarget.height));
+      // `panX`/`panY` centre the stage's own box (the full canvas bounds)
+      // on the workspace by default — an extra screen-pixel offset re-centres
+      // on the fit target instead, since it is not generally the canvas
+      // bounds' own centre once a second artboard or off-canvas shape exists.
+      const targetCenterX = fitTarget.x + fitTarget.width / 2, targetCenterY = fitTarget.y + fitTarget.height / 2;
+      const canvasCenterX = canvasBounds.x + canvasBounds.width / 2, canvasCenterY = canvasBounds.y + canvasBounds.height / 2;
+      const panX = -(targetCenterX - canvasCenterX) * zoom, panY = -(targetCenterY - canvasCenterY) * zoom;
       const current = useShellStore.getState().viewports[document.id] ?? defaultViewport;
-      if (Math.abs(current.zoom - zoom) > 0.0001 || current.panX !== 0 || current.panY !== 0) setViewport(document.id, { zoom, panX: 0, panY: 0 });
+      if (Math.abs(current.zoom - zoom) > 0.0001 || Math.abs(current.panX - panX) > 0.0001 || Math.abs(current.panY - panY) > 0.0001) setViewport(document.id, { zoom, panX, panY });
     };
     fit();
     const observer = new ResizeObserver(fit);
     observer.observe(workspace);
     return () => observer.disconnect();
-  }, [document.id, setViewport, state.width, state.height, viewport.mode]);
+  }, [document.id, setViewport, state.width, state.height, state.artboards, state.activeArtboardId, canvasBounds, viewport.mode]);
 
   const catalogueTool = activeToolId ? vectorToolById.get(activeToolId) : undefined;
 
@@ -397,21 +431,21 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   const onPointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (event.button !== 0 || !catalogueTool) return; // right-click opens the context menu instead, left-click only draws
     const workspace = workspaceRef.current; if (!workspace) return;
-    const point = toDocumentPoint(event, workspace, viewport, state.width, state.height);
+    const point = toDocumentPoint(event, workspace, viewport, canvasBounds);
     catalogueTool.onPointerDown?.(toolContextFor(catalogueTool.id), toolPointerFrom(event, point));
   };
 
   const onPointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (!catalogueTool) return;
     const workspace = workspaceRef.current; if (!workspace) return;
-    const point = toDocumentPoint(event, workspace, viewport, state.width, state.height);
+    const point = toDocumentPoint(event, workspace, viewport, canvasBounds);
     catalogueTool.onPointerMove?.(toolContextFor(catalogueTool.id), toolPointerFrom(event, point));
   };
 
   const onPointerUp = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (!catalogueTool) return;
     const workspace = workspaceRef.current; if (!workspace) return;
-    const point = toDocumentPoint(event, workspace, viewport, state.width, state.height);
+    const point = toDocumentPoint(event, workspace, viewport, canvasBounds);
     catalogueTool.onGestureEnd?.(toolContextFor(catalogueTool.id), toolPointerFrom(event, point));
   };
 
@@ -434,7 +468,7 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
       return;
     }
     const workspace = workspaceRef.current;
-    const point = workspace ? toDocumentPoint(event, workspace, viewport, state.width, state.height) : null;
+    const point = workspace ? toDocumentPoint(event, workspace, viewport, canvasBounds) : null;
     const hit = point ? shapeAtIndexed(spatialIndex, state.shapes, point.x, point.y, vectorTextMeasurer) : null;
     if (hit?.kind === "image") {
       kernel.documents.update<VectorDocumentState>(document.id, (draftState) => { draftState.activeShapeId = hit.id; draftState.selection = [hit.id]; });
@@ -456,7 +490,12 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   // ancestor chain once this revision; a second walk here would just repeat
   // that work every render.
   const bounds = active ? (shapeWorldBoundsIndexed(spatialIndex, active.id) ?? null) : null;
-  const stageStyle = { width: state.width, height: state.height, transform: `translate(-50%, -50%) translate(${viewport.panX}px, ${viewport.panY}px) rotate(${viewport.rotation}deg) scale(${viewport.zoom})` } as CSSProperties;
+  // Stage 15: the stage's own CSS box now spans the canvas bounds, not
+  // `state.width`/`height` — the `<svg>`'s `viewBox` (below) carries
+  // `canvasBounds`'s own (x, y) origin, so this box's local coordinate
+  // system still starts at (0, 0) regardless of where that origin sits in
+  // document space.
+  const stageStyle = { width: canvasBounds.width, height: canvasBounds.height, transform: `translate(-50%, -50%) translate(${viewport.panX}px, ${viewport.panY}px) rotate(${viewport.rotation}deg) scale(${viewport.zoom})` } as CSSProperties;
 
   // Stage 12 (docs/vector-plan.md): skip rendering leaf shapes definitely
   // outside the current view. `workspaceSize` is only known after the
@@ -466,7 +505,7 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   // against a bogus zero-size rect and hiding the whole document for a
   // frame.
   const visibleIds = workspaceSize.width > 0 && workspaceSize.height > 0
-    ? new Set(shapesInRect(spatialIndex, state.shapes, visibleDocumentRect(workspaceSize, viewport, state.width, state.height)).map((shape) => shape.id))
+    ? new Set(shapesInRect(spatialIndex, state.shapes, visibleDocumentRect(workspaceSize, viewport, canvasBounds)).map((shape) => shape.id))
     : undefined;
 
   const handleWheel = (event: React.WheelEvent) => {
@@ -505,13 +544,26 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
     const files = [...(event.dataTransfer?.files ?? [])].filter((file) => file.type.startsWith("image/"));
     if (!files.length) return;
     const workspace = workspaceRef.current; if (!workspace) return;
-    const dropPoint = toDocumentPoint(event, workspace, viewport, state.width, state.height);
+    const dropPoint = toDocumentPoint(event, workspace, viewport, canvasBounds);
     files.forEach((file, index) => void importImageFile(file, { x: dropPoint.x + index * 32, y: dropPoint.y + index * 32 }));
   };
 
+  // Stage 15: the page(s) actually drawn as white rectangles on the canvas
+  // — real artboards when the document has any, or one implicit default
+  // page at (0,0,width,height) for a document with none at all, so a
+  // plain single-page document still looks exactly as it always did
+  // rather than showing a bare grey canvas with nothing on it.
+  const pages = state.artboards.length > 0 ? state.artboards : [{ id: "__default__", name: "", x: 0, y: 0, width: state.width, height: state.height }];
+  const labelSize = 12 / viewport.zoom;
+
   return <div ref={workspaceRef} className="vector-workspace" data-active-tool={activeToolId} onWheel={handleWheel} onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
     <div className="vector-stage" style={stageStyle}>
-      <svg width={state.width} height={state.height} viewBox={`0 0 ${state.width} ${state.height}`} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerUp} onContextMenu={onCanvasContextMenu}>
+      <svg width={canvasBounds.width} height={canvasBounds.height} viewBox={`${canvasBounds.x} ${canvasBounds.y} ${canvasBounds.width} ${canvasBounds.height}`} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerUp} onContextMenu={onCanvasContextMenu}>
+        {pages.map((page) => <g key={page.id}>
+          <rect className="vector-artboard-page" x={page.x} y={page.y} width={page.width} height={page.height}/>
+          <rect className={page.id === state.activeArtboardId ? "vector-artboard-outline active" : "vector-artboard-outline"} x={page.x} y={page.y} width={page.width} height={page.height} strokeWidth={(page.id === state.activeArtboardId ? 1.5 : 1) / viewport.zoom}/>
+          {page.name && <text className="vector-artboard-label" x={page.x} y={page.y - labelSize * 0.6} fontSize={labelSize}>{page.name}</text>}
+        </g>)}
         {renderShapeTree(state.shapes, null, modifierResults, visibleIds)}
         {bounds && <rect className="vector-selection" x={bounds.x} y={bounds.y} width={bounds.width} height={bounds.height} strokeWidth={1 / viewport.zoom}/>}
         {bounds && [[bounds.x, bounds.y], [bounds.x + bounds.width, bounds.y], [bounds.x, bounds.y + bounds.height], [bounds.x + bounds.width, bounds.y + bounds.height]].map(([x, y]) => <circle className="vector-handle" key={`${x}-${y}`} cx={x} cy={y} r={5 / viewport.zoom} strokeWidth={1 / viewport.zoom}/>)}

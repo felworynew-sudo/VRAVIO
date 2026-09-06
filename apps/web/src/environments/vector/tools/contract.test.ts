@@ -97,7 +97,7 @@ function drive(
     get state() { return effects.state; },
     setState: (next) => { effects.state = next; effects.stateHistory.push(next); },
     mutate: (fn) => fn(document),
-    snapshot: () => ({ shapes: structuredClone(document.shapes), activeShapeId: document.activeShapeId, selection: document.selection }),
+    snapshot: () => ({ shapes: structuredClone(document.shapes), activeShapeId: document.activeShapeId, selection: document.selection, artboards: structuredClone(document.artboards), activeArtboardId: document.activeArtboardId }),
     commitDrag: (before, label) => { effects.dragCommits.push({ before, label }); },
     changeDocument: async (label, mutateFn) => { const applied = mutateFn(document); effects.documentChanges.push({ label, applied }); },
   };
@@ -137,8 +137,8 @@ describe("every tool in the vector catalogue keeps the contract", () => {
     expect(vectorTools.length).toBeGreaterThan(0);
   });
 
-  it("has all six tools from the plan's inventory", () => {
-    expect(new Set(vectorTools.map((tool) => tool.id))).toEqual(new Set(["vector.select", "vector.nodes", "vector.pen", "vector.rectangle", "vector.ellipse", "vector.text"]));
+  it("has all seven tools from the plan's inventory (six plus stage 15's Artboard tool)", () => {
+    expect(new Set(vectorTools.map((tool) => tool.id))).toEqual(new Set(["vector.select", "vector.nodes", "vector.pen", "vector.rectangle", "vector.ellipse", "vector.text", "vector.artboard"]));
   });
 
   for (const tool of vectorTools) {
