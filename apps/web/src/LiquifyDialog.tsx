@@ -120,7 +120,7 @@ export function LiquifyDialog({ layer, onApply, onClose, language }: { layer: Ra
     <section className="liquify-dialog" role="dialog" aria-modal="true" aria-label="Liquify (Пластика)" onMouseDown={(event) => event.stopPropagation()}>
       <header><strong>Liquify (Пластика)</strong><button onClick={onClose}>×</button></header>
       <div className="liquify-body">
-        <aside className="liquify-tools">{tools.map(([id, iconFile, label]) => <button key={id} className={tool === id ? "active" : ""} title={label} aria-label={label} onClick={() => setTool(id)}><img className="liquify-glyph" src={`/${iconFile}`} alt=""/></button>)}</aside>
+        <aside className="liquify-tools">{tools.map(([id, iconFile, label]) => <button key={id} className={tool === id ? "active" : ""} title={label} aria-label={label} onClick={() => setTool(id)}><img className="liquify-glyph" src={`${import.meta.env.BASE_URL}${iconFile}`} alt=""/></button>)}</aside>
         <main className="liquify-canvas-wrap">
           <div className="liquify-canvas-stage" style={{ width: displayWidth, height: displayHeight }}>
             <canvas ref={canvasRef} width={displayWidth} height={displayHeight} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerCancel={onPointerUp} style={{ cursor: "none" }}/>

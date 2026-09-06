@@ -405,7 +405,7 @@ export function App() {
 
   return <div className="app" data-theme={store.theme} data-has-toolbar={active?.kind === "raster" || active?.kind === "vector"} style={themeStyle}>
     <header className="menu-bar">
-      <strong className={active ? "brand compact" : "brand full"}><img src={active ? "/логотип цветная плашка.svg" : "/логотип белый.svg"} alt="VRAVIO" /></strong>
+      <strong className={active ? "brand compact" : "brand full"}><img src={active ? `${import.meta.env.BASE_URL}логотип цветная плашка.svg` : `${import.meta.env.BASE_URL}логотип белый.svg`} alt="VRAVIO" /></strong>
       <nav aria-label={store.language === "ru" ? "Главное меню" : "Main menu"}>
         <Menu label="File (Файл)" language={store.language} open={openMenu === "file"} onToggle={() => setOpenMenu(openMenu === "file" ? null : "file")} items={[
           ["New… (Новый…)", "Ctrl+N", () => store.requestNewDocument("raster")],
@@ -487,7 +487,7 @@ export function App() {
         <Menu label="Window (Окно)" language={store.language} open={openMenu === "window"} onToggle={() => setOpenMenu(openMenu === "window" ? null : "window")} items={[...windowMenuItems(active?.kind, store.language), ["Settings (Настройки)", "", () => store.setSettingsOpen(true)], ["Command Palette (Палитра команд)", "Ctrl+K", () => store.setPaletteOpen(true)]]}/>
         <Menu label="Help (Справка)" language={store.language} open={openMenu === "help"} onToggle={() => setOpenMenu(openMenu === "help" ? null : "help")} items={[["Diagnostics log (Журнал диагностики)", "", () => setDiagnosticsOpen(true)], ["About VRAVIO (О VRAVIO)", "", () => window.alert("VRAVIO — local-first creative suite")]]}/>
       </nav>
-      <button className="settings-button" onClick={() => store.setSettingsOpen(true)} aria-label={store.language === "ru" ? "Настройки" : "Settings"} title={store.language === "ru" ? "Настройки" : "Settings"}><img src="/НАСТРОЙКИ.svg" alt=""/></button>
+      <button className="settings-button" onClick={() => store.setSettingsOpen(true)} aria-label={store.language === "ru" ? "Настройки" : "Settings"} title={store.language === "ru" ? "Настройки" : "Settings"}><img src={`${import.meta.env.BASE_URL}НАСТРОЙКИ.svg`} alt=""/></button>
       {/* Fills the gap between the menu and the window controls (or, on the
           web build, just trailing space) — its own element rather than relying
           on <nav>'s width, so there is always a real draggable strip here
@@ -629,7 +629,8 @@ function Menu({ label, language, open, onToggle, items }: { label: string; langu
 }
 
 function ToolGlyph({ tool }: { tool: ToolDefinition }) {
-  return tool.iconFile ? <span className="tool-svg-icon" aria-hidden="true" style={{ "--tool-mask": `url("/${tool.iconFile}")` } as CSSProperties} /> : <span>{tool.icon}</span>;
+  // import.meta.env.BASE_URL, not a hardcoded '/' — see EnvironmentIcon.tsx's own comment on why (GitHub Pages serves this app under /VRAVIO/, not the domain root).
+  return tool.iconFile ? <span className="tool-svg-icon" aria-hidden="true" style={{ "--tool-mask": `url("${import.meta.env.BASE_URL}${tool.iconFile}")` } as CSSProperties} /> : <span>{tool.icon}</span>;
 }
 
 function ToolPalette({ kind, language, activeToolId, openGroup, onOpenGroup, onSelect }: { kind: "raster" | "vector"; language: Language; activeToolId: string | undefined; openGroup: string | null; onOpenGroup(group: string | null): void; onSelect(toolId: string): void }) {
@@ -723,9 +724,9 @@ const distributeButtons: Array<[AlignEdge, string, string]> = [
 function AlignDistributeBar({ selectionCount, onAlign, onDistribute }: { selectionCount: number; onAlign(edge: AlignEdge): void; onDistribute(edge: AlignEdge): void }) {
   const canAlign = selectionCount >= 1, canDistribute = selectionCount >= 3;
   return <div className="align-bar">
-    {alignButtons.map(([edge, icon, title]) => <button key={edge} disabled={!canAlign} title={title} aria-label={title} onClick={() => onAlign(edge)}><i style={{ "--icon-mask": `url("/${icon}")` } as CSSProperties}/></button>)}
+    {alignButtons.map(([edge, icon, title]) => <button key={edge} disabled={!canAlign} title={title} aria-label={title} onClick={() => onAlign(edge)}><i style={{ "--icon-mask": `url("${import.meta.env.BASE_URL}${icon}")` } as CSSProperties}/></button>)}
     <span className="align-bar-sep"/>
-    {distributeButtons.map(([edge, icon, title]) => <button key={edge} disabled={!canDistribute} title={title} aria-label={title} onClick={() => onDistribute(edge)}><i style={{ "--icon-mask": `url("/${icon}")` } as CSSProperties}/></button>)}
+    {distributeButtons.map(([edge, icon, title]) => <button key={edge} disabled={!canDistribute} title={title} aria-label={title} onClick={() => onDistribute(edge)}><i style={{ "--icon-mask": `url("${import.meta.env.BASE_URL}${icon}")` } as CSSProperties}/></button>)}
   </div>;
 }
 
