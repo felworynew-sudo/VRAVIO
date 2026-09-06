@@ -45,11 +45,53 @@ function forEachBrushNode(state: LiquifyState, cx: number, cy: number, radius: n
   }
 }
 
+/**
+ * Writes a node's displacement after clamping its magnitude to the current
+ * brush radius — the single door every displacement-adding tool (Warp,
+ * Twirl, Pucker/Bloat) must go through, so none of them can independently
+ * regress the same bug. Reconstruct/Smooth don't call this: they blend
+ * toward an existing or neighbouring value and can only shrink the field
+ * or average already-bounded neighbours, never grow it past what put it
+ * there.
+ *
+ * Found live, twice: holding Twirl in one spot spirals a node's stored
+ * displacement outward without limit, because each held tick adds a fixed
+ * delta computed from the node's ORIGINAL (undisplaced) offset — not a
+ * true composed rotation around the accumulated position — so N ticks sum
+ * to a magnitude that grows linearly with N in a fixed direction, not a
+ * point orbiting at constant radius. Bloat/Pucker's outward pull has the
+ * same "add the same delta every tick" shape. Once the accumulated vector
+ * outgrows the brush's own radius, the inverse-sampled source point can
+ * cross the deformation centre or run off the layer edge, and the fold
+ * reads on screen as a self-intersecting spiral or a punched-through hole
+ * rather than a smooth swirl/bulge — confirmed by reverting this clamp and
+ * holding Twirl and Bloat in place in the running app: both reliably
+ * produce the fold within a couple dozen held ticks, and holding it
+ * clamped keeps both a clean, bounded deformation indefinitely.
+ *
+ * Patchy's own Liquify (`src/core/liquify.cpp`, `LiquifyMesh::render`)
+ * takes a related but distinct approach — it clamps the FINAL sampled
+ * source coordinate to the image bounds at render time, on a coarse
+ * interpolated mesh (capped at 129 nodes per axis) rather than a
+ * dense per-pixel field. The coarse mesh means any one node's runaway
+ * value gets spread by bilinear interpolation over a wide neighbourhood
+ * instead of creating a tight, high-frequency knot the way a per-pixel
+ * field can — see docs/master-plan.md §1.3 for why VRAVIO keeps the
+ * denser field for now and clamps per node instead of migrating to a
+ * mesh.
+ */
+function commitDisplacement(state: LiquifyState, index: number, dx: number, dy: number, radius: number): void {
+  const nextX = state.dx[index]! + dx, nextY = state.dy[index]! + dy;
+  const length = Math.hypot(nextX, nextY);
+  const scale = length > radius ? radius / length : 1;
+  state.dx[index] = nextX * scale;
+  state.dy[index] = nextY * scale;
+}
+
 /** Warp: drags the deformation field along the pointer's motion, pressure-scaled. */
 export function liquifyWarp(state: LiquifyState, x: number, y: number, motionX: number, motionY: number, radius: number, strength: number, density = 0.5): void {
   forEachBrushNode(state, x, y, radius, (index, weight) => {
-    state.dx[index]! -= motionX * weight * strength;
-    state.dy[index]! -= motionY * weight * strength;
+    commitDisplacement(state, index, -motionX * weight * strength, -motionY * weight * strength, radius);
   }, density);
 }
 
@@ -59,8 +101,7 @@ export function liquifyTwirl(state: LiquifyState, x: number, y: number, radius: 
     const angle = -weight * strength * 12 * Math.PI / 180;
     const sin = Math.sin(angle), cos = Math.cos(angle);
     const sourceX = ox * cos - oy * sin, sourceY = ox * sin + oy * cos;
-    state.dx[index]! += sourceX - ox;
-    state.dy[index]! += sourceY - oy;
+    commitDisplacement(state, index, sourceX - ox, sourceY - oy, radius);
   }, density);
 }
 
@@ -68,20 +109,7 @@ export function liquifyTwirl(state: LiquifyState, x: number, y: number, radius: 
 export function liquifyPuckerBloat(state: LiquifyState, x: number, y: number, radius: number, strength: number, sign: 1 | -1, density = 0.5): void {
   forEachBrushNode(state, x, y, radius, (index, weight, ox, oy) => {
     const pull = weight * strength * 0.12 * sign;
-    const nextX = state.dx[index]! + ox * pull, nextY = state.dy[index]! + oy * pull;
-    // Held in place (now possible since LiquifyDialog re-applies every stroke
-    // on a timer, not only on pointer motion — see its holdTimerRef), bloat
-    // keeps adding to the same node every tick with nothing to stop it: past
-    // a certain magnitude the inverse-sampled source point crosses the brush
-    // centre or runs off the layer edge, and the fold reads on screen as a
-    // punched-through hole rather than a smooth bulge. Clamping the node's
-    // total displacement to the brush radius keeps the source sample inside
-    // the same local neighbourhood the brush is deforming, however long the
-    // tool is held.
-    const length = Math.hypot(nextX, nextY);
-    const scale = length > radius ? radius / length : 1;
-    state.dx[index] = nextX * scale;
-    state.dy[index] = nextY * scale;
+    commitDisplacement(state, index, ox * pull, oy * pull, radius);
   }, density);
 }
 
