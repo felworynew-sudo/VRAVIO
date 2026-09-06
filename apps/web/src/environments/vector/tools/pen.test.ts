@@ -1,0 +1,167 @@
+import { describe, expect, it } from "vitest";
+import { buildShapeSpatialIndex, createVectorDocument, type VectorDocumentState } from "@vravio/env-vector";
+import pen, { finishPath, type PenState } from "./definitions/pen";
+import type { ToolContext, ToolPointer } from "./types";
+
+/**
+ * The gestures added 6 September 2026 (`docs/vector-plan.md` section 9,
+ * "Долг: инструмент «Перо»", first priority) — the ones a live click-
+ * through in the browser can't reliably exercise: `Alt` needs to stay held
+ * across every synthetic pointer-move the browser automation tool sends
+ * during one `left_click_drag`, and this pass found (the hard way, matching
+ * `CLAUDE.md`'s own repeated lesson that a synthetic-input test can be the
+ * broken half, not the code) that it does not — a live drag with
+ * `modifiers: "alt"` still landed on a mirrored handle. Headless is the
+ * reliable way to prove `Alt`/`Shift` actually change the outcome, the same
+ * reason `contract.test.ts` exists at all.
+ *
+ * Lives here, next to `contract.test.ts`, not inside `definitions/` — that
+ * directory is `registry.ts`'s own `import.meta.glob("./definitions/*.{tsx,ts}")`
+ * scope, which reads every matched module's `default` export as a tool. A
+ * `.test.ts` file placed there has none, and `vectorToolById`'s own
+ * `.map((tool) => [tool.id, tool])` crashes on the resulting `undefined` —
+ * found the moment this file was first added there, by the full suite
+ * failing everywhere, not by this file's own tests (which passed fine in
+ * isolation, since nothing in isolation ever imports `registry.ts`).
+ */
+
+function pointerAt(x: number, y: number, extra: Partial<ToolPointer> = {}): ToolPointer {
+  return { point: { x, y }, screenX: x, screenY: y, pointerId: 1, shiftKey: false, altKey: false, ctrlKey: false, metaKey: false, button: 0, detail: 1, ...extra };
+}
+
+function makeContext(document: VectorDocumentState): { context: ToolContext<PenState> } {
+  let state: PenState = pen.createState();
+  const context: ToolContext<PenState> = {
+    documentId: "test-document",
+    document,
+    viewport: { zoom: 1, rotation: 0, panX: 0, panY: 0, mode: "actual" },
+    options: { strokeWidth: 2 },
+    get activeShape() { return document.shapes.find((shape) => shape.id === document.activeShapeId) ?? null; },
+    get selection() { return document.selection; },
+    foregroundColor: "#101317",
+    get spatialIndex() { return buildShapeSpatialIndex(document.shapes); },
+    snapping: { sources: [], gridSpacing: null, radius: 0 },
+    get state() { return state; },
+    setState: (next) => { state = next; },
+    mutate: (fn) => fn(document),
+    snapshot: () => ({ shapes: structuredClone(document.shapes), activeShapeId: document.activeShapeId, selection: document.selection, artboards: structuredClone(document.artboards), activeArtboardId: document.activeArtboardId }),
+    commitDrag: () => {},
+    changeDocument: async () => {},
+  };
+  return { context };
+}
+
+function firstPath(document: VectorDocumentState) {
+  const shape = document.shapes.find((item) => item.kind === "path");
+  if (shape?.kind !== "path") throw new Error("expected a path shape");
+  return shape;
+}
+
+describe("vector.pen — gestures added for docs/vector-plan.md section 9", () => {
+  it("Shift constrains a new segment to the nearest 45°-multiple angle from the last point", () => {
+    const document = createVectorDocument(400, 300);
+    const { context } = makeContext(document);
+    pen.onPointerDown!(context, pointerAt(100, 100));
+    // (100,100) -> (250,120): angle ≈ atan2(20,150) ≈ 7.6°, nearest 45°
+    // multiple is 0° — the placed point should land with the same y as the
+    // last point, not at (250,120).
+    pen.onPointerDown!(context, pointerAt(250, 120, { shiftKey: true }));
+    const path = firstPath(document);
+    expect(path.points).toHaveLength(2);
+    expect(path.points[1]!.y).toBeCloseTo(path.points[0]!.y, 5);
+  });
+
+  it("Shift constrains a handle drag to the nearest 45°-multiple angle", () => {
+    const document = createVectorDocument(400, 300);
+    const { context } = makeContext(document);
+    pen.onPointerDown!(context, pointerAt(100, 100));
+    // Drag the handle at (100,100) toward (110, 60): angle ≈ atan2(-40,10) ≈
+    // -76°, nearest 45°-multiple is -90° (straight up) — handleOut.x should
+    // land at 0, not 10.
+    pen.onPointerMove!(context, pointerAt(110, 60, { shiftKey: true }));
+    const path = firstPath(document);
+    expect(path.points[0]!.handleOut!.x).toBeCloseTo(0, 5);
+    expect(path.points[0]!.handleOut!.y).toBeLessThan(0);
+  });
+
+  it("Alt breaks the handle from its mirror — handleIn stays untouched instead of mirroring handleOut", () => {
+    const document = createVectorDocument(400, 300);
+    const { context } = makeContext(document);
+    pen.onPointerDown!(context, pointerAt(100, 100));
+    pen.onPointerMove!(context, pointerAt(140, 100, { altKey: true }));
+    const path = firstPath(document);
+    expect(path.points[0]!.handleOut).toEqual({ x: 40, y: 0 });
+    // No handleIn was ever set on this fresh point, and Alt must not invent
+    // one by mirroring handleOut — this is the exact bug a live browser
+    // click-drag test could not catch (see this file's own doc comment).
+    expect(path.points[0]!.handleIn).toBeUndefined();
+  });
+
+  it("without Alt, dragging a handle mirrors it onto handleIn (the existing symmetric-handle behaviour, unchanged)", () => {
+    const document = createVectorDocument(400, 300);
+    const { context } = makeContext(document);
+    pen.onPointerDown!(context, pointerAt(100, 100));
+    pen.onPointerMove!(context, pointerAt(140, 100));
+    const path = firstPath(document);
+    expect(path.points[0]!.handleOut).toEqual({ x: 40, y: 0 });
+    // `-0`, not `0` — dy is exactly 0 here, and `-dy` on a plain `0` in
+    // JavaScript produces `-0`; `toEqual` distinguishes the two, so this
+    // compares magnitude rather than bit-for-bit sign, which is not what
+    // the mirroring behaviour itself is being tested for.
+    expect(path.points[0]!.handleIn!.x).toBe(-40);
+    expect(path.points[0]!.handleIn!.y).toBeCloseTo(0, 10);
+  });
+
+  it("clicking back on the path's own first point closes it instead of adding a new point", () => {
+    const document = createVectorDocument(400, 300);
+    const { context } = makeContext(document);
+    pen.onPointerDown!(context, pointerAt(100, 100));
+    pen.onGestureEnd!(context, pointerAt(100, 100));
+    pen.onPointerDown!(context, pointerAt(200, 100));
+    pen.onGestureEnd!(context, pointerAt(200, 100));
+    pen.onPointerDown!(context, pointerAt(150, 180));
+    pen.onGestureEnd!(context, pointerAt(150, 180));
+    // Click within tolerance of the first point (100,100), not exactly on it —
+    // matching how a real cursor never lands on the exact original pixel.
+    pen.onPointerDown!(context, pointerAt(102, 101));
+    const path = firstPath(document);
+    expect(path.closed).toBe(true);
+    expect(path.points).toHaveLength(3);
+    expect(context.state.draft).toBeNull();
+  });
+
+  it("does not close on a first-point click when only one point exists (a single point can't be a closed path)", () => {
+    const document = createVectorDocument(400, 300);
+    const { context } = makeContext(document);
+    pen.onPointerDown!(context, pointerAt(100, 100));
+    pen.onGestureEnd!(context, pointerAt(100, 100));
+    pen.onPointerDown!(context, pointerAt(101, 100));
+    const path = firstPath(document);
+    expect(path.closed).toBe(false);
+    expect(path.points).toHaveLength(2);
+  });
+
+  it("tracks the live cursor position in state while a path is in progress, for the rubber-band overlay", () => {
+    const document = createVectorDocument(400, 300);
+    const { context } = makeContext(document);
+    pen.onPointerDown!(context, pointerAt(100, 100));
+    pen.onGestureEnd!(context, pointerAt(100, 100));
+    // Placing the first point already sets cursor to that same point (the
+    // handle-drag anchor doubles as the initial rubber-band origin) —
+    // what this test actually checks is that a later, distinct move
+    // updates it, not that it starts out unset.
+    expect(context.state.cursor).toEqual({ x: 100, y: 100 });
+    pen.onPointerMove!(context, pointerAt(180, 140));
+    expect(context.state.cursor).toEqual({ x: 180, y: 140 });
+  });
+
+  it("finishing the path clears cursor tracking along with the rest of the draft state", () => {
+    const document = createVectorDocument(400, 300);
+    const { context } = makeContext(document);
+    pen.onPointerDown!(context, pointerAt(100, 100));
+    pen.onGestureEnd!(context, pointerAt(100, 100));
+    pen.onPointerMove!(context, pointerAt(180, 140));
+    finishPath(context);
+    expect(context.state).toEqual({ draft: null, handle: null, cursor: null });
+  });
+});

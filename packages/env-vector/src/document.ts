@@ -24,10 +24,40 @@ export function createArtboard(x: number, y: number, width: number, height: numb
 }
 
 let counter = 0;
-/** Short, readable ids ("rectangle-1") rather than UUIDs — vector documents stay small enough that collisions across a session are not a concern, and the name doubles as a default label. */
+/** Short, readable ids ("rectangle-1") rather than UUIDs — vector documents stay small enough that collisions across a session are not a concern *within one running session*. That assumption breaks the moment a document is persisted and reloaded: `counter` is a module-level variable that restarts at 0 on every page load, while the reloaded document's own shapes already carry ids minted by a *previous* run's counter — a fresh session's very first new shape can mint the exact id an already-loaded shape has. `addShape` has no collision check (same reasoning: "small enough not to matter" — which was true only because nothing before this could actually produce a collision), so the new shape and the old one silently become the same array entry to every by-id lookup, and a mutation meant for the new shape lands on the old one's data instead. Found live (`docs/vector-plan.md` section 9's own pen-tool work): a fresh `vector.pen` click on a page that already had a persisted "path-1" square appended its new point straight onto that square's own point list. See `reseedShapeIdCounters` below — the fix, not a workaround. */
 function nextId(kind: VectorShapeKind): string {
   counter += 1;
   return `${kind}-${counter}`;
+}
+
+/** The highest numeric suffix seen across `ids` (each expected to look like
+ * `${kind}-${n}` or `artboard-${n}`) — 0 if none parse. Shared by both
+ * counters `reseedShapeIdCounters` bumps below. */
+function maxNumericSuffix(ids: Iterable<string>): number {
+  let max = 0;
+  for (const id of ids) {
+    const match = /-(\d+)$/.exec(id);
+    if (!match) continue;
+    const value = Number(match[1]);
+    if (value > max) max = value;
+  }
+  return max;
+}
+
+/**
+ * Raises `nextId`'s and `createArtboard`'s counters so the *next* shape or
+ * artboard this session creates cannot collide with one already in
+ * `state` — called once when a persisted document re-enters the live app
+ * (`apps/web/src/kernel.ts`, right after `autosave.restore()`), the one
+ * door every document takes back into the session regardless of which
+ * environment it belongs to. Only ever raises the counters, never lowers
+ * them — restoring several documents in the same session (several open
+ * tabs' worth) must not let a later, sparser document undo the headroom
+ * an earlier, denser one already established.
+ */
+export function reseedShapeIdCounters(state: VectorDocumentState): void {
+  counter = Math.max(counter, maxNumericSuffix(state.shapes.map((shape) => shape.id)));
+  artboardCounter = Math.max(artboardCounter, maxNumericSuffix(state.artboards.map((artboard) => artboard.id)));
 }
 
 // A placeholder that `appendShapeAt` (tree.ts) always overwrites the moment a

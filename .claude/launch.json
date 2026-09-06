@@ -3,9 +3,10 @@
   "configurations": [
     {
       "name": "vravio-web",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["pnpm", "--filter", "@vravio/web", "dev", "--port", "5300", "--strictPort"],
-      "port": 5300
+      "runtimeExecutable": "D:/node.exe",
+      "runtimeArgs": ["node_modules/vite/bin/vite.js", "--port", "5300", "--strictPort"],
+      "port": 5300,
+      "cwd": "apps/web"
     }
   ]
 }
