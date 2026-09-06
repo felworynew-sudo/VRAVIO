@@ -37,7 +37,7 @@ import { adjustedPixels } from "./raster-adjustments/apply";
 import { windowsFor } from "./windows/registry";
 import { windowTitle } from "./windows/types";
 import { PANEL_CHANGED_EVENT, readVisiblePanelIds, requestPanelVisibility } from "./windows/runtime";
-import { applyPathfinderOp, convertActiveTextToOutlines, createSymbolFromActiveSelection, detachActiveVectorInstance, duplicateActiveVectorShape, deleteActiveVectorShapes, groupActiveVectorShapes, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
+import { applyPathfinderOp, attachActiveTextToPath, convertActiveTextToOutlines, createSymbolFromActiveSelection, detachActiveTextFromPath, detachActiveVectorInstance, duplicateActiveVectorShape, deleteActiveVectorShapes, groupActiveVectorShapes, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
 import { importedShapesFromJson, isVectorDocumentState, type VectorDocumentState } from "@vravio/env-vector";
 import { exportVectorDocumentToSvg } from "./vector-svg-export";
 import { vectorTextMeasurer } from "./vector-text-metrics";
@@ -220,6 +220,22 @@ export function App() {
   const activeImageShape = (() => { if (!active || !isVectorDocumentState(active.state)) return false; const state = active.state; return state.shapes.find((shape) => shape.id === state.activeShapeId)?.kind === "image"; })();
   const pathfinderDisabled = !active || !isVectorDocumentState(active.state) || active.state.selection.length < 2;
   const activeTextShape = (() => { if (!active || !isVectorDocumentState(active.state)) return false; const state = active.state; return state.shapes.find((shape) => shape.id === state.activeShapeId)?.kind === "text"; })();
+  // "Attach to Path" needs exactly one text shape and one top-level path
+  // shape selected together — same "two shapes selected" reading Pathfinder
+  // above already uses. "Detach" only needs the active shape to actually
+  // be following one right now.
+  const attachToPathDisabled = (() => {
+    if (!active || !isVectorDocumentState(active.state)) return true;
+    const state = active.state;
+    const selected = state.selection.map((id) => state.shapes.find((shape) => shape.id === id)).filter((shape) => shape !== undefined);
+    return !selected.some((shape) => shape.kind === "text") || !selected.some((shape) => shape.kind === "path" && shape.parentId === null);
+  })();
+  const detachFromPathDisabled = (() => {
+    if (!active || !isVectorDocumentState(active.state)) return true;
+    const state = active.state;
+    const shape = state.shapes.find((item) => item.id === state.activeShapeId);
+    return !(shape?.kind === "text" && shape.pathShapeId);
+  })();
   const unionBounds = (boxes: RasterRect[]): RasterRect => { const left = Math.min(...boxes.map((box) => box.x)), top = Math.min(...boxes.map((box) => box.y)), right = Math.max(...boxes.map((box) => box.x + box.width)), bottom = Math.max(...boxes.map((box) => box.y + box.height)); return { x: left, y: top, width: right - left, height: bottom - top }; };
   const alignOrDistributeLayers = (kind: "align" | "distribute", edge: AlignEdge) => {
     if (!active || !isRasterDocumentState(active.state)) return;
@@ -442,6 +458,8 @@ export function App() {
             ["Exclude (Исключить)", "", () => active && void applyPathfinderOp(active.id, "exclude"), pathfinderDisabled],
           ] },
           ["Convert to Outlines (Преобразовать в контуры)", "", () => active && void convertActiveTextToOutlines(active.id), !activeTextShape],
+          ["Attach Text to Path (Прикрепить текст к контуру)", "", () => active && attachActiveTextToPath(active.id), attachToPathDisabled],
+          ["Detach Text from Path (Открепить текст от контура)", "", () => active && detachActiveTextFromPath(active.id), detachFromPathDisabled],
           ["Edit Image in Raster Environment… (Открыть картинку в растровой среде…)", "", () => active && void kernel.commands.execute("image.openElsewhere", { activeDocumentId: active.id }), !activeImageShape],
           ["Edit Image as a Copy… (Открыть картинку копией…)", "", () => active && void kernel.commands.execute("image.openElsewhereBranch", { activeDocumentId: active.id }), !activeImageShape],
         ]}/>}

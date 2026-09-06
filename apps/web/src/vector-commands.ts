@@ -293,3 +293,43 @@ export async function convertActiveTextToOutlines(documentId: string): Promise<v
     return true;
   });
 }
+
+/**
+ * "Attach to Path" (Type menu) — stage 11's "text on a path", the SVG-native
+ * half of it: makes the current selection's text shape follow the
+ * selection's own path shape (`<textPath>`, `VectorWorkspace.tsx`'s own
+ * `renderShape`/`vector-svg-export.ts`'s `geometryElement` — neither
+ * recomputes glyph placement by hand, both hand the referenced curve
+ * straight to the renderer). Needs exactly one text shape and one
+ * top-level `path` shape in the selection — the same "two shapes selected"
+ * gesture `applyPathfinderOp` above already uses, not a separate picker UI.
+ * `null` (detach) is `setActiveTextPath(documentId, null)`, called with no
+ * path shape required.
+ */
+export function attachActiveTextToPath(documentId: string): void {
+  const document = kernel.documents.get<VectorDocumentState>(documentId);
+  if (!document) return;
+  const selected = document.state.selection.map((id) => document.state.shapes.find((shape) => shape.id === id)).filter((shape): shape is VectorShape => shape !== undefined);
+  const textShape = selected.find((shape): shape is Extract<VectorShape, { kind: "text" }> => shape.kind === "text");
+  const pathShape = selected.find((shape): shape is Extract<VectorShape, { kind: "path" }> => shape.kind === "path" && shape.parentId === null);
+  if (!textShape || !pathShape) return;
+  void changeVectorDocument(documentId, "Attach Text to Path (Прикрепить текст к контуру)", (draft) => {
+    const text = draft.shapes.find((shape) => shape.id === textShape.id);
+    if (!text || text.kind !== "text") return false;
+    text.pathShapeId = pathShape.id;
+    return true;
+  });
+}
+
+export function detachActiveTextFromPath(documentId: string): void {
+  const document = kernel.documents.get<VectorDocumentState>(documentId);
+  const id = document?.state.activeShapeId;
+  const shape = document?.state.shapes.find((item) => item.id === id);
+  if (!shape || shape.kind !== "text" || !shape.pathShapeId) return;
+  void changeVectorDocument(documentId, "Detach Text from Path (Открепить текст от контура)", (draft) => {
+    const text = draft.shapes.find((item) => item.id === id);
+    if (!text || text.kind !== "text") return false;
+    text.pathShapeId = null;
+    return true;
+  });
+}

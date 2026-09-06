@@ -130,6 +130,47 @@ describe("exportVectorDocumentToSvg", () => {
     expect(svg).toContain("one two three four five<");
   });
 
+  it("a text shape attached to a top-level path writes a <textPath> referencing a <defs> copy of that path's own geometry", () => {
+    const state = createVectorDocument(200, 200);
+    const path = createShape("path", 0, 0, emptyVectorStyle());
+    if (path.kind === "path") { path.points = [{ x: 0, y: 0 }, { x: 100, y: 0 }]; path.closed = false; }
+    state.shapes.push(path);
+    const text = createShape("text", 0, 0, { ...emptyVectorStyle(), fills: [solidFill(srgb(0, 0, 0))] });
+    if (text.kind === "text") { text.value = "on a path"; text.pathShapeId = path.id; }
+    state.shapes.push(text);
+    const svg = exportVectorDocumentToSvg(state);
+    expect(svg).toContain(`<defs><path id="textpath-${text.id}"`);
+    expect(svg).toContain(`<textPath href="#textpath-${text.id}">on a path</textPath>`);
+  });
+
+  it("pathShapeId takes priority over frameWidth when both are set on the same text shape", () => {
+    const state = createVectorDocument(200, 200);
+    const path = createShape("path", 0, 0, emptyVectorStyle());
+    if (path.kind === "path") { path.points = [{ x: 0, y: 0 }, { x: 100, y: 0 }]; path.closed = false; }
+    state.shapes.push(path);
+    const text = createShape("text", 0, 0, { ...emptyVectorStyle(), fills: [solidFill(srgb(0, 0, 0))] });
+    if (text.kind === "text") { text.value = "both set"; text.pathShapeId = path.id; text.frameWidth = 10; }
+    state.shapes.push(text);
+    const svg = exportVectorDocumentToSvg(state, undefined, { measure: () => ({ width: 1000, ascent: 10, descent: 3 }) });
+    expect(svg).toContain("<textPath");
+    expect(svg).not.toContain("<tspan");
+  });
+
+  it("a pathShapeId referencing a shape nested in a group is ignored — only a top-level path is a valid target", () => {
+    const state = createVectorDocument(200, 200);
+    const group = createVectorGroup();
+    appendShapeAt(state, group, null);
+    const nestedPath = createShape("path", 0, 0, emptyVectorStyle());
+    if (nestedPath.kind === "path") { nestedPath.points = [{ x: 0, y: 0 }, { x: 100, y: 0 }]; nestedPath.closed = false; }
+    appendShapeAt(state, nestedPath, group.id);
+    const text = createShape("text", 0, 0, { ...emptyVectorStyle(), fills: [solidFill(srgb(0, 0, 0))] });
+    if (text.kind === "text") { text.value = "should stay point text"; text.pathShapeId = nestedPath.id; }
+    state.shapes.push(text);
+    const svg = exportVectorDocumentToSvg(state);
+    expect(svg).not.toContain("<textPath");
+    expect(svg).toContain("should stay point text<");
+  });
+
   it("a gradient fill gets a <linearGradient> in <defs> and a url() fill reference", () => {
     const state = createVectorDocument(200, 200);
     const gradient = { kind: "linear" as const, stops: [{ offset: 0, color: srgb(0, 0, 0) }, { offset: 1, color: srgb(255, 255, 255) }], from: { x: 0, y: 0 }, to: { x: 1, y: 0 } };

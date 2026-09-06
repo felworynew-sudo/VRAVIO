@@ -111,6 +111,26 @@ describe("SVG export cross-checked against resvg", () => {
     expect(insideAlpha).toBe(0);
   });
 
+  // Stage 11's text-on-a-path has no pixel-level check in *this* file, on
+  // purpose, not by oversight: tried first, as a check that real ink
+  // actually lands near the referenced path's own baseline — it failed,
+  // and tracing why (a throwaway control test asserting a *plain*, off-
+  // path `<text>` shape renders any ink at all through this same
+  // `render_svg_to_rgba`) showed zero ink for that one too. `usvg::
+  // Options::default()` (this crate's `import_svg`/`render_svg_to_rgba`,
+  // `crates/vector-svg/src/lib.rs`) has an empty `fontdb` — no fonts
+  // loaded at all — so resvg cannot shape *any* text through this
+  // particular harness, `<textPath>` included, regardless of whether the
+  // feature under test is correct. The method itself can't answer this
+  // question yet, not the code (the same "suspect the measurement, not
+  // just the code" lesson CLAUDE.md's own §2 already documents elsewhere
+  // in this project) — `vector-svg-export.test.ts`'s own markup-string
+  // checks (the `<defs><path>`/`<textPath href>` shape, priority over
+  // `frameWidth`, the top-level-only restriction) are what actually
+  // covers this feature today. A real pixel check needs `crates/vector-
+  // svg` to load a font into `fontdb` first — separate work, not this
+  // stage's own scope.
+
   it("is non-vacuous: a shape moved outside the canvas produces no pixels at its old location", async () => {
     const state = createVectorDocument(100, 100);
     const rect = createShape("rectangle", 10, 10, { ...emptyVectorStyle(), fills: [solidFill(srgb(200, 50, 50))] });

@@ -183,13 +183,23 @@ function geometryOrModified(shape: Exclude<VectorShape, { kind: "image" } | { ki
   return geometryFor(shape);
 }
 
-function renderShape(shape: VectorShape, modifiedPath: string | undefined, proofColors: ReadonlyMap<string, string>): ReactNode {
+function renderShape(shape: VectorShape, modifiedPath: string | undefined, proofColors: ReadonlyMap<string, string>, shapes: readonly VectorShape[]): ReactNode {
   if (!shape.visible) return null;
   if (shape.kind === "image") return <VectorImageShape key={shape.id} shape={shape}/>;
   if (shape.kind === "group" || shape.kind === "instance") return null; // neither paints anything of its own — see renderShapeTree, which wraps a group's children (or, for an instance, its symbol's) in a transformed <g> instead of calling this
 
   const { Tag, props } = geometryOrModified(shape, modifiedPath);
   const resolved = resolveAppearance(shape.style, shape.id);
+  // Stage 11's text-on-a-path: only a *top-level* `path` shape is a valid
+  // target — see `VectorShape`'s own `pathShapeId` doc comment for why a
+  // group-nested one isn't supported yet. Takes priority over `frameWidth`
+  // below when both happen to be set (the panel does not stop a caller
+  // from setting both; the renderer has to pick one, and following a path
+  // is the more specific request of the two).
+  const pathTarget = shape.kind === "text" && shape.pathShapeId
+    ? shapes.find((candidate): candidate is Extract<VectorShape, { kind: "path" }> => candidate.id === shape.pathShapeId && candidate.kind === "path" && candidate.parentId === null)
+    : undefined;
+  const textPathId = pathTarget ? `textpath-${shape.id}` : undefined;
   // Stage 11's text-in-frame: a framed shape's own `value` becomes one
   // `<tspan>` per wrapped line rather than a single string child — each
   // starting at the same `x` (the parent `<text>`'s own `text-anchor`
@@ -201,11 +211,13 @@ function renderShape(shape: VectorShape, modifiedPath: string | undefined, proof
   // `vector-svg-export.ts`'s export copy can never quietly disagree on
   // line spacing.
   const textValue = shape.kind === "text"
-    ? (shape.frameWidth
-      ? wrapText(shape.value, shape.fontFamily, shape.fontSize, shape.frameWidth, vectorTextMeasurer).map((line, index) => (
-        <tspan key={index} x={shape.x} dy={index === 0 ? 0 : shape.fontSize * TEXT_LINE_HEIGHT}>{line}</tspan>
-      ))
-      : shape.value)
+    ? (textPathId
+      ? <textPath href={`#${textPathId}`}>{shape.value}</textPath>
+      : shape.frameWidth
+        ? wrapText(shape.value, shape.fontFamily, shape.fontSize, shape.frameWidth, vectorTextMeasurer).map((line, index) => (
+          <tspan key={index} x={shape.x} dy={index === 0 ? 0 : shape.fontSize * TEXT_LINE_HEIGHT}>{line}</tspan>
+        ))
+        : shape.value)
     : undefined;
   // Stage 14's softproof: a resolved solid colour's own css string is the
   // key `useCmykSoftproof` built its map with (see that hook's own doc
@@ -215,11 +227,17 @@ function renderShape(shape: VectorShape, modifiedPath: string | undefined, proof
   // through unproofed exactly as `softproof.ts`'s own documented scope
   // says it should.
   const proof = (css: string) => proofColors.get(css) ?? css;
+  // `<textPath>` owns positioning entirely — an ancestor `<text>`'s own
+  // `x`/`y` are meaningless (and, in at least one renderer's reading of the
+  // spec, actively confusing) once it has a `<textPath>` child instead of
+  // plain text.
+  const geometryProps = textPathId ? { ...props, x: undefined, y: undefined } : props;
 
   return <g key={shape.id} transform={shapeTransform(shape)} opacity={shape.style.opacity} style={blendStyle(shape.style.blendMode)}>
     {resolved.gradientDefs.length > 0 && <defs>{resolved.gradientDefs.map(renderGradientDef)}</defs>}
+    {pathTarget && textPathId && <defs><path id={textPathId} transform={isIdentityMatrix(pathTarget.transform) ? undefined : matrixToCss(pathTarget.transform)} d={pathData(pathTarget.points, pathTarget.closed)}/></defs>}
     {resolved.fills.filter((fill) => fill.layer.visible).map((fill, index) => (
-      <Tag key={`fill-${index}`} {...props} fill={proof(fill.css)} stroke="none" opacity={fill.layer.opacity} style={blendStyle(fill.layer.blendMode)}>{textValue}</Tag>
+      <Tag key={`fill-${index}`} {...geometryProps} fill={proof(fill.css)} stroke="none" opacity={fill.layer.opacity} style={blendStyle(fill.layer.blendMode)}>{textValue}</Tag>
     ))}
     {resolved.strokes.filter((stroke) => stroke.layer.visible).map((stroke, index) => {
       // Stage 6's own honest gap, closed: SVG's `stroke` primitive is
@@ -246,18 +264,18 @@ function renderShape(shape: VectorShape, modifiedPath: string | undefined, proof
       // has actually been checked to define the same way.
       const alignment = stroke.layer.alignment;
       if (alignment === "center") {
-        return <Tag key={`stroke-${index}`} {...props} fill="none" stroke={proof(stroke.css)} strokeWidth={stroke.layer.width}
+        return <Tag key={`stroke-${index}`} {...geometryProps} fill="none" stroke={proof(stroke.css)} strokeWidth={stroke.layer.width}
           strokeDasharray={stroke.layer.dash.length ? stroke.layer.dash.join(" ") : undefined} strokeLinecap={stroke.layer.cap} strokeLinejoin={stroke.layer.join}
           opacity={stroke.layer.opacity} style={blendStyle(stroke.layer.blendMode)}>{textValue}</Tag>;
       }
       const confineId = `stroke-align-${shape.id}-${index}`;
-      const strokeElement = <Tag {...props} fill="none" stroke={proof(stroke.css)} strokeWidth={stroke.layer.width * 2} {...(alignment === "inner" ? { clipPath: `url(#${confineId})` } : { mask: `url(#${confineId})` })}
+      const strokeElement = <Tag {...geometryProps} fill="none" stroke={proof(stroke.css)} strokeWidth={stroke.layer.width * 2} {...(alignment === "inner" ? { clipPath: `url(#${confineId})` } : { mask: `url(#${confineId})` })}
         strokeDasharray={stroke.layer.dash.length ? stroke.layer.dash.join(" ") : undefined} strokeLinecap={stroke.layer.cap} strokeLinejoin={stroke.layer.join}
         opacity={stroke.layer.opacity} style={blendStyle(stroke.layer.blendMode)}>{textValue}</Tag>;
       return <g key={`stroke-${index}`}>
         {alignment === "inner"
-          ? <clipPath id={confineId}><Tag {...props}/></clipPath>
-          : <mask id={confineId}><rect x={-100000} y={-100000} width={200000} height={200000} fill="white"/><Tag {...props} fill="black"/></mask>}
+          ? <clipPath id={confineId}><Tag {...geometryProps}/></clipPath>
+          : <mask id={confineId}><rect x={-100000} y={-100000} width={200000} height={200000} fill="white"/><Tag {...geometryProps} fill="black"/></mask>}
         {strokeElement}
       </g>;
     })}
@@ -311,7 +329,7 @@ function renderShapeTree(shapes: readonly VectorShape[], parentId: string | null
       // there is nothing worth culling again inside it.
       <g key={shape.id} transform={shapeTransform(shape)}>{renderShapeTree(shapes, shape.symbolId, modifierResults, proofColors)}</g>
     );
-    return renderShape(shape, modifierResults.get(shape.id), proofColors);
+    return renderShape(shape, modifierResults.get(shape.id), proofColors, shapes);
   });
 }
 

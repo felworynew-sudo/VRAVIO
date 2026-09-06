@@ -77,6 +77,25 @@ export type VectorShape =
        * already takes), not `crates/vector-text`'s Parley engine, despite
        * that engine existing for exactly this kind of layout. */
       frameWidth: number | null;
+      /** Stage 11's "text on a path" — the id of a top-level `path` shape
+       * whose own curve this text's baseline follows, `null` for ordinary
+       * text. Rendered via SVG's own native `<textPath>` (real browsers and
+       * `resvg` both walk the referenced path's actual curve, not a
+       * polygon approximation of it — see `VectorWorkspace.tsx`'s
+       * `renderShape` for why the referenced path is a `<defs>` copy of
+       * the target shape's own `d`/`transform`, not a `href` straight into
+       * the target's own rendered element). Only a **top-level** path
+       * (`parentId: null`) is supported — a path nested in a group only
+       * carries a transform *relative to that group*, and this field has
+       * nowhere to record which group's world transform to compose it
+       * with; a document with a path deep inside a group cannot be used
+       * this way yet, an honest, narrower scope rather than silently wrong
+       * placement. Mutually exclusive with `frameWidth` in practice (a
+       * path-following text does not also wrap to a rectangle), though
+       * nothing enforces that — the same "the panel exposes both, the
+       * renderer prioritises one" shape other appearance settings already
+       * have. */
+      pathShapeId: string | null;
     })
   | (VectorShapeBase & {
       kind: "image"; x: number; y: number; width: number; height: number;
@@ -164,7 +183,7 @@ export interface PaletteColor {
 
 export interface VectorDocumentState {
   readonly kind: "vector";
-  readonly schemaVersion: 11;
+  readonly schemaVersion: 12;
   width: number;
   height: number;
   artboards: Artboard[];
@@ -295,6 +314,10 @@ export interface VectorGuide {
  *   (never wrapped, no frame at all), so `null` reproduces that exactly
  *   rather than inventing a frame width from the string's own measured
  *   length.
+ * - v11 → v12 (stage 11's text-on-a-path): every `text` shape gets
+ *   `pathShapeId: null` — a v11 text shape already behaved as if it
+ *   followed no path (there was no such field, no such rendering), so
+ *   `null` reproduces that exactly.
  */
 export function migrateVectorDocumentState(state: VectorDocumentState): VectorDocumentState {
   const candidate = state as unknown as {
@@ -337,6 +360,7 @@ export function migrateVectorDocumentState(state: VectorDocumentState): VectorDo
     delete shape.rotation;
     if (!Array.isArray(shape.geometry)) shape.geometry = [];
     if (shape.kind === "text" && shape.frameWidth === undefined) shape.frameWidth = null;
+    if (shape.kind === "text" && shape.pathShapeId === undefined) shape.pathShapeId = null;
 
     const style = shape.style as { fill?: unknown; stroke?: unknown; strokeWidth?: unknown; opacity?: unknown; fills?: unknown; strokes?: unknown } | undefined;
     if (!style) return;
@@ -354,7 +378,7 @@ export function migrateVectorDocumentState(state: VectorDocumentState): VectorDo
     }
   });
 
-  (state as { schemaVersion: number }).schemaVersion = 11;
+  (state as { schemaVersion: number }).schemaVersion = 12;
   return state;
 }
 
@@ -386,7 +410,7 @@ export function isVectorDocumentState(value: unknown): value is VectorDocumentSt
   if (!value || typeof value !== "object") return false;
   const state = value as { kind?: unknown; shapes?: unknown; schemaVersion?: unknown };
   if (state.kind !== "vector" || !Array.isArray(state.shapes)) return false;
-  if (![2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(state.schemaVersion as number)) return false;
+  if (![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].includes(state.schemaVersion as number)) return false;
   migrateVectorDocumentState(value as VectorDocumentState);
   return true;
 }

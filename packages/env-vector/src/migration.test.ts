@@ -36,11 +36,11 @@ function v2Document(): unknown {
   };
 }
 
-describe("vector document v2 → v11 migration", () => {
+describe("vector document v2 → v12 migration", () => {
   it("accepts a v2 document as valid and upgrades it all the way to the current schemaVersion", () => {
     const raw = v2Document();
     expect(isVectorDocumentState(raw)).toBe(true);
-    expect((raw as VectorDocumentState).schemaVersion).toBe(11);
+    expect((raw as VectorDocumentState).schemaVersion).toBe(12);
   });
 
   it("gives a pre-palette document an empty palette rather than inventing entries", () => {
@@ -84,6 +84,16 @@ describe("vector document v2 → v11 migration", () => {
     const text = state.shapes.find((shape) => shape.kind === "text");
     expect(text).toBeDefined();
     if (text?.kind === "text") expect(text.frameWidth).toBeNull();
+  });
+
+  it("gives a pre-path text shape pathShapeId: null — not following any path", () => {
+    const raw = v2Document() as { shapes: Array<Record<string, unknown>> };
+    raw.shapes.push({ id: "text-1", kind: "text", name: "T", visible: true, locked: false, x: 0, y: 0, value: "hi", fontSize: 32, fontFamily: "Arial", align: "left", style: { fill: null, stroke: null, strokeWidth: 1, opacity: 1 } });
+    isVectorDocumentState(raw);
+    const state = raw as unknown as VectorDocumentState;
+    const text = state.shapes.find((shape) => shape.kind === "text");
+    expect(text).toBeDefined();
+    if (text?.kind === "text") expect(text.pathShapeId).toBeNull();
   });
 
   it("turns the boolean artboards flag into an empty array, not a truthy/falsy re-encoding of it", () => {

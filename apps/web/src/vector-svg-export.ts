@@ -32,12 +32,21 @@ function escapeAttr(value: string): string {
  * which has no `window` for the browser-backed `vectorTextMeasurer`
  * (`apps/web/src/vector-text-metrics.ts`) to use — only the real UI call
  * sites (`App.tsx`, `DockLayout.tsx`) ever pass one. */
-function geometryElement(shape: Exclude<VectorShape, { kind: "image" } | { kind: "group" } | { kind: "instance" }>, attrs: string, measurer?: TextMeasurer): string {
+function geometryElement(shape: Exclude<VectorShape, { kind: "image" } | { kind: "group" } | { kind: "instance" }>, attrs: string, measurer?: TextMeasurer, allShapes?: readonly VectorShape[]): string {
   if (shape.kind === "rectangle") return `<rect x="${shape.x}" y="${shape.y}" width="${shape.width}" height="${shape.height}" rx="${shape.cornerRadius}" ${attrs}/>`;
   if (shape.kind === "ellipse") return `<ellipse cx="${shape.x + shape.width / 2}" cy="${shape.y + shape.height / 2}" rx="${shape.width / 2}" ry="${shape.height / 2}" ${attrs}/>`;
   if (shape.kind === "line") return `<line x1="${shape.x1}" y1="${shape.y1}" x2="${shape.x2}" y2="${shape.y2}" ${attrs}/>`;
   if (shape.kind === "text") {
     const commonAttrs = `font-size="${shape.fontSize}" font-family="${escapeAttr(shape.fontFamily)}" text-anchor="${shape.align === "center" ? "middle" : shape.align === "right" ? "end" : "start"}" ${attrs}`;
+    // Text-on-a-path takes priority over a frame, mirrors `VectorWorkspace
+    // .tsx`'s own `renderShape` — see that file's doc comment for why only
+    // a top-level `path` target is supported.
+    const pathTarget = shape.pathShapeId ? allShapes?.find((candidate): candidate is Extract<VectorShape, { kind: "path" }> => candidate.id === shape.pathShapeId && candidate.kind === "path" && candidate.parentId === null) : undefined;
+    if (pathTarget) {
+      const textPathId = `textpath-${shape.id}`;
+      const defs = `<defs><path id="${textPathId}" d="${escapeAttr(pathData(pathTarget.points, pathTarget.closed))}"${isIdentityMatrix(pathTarget.transform) ? "" : ` transform="${matrixToCss(pathTarget.transform)}"`}/></defs>`;
+      return `${defs}<text ${commonAttrs}><textPath href="#${textPathId}">${escapeAttr(shape.value)}</textPath></text>`;
+    }
     if (shape.frameWidth && measurer) {
       const lines = wrapText(shape.value, shape.fontFamily, shape.fontSize, shape.frameWidth, measurer);
       const tspans = lines.map((line, index) => `<tspan x="${shape.x}" dy="${index === 0 ? 0 : shape.fontSize * TEXT_LINE_HEIGHT}">${escapeAttr(line)}</tspan>`).join("");
@@ -55,14 +64,14 @@ function gradientDefMarkup({ id, gradient }: GradientDef): string {
   return `<radialGradient id="${id}" gradientUnits="objectBoundingBox" cx="${gradient.from.x}" cy="${gradient.from.y}" r="${radius}">${stops}</radialGradient>`;
 }
 
-function shapeMarkup(shape: VectorShape, gradientDefs: GradientDef[], measurer?: TextMeasurer): string {
+function shapeMarkup(shape: VectorShape, gradientDefs: GradientDef[], measurer?: TextMeasurer, allShapes?: readonly VectorShape[]): string {
   if (!shape.visible) return "";
   if (shape.kind === "group" || shape.kind === "image" || shape.kind === "instance") return ""; // images have no portable pixel reference to write into a standalone file (see this module's own doc comment); an instance is written as <use> by `walk` instead, since it needs the symbol-id bookkeeping this function doesn't have
   const resolved = resolveAppearance(shape.style, shape.id);
   gradientDefs.push(...resolved.gradientDefs);
   const transform = isIdentityMatrix(shape.transform) ? "" : ` transform="${matrixToCss(shape.transform)}"`;
-  const fillElements = resolved.fills.filter((fill) => fill.layer.visible).map((fill) => geometryElement(shape, fillAttrs(fill.layer, fill.css), measurer)).join("");
-  const strokeElements = resolved.strokes.filter((stroke) => stroke.layer.visible).map((stroke, index) => strokeMarkup(shape, stroke.layer, stroke.css, index, measurer)).join("");
+  const fillElements = resolved.fills.filter((fill) => fill.layer.visible).map((fill) => geometryElement(shape, fillAttrs(fill.layer, fill.css), measurer, allShapes)).join("");
+  const strokeElements = resolved.strokes.filter((stroke) => stroke.layer.visible).map((stroke, index) => strokeMarkup(shape, stroke.layer, stroke.css, index, measurer, allShapes)).join("");
   const blend = shape.style.blendMode === "normal" ? "" : ` style="mix-blend-mode:${shape.style.blendMode}"`;
   return `<g${transform} opacity="${shape.style.opacity}"${blend}>${fillElements}${strokeElements}</g>`;
 }
@@ -90,14 +99,14 @@ function strokeAttrs(layer: StrokeLayer, css: string, width: number): string {
  * tradeoff this file's own module doc comment already makes for every
  * other piece of markup here.
  */
-function strokeMarkup(shape: Exclude<VectorShape, { kind: "image" } | { kind: "group" } | { kind: "instance" }>, layer: StrokeLayer, css: string, index: number, measurer?: TextMeasurer): string {
-  if (layer.alignment === "center") return geometryElement(shape, strokeAttrs(layer, css, layer.width), measurer);
+function strokeMarkup(shape: Exclude<VectorShape, { kind: "image" } | { kind: "group" } | { kind: "instance" }>, layer: StrokeLayer, css: string, index: number, measurer?: TextMeasurer, allShapes?: readonly VectorShape[]): string {
+  if (layer.alignment === "center") return geometryElement(shape, strokeAttrs(layer, css, layer.width), measurer, allShapes);
   const confineId = `stroke-align-${shape.id}-${index}`;
   const confine = layer.alignment === "inner"
-    ? `<clipPath id="${confineId}">${geometryElement(shape, "", measurer)}</clipPath>`
-    : `<mask id="${confineId}"><rect x="-100000" y="-100000" width="200000" height="200000" fill="white"/>${geometryElement(shape, 'fill="black"', measurer)}</mask>`;
+    ? `<clipPath id="${confineId}">${geometryElement(shape, "", measurer, allShapes)}</clipPath>`
+    : `<mask id="${confineId}"><rect x="-100000" y="-100000" width="200000" height="200000" fill="white"/>${geometryElement(shape, 'fill="black"', measurer, allShapes)}</mask>`;
   const confineAttr = layer.alignment === "inner" ? `clip-path="url(#${confineId})"` : `mask="url(#${confineId})"`;
-  return `${confine}${geometryElement(shape, `${strokeAttrs(layer, css, layer.width * 2)} ${confineAttr}`, measurer)}`;
+  return `${confine}${geometryElement(shape, `${strokeAttrs(layer, css, layer.width * 2)} ${confineAttr}`, measurer, allShapes)}`;
 }
 
 /** `usedSymbolIds` collects every symbol an `instance` shape references as
@@ -118,7 +127,7 @@ function walk(shapes: readonly VectorShape[], parentId: string | null, gradientD
       const transform = isIdentityMatrix(shape.transform) ? "" : ` transform="${matrixToCss(shape.transform)}"`;
       return `<use href="#${shape.symbolId}"${transform}/>`;
     }
-    return shapeMarkup(shape, gradientDefs, measurer);
+    return shapeMarkup(shape, gradientDefs, measurer, shapes);
   }).join("");
 }
 
