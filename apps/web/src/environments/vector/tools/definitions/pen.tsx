@@ -179,6 +179,35 @@ const pen: VectorToolDefinition<PenState> = {
       return;
     }
     const before = context.snapshot();
+
+    // Clicking near the open end of an existing path continues it instead
+    // of always starting a new one — docs/vector-plan.md section 9, second
+    // priority ("продолжение существующего открытого контура кликом по его
+    // концу"). Only the *last*-point end is picked up here: prepending at
+    // the first-point end (which would need reversing the point order and
+    // swapping each point's handleIn/handleOut) and joining two separate
+    // open contours into one are both still open — see that section's own
+    // notes. A closed path or one with only one point (nothing meaningfully
+    // "open" to continue) is skipped.
+    const toleranceDocumentUnits = firstPointToleranceScreenPx / context.viewport.zoom;
+    const continuation = context.document.shapes.find((item) => {
+      if (item.kind !== "path" || item.closed || item.points.length < 2) return false;
+      const last = item.points[item.points.length - 1]!;
+      return Math.hypot(pointer.point.x - last.x, pointer.point.y - last.y) <= toleranceDocumentUnits;
+    });
+    if (continuation?.kind === "path") {
+      // The click that resumes an open path only *selects* it to keep
+      // drawing on — it does not itself add a point at (essentially) the
+      // same spot the existing last point already occupies. The handle
+      // anchors on that existing last point so a click-drag here can still
+      // pull a new handle out of it, mirroring what a click-drag on any
+      // other already-placed point does.
+      const lastIndex = continuation.points.length - 1;
+      const lastPoint = continuation.points[lastIndex]!;
+      context.setState({ draft: { shapeId: continuation.id, before }, handle: { shapeId: continuation.id, pointIndex: lastIndex, anchor: { x: lastPoint.x, y: lastPoint.y } }, cursor: { x: lastPoint.x, y: lastPoint.y } });
+      return;
+    }
+
     // "strokeWidth" is vector.pen's own option; the pre-port code hardcoded
     // 2 regardless of what the panel showed — the dead-checkbox CLAUDE.md §3
     // rules out. A freshly drawn path still has no *visible* stroke (matches

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildShapeSpatialIndex, createVectorDocument, type VectorDocumentState } from "@vravio/env-vector";
-import pen, { finishPath, type PenState } from "./definitions/pen";
+import pen, { closePath, finishPath, type PenState } from "./definitions/pen";
 import type { ToolContext, ToolPointer } from "./types";
 
 /**
@@ -153,6 +153,49 @@ describe("vector.pen — gestures added for docs/vector-plan.md section 9", () =
     expect(context.state.cursor).toEqual({ x: 100, y: 100 });
     pen.onPointerMove!(context, pointerAt(180, 140));
     expect(context.state.cursor).toEqual({ x: 180, y: 140 });
+  });
+
+  it("clicking near the open end of an existing path continues it instead of starting a new one", () => {
+    const document = createVectorDocument(400, 300);
+    const { context } = makeContext(document);
+    pen.onPointerDown!(context, pointerAt(100, 100));
+    pen.onGestureEnd!(context, pointerAt(100, 100));
+    pen.onPointerDown!(context, pointerAt(160, 100));
+    pen.onGestureEnd!(context, pointerAt(160, 100));
+    finishPath(context);
+    expect(document.shapes).toHaveLength(1);
+
+    // Fresh gesture, no draft — but the click lands within tolerance of the
+    // finished path's own last point (160,100), not exactly on it.
+    pen.onPointerDown!(context, pointerAt(162, 101));
+    pen.onGestureEnd!(context, pointerAt(162, 101));
+    pen.onPointerDown!(context, pointerAt(220, 140));
+    finishPath(context);
+
+    // Still one shape — the continuation appended to it, it did not create
+    // a second, separate path.
+    expect(document.shapes).toHaveLength(1);
+    expect(firstPath(document).points).toHaveLength(3);
+  });
+
+  it("does not continue a closed path, or a path with only one point", () => {
+    const document = createVectorDocument(400, 300);
+    const { context } = makeContext(document);
+    pen.onPointerDown!(context, pointerAt(100, 100));
+    pen.onGestureEnd!(context, pointerAt(100, 100));
+    pen.onPointerDown!(context, pointerAt(160, 100));
+    pen.onGestureEnd!(context, pointerAt(160, 100));
+    pen.onPointerDown!(context, pointerAt(130, 160));
+    pen.onGestureEnd!(context, pointerAt(130, 160));
+    closePath(context);
+    expect(document.shapes).toHaveLength(1);
+
+    // Click near the now-closed path's last point — must start a brand
+    // new path, not append to a closed one.
+    pen.onPointerDown!(context, pointerAt(131, 161));
+    pen.onGestureEnd!(context, pointerAt(131, 161));
+    finishPath(context);
+    expect(document.shapes).toHaveLength(2);
   });
 
   it("finishing the path clears cursor tracking along with the rest of the draft state", () => {
