@@ -44,7 +44,7 @@ function makeContext(document: VectorDocumentState): { context: ToolContext<PenS
     get state() { return state; },
     setState: (next) => { state = next; },
     mutate: (fn) => fn(document),
-    snapshot: () => ({ shapes: structuredClone(document.shapes), activeShapeId: document.activeShapeId, selection: document.selection, artboards: structuredClone(document.artboards), activeArtboardId: document.activeArtboardId, palette: structuredClone(document.palette) }),
+    snapshot: () => ({ shapes: structuredClone(document.shapes), activeShapeId: document.activeShapeId, selection: document.selection, artboards: structuredClone(document.artboards), activeArtboardId: document.activeArtboardId, palette: structuredClone(document.palette), guides: structuredClone(document.guides), rulerOrigin: document.rulerOrigin, rulerMode: document.rulerMode }),
     commitDrag: () => {},
     // Applies the mutator synchronously (like the real implementation's
     // own before-any-`await` ordering — see `vector-commands.ts`'s

@@ -153,7 +153,7 @@ export interface PaletteColor {
 
 export interface VectorDocumentState {
   readonly kind: "vector";
-  readonly schemaVersion: 8;
+  readonly schemaVersion: 9;
   width: number;
   height: number;
   artboards: Artboard[];
@@ -179,6 +179,41 @@ export interface VectorDocumentState {
   /** The document's own saved colour swatches — see `PaletteColor`'s own
    * doc comment for what this is and isn't. */
   palette: PaletteColor[];
+  /** Stage 15/stage 5's own honest gap, closed together: draggable guide
+   * lines, the vector side of what raster's `RasterGuide` already has. See
+   * `VectorGuide`'s own doc comment for `scope`. */
+  guides: VectorGuide[];
+  /** Where the ruler shows "0" — `null` means the document's own (0, 0),
+   * same as before this existed. Set by dragging from the ruler corner
+   * (Illustrator's own gesture for repositioning the zero point), read
+   * only in `"global"` ruler mode; `"artboard"` mode ignores this and
+   * shows 0 at the active artboard's own corner instead, so the two
+   * settings never fight over the same ruler. */
+  rulerOrigin: { x: number; y: number } | null;
+  /** `"global"`: ruler values are document-space (offset by `rulerOrigin`
+   * if set). `"artboard"`: ruler values are relative to the active
+   * artboard's own top-left corner, the way Illustrator's own per-artboard
+   * ruler mode works — falls back to `"global"` behaviour when there is no
+   * active artboard to be relative to. */
+  rulerMode: "global" | "artboard";
+}
+
+/**
+ * A draggable guide line — dragged out of a ruler, same gesture as
+ * `RasterGuide`. `scope: null` is a *global* guide, shown and usable
+ * regardless of which artboard (if any) is active; `scope: <artboardId>`
+ * is visible only while that specific artboard is the active one, the
+ * `Guide { scope }` this stage's own plan entry asked for. An artboard
+ * being deleted does not delete its scoped guides — they simply become
+ * unreachable the same way a shape under a deleted artboard stays exactly
+ * where it was (an artboard owns nothing, `deleteArtboard`'s own doc
+ * comment) — orphaned rather than destroyed, consistent with everything
+ * else this stage already treats an artboard as pure metadata for.
+ */
+export interface VectorGuide {
+  readonly orientation: "horizontal" | "vertical";
+  readonly position: number;
+  readonly scope: string | null;
 }
 
 /**
@@ -219,6 +254,11 @@ export interface VectorDocumentState {
  * - v7 → v8 (stage 15's bleed): every artboard gets `bleed: 0` — a v7
  *   artboard already behaved as if it had none (nothing read the field,
  *   nothing drew a margin), so `0` reproduces that exactly.
+ * - v8 → v9 (stage 15's rulers/guides): `guides` defaults to `[]`,
+ *   `rulerOrigin` to `null`, `rulerMode` to `"global"` — a v8 document
+ *   already behaved exactly like an empty-guides, zero-origin, global-mode
+ *   one (there was no ruler for vector documents at all), so these
+ *   reproduce that rather than inventing a saved ruler state from nothing.
  */
 export function migrateVectorDocumentState(state: VectorDocumentState): VectorDocumentState {
   const candidate = state as unknown as {
@@ -227,6 +267,9 @@ export function migrateVectorDocumentState(state: VectorDocumentState): VectorDo
     resolution?: number;
     displayUnit?: LengthUnit;
     palette?: PaletteColor[];
+    guides?: VectorGuide[];
+    rulerOrigin?: { x: number; y: number } | null;
+    rulerMode?: "global" | "artboard";
     shapes: Array<Record<string, unknown>>;
   };
   if (typeof candidate.artboards === "boolean" || candidate.artboards === undefined) candidate.artboards = [];
@@ -235,6 +278,9 @@ export function migrateVectorDocumentState(state: VectorDocumentState): VectorDo
   candidate.resolution ??= 72;
   candidate.displayUnit ??= "px";
   candidate.palette ??= [];
+  candidate.guides ??= [];
+  candidate.rulerOrigin ??= null;
+  candidate.rulerMode ??= "global";
 
   candidate.shapes.forEach((shape, index) => {
     if (typeof shape.parentId === "undefined") shape.parentId = null;
@@ -267,7 +313,7 @@ export function migrateVectorDocumentState(state: VectorDocumentState): VectorDo
     }
   });
 
-  (state as { schemaVersion: number }).schemaVersion = 8;
+  (state as { schemaVersion: number }).schemaVersion = 9;
   return state;
 }
 
@@ -299,7 +345,7 @@ export function isVectorDocumentState(value: unknown): value is VectorDocumentSt
   if (!value || typeof value !== "object") return false;
   const state = value as { kind?: unknown; shapes?: unknown; schemaVersion?: unknown };
   if (state.kind !== "vector" || !Array.isArray(state.shapes)) return false;
-  if (![2, 3, 4, 5, 6, 7, 8].includes(state.schemaVersion as number)) return false;
+  if (![2, 3, 4, 5, 6, 7, 8, 9].includes(state.schemaVersion as number)) return false;
   migrateVectorDocumentState(value as VectorDocumentState);
   return true;
 }

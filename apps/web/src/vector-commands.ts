@@ -1,4 +1,4 @@
-import { createSymbolFromShapes, detachInstance, duplicateShape, groupShapes, moveShapeInStack, placeSymbolInstance, redefineSymbolFromShapes, removeShapes, ungroupShapes, type Artboard, type PaletteColor, type VectorDocumentState, type VectorShape, type ZOrderMove } from "@vravio/env-vector";
+import { createSymbolFromShapes, detachInstance, duplicateShape, groupShapes, moveShapeInStack, placeSymbolInstance, redefineSymbolFromShapes, removeShapes, ungroupShapes, type Artboard, type PaletteColor, type VectorDocumentState, type VectorGuide, type VectorShape, type ZOrderMove } from "@vravio/env-vector";
 import { kernel } from "./kernel";
 
 /**
@@ -12,12 +12,18 @@ import { kernel } from "./kernel";
  * one of `artboard-ops.ts`'s own functions) had its entire effect thrown
  * away the moment `assign` wrote back a snapshot that never mentioned
  * artboards at all — caught live, not in a test: the Artboards panel's own
- * delete button visibly did nothing.
+ * delete button visibly did nothing. `palette` (section 8's addition) hit
+ * the exact same bug the same way, live again; `guides`/`rulerOrigin`/
+ * `rulerMode` (stage 15's rulers) were added to all three spots — this
+ * type, `snapshotVector`, and both `assign`/`working`/`after` sites in
+ * `changeVectorDocument` below — in the same commit that introduced them,
+ * on the strength of that pattern, rather than waiting to rediscover it a
+ * third time live.
  */
-export interface VectorSnapshot { shapes: VectorShape[]; activeShapeId: string | null; selection: readonly string[]; artboards: Artboard[]; activeArtboardId: string | null; palette: PaletteColor[] }
+export interface VectorSnapshot { shapes: VectorShape[]; activeShapeId: string | null; selection: readonly string[]; artboards: Artboard[]; activeArtboardId: string | null; palette: PaletteColor[]; guides: VectorGuide[]; rulerOrigin: { x: number; y: number } | null; rulerMode: "global" | "artboard" }
 
 export function snapshotVector(state: VectorDocumentState): VectorSnapshot {
-  return { shapes: structuredClone(state.shapes), activeShapeId: state.activeShapeId, selection: state.selection, artboards: structuredClone(state.artboards), activeArtboardId: state.activeArtboardId, palette: structuredClone(state.palette) };
+  return { shapes: structuredClone(state.shapes), activeShapeId: state.activeShapeId, selection: state.selection, artboards: structuredClone(state.artboards), activeArtboardId: state.activeArtboardId, palette: structuredClone(state.palette), guides: structuredClone(state.guides), rulerOrigin: state.rulerOrigin, rulerMode: state.rulerMode };
 }
 
 function assignVectorSnapshot(documentId: string, snapshot: VectorSnapshot): void {
@@ -28,6 +34,9 @@ function assignVectorSnapshot(documentId: string, snapshot: VectorSnapshot): voi
     state.artboards = structuredClone(snapshot.artboards);
     state.activeArtboardId = snapshot.activeArtboardId;
     state.palette = structuredClone(snapshot.palette);
+    state.guides = structuredClone(snapshot.guides);
+    state.rulerOrigin = snapshot.rulerOrigin;
+    state.rulerMode = snapshot.rulerMode;
   });
 }
 
@@ -60,9 +69,9 @@ export async function changeVectorDocument(documentId: string, label: string, mu
   if (!document || !history) return;
 
   const before = snapshotVector(document.state);
-  const working: VectorDocumentState = { ...document.state, shapes: structuredClone(document.state.shapes), artboards: structuredClone(document.state.artboards), palette: structuredClone(document.state.palette) };
+  const working: VectorDocumentState = { ...document.state, shapes: structuredClone(document.state.shapes), artboards: structuredClone(document.state.artboards), palette: structuredClone(document.state.palette), guides: structuredClone(document.state.guides) };
   if (!mutate(working)) return;
-  const after: VectorSnapshot = { shapes: working.shapes, activeShapeId: working.activeShapeId, selection: working.selection, artboards: working.artboards, activeArtboardId: working.activeArtboardId, palette: working.palette };
+  const after: VectorSnapshot = { shapes: working.shapes, activeShapeId: working.activeShapeId, selection: working.selection, artboards: working.artboards, activeArtboardId: working.activeArtboardId, palette: working.palette, guides: working.guides, rulerOrigin: working.rulerOrigin, rulerMode: working.rulerMode };
 
   const assign = (snapshot: VectorSnapshot): void => assignVectorSnapshot(documentId, snapshot);
   await history.execute({ label, memoryEstimate: 0, redo: () => assign(after), undo: () => assign(before) });

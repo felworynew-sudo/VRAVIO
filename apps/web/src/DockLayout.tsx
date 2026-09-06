@@ -19,7 +19,7 @@ import { rasterAdjustmentById, rasterAdjustments } from "./raster-adjustments/re
 import { environmentsWithWindows, windowById, windowsFor } from "./windows/registry";
 import { windowTitle } from "./windows/types";
 import { PANEL_REQUEST_EVENT, persistVisiblePanelIds, readVisiblePanelIds, type PanelVisibilityDetail } from "./windows/runtime";
-import { addPaletteColor, deleteArtboard, duplicateArtboard, isVectorDocumentState, listSymbols, rearrangeArtboardsGrid, renameArtboard, renamePaletteColor, reorderArtboard, removePaletteColor, setArtboardBleed, shapeBounds, updateShape, vectorShapeRows, type Artboard, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { addPaletteColor, clearGuides, deleteArtboard, duplicateArtboard, isVectorDocumentState, listSymbols, rearrangeArtboardsGrid, renameArtboard, renamePaletteColor, reorderArtboard, removePaletteColor, setArtboardBleed, setRulerMode, shapeBounds, updateShape, vectorShapeRows, type Artboard, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
 import { colorToCss, cssToColor } from "@vravio/kernel";
 import { vectorTextMeasurer } from "./vector-text-metrics";
 import { changeVectorDocument, createSymbolFromActiveSelection, deleteActiveVectorShapes, detachActiveVectorInstance, duplicateActiveVectorShape, groupActiveVectorShapes, placeVectorSymbolInstance, redefineSymbolFromActiveSelection, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
@@ -695,6 +695,14 @@ function ArtboardsPanel() {
   };
 
   return <div className="dock-panel-body">
+    <div className="artboard-row">
+      <button className={state.rulerMode === "artboard" ? "active" : ""} onClick={() => void changeVectorDocument(active.id, "Set Ruler Mode (Режим линеек)", (draft) => { setRulerMode(draft, draft.rulerMode === "artboard" ? "global" : "artboard"); return true; })} title={text(language, "Toggle between document-wide rulers and rulers relative to the active artboard", "Переключить линейки между всем документом и активной областью")}>
+        {text(language, "Ruler:", "Линейка:")} {state.rulerMode === "artboard" ? text(language, "Artboard", "Область") : text(language, "Global", "Документ")}
+      </button>
+      <button onClick={() => void changeVectorDocument(active.id, "Clear Guides (Очистить направляющие)", (draft) => { clearGuides(draft); return true; })} title={text(language, "Remove every guide", "Удалить все направляющие")}>
+        {text(language, "Clear Guides", "Очистить направляющие")}
+      </button>
+    </div>
     {state.artboards.length === 0
       ? <div className="empty-row">{text(language, "No artboards yet — the document itself is the canvas.", "Монтажных областей пока нет — холст пока сам является документом.")}</div>
       : <>

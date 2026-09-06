@@ -36,11 +36,11 @@ function v2Document(): unknown {
   };
 }
 
-describe("vector document v2 → v8 migration", () => {
+describe("vector document v2 → v9 migration", () => {
   it("accepts a v2 document as valid and upgrades it all the way to the current schemaVersion", () => {
     const raw = v2Document();
     expect(isVectorDocumentState(raw)).toBe(true);
-    expect((raw as VectorDocumentState).schemaVersion).toBe(8);
+    expect((raw as VectorDocumentState).schemaVersion).toBe(9);
   });
 
   it("gives a pre-palette document an empty palette rather than inventing entries", () => {
@@ -57,6 +57,15 @@ describe("vector document v2 → v8 migration", () => {
     const raw = { ...v2Document(), schemaVersion: 7, artboards: [{ id: "artboard-1", name: "Page 1", x: 0, y: 0, width: 800, height: 600 }], activeArtboardId: null, palette: [] };
     isVectorDocumentState(raw);
     expect((raw as VectorDocumentState).artboards[0]!.bleed).toBe(0);
+  });
+
+  it("gives a pre-ruler document no guides, no ruler origin, and global ruler mode", () => {
+    const raw = v2Document();
+    isVectorDocumentState(raw);
+    const state = raw as VectorDocumentState;
+    expect(state.guides).toEqual([]);
+    expect(state.rulerOrigin).toBeNull();
+    expect(state.rulerMode).toBe("global");
   });
 
   it("turns the boolean artboards flag into an empty array, not a truthy/falsy re-encoding of it", () => {

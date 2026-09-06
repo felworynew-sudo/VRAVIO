@@ -13,6 +13,7 @@ import { closePath, deleteLastPoint, deletePath, finishPath, hasDraft, type PenS
 import type { ToolContext, ToolPointer } from "./environments/vector/tools/types";
 import { vectorTextMeasurer } from "./vector-text-metrics";
 import { useModifierResults } from "./vector-modifiers";
+import { useVectorRulerGuides } from "./vector-ruler-guides";
 
 /**
  * Stage 5 of docs/migration-plan.md: the vector counterpart of
@@ -57,7 +58,7 @@ function clampZoom(zoom: number): number {
  * actually centres) is `stageBounds`'s centre, which is what this needs
  * instead of assuming document space starts at the stage's own origin.
  */
-function toDocumentPoint(event: { clientX: number; clientY: number }, workspace: HTMLElement, viewport: { panX: number; panY: number; zoom: number; rotation: number }, stageBounds: { x: number; y: number; width: number; height: number }) {
+export function toDocumentPoint(event: { clientX: number; clientY: number }, workspace: HTMLElement, viewport: { panX: number; panY: number; zoom: number; rotation: number }, stageBounds: { x: number; y: number; width: number; height: number }) {
   const rect = workspace.getBoundingClientRect();
   const dx = event.clientX - rect.left - rect.width / 2 - viewport.panX;
   const dy = event.clientY - rect.top - rect.height / 2 - viewport.panY;
@@ -604,6 +605,9 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   // rather than showing a bare grey canvas with nothing on it.
   const pages = state.artboards.length > 0 ? state.artboards : [{ id: "__default__", name: "", x: 0, y: 0, width: state.width, height: state.height, bleed: 0 }];
   const labelSize = 12 / viewport.zoom;
+  const { guideOverlay, rulers } = useVectorRulerGuides({ documentId: document.id, state, viewport, workspaceRef, workspaceSize, canvasBounds });
+  const showRulers = useShellStore((shell) => shell.preferences.showRulers);
+  const showGuides = useShellStore((shell) => shell.preferences.showGuides);
 
   return <div ref={workspaceRef} className="vector-workspace" data-active-tool={activeToolId} onWheel={handleWheel} onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
     <div className="vector-stage" style={stageStyle}>
@@ -620,6 +624,12 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
         {catalogueTool?.Overlay && <catalogueTool.Overlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>} context={toolContextFor(catalogueTool.id)}/>}
       </svg>
     </div>
+    {/* Outside .vector-stage on purpose — same reasoning as the brush cursor
+        and raster's own rulers/guides (`raster-ruler-guides.tsx`'s own doc
+        comment): that element carries the zoom's CSS transform, which
+        `non-scaling-stroke` does not reliably cancel for screen-space chrome. */}
+    {showGuides && guideOverlay}
+    {showRulers && rulers}
     {contextMenu.node}
   </div>;
 }
