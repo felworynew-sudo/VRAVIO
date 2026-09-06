@@ -165,6 +165,15 @@ export function placeVectorSymbolInstance(documentId: string, symbolId: string, 
 
 let sharedGeometryPort: ReturnType<typeof createWasmGeometryPort> | null = null;
 
+/** The one WASM boolean-op instance every geometry-dependent vector command
+ * shares — `vector.shape-builder`'s own face-fracturing needs the exact same
+ * port `applyPathfinderOp` below already lazily creates, not a second WASM
+ * module load. */
+export function getSharedGeometryPort(): ReturnType<typeof createWasmGeometryPort> {
+  sharedGeometryPort ??= createWasmGeometryPort();
+  return sharedGeometryPort;
+}
+
 const pathfinderLabels: Record<BooleanOpKind, string> = {
   union: "Unite (Объединить)",
   subtract: "Subtract (Вычесть)",

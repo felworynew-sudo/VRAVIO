@@ -112,6 +112,7 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "tool.vector.r|R|vector|Tools",
   "tool.vector.t|T|vector|Tools",
   "tool.vector.v|V|vector|Tools",
+  "tool.vector.x|X|vector|Tools", // Shape Builder (vector.shape-builder) — Inkscape's own bare "X" shortcut for the same tool, no remap needed.
   "tool.vector.z|Z|vector|Tools", // the vector Zoom tool — same addition as vector.hand just above.
   "view.actual|Mod+1||View",
   "view.commandPalette|Mod+F||Edit",

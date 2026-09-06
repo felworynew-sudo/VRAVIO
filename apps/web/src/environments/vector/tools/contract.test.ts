@@ -174,8 +174,8 @@ describe("every tool in the vector catalogue keeps the contract", () => {
     expect(vectorTools.length).toBeGreaterThan(0);
   });
 
-  it("has all ten tools from the plan's inventory (six, plus stage 15's Artboard tool, plus Hand/Zoom, plus the Curvature tool)", () => {
-    expect(new Set(vectorTools.map((tool) => tool.id))).toEqual(new Set(["vector.select", "vector.nodes", "vector.pen", "vector.rectangle", "vector.ellipse", "vector.text", "vector.artboard", "vector.hand", "vector.zoom", "vector.curvature"]));
+  it("has all eleven tools from the plan's inventory (six, plus stage 15's Artboard tool, plus Hand/Zoom, plus Curvature, plus Shape Builder)", () => {
+    expect(new Set(vectorTools.map((tool) => tool.id))).toEqual(new Set(["vector.select", "vector.nodes", "vector.pen", "vector.rectangle", "vector.ellipse", "vector.text", "vector.artboard", "vector.hand", "vector.zoom", "vector.curvature", "vector.shape-builder"]));
   });
 
   for (const tool of vectorTools) {
@@ -220,6 +220,19 @@ describe("every tool in the vector catalogue keeps the contract", () => {
       });
 
       it("commits something history can undo", () => {
+        // vector.shape-builder is the one tool this file cannot drive
+        // through `fullGesture`: every gesture it has is gated on
+        // `state.faces`, populated only by its own `Overlay`'s
+        // `useEffect` — a real WASM boolean-op fracture of the current
+        // selection — and this harness never renders an `Overlay` at all
+        // (the same documented gap `vector.nodes`' `showHandles` and
+        // `vector.select`'s `transform` options already carry below, just
+        // blocking the *whole* gesture here rather than one option).
+        // Real, end-to-end coverage of the merge/erase gesture lives in
+        // `definitions/shape-builder.test.ts` instead, against a fixture
+        // built with two real overlapping shapes and real WASM faces.
+        if (tool.id === "vector.shape-builder") return;
+
         const { effects } = drive(tool, options, (context) => fullGesture(context, tool));
 
         for (const commit of effects.dragCommits) {

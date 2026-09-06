@@ -24,4 +24,5 @@ export * from "./palette-ops";
 export * from "./guide-ops";
 export * from "./softproof";
 export * from "./boolean-ops";
+export * from "./shape-builder";
 export * from "./text-wrap";

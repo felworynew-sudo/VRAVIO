@@ -79,6 +79,12 @@ export const tools: readonly ToolDefinition[] = [
   // icons/ either, so a hand-picked glyph, the same reason vector.artboard
   // has one below.
   { id: "vector.curvature", kind: "vector", icon: "∿", label: { en: "Curvature Tool", ru: "Перо кривизны" }, shortcut: "C", options: [color, { id: "strokeWidth", label: { en: "Stroke", ru: "Обводка" }, type: "number", min: 0, max: 1000, step: 0.25, defaultValue: 2, unit: "px" }] },
+  // Illustrator's own shortcut is Shift+M; Inkscape's own Shape Builder
+  // (the donor this tool's behaviour is actually read from — see
+  // shape-builder.ts's own doc comment) uses a bare "X", which this
+  // project's single-bare-key convention can use directly, no remap
+  // needed. No matching icons/ file, hence the hand-picked glyph.
+  { id: "vector.shape-builder", kind: "vector", icon: "◐", label: { en: "Shape Builder Tool", ru: "Создание фигур" }, shortcut: "X", options: [] },
   { id: "vector.rectangle", kind: "vector", icon: "□", iconFile: "КВАДРАТ.svg", label: { en: "Rectangle Tool", ru: "Прямоугольник" }, shortcut: "R", options: [color, { id: "radius", label: { en: "Corner radius", ru: "Радиус углов" }, type: "number", min: 0, max: 1000, step: 1, defaultValue: 0, unit: "px" }] },
   { id: "vector.ellipse", kind: "vector", icon: "○", iconFile: "ЭЛИПС.svg", label: { en: "Ellipse Tool", ru: "Эллипс" }, shortcut: "O", options: [color] },
   { id: "vector.text", kind: "vector", icon: "T", iconFile: "ТЕКСТ.svg", label: { en: "Type Tool", ru: "Текст" }, shortcut: "T", options: [color, { id: "fontSize", label: { en: "Font size", ru: "Размер шрифта" }, type: "number", min: 1, max: 1000, step: 1, defaultValue: 48, unit: "px" }] },
