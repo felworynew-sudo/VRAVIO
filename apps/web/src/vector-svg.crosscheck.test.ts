@@ -70,6 +70,47 @@ describe("SVG export cross-checked against resvg", () => {
     expect(interiorAlpha).toBe(0);
   });
 
+  it("an inner-aligned stroke's clip-path actually confines it inside the shape when resvg renders it, not just in the markup's own strings", async () => {
+    // Rectangle x=10..70, stroke width 6, "inner" alignment: the stroke
+    // should occupy x=10..16 (inward from the edge), never x<10 — proof
+    // the double-width-stroke-plus-clip-path technique
+    // (`vector-svg-export.ts`'s own `strokeMarkup`) actually confines the
+    // stroke the way a real SVG renderer executes it, not just that the
+    // right attribute strings are present in the text output.
+    const state = createVectorDocument(100, 100);
+    const rect = createShape("rectangle", 10, 10, { ...emptyVectorStyle(), strokes: [{ ...solidStroke(srgb(20, 20, 200), 6), alignment: "inner" }] });
+    Object.assign(rect, { width: 60, height: 60 });
+    state.shapes.push(rect);
+
+    const svg = exportVectorDocumentToSvg(state);
+    const pixels = await renderSvgToRgba(svg, 100, 100);
+
+    const [, , , outsideAlpha] = pixelAt(pixels, 100, 8, 40); // 2px outside the edge — center alignment would reach here, inner must not
+    expect(outsideAlpha).toBe(0);
+    const [, , insideBlue, insideAlpha] = pixelAt(pixels, 100, 13, 40); // 3px inside the edge — within the inner stroke's own 6px band
+    expect(insideAlpha).toBeGreaterThan(0);
+    expect(insideBlue).toBeGreaterThan(150);
+  });
+
+  it("an outer-aligned stroke's clip-path actually confines it outside the shape when resvg renders it", async () => {
+    // Same rectangle, "outer" alignment: the stroke should occupy
+    // x=4..10 (outward from the edge), never x>10 (the shape's own
+    // unfilled interior stays fully transparent).
+    const state = createVectorDocument(100, 100);
+    const rect = createShape("rectangle", 10, 10, { ...emptyVectorStyle(), strokes: [{ ...solidStroke(srgb(20, 20, 200), 6), alignment: "outer" }] });
+    Object.assign(rect, { width: 60, height: 60 });
+    state.shapes.push(rect);
+
+    const svg = exportVectorDocumentToSvg(state);
+    const pixels = await renderSvgToRgba(svg, 100, 100);
+
+    const [, , outsideBlue, outsideAlpha] = pixelAt(pixels, 100, 6, 40); // 4px outside the edge — within the outer stroke's own 6px band
+    expect(outsideAlpha).toBeGreaterThan(0);
+    expect(outsideBlue).toBeGreaterThan(150);
+    const [, , , insideAlpha] = pixelAt(pixels, 100, 13, 40); // 3px inside the edge — center alignment would reach here, outer must not
+    expect(insideAlpha).toBe(0);
+  });
+
   it("is non-vacuous: a shape moved outside the canvas produces no pixels at its old location", async () => {
     const state = createVectorDocument(100, 100);
     const rect = createShape("rectangle", 10, 10, { ...emptyVectorStyle(), fills: [solidFill(srgb(200, 50, 50))] });

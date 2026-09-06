@@ -43,7 +43,7 @@ function shapeMarkup(shape: VectorShape, gradientDefs: GradientDef[]): string {
   gradientDefs.push(...resolved.gradientDefs);
   const transform = isIdentityMatrix(shape.transform) ? "" : ` transform="${matrixToCss(shape.transform)}"`;
   const fillElements = resolved.fills.filter((fill) => fill.layer.visible).map((fill) => geometryElement(shape, fillAttrs(fill.layer, fill.css))).join("");
-  const strokeElements = resolved.strokes.filter((stroke) => stroke.layer.visible).map((stroke) => geometryElement(shape, strokeAttrs(stroke.layer, stroke.css))).join("");
+  const strokeElements = resolved.strokes.filter((stroke) => stroke.layer.visible).map((stroke, index) => strokeMarkup(shape, stroke.layer, stroke.css, index)).join("");
   const blend = shape.style.blendMode === "normal" ? "" : ` style="mix-blend-mode:${shape.style.blendMode}"`;
   return `<g${transform} opacity="${shape.style.opacity}"${blend}>${fillElements}${strokeElements}</g>`;
 }
@@ -52,9 +52,33 @@ function fillAttrs(layer: FillLayer, css: string): string {
   return `fill="${css}" stroke="none" opacity="${layer.opacity}"${layer.blendMode === "normal" ? "" : ` style="mix-blend-mode:${layer.blendMode}"`}`;
 }
 
-function strokeAttrs(layer: StrokeLayer, css: string): string {
+function strokeAttrs(layer: StrokeLayer, css: string, width: number): string {
   const dash = layer.dash.length ? ` stroke-dasharray="${layer.dash.join(" ")}"` : "";
-  return `fill="none" stroke="${css}" stroke-width="${layer.width}" stroke-linecap="${layer.cap}" stroke-linejoin="${layer.join}"${dash} opacity="${layer.opacity}"${layer.blendMode === "normal" ? "" : ` style="mix-blend-mode:${layer.blendMode}"`}`;
+  return `fill="none" stroke="${css}" stroke-width="${width}" stroke-linecap="${layer.cap}" stroke-linejoin="${layer.join}"${dash} opacity="${layer.opacity}"${layer.blendMode === "normal" ? "" : ` style="mix-blend-mode:${layer.blendMode}"`}`;
+}
+
+/**
+ * Mirrors `VectorWorkspace.tsx`'s own `renderShape` stroke handling —
+ * see that function's doc comment for why "inside"/"outside" alignment
+ * needs a double-width stroke plus a `<clipPath>`/`<mask>` at all (SVG's
+ * `stroke` primitive has no native alignment attribute), and specifically
+ * for why "outer" is a `<mask>` and not a `<clipPath clip-rule="evenodd">`
+ * across two sibling shapes — that was the first attempt here too, and
+ * `vector-svg.crosscheck.test.ts` (rendering this exact function's output
+ * through `resvg`, not just reading the markup's own attribute strings)
+ * caught it rendering straight through to the shape's untouched interior.
+ * Kept in step with the live-canvas version by hand, the same acknowledged
+ * tradeoff this file's own module doc comment already makes for every
+ * other piece of markup here.
+ */
+function strokeMarkup(shape: Exclude<VectorShape, { kind: "image" } | { kind: "group" } | { kind: "instance" }>, layer: StrokeLayer, css: string, index: number): string {
+  if (layer.alignment === "center") return geometryElement(shape, strokeAttrs(layer, css, layer.width));
+  const confineId = `stroke-align-${shape.id}-${index}`;
+  const confine = layer.alignment === "inner"
+    ? `<clipPath id="${confineId}">${geometryElement(shape, "")}</clipPath>`
+    : `<mask id="${confineId}"><rect x="-100000" y="-100000" width="200000" height="200000" fill="white"/>${geometryElement(shape, 'fill="black"')}</mask>`;
+  const confineAttr = layer.alignment === "inner" ? `clip-path="url(#${confineId})"` : `mask="url(#${confineId})"`;
+  return `${confine}${geometryElement(shape, `${strokeAttrs(layer, css, layer.width * 2)} ${confineAttr}`)}`;
 }
 
 /** `usedSymbolIds` collects every symbol an `instance` shape references as

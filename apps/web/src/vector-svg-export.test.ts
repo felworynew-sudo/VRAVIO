@@ -56,6 +56,44 @@ describe("exportVectorDocumentToSvg", () => {
     expect(svg).toContain('stroke-linecap="round"');
   });
 
+  it("center-aligned stroke (the default) writes a plain stroke at its own width, no clip-path", () => {
+    const state = createVectorDocument(200, 200);
+    const rect = createShape("rectangle", 10, 10, { ...emptyVectorStyle(), strokes: [solidStroke(srgb(0, 0, 0), 6)] });
+    state.shapes.push(rect);
+    const svg = exportVectorDocumentToSvg(state);
+    expect(svg).toContain('stroke-width="6"');
+    expect(svg).not.toContain("clipPath");
+  });
+
+  it("inner-aligned stroke writes a double-width stroke clipped to the shape's own geometry", () => {
+    const state = createVectorDocument(200, 200);
+    const rect = createShape("rectangle", 10, 10, { ...emptyVectorStyle(), strokes: [{ ...solidStroke(srgb(0, 0, 0), 6), alignment: "inner" }] });
+    state.shapes.push(rect);
+    const svg = exportVectorDocumentToSvg(state);
+    expect(svg).toContain('stroke-width="12"'); // 2x the configured width
+    expect(svg).toContain('<clipPath id="stroke-align-');
+    expect(svg).toContain('clip-path="url(#stroke-align-');
+  });
+
+  it("outer-aligned stroke writes a double-width stroke masked to everywhere *except* the shape", () => {
+    // Not a clip-path: an earlier version tried `clipRule="evenodd"` across
+    // two sibling shapes here and `vector-svg.crosscheck.test.ts` (an
+    // actual resvg render, not just this markup-string check) caught it
+    // rendering straight through to the shape's own interior — resvg does
+    // not combine two *separate* clipPath children via even-odd the way
+    // two subpaths of one `<path d>` would. A `<mask>`'s white/black
+    // luminance compositing across separate elements is the one that
+    // actually confines the stroke, checked there with real pixels.
+    const state = createVectorDocument(200, 200);
+    const rect = createShape("rectangle", 10, 10, { ...emptyVectorStyle(), strokes: [{ ...solidStroke(srgb(0, 0, 0), 6), alignment: "outer" }] });
+    state.shapes.push(rect);
+    const svg = exportVectorDocumentToSvg(state);
+    expect(svg).toContain('stroke-width="12"');
+    expect(svg).toContain('<mask id="stroke-align-');
+    expect(svg).toContain('mask="url(#stroke-align-');
+    expect(svg).toContain('width="200000"'); // the oversized rect standing in for "the rest of the plane"
+  });
+
   it("a gradient fill gets a <linearGradient> in <defs> and a url() fill reference", () => {
     const state = createVectorDocument(200, 200);
     const gradient = { kind: "linear" as const, stops: [{ offset: 0, color: srgb(0, 0, 0) }, { offset: 1, color: srgb(255, 255, 255) }], from: { x: 0, y: 0 }, to: { x: 1, y: 0 } };

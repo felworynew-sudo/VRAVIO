@@ -244,17 +244,43 @@ export function paintShape(context: CanvasRenderingContext2D, shape: VectorShape
     if (shape.kind === "text") { context.font = `${shape.fontSize}px ${shape.fontFamily}`; context.textAlign = shape.align === "center" ? "center" : shape.align === "right" ? "right" : "left"; context.textBaseline = "alphabetic"; context.fillText(shape.value, shape.x, shape.y); }
     else if (path) context.fill(path);
   };
+  // "inner"/"outer" mirror `VectorWorkspace.tsx`'s `renderShape` and
+  // `vector-svg-export.ts`'s `strokeMarkup`: canvas's own `stroke()` is
+  // always centered on the path, same as SVG's `stroke`, so the same
+  // double-width-plus-confinement technique applies. `clip(path, "evenodd")`
+  // combining a huge rect with the shape's own path as two subpaths of *one*
+  // `Path2D` is the canvas equivalent of the single-`<path d>` case that
+  // worked correctly in resvg (see that file's own doc comment on why two
+  // *separate* SVG elements did not) — one Path2D object, not two, so the
+  // even-odd rule has one winding computation to resolve, not the
+  // cross-element case that failed there. Only meaningful for shapes with an
+  // interior (`path` is non-null: rectangle/ellipse/path) — a line or text
+  // baseline has no fill area for "inner"/"outer" to mean anything against,
+  // so those two kinds always render centered regardless of the setting,
+  // same degenerate case the SVG paths would hit for the same shapes.
   const paintStroke = (stroke: StrokeLayer) => {
     if (!stroke.visible) return;
     context.globalAlpha = baseAlpha * stroke.opacity;
     context.strokeStyle = canvasPaint(context, stroke.paint, bounds);
-    context.lineWidth = stroke.width;
     context.setLineDash([...stroke.dash]);
     context.lineCap = stroke.cap;
     context.lineJoin = stroke.join;
+    const confine = stroke.alignment !== "center" && path;
+    context.lineWidth = confine ? stroke.width * 2 : stroke.width;
+    if (confine) {
+      context.save();
+      if (stroke.alignment === "inner") context.clip(path);
+      else {
+        const outerClip = new Path2D();
+        outerClip.rect(-100000, -100000, 200000, 200000);
+        outerClip.addPath(path);
+        context.clip(outerClip, "evenodd");
+      }
+    }
     if (shape.kind === "line") { context.beginPath(); context.moveTo(shape.x1, shape.y1); context.lineTo(shape.x2, shape.y2); context.stroke(); }
     else if (shape.kind === "text") { context.font = `${shape.fontSize}px ${shape.fontFamily}`; context.textAlign = shape.align === "center" ? "center" : shape.align === "right" ? "right" : "left"; context.textBaseline = "alphabetic"; context.strokeText(shape.value, shape.x, shape.y); }
     else if (path) context.stroke(path);
+    if (confine) context.restore();
   };
 
   for (const fill of shape.style.fills) paintFill(fill);

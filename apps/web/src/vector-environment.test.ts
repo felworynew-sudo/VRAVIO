@@ -11,6 +11,7 @@ class FakePath2D {
   rect() {}
   roundRect() {}
   ellipse() {}
+  addPath() {}
 }
 (globalThis as { Path2D?: unknown }).Path2D = FakePath2D;
 
@@ -34,6 +35,7 @@ function fakeContext() {
     gradientStops,
     save() { calls.push("save"); },
     restore() { calls.push("restore"); },
+    clip(_path?: unknown, rule?: string) { calls.push(rule ? `clip:${rule}` : "clip"); },
     transform() { calls.push("transform"); },
     fill() { calls.push("fill"); },
     stroke() { calls.push("stroke"); },
@@ -131,6 +133,38 @@ describe("paintShape — dead-checkbox coverage", () => {
     paintShape(thick, rect({ ...emptyVectorStyle(), strokes: [solidStroke(srgb(0, 0, 0), 20)] }));
     expect(thin.calls).toContain("lineWidth:1");
     expect(thick.calls).toContain("lineWidth:20");
+  });
+
+  it("center-aligned stroke (the default) draws at its own width, no clip", () => {
+    const context = fakeContext();
+    paintShape(context, rect({ ...emptyVectorStyle(), strokes: [solidStroke(srgb(0, 0, 0), 6)] }));
+    expect(context.calls).toContain("lineWidth:6");
+    expect(context.calls).not.toContain("clip");
+    expect(context.calls.some((call) => call.startsWith("clip"))).toBe(false);
+  });
+
+  it("inner-aligned stroke doubles the width and clips to the shape's own path", () => {
+    const context = fakeContext();
+    paintShape(context, rect({ ...emptyVectorStyle(), strokes: [{ ...solidStroke(srgb(0, 0, 0), 6), alignment: "inner" }] }));
+    expect(context.calls).toContain("lineWidth:12");
+    expect(context.calls).toContain("save");
+    expect(context.calls).toContain("clip");
+    expect(context.calls).toContain("restore");
+  });
+
+  it("outer-aligned stroke doubles the width and clips with the even-odd rule (the huge-rect-minus-shape trick)", () => {
+    const context = fakeContext();
+    paintShape(context, rect({ ...emptyVectorStyle(), strokes: [{ ...solidStroke(srgb(0, 0, 0), 6), alignment: "outer" }] }));
+    expect(context.calls).toContain("lineWidth:12");
+    expect(context.calls).toContain("clip:evenodd");
+  });
+
+  it("a line shape ignores alignment (no interior to confine against) and always draws centered", () => {
+    const context = fakeContext();
+    const line = createShape("line", 0, 0, { ...emptyVectorStyle(), strokes: [{ ...solidStroke(srgb(0, 0, 0), 6), alignment: "outer" }] });
+    paintShape(context, line);
+    expect(context.calls).toContain("lineWidth:6");
+    expect(context.calls).not.toContain("clip:evenodd");
   });
 
   it("per-layer opacity multiplies into globalAlpha differently from full opacity", () => {

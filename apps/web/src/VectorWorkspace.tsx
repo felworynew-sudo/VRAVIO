@@ -195,11 +195,46 @@ function renderShape(shape: VectorShape, modifiedPath: string | undefined): Reac
     {resolved.fills.filter((fill) => fill.layer.visible).map((fill, index) => (
       <Tag key={`fill-${index}`} {...props} fill={fill.css} stroke="none" opacity={fill.layer.opacity} style={blendStyle(fill.layer.blendMode)}>{textValue}</Tag>
     ))}
-    {resolved.strokes.filter((stroke) => stroke.layer.visible).map((stroke, index) => (
-      <Tag key={`stroke-${index}`} {...props} fill="none" stroke={stroke.css} strokeWidth={stroke.layer.width}
+    {resolved.strokes.filter((stroke) => stroke.layer.visible).map((stroke, index) => {
+      // Stage 6's own honest gap, closed: SVG's `stroke` primitive is
+      // always centered on the path — there is no native "inside"/
+      // "outside" attribute. The standard workaround (also what
+      // Illustrator/Figma's own SVG export does): draw the stroke at
+      // *double* width, then confine it to the shape's own geometry
+      // ("inner", a plain `<clipPath>` referencing the shape) or to
+      // everywhere *except* the shape ("outer"). "outer" needs a
+      // `<mask>`, not a `clipPath` with `clipRule="evenodd"` across two
+      // sibling shapes — tried first, and disproved by a real renderer,
+      // not just read from a spec: resvg does not combine two *separate*
+      // child elements of one `clipPath` via even-odd the way two
+      // subpaths of one `<path d>` would combine (`vector-svg.
+      // crosscheck.test.ts` caught this — the "outer" stroke rendered
+      // right through to the shape's own untouched interior, which the
+      // markup's own attribute strings alone would never have shown). A
+      // `<mask>`'s white/black luminance compositing across separate
+      // elements *is* reliably defined the way this needs: a big white
+      // rect everywhere, a black copy of the shape painted over it, and
+      // "outer" then has an unambiguous single visible region — the
+      // white minus the black — instead of leaning on ambiguous evenodd-
+      // across-elements behaviour no renderer this project ships against
+      // has actually been checked to define the same way.
+      const alignment = stroke.layer.alignment;
+      if (alignment === "center") {
+        return <Tag key={`stroke-${index}`} {...props} fill="none" stroke={stroke.css} strokeWidth={stroke.layer.width}
+          strokeDasharray={stroke.layer.dash.length ? stroke.layer.dash.join(" ") : undefined} strokeLinecap={stroke.layer.cap} strokeLinejoin={stroke.layer.join}
+          opacity={stroke.layer.opacity} style={blendStyle(stroke.layer.blendMode)}>{textValue}</Tag>;
+      }
+      const confineId = `stroke-align-${shape.id}-${index}`;
+      const strokeElement = <Tag {...props} fill="none" stroke={stroke.css} strokeWidth={stroke.layer.width * 2} {...(alignment === "inner" ? { clipPath: `url(#${confineId})` } : { mask: `url(#${confineId})` })}
         strokeDasharray={stroke.layer.dash.length ? stroke.layer.dash.join(" ") : undefined} strokeLinecap={stroke.layer.cap} strokeLinejoin={stroke.layer.join}
-        opacity={stroke.layer.opacity} style={blendStyle(stroke.layer.blendMode)}>{textValue}</Tag>
-    ))}
+        opacity={stroke.layer.opacity} style={blendStyle(stroke.layer.blendMode)}>{textValue}</Tag>;
+      return <g key={`stroke-${index}`}>
+        {alignment === "inner"
+          ? <clipPath id={confineId}><Tag {...props}/></clipPath>
+          : <mask id={confineId}><rect x={-100000} y={-100000} width={200000} height={200000} fill="white"/><Tag {...props} fill="black"/></mask>}
+        {strokeElement}
+      </g>;
+    })}
   </g>;
 }
 

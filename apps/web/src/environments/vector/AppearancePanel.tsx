@@ -1,6 +1,6 @@
 import {
   colorPaint, solidFill, solidStroke,
-  type FillLayer, type Gradient, type Paint, type StrokeCap, type StrokeJoin, type StrokeLayer, type VectorStyle,
+  type FillLayer, type Gradient, type Paint, type StrokeAlignment, type StrokeCap, type StrokeJoin, type StrokeLayer, type VectorStyle,
 } from "@vravio/env-vector";
 import { colorToCss, colorToHex, cssToColor, srgb } from "@vravio/kernel";
 import { text } from "../../i18n";
@@ -102,6 +102,14 @@ function StrokeRow({ layer, onChange, onRemove, onMove, isFirst, isLast }: Layer
       </select>
       <select value={layer.join} onChange={(event) => onChange({ ...layer, join: event.target.value as StrokeJoin })}>
         <option value="miter">Miter</option><option value="round">Round</option><option value="bevel">Bevel</option>
+      </select>
+      {/* docs/vector-plan.md stage 6's own note: this option existed on the
+          data model with no panel control to change it away from "center"
+          at all — the dead-checkbox CLAUDE.md §3 rules out, just the other
+          direction from usual (a setting nothing could reach, not a control
+          nothing read). VectorWorkspace.tsx's renderShape now reads it. */}
+      <select value={layer.alignment} onChange={(event) => onChange({ ...layer, alignment: event.target.value as StrokeAlignment })}>
+        <option value="center">Center</option><option value="inner">Inside</option><option value="outer">Outside</option>
       </select>
     </div>
   </div>;
