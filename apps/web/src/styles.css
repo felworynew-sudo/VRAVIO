@@ -23,7 +23,18 @@ select{-webkit-appearance:none;appearance:none;background-image:linear-gradient(
 .app[data-has-toolbar="true"] { grid-template-columns:48px 1fr; }
 .app[data-theme="light"] { --bg:#e8eaf0; --surface:#f8f9fb; --surface2:#fff; --surface3:#e0e3eb; --border:#c5cad5; --text:#1a1d24; --muted:#626a78; --warning:#a86a15; --danger:#c0392b; color-scheme:light; }
 .app[data-theme="contrast"] { --bg:#000; --surface:#000; --surface2:#090909; --surface3:#111; --border:#fff; --text:#fff; --muted:#ddd; --focus:#ff0; --warning:#ff0; --danger:#f00; --accent-ink:#000; color-scheme:dark; }
-.menu-bar { grid-area:menu; display:flex; align-items:center; gap:8px; padding:0 8px; background:var(--surface); box-shadow:0 1px 0 var(--border); position:relative; z-index:5; }
+/* z-index:30, not 5: dockview (the dock/panel host next to this bar in the
+   grid) renders its own internal panels/tabs with position+z-index that is
+   never confined to a stacking context of its own — `.dock-host` and every
+   ancestor up to `.app` stay position:static, so those dockview-internal
+   z-index values compete directly against this bar's, at the document's
+   root stacking context. At 5 they won: a dropdown menu opened from here
+   (Файл/Плагины/Окно/...) rendered UNDERNEATH the dock panels, with a panel's
+   own border reading as a stray line cutting through the open dropdown.
+   30 clears every dockview element actually observed doing this, live,
+   while staying below this file's real modal layer (dialog-backdrop and
+   friends, 45-50), which still needs to cover the menu bar itself. */
+.menu-bar { grid-area:menu; display:flex; align-items:center; gap:8px; padding:0 8px; background:var(--surface); box-shadow:0 1px 0 var(--border); position:relative; z-index:30; }
 .brand { display:flex;align-items:center;margin:0 12px 0 4px;height:28px }.brand img{display:block;object-fit:contain;object-position:left center}.brand.compact img{width:23px;height:23px}.brand.full img{width:88px;height:27px}
 .menu-bar nav { display:flex; flex:0 0 auto; gap:1px; }
 .menu-bar button, .document-tabs button, .toolbar button { border:0; border-radius:var(--radius-sm); background:transparent; padding:6px 9px; cursor:pointer; }
