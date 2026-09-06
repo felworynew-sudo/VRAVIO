@@ -41,6 +41,19 @@ export interface ToolContext<TState> {
   readonly documentId: string;
   readonly document: VectorDocumentState;
   readonly viewport: DocumentViewport;
+  /**
+   * The workspace element's own pixel size and the document-space rectangle
+   * its scaled stage currently represents (`computeCanvasBounds`) — together
+   * everything `toScreenPoint` (`vector-coordinates.ts`) needs to convert a
+   * document-space point into screen pixels local to the workspace's own
+   * top-left. Added for `ScreenOverlay` below (docs/master-plan.md section
+   * 4.8's unscaled-overlay refactor): a tool that draws its own chrome in
+   * the unscaled layer needs both to place anything there at all, the same
+   * two values `VectorWorkspace.tsx` itself already threads through
+   * `toScreenPoint` for the selection handles.
+   */
+  readonly workspaceSize: { readonly width: number; readonly height: number };
+  readonly stageBounds: { readonly x: number; readonly y: number; readonly width: number; readonly height: number };
   /** This tool's own options, as the options bar has them. */
   readonly options: Readonly<Record<string, string | number | boolean>>;
   readonly activeShape: VectorShape | null;
@@ -164,12 +177,31 @@ export interface VectorToolDefinition<TState = unknown> {
 
   /**
    * Anything the tool draws over the canvas, inside the same `<svg>` the
-   * shapes render into (not a separate overlay layer — a vector canvas has no
-   * pixel/vector split to keep apart the way raster's canvas-plus-HTML-overlay
-   * does). Sizes that must not scale with zoom divide by `context.viewport.zoom`,
-   * the same convention `VectorWorkspace`'s own selection handles already use.
+   * shapes render into — document-space coordinates, sharing that `<svg>`'s
+   * own pan/zoom/rotate CSS transform. Sizes that must not visually scale
+   * with zoom still need `/ context.viewport.zoom` here (the same
+   * convention this file has always used); a size that must never be
+   * divided by anything, ever — because a competing CSS rule or a future
+   * edit could silently defeat that division, the exact regression
+   * `docs/master-plan.md` section 4.8 documents happening twice already —
+   * belongs in `ScreenOverlay` below instead.
    */
   readonly Overlay?: (props: { state: TState; document: VectorDocumentState; options: Readonly<Record<string, string | number | boolean>>; context: ToolContext<TState> }) => ReactNode;
+
+  /**
+   * Screen-space chrome: rendered *outside* the scaled `<svg>`, in the same
+   * unscaled layer `VectorWorkspace.tsx`'s own selection handles live in
+   * (`docs/master-plan.md` section 4.8) — a plain `<circle r={5}>` here is
+   * really always 5 screen pixels, not "5 document units that happen to be
+   * divided by zoom today." Use `context.workspaceSize`/`context.stageBounds`
+   * with `toScreenPoint` (`vector-coordinates.ts`) to convert a document
+   * point into this layer's own coordinate space. Added for `vector.nodes`'
+   * anchor/handle overlay — the one other place besides the selection
+   * handles this project's own bug history (commit `93fdc6e`, then the CSS
+   * regression `5ba9856` fixed) has already shown needs this, not the
+   * scaled `Overlay` above.
+   */
+  readonly ScreenOverlay?: (props: { state: TState; document: VectorDocumentState; options: Readonly<Record<string, string | number | boolean>>; context: ToolContext<TState> }) => ReactNode;
 }
 
 export interface VectorToolModule<TState = unknown> {

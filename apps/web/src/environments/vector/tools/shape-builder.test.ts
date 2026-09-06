@@ -43,6 +43,8 @@ async function fixture() {
     documentId: "test-document",
     document,
     viewport: { zoom: 1, rotation: 0, panX: 0, panY: 0, mode: "actual" },
+    workspaceSize: { width: 800, height: 600 },
+    stageBounds: { x: 0, y: 0, width: 400, height: 300 },
     options: {},
     get activeShape() { return document.shapes.find((shape) => shape.id === document.activeShapeId) ?? null; },
     get selection() { return document.selection; },

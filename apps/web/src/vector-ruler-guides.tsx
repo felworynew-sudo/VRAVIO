@@ -1,7 +1,7 @@
 import { useState, type RefObject } from "react";
 import { addGuide, removeGuide, setRulerOrigin, visibleGuides, type VectorDocumentState, type VectorGuide } from "@vravio/env-vector";
 import { rulerStep } from "./raster-coordinates";
-import { toDocumentPoint } from "./VectorWorkspace";
+import { toDocumentPoint } from "./vector-coordinates";
 import { changeVectorDocument } from "./vector-commands";
 import type { DocumentViewport } from "./store";
 

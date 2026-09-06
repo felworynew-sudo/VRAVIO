@@ -18,6 +18,7 @@ import { useVectorRulerGuides } from "./vector-ruler-guides";
 import { useCmykSoftproof } from "./vector-softproof";
 import { useVectorCanvasNavigation } from "./vector-navigation";
 import { clampZoom } from "./raster-coordinates";
+import { toDocumentPoint, toScreenPoint } from "./vector-coordinates";
 
 /**
  * Stage 5 of docs/migration-plan.md: the vector counterpart of
@@ -45,26 +46,6 @@ import { clampZoom } from "./raster-coordinates";
  *   import are canvas chrome independent of the active tool, the same as
  *   pan/zoom/rotate are for raster.
  */
-
-/**
- * Screen-space pointer coordinates into document space, undoing the
- * stage's pan/zoom/rotate transform — the same math RasterWorkspace uses
- * for its own canvas. `stageBounds` is the document-space rectangle the
- * scaled stage's own CSS box currently represents (stage 15's canvas
- * bounds, `computeCanvasBounds` — not necessarily `state.width`/`height`
- * or an origin at (0,0) any more, now that a second artboard can sit
- * anywhere on a canvas larger than the document's own default area); the
- * stage's own visual *centre* (what the existing `translate(-50%,-50%)`
- * actually centres) is `stageBounds`'s centre, which is what this needs
- * instead of assuming document space starts at the stage's own origin.
- */
-export function toDocumentPoint(event: { clientX: number; clientY: number }, workspace: HTMLElement, viewport: { panX: number; panY: number; zoom: number; rotation: number }, stageBounds: { x: number; y: number; width: number; height: number }) {
-  const rect = workspace.getBoundingClientRect();
-  const dx = event.clientX - rect.left - rect.width / 2 - viewport.panX;
-  const dy = event.clientY - rect.top - rect.height / 2 - viewport.panY;
-  const radians = -viewport.rotation * Math.PI / 180, cosine = Math.cos(radians), sine = Math.sin(radians);
-  return { x: (cosine * dx - sine * dy) / viewport.zoom + stageBounds.x + stageBounds.width / 2, y: (sine * dx + cosine * dy) / viewport.zoom + stageBounds.y + stageBounds.height / 2 };
-}
 
 /**
  * The document-space rectangle the workspace's own pixel box currently
@@ -456,6 +437,8 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
       documentId: document.id,
       document: state,
       viewport,
+      workspaceSize,
+      stageBounds: canvasBounds,
       options: (toolOptions[toolId] ?? {}) as Readonly<Record<string, string | number | boolean>>,
       activeShape: state.shapes.find((shape) => shape.id === state.activeShapeId) ?? null,
       selection: state.selection,
@@ -665,15 +648,35 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
           {page.name && <text className="vector-artboard-label" x={page.x} y={page.y - labelSize * 0.6} fontSize={labelSize}>{page.name}</text>}
         </g>)}
         {renderShapeTree(state.shapes, null, modifierResults, proofColors, visibleIds)}
-        {bounds && <rect className="vector-selection" x={bounds.x} y={bounds.y} width={bounds.width} height={bounds.height} strokeWidth={1 / viewport.zoom}/>}
-        {bounds && [[bounds.x, bounds.y], [bounds.x + bounds.width, bounds.y], [bounds.x, bounds.y + bounds.height], [bounds.x + bounds.width, bounds.y + bounds.height]].map(([x, y]) => <circle className="vector-handle" key={`${x}-${y}`} cx={x} cy={y} r={5 / viewport.zoom} strokeWidth={1 / viewport.zoom}/>)}
         {catalogueTool?.Overlay && <catalogueTool.Overlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>} context={toolContextFor(catalogueTool.id)}/>}
       </svg>
     </div>
     {/* Outside .vector-stage on purpose — same reasoning as the brush cursor
         and raster's own rulers/guides (`raster-ruler-guides.tsx`'s own doc
         comment): that element carries the zoom's CSS transform, which
-        `non-scaling-stroke` does not reliably cancel for screen-space chrome. */}
+        `non-scaling-stroke` does not reliably cancel for screen-space chrome.
+        The selection outline/handles moved here in docs/master-plan.md
+        section 4.8's own refactor — see `toScreenPoint`'s doc comment
+        (`vector-coordinates.ts`) for the svgedit-verified reasoning: this
+        layer carries no scale transform at all, so a handle's own radius is
+        simply a constant, never divided by zoom, the same way the CSS
+        cascade regression (commit `5ba9856`) could not have happened here —
+        there is nothing left for a stray `stroke-width` rule to defeat. */}
+    {bounds && (() => {
+      const corners = [
+        toScreenPoint({ x: bounds.x, y: bounds.y }, workspaceSize, viewport, canvasBounds),
+        toScreenPoint({ x: bounds.x + bounds.width, y: bounds.y }, workspaceSize, viewport, canvasBounds),
+        toScreenPoint({ x: bounds.x + bounds.width, y: bounds.y + bounds.height }, workspaceSize, viewport, canvasBounds),
+        toScreenPoint({ x: bounds.x, y: bounds.y + bounds.height }, workspaceSize, viewport, canvasBounds),
+      ];
+      return <svg className="vector-selection-overlay" width={workspaceSize.width} height={workspaceSize.height} aria-hidden="true">
+        <polygon className="vector-selection" points={corners.map((corner) => `${corner.x},${corner.y}`).join(" ")}/>
+        {corners.map((corner, index) => <circle key={index} className="vector-handle" cx={corner.x} cy={corner.y} r={5}/>)}
+      </svg>;
+    })()}
+    {catalogueTool?.ScreenOverlay && <svg className="vector-selection-overlay" width={workspaceSize.width} height={workspaceSize.height} aria-hidden="true">
+      <catalogueTool.ScreenOverlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>} context={toolContextFor(catalogueTool.id)}/>
+    </svg>}
     {showGuides && guideOverlay}
     {showRulers && rulers}
     {contextMenu.node}

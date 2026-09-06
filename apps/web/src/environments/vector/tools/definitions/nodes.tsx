@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { deletePointPreservingCurve, type VectorDocumentState, type VectorPoint, type VectorShape } from "@vravio/env-vector";
 import type { VectorSnapshot } from "../../../../vector-commands";
+import { toScreenPoint } from "../../../../vector-coordinates";
 import { beginSelectDrag, type SelectState } from "./select";
 import type { ToolContext, ToolPointer, VectorToolDefinition } from "../types";
 
@@ -126,15 +127,24 @@ const nodes: VectorToolDefinition<NodesState> = {
     context.setState(empty);
   },
 
-  Overlay({ state, document, options, context }) {
+  ScreenOverlay({ state, document, options, context }) {
     // Delete/Backspace removes the selected anchor — the pre-port code's own
     // global keydown handler gated this on `activeToolId === "vector.nodes"`;
-    // now that the tool owns its Overlay, it owns the shortcut too, the same
+    // now that the tool owns its overlay, it owns the shortcut too, the same
     // move raster.move made for its Enter/Escape handling. `context` is
     // included in the dependency array deliberately: the host builds a fresh
     // context every render, and a callback that closed over a stale one from
     // an earlier render is exactly the class of bug CLAUDE.md's ToolContext
     // snapshot lesson (raster.move's scale/rotate handles) warns about.
+    //
+    // Lives in `ScreenOverlay`, not `Overlay`, since docs/master-plan.md
+    // section 4.8: the anchor squares and handle dots/lines below used to
+    // divide every size by `context.viewport.zoom` inside the scaled `<svg>`
+    // (this project's own commit `93fdc6e`, after `vectorEffect=
+    // "non-scaling-stroke"` alone measurably failed) — moved here so there
+    // is nothing left to divide, and so a future stray CSS rule cannot
+    // silently reintroduce the exact regression the selection handles just
+    // had (commit `5ba9856`).
     useEffect(() => {
       const selected = state.selectedNode;
       if (!selected) return;
@@ -168,7 +178,6 @@ const nodes: VectorToolDefinition<NodesState> = {
 
     const active = document.shapes.find((shape) => shape.id === document.activeShapeId) ?? null;
     if (active?.kind !== "path") return null;
-    const zoom = context.viewport.zoom;
     // "Bézier handles" was declared on this tool's own option schema but the
     // pre-port code drew the handle lines/dots unconditionally — the
     // dead-checkbox CLAUDE.md §3 rules out. The anchor squares themselves
@@ -176,15 +185,19 @@ const nodes: VectorToolDefinition<NodesState> = {
     // node overlay" as a whole, and an anchor with no visible handle is
     // still where a click has to land to grab or delete it.
     const showHandles = options.showHandles !== false;
+    const toScreen = (point: { x: number; y: number }) => toScreenPoint(point, context.workspaceSize, context.viewport, context.stageBounds);
     return <>
       {active.points.map((point, pointIndex) => {
         const isSelected = state.selectedNode?.shapeId === active.id && state.selectedNode.pointIndex === pointIndex;
+        const anchor = toScreen(point);
+        const handleOut = point.handleOut ? toScreen({ x: point.x + point.handleOut.x, y: point.y + point.handleOut.y }) : null;
+        const handleIn = point.handleIn ? toScreen({ x: point.x + point.handleIn.x, y: point.y + point.handleIn.y }) : null;
         return <g key={pointIndex}>
-          {showHandles && point.handleOut && <line className="vector-node-handle-line" x1={point.x} y1={point.y} x2={point.x + point.handleOut.x} y2={point.y + point.handleOut.y} strokeWidth={1 / zoom}/>}
-          {showHandles && point.handleIn && <line className="vector-node-handle-line" x1={point.x} y1={point.y} x2={point.x + point.handleIn.x} y2={point.y + point.handleIn.y} strokeWidth={1 / zoom}/>}
-          {showHandles && point.handleOut && <circle className="vector-node-handle" cx={point.x + point.handleOut.x} cy={point.y + point.handleOut.y} r={3.5 / zoom} strokeWidth={1 / zoom}/>}
-          {showHandles && point.handleIn && <circle className="vector-node-handle" cx={point.x + point.handleIn.x} cy={point.y + point.handleIn.y} r={3.5 / zoom} strokeWidth={1 / zoom}/>}
-          <rect className={isSelected ? "vector-node-anchor selected" : "vector-node-anchor"} x={point.x - 4 / zoom} y={point.y - 4 / zoom} width={8 / zoom} height={8 / zoom} strokeWidth={1 / zoom}/>
+          {showHandles && handleOut && <line className="vector-node-handle-line" x1={anchor.x} y1={anchor.y} x2={handleOut.x} y2={handleOut.y}/>}
+          {showHandles && handleIn && <line className="vector-node-handle-line" x1={anchor.x} y1={anchor.y} x2={handleIn.x} y2={handleIn.y}/>}
+          {showHandles && handleOut && <circle className="vector-node-handle" cx={handleOut.x} cy={handleOut.y} r={3.5}/>}
+          {showHandles && handleIn && <circle className="vector-node-handle" cx={handleIn.x} cy={handleIn.y} r={3.5}/>}
+          <rect className={isSelected ? "vector-node-anchor selected" : "vector-node-anchor"} x={anchor.x - 4} y={anchor.y - 4} width={8} height={8}/>
         </g>;
       })}
     </>;
