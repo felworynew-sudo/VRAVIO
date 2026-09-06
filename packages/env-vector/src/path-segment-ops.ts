@@ -121,3 +121,111 @@ export function insertPointOnPathSegment(points: readonly VectorPoint[], segment
   result.splice(insertAt, 0, newPoint);
   return result;
 }
+
+/**
+ * Toggles the anchor at `index` between a corner point (no handles, a
+ * straight-line join on either side) and a smooth point (handles mirrored
+ * through the anchor, tangent to the curve) — docs/vector-plan.md section 9,
+ * third priority ("Умное преобразование угловой/сглаженной точки,
+ * автосглаживание"). Illustrator's own Convert Anchor Point tool and
+ * Inkscape's "make node smooth" do the same toggle; the auto-smooth
+ * direction here is the standard heuristic both editors' behaviour
+ * approximates for a freshly-smoothed point that never had handles to
+ * begin with: tangent = direction from the previous anchor to the next
+ * one, handle length = 1/3 the distance to each respective neighbour (a
+ * common, not universal, Bézier "smooth through points" convention — not
+ * a curvature-preserving fit, since the point had no curve to preserve
+ * before this call).
+ *
+ * A point with only one neighbour (an open path's own endpoint) gets a
+ * handle only on that one side — there is no "other side" tangent to
+ * average with, and inventing one would curve the path *outward* past its
+ * own end, which is not what smoothing an endpoint means in any editor.
+ */
+export function toggleCornerSmooth(points: readonly VectorPoint[], index: number, closed: boolean): VectorPoint[] {
+  const point = points[index];
+  if (!point) return points.slice();
+  const isSmooth = Boolean(point.handleIn || point.handleOut);
+  if (isSmooth) {
+    const corner: VectorPoint = { x: point.x, y: point.y };
+    return points.map((current, i) => i === index ? corner : current);
+  }
+
+  const prevIndex = index > 0 ? index - 1 : closed ? points.length - 1 : -1;
+  const nextIndex = index < points.length - 1 ? index + 1 : closed ? 0 : -1;
+  const prev = prevIndex >= 0 ? points[prevIndex] : undefined;
+  const next = nextIndex >= 0 ? points[nextIndex] : undefined;
+  if (!prev && !next) return points.slice();
+
+  let tangent = { x: 0, y: 0 };
+  if (prev && next) tangent = { x: next.x - prev.x, y: next.y - prev.y };
+  else if (next) tangent = { x: next.x - point.x, y: next.y - point.y };
+  else if (prev) tangent = { x: point.x - prev.x, y: point.y - prev.y };
+  const tangentLength = Math.hypot(tangent.x, tangent.y);
+  const unit = tangentLength > 0 ? { x: tangent.x / tangentLength, y: tangent.y / tangentLength } : { x: 1, y: 0 };
+
+  const smoothed: VectorPoint = { ...point };
+  if (next) {
+    const distanceToNext = Math.hypot(next.x - point.x, next.y - point.y);
+    smoothed.handleOut = { x: unit.x * distanceToNext / 3, y: unit.y * distanceToNext / 3 };
+  }
+  if (prev) {
+    const distanceToPrev = Math.hypot(point.x - prev.x, point.y - prev.y);
+    smoothed.handleIn = { x: -unit.x * distanceToPrev / 3, y: -unit.y * distanceToPrev / 3 };
+  }
+  return points.map((current, i) => i === index ? smoothed : current);
+}
+
+/**
+ * Removes the anchor at `index`, recomputing the surviving neighbours'
+ * handles so the new, single segment between them approximates the shape
+ * the *two* removed segments used to trace — docs/vector-plan.md section 9,
+ * third priority ("Удаление узла с сохранением кривизны контура, не просто
+ * прямая между соседями"). This is a heuristic, not an exact fit (there is
+ * no cubic that always exactly retraces two arbitrary cubics through a
+ * removed point): each surviving neighbour keeps its *existing* tangent
+ * direction (the handle it already had on the side away from the deleted
+ * point) and its handle *length* is rescaled to the new, typically longer,
+ * chord distance to the other surviving neighbour — the same "keep
+ * direction, rescale length" idea `toggleCornerSmooth` uses for a fresh
+ * point, applied here to a handle that already existed. A neighbour with
+ * no handle on that side (a corner) is left a corner; deleting a point
+ * between two corners still joins its neighbours with a straight line,
+ * honestly, rather than inventing curvature that was never there.
+ */
+export function deletePointPreservingCurve(points: readonly VectorPoint[], index: number, closed: boolean): VectorPoint[] {
+  const point = points[index];
+  if (!point) return points.slice();
+  const prevIndex = index > 0 ? index - 1 : closed ? points.length - 1 : -1;
+  const nextIndex = index < points.length - 1 ? index + 1 : closed ? 0 : -1;
+  const prev = prevIndex >= 0 ? points[prevIndex] : undefined;
+  const next = nextIndex >= 0 ? points[nextIndex] : undefined;
+  const newChordLength = prev && next ? Math.hypot(next.x - prev.x, next.y - prev.y) : 0;
+
+  const rescale = (current: VectorPoint, part: "handleOut" | "handleIn"): VectorPoint => {
+    const handle = current[part];
+    if (!handle || newChordLength === 0) return current;
+    // This neighbour's handle pointed *toward the deleted point* — its
+    // length was calibrated to that (now-gone) distance. Keep the same
+    // direction, rescale to a third of the new chord to the other
+    // surviving neighbour, the same proportion `toggleCornerSmooth` uses.
+    const length = Math.hypot(handle.x, handle.y);
+    if (length === 0) return current;
+    const unit = { x: handle.x / length, y: handle.y / length };
+    const newLength = newChordLength / 3;
+    return { ...current, [part]: { x: unit.x * newLength, y: unit.y * newLength } };
+  };
+
+  return points
+    .filter((_, i) => i !== index)
+    .map((current, i) => {
+      // After filtering, `prev`'s own new index is unchanged (it was
+      // before `index`); `next`'s shifts down by one — both identified by
+      // object identity instead of recomputing indices, since a closed
+      // path's wrap-around makes "one less than index" ambiguous at the
+      // array boundary.
+      if (current === prev) return rescale(current, "handleOut");
+      if (current === next) return rescale(current, "handleIn");
+      return current;
+    });
+}

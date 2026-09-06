@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { addShape, closestPointOnPath, createShape, emptyVectorStyle, insertPointOnPathSegment, resolveSnapForBounds, solidFill, solidStroke, type VectorDocumentState } from "@vravio/env-vector";
+import { addShape, closestPointOnPath, createShape, deletePointPreservingCurve, emptyVectorStyle, insertPointOnPathSegment, resolveSnapForBounds, solidFill, solidStroke, toggleCornerSmooth, type VectorDocumentState } from "@vravio/env-vector";
 import { cssToColor } from "@vravio/kernel";
 import type { VectorSnapshot } from "../../../../vector-commands";
 import { applyNodeMove, hitTestNode, type NodePart } from "./nodes";
@@ -151,6 +151,20 @@ const pen: VectorToolDefinition<PenState> = {
       const candidate = draftShape ?? context.activeShape;
       const hit = candidate ? hitTestNode(candidate, pointer.point, tolerance) : null;
       if (candidate && hit) {
+        // `Ctrl` + double-click on the anchor itself (not a handle) toggles
+        // corner ↔ smooth — docs/vector-plan.md section 9, third priority
+        // ("Умное преобразование угловой/сглаженной точки, автосглаживание").
+        // A one-shot `changeDocument`, not a drag: there is nothing to drag
+        // to, the whole gesture is the toggle itself.
+        if (hit.part === "anchor" && pointer.detail >= 2) {
+          void context.changeDocument("Convert Point (Преобразовать точку)", (document) => {
+            const target = document.shapes.find((shape) => shape.id === candidate.id);
+            if (target?.kind !== "path") return false;
+            target.points = toggleCornerSmooth(target.points, hit.pointIndex, target.closed);
+            return true;
+          });
+          return;
+        }
         context.setState({ ...context.state, nodeEdit: { shapeId: candidate.id, pointIndex: hit.pointIndex, part: hit.part, before: context.snapshot() } });
         return;
       }
@@ -238,7 +252,12 @@ const pen: VectorToolDefinition<PenState> = {
         void context.changeDocument("Delete Point (Удалить точку)", (document) => {
           const target = document.shapes.find((shape) => shape.id === item.id);
           if (target?.kind !== "path") return false;
-          target.points = target.points.filter((_, index) => index !== hitIndex);
+          // `deletePointPreservingCurve`, not a plain `.filter()` — section
+          // 9's third priority ("удаление узла с сохранением кривизны
+          // контура"), see that function's own doc comment for exactly what
+          // "preserving" means here (a documented heuristic, not an exact
+          // curvature fit).
+          target.points = deletePointPreservingCurve(target.points, hitIndex, target.closed);
           return true;
         });
       }

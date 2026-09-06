@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import type { VectorDocumentState, VectorPoint, VectorShape } from "@vravio/env-vector";
+import { deletePointPreservingCurve, type VectorDocumentState, type VectorPoint, type VectorShape } from "@vravio/env-vector";
 import type { VectorSnapshot } from "../../../../vector-commands";
 import { beginSelectDrag, type SelectState } from "./select";
 import type { ToolContext, ToolPointer, VectorToolDefinition } from "../types";
@@ -155,7 +155,10 @@ const nodes: VectorToolDefinition<NodesState> = {
         void context.changeDocument("Delete Point (Удалить точку)", (draft) => {
           const shape = draft.shapes.find((item) => item.id === shapeId);
           if (shape?.kind !== "path" || shape.points.length <= 2) return false;
-          shape.points = shape.points.filter((_, index) => index !== pointIndex);
+          // `deletePointPreservingCurve`, not a plain `.filter()` —
+          // docs/vector-plan.md section 9's third priority applies to this
+          // delete gesture too, not only vector.pen's own.
+          shape.points = deletePointPreservingCurve(shape.points, pointIndex, shape.closed);
           return true;
         });
       };

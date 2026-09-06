@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { closestPointOnPath, insertPointOnPathSegment } from "./path-segment-ops";
+import { closestPointOnPath, deletePointPreservingCurve, insertPointOnPathSegment, toggleCornerSmooth } from "./path-segment-ops";
 import type { VectorPoint } from "./types";
 
 describe("closestPointOnPath", () => {
@@ -103,6 +103,88 @@ describe("insertPointOnPathSegment", () => {
     const points: VectorPoint[] = [{ x: 0, y: 0 }, { x: 100, y: 0 }];
     const before = JSON.stringify(points);
     insertPointOnPathSegment(points, 0, 0.5);
+    expect(JSON.stringify(points)).toBe(before);
+  });
+});
+
+describe("toggleCornerSmooth", () => {
+  it("turns a corner point smooth, with the tangent pointing from the previous neighbour toward the next one", () => {
+    const points: VectorPoint[] = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }];
+    const result = toggleCornerSmooth(points, 1, false);
+    const middle = result[1]!;
+    expect(middle.handleOut).toBeDefined();
+    expect(middle.handleIn).toBeDefined();
+    // Tangent = next(100,100) - prev(0,0) = (100,100), i.e. a 45° direction —
+    // handleOut and handleIn must point in exactly opposite directions along it.
+    expect(middle.handleOut!.x).toBeCloseTo(middle.handleOut!.y, 5);
+    expect(middle.handleIn!.x).toBeCloseTo(middle.handleIn!.y, 5);
+    expect(middle.handleOut!.x).toBeGreaterThan(0);
+    expect(middle.handleIn!.x).toBeLessThan(0);
+  });
+
+  it("turns a smooth point back into a plain corner, removing both handles", () => {
+    const points: VectorPoint[] = [{ x: 0, y: 0 }, { x: 100, y: 0, handleIn: { x: -10, y: 0 }, handleOut: { x: 10, y: 0 } }, { x: 100, y: 100 }];
+    const result = toggleCornerSmooth(points, 1, false);
+    expect(result[1]!.handleIn).toBeUndefined();
+    expect(result[1]!.handleOut).toBeUndefined();
+    expect(result[1]!.x).toBe(100);
+    expect(result[1]!.y).toBe(0);
+  });
+
+  it("only adds a handle on the side that has a neighbour, for an open path's own endpoint", () => {
+    const points: VectorPoint[] = [{ x: 0, y: 0 }, { x: 100, y: 0 }];
+    const result = toggleCornerSmooth(points, 0, false);
+    expect(result[0]!.handleIn).toBeUndefined(); // no previous neighbour to speak of
+    expect(result[0]!.handleOut).toBeDefined();
+  });
+
+  it("wraps around for a closed path's own boundary point", () => {
+    const points: VectorPoint[] = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }];
+    const result = toggleCornerSmooth(points, 0, true);
+    // Neighbours of index 0 on a closed 3-point path are index 2 (prev, via
+    // wraparound) and index 1 (next) — both present, both handles set.
+    expect(result[0]!.handleIn).toBeDefined();
+    expect(result[0]!.handleOut).toBeDefined();
+  });
+
+  it("does not mutate the input array", () => {
+    const points: VectorPoint[] = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }];
+    const before = JSON.stringify(points);
+    toggleCornerSmooth(points, 1, false);
+    expect(JSON.stringify(points)).toBe(before);
+  });
+});
+
+describe("deletePointPreservingCurve", () => {
+  it("rescales the surviving neighbours' handles to the new chord instead of leaving them calibrated to the deleted point's old distance", () => {
+    // Three points, each smooth, with handles calibrated to the original
+    // (shorter) neighbour distances.
+    const points: VectorPoint[] = [
+      { x: 0, y: 0, handleOut: { x: 10, y: 0 } },
+      { x: 30, y: 0, handleIn: { x: -10, y: 0 }, handleOut: { x: 10, y: 0 } },
+      { x: 60, y: 0, handleIn: { x: -10, y: 0 } },
+    ];
+    const result = deletePointPreservingCurve(points, 1, false);
+    expect(result).toHaveLength(2);
+    // New chord is 60 (0 -> 60), so each surviving handle should now be
+    // 60/3 = 20 long, not the original 10 (calibrated to the 30-unit gap
+    // to the now-deleted middle point).
+    expect(result[0]!.handleOut!.x).toBeCloseTo(20, 5);
+    expect(result[1]!.handleIn!.x).toBeCloseTo(-20, 5);
+  });
+
+  it("keeps a neighbour a plain corner if it had no handle on the side facing the deleted point", () => {
+    const points: VectorPoint[] = [{ x: 0, y: 0 }, { x: 30, y: 0 }, { x: 60, y: 0 }];
+    const result = deletePointPreservingCurve(points, 1, false);
+    expect(result).toHaveLength(2);
+    expect(result[0]!.handleOut).toBeUndefined();
+    expect(result[1]!.handleIn).toBeUndefined();
+  });
+
+  it("does not mutate the input array", () => {
+    const points: VectorPoint[] = [{ x: 0, y: 0 }, { x: 30, y: 0 }, { x: 60, y: 0 }];
+    const before = JSON.stringify(points);
+    deletePointPreservingCurve(points, 1, false);
     expect(JSON.stringify(points)).toBe(before);
   });
 });

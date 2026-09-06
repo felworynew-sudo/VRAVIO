@@ -345,6 +345,30 @@ describe("vector.pen — gestures added for docs/vector-plan.md section 9", () =
       expect(document.shapes).toHaveLength(1);
       expect(firstPath(document).points).toEqual([{ x: 100, y: 100 }]);
     });
+
+    it("Ctrl + double-click on an anchor toggles corner ↔ smooth instead of starting a drag", () => {
+      const document = createVectorDocument(400, 300);
+      document.shapes = [{
+        id: "path-1", kind: "path", visible: true, locked: false,
+        style: emptyVectorStyle(), parentId: null, orderKey: "a0", transform: IDENTITY_MATRIX, geometry: [],
+        points: [{ x: 0, y: 100 }, { x: 100, y: 100 }, { x: 100, y: 0 }], closed: false, name: "Test Path",
+      }];
+      document.activeShapeId = "path-1";
+      const { context } = makeContext(document);
+
+      // The middle anchor starts a plain corner (no handles).
+      pen.onPointerDown!(context, pointerAt(100, 100, { ctrlKey: true, detail: 2 }));
+      expect(context.state.nodeEdit).toBeNull(); // toggled, not dragging
+      let middle = firstPath(document).points[1]!;
+      expect(middle.handleIn).toBeDefined();
+      expect(middle.handleOut).toBeDefined();
+
+      // Toggling again turns it back into a plain corner.
+      pen.onPointerDown!(context, pointerAt(100, 100, { ctrlKey: true, detail: 2 }));
+      middle = firstPath(document).points[1]!;
+      expect(middle.handleIn).toBeUndefined();
+      expect(middle.handleOut).toBeUndefined();
+    });
   });
 
   describe("cursorFor — hover preview of which of the five outcomes a click will produce", () => {
