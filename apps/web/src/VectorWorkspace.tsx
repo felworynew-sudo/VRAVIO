@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { addShape, buildShapeSpatialIndex, createImageShape, isIdentityMatrix, isVectorDocumentState, matrixToCss, pathData, removeShapes, resolveAppearance, shapeAtIndexed, shapeWorldBoundsIndexed, siblingsOf, snapSources, type GradientDef, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { addShape, buildShapeSpatialIndex, createImageShape, isIdentityMatrix, isVectorDocumentState, matrixToCss, pathData, removeShapes, resolveAppearance, shapeAtIndexed, shapesInRect, shapeWorldBoundsIndexed, siblingsOf, snapSources, type GradientDef, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
 import { RASTER_ASSET_MIME, decodeRasterAsset, encodeRasterAsset } from "@vravio/env-raster";
 import { colorToCss } from "@vravio/kernel";
 import type { AssetId, VravioDocument } from "@vravio/kernel";
@@ -52,6 +52,36 @@ function toDocumentPoint(event: { clientX: number; clientY: number }, workspace:
   const dy = event.clientY - rect.top - rect.height / 2 - viewport.panY;
   const radians = -viewport.rotation * Math.PI / 180, cosine = Math.cos(radians), sine = Math.sin(radians);
   return { x: (cosine * dx - sine * dy) / viewport.zoom + width / 2, y: (sine * dx + cosine * dy) / viewport.zoom + height / 2 };
+}
+
+/**
+ * The document-space rectangle the workspace's own pixel box currently
+ * shows, for stage 12's viewport culling (docs/vector-plan.md) — same
+ * transform `toDocumentPoint` undoes, but for the workspace's four corners
+ * rather than a pointer event, and using the tracked `workspaceSize`
+ * instead of a fresh `getBoundingClientRect()` (no DOM read needed: the
+ * math only cares about the box's own width/height, not its screen
+ * offset). A rotated viewport's true visible area is a rotated rectangle;
+ * this returns its axis-aligned bounding box, a conservative superset —
+ * exactly what a "don't render if definitely offscreen" filter needs, and
+ * simpler than clipping to the exact rotated shape for the false positives
+ * (a few extra shapes rendered near a rotated view's corners) it costs.
+ * Padded by one workspace-size worth of document space on each side so a
+ * shape does not visibly pop in only after it has already scrolled inside
+ * the frame.
+ */
+function visibleDocumentRect(workspaceSize: { width: number; height: number }, viewport: { panX: number; panY: number; zoom: number; rotation: number }, width: number, height: number) {
+  const radians = -viewport.rotation * Math.PI / 180, cosine = Math.cos(radians), sine = Math.sin(radians);
+  const toDoc = (localX: number, localY: number) => {
+    const dx = localX - workspaceSize.width / 2 - viewport.panX;
+    const dy = localY - workspaceSize.height / 2 - viewport.panY;
+    return { x: (cosine * dx - sine * dy) / viewport.zoom + width / 2, y: (sine * dx + cosine * dy) / viewport.zoom + height / 2 };
+  };
+  const marginX = workspaceSize.width, marginY = workspaceSize.height;
+  const corners = [toDoc(-marginX, -marginY), toDoc(workspaceSize.width + marginX, -marginY), toDoc(-marginX, workspaceSize.height + marginY), toDoc(workspaceSize.width + marginX, workspaceSize.height + marginY)];
+  const xs = corners.map((corner) => corner.x), ys = corners.map((corner) => corner.y);
+  const minX = Math.min(...xs), minY = Math.min(...ys);
+  return { x: minX, y: minY, width: Math.max(...xs) - minX, height: Math.max(...ys) - minY };
 }
 
 /** Resolves an asset's pixels to a `<image>`-ready data URL, refetching whenever `rev` changes —
@@ -170,11 +200,28 @@ function renderShape(shape: VectorShape, modifiedPath: string | undefined): Reac
  * comment). This is the one place group nesting actually has to exist in the
  * render tree; `shapeAt`/`shapeWorldBounds` walk the flat `parentId` chain
  * instead because pointer math has no DOM to lean on.
+ *
+ * `visibleIds`, when given, skips a leaf shape not in the set instead of
+ * rendering it — see docs/vector-plan.md stage 12: a live measurement found
+ * the current SVG/DOM render taking seconds per frame at a few thousand
+ * *simultaneously on-screen* shapes, which this does not fix (it only skips
+ * shapes outside the viewport). What it does fix is the more common case of
+ * a large document mostly panned out of view — not rendering a DOM node
+ * that would not be visible anyway. `undefined` (the default) renders
+ * everything, matching this function's behaviour before this parameter
+ * existed — used for contexts with no workspace size to compute a viewport
+ * rect from yet (none today, but the fallback is what the type asks for
+ * rather than an unchecked non-null assertion at the call site). A group is
+ * never itself tested against `visibleIds` (only leaf shapes are indexed —
+ * see `buildShapeSpatialIndex`'s own reasoning for skipping them) and
+ * always recurses; the cost this saves is per rendered *leaf* shape, and an
+ * empty `<g>` left behind by a fully-offscreen group costs nothing real.
  */
-function renderShapeTree(shapes: readonly VectorShape[], parentId: string | null, modifierResults: ReadonlyMap<string, string>): ReactNode[] {
+function renderShapeTree(shapes: readonly VectorShape[], parentId: string | null, modifierResults: ReadonlyMap<string, string>, visibleIds?: ReadonlySet<string>): ReactNode[] {
   return siblingsOf(shapes, parentId).map((shape) => {
     if (!shape.visible) return null;
-    if (shape.kind === "group") return <g key={shape.id} transform={shapeTransform(shape)}>{renderShapeTree(shapes, shape.id, modifierResults)}</g>;
+    if (shape.kind === "group") return <g key={shape.id} transform={shapeTransform(shape)}>{renderShapeTree(shapes, shape.id, modifierResults, visibleIds)}</g>;
+    if (visibleIds && !visibleIds.has(shape.id)) return null;
     return renderShape(shape, modifierResults.get(shape.id));
   });
 }
@@ -230,6 +277,24 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   const [toolStates, setToolStates] = useState<Record<string, unknown>>({});
   const toolStatesRef = useRef(toolStates);
   toolStatesRef.current = toolStates;
+
+  // Stage 12's cheaper half (docs/vector-plan.md): the workspace's own pixel
+  // size, tracked unconditionally (not just under "fit" mode, the way the
+  // effect below only cares about it) so the culling below can convert it
+  // to a document-space visible rect on every pan/zoom/resize.
+  const [workspaceSize, setWorkspaceSize] = useState({ width: 0, height: 0 });
+  useEffect(() => {
+    const workspace = workspaceRef.current;
+    if (!workspace) return;
+    const measure = () => {
+      const rect = workspace.getBoundingClientRect();
+      setWorkspaceSize((current) => (current.width === rect.width && current.height === rect.height ? current : { width: rect.width, height: rect.height }));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(workspace);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     const workspace = workspaceRef.current;
@@ -376,6 +441,17 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   const bounds = active ? (shapeWorldBoundsIndexed(spatialIndex, active.id) ?? null) : null;
   const stageStyle = { width: state.width, height: state.height, transform: `translate(-50%, -50%) translate(${viewport.panX}px, ${viewport.panY}px) rotate(${viewport.rotation}deg) scale(${viewport.zoom})` } as CSSProperties;
 
+  // Stage 12 (docs/vector-plan.md): skip rendering leaf shapes definitely
+  // outside the current view. `workspaceSize` is only known after the
+  // ResizeObserver effect's first measurement (0x0 before that single
+  // frame) — `undefined` then means "render everything", the same
+  // behaviour this had before culling existed, rather than culling
+  // against a bogus zero-size rect and hiding the whole document for a
+  // frame.
+  const visibleIds = workspaceSize.width > 0 && workspaceSize.height > 0
+    ? new Set(shapesInRect(spatialIndex, state.shapes, visibleDocumentRect(workspaceSize, viewport, state.width, state.height)).map((shape) => shape.id))
+    : undefined;
+
   const handleWheel = (event: React.WheelEvent) => {
     if (event.ctrlKey || event.metaKey) {
       event.preventDefault();
@@ -419,7 +495,7 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   return <div ref={workspaceRef} className="vector-workspace" data-active-tool={activeToolId} onWheel={handleWheel} onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
     <div className="vector-stage" style={stageStyle}>
       <svg width={state.width} height={state.height} viewBox={`0 0 ${state.width} ${state.height}`} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerUp} onContextMenu={onCanvasContextMenu}>
-        {renderShapeTree(state.shapes, null, modifierResults)}
+        {renderShapeTree(state.shapes, null, modifierResults, visibleIds)}
         {bounds && <rect className="vector-selection" x={bounds.x} y={bounds.y} width={bounds.width} height={bounds.height} strokeWidth={1 / viewport.zoom}/>}
         {bounds && [[bounds.x, bounds.y], [bounds.x + bounds.width, bounds.y], [bounds.x, bounds.y + bounds.height], [bounds.x + bounds.width, bounds.y + bounds.height]].map(([x, y]) => <circle className="vector-handle" key={`${x}-${y}`} cx={x} cy={y} r={5 / viewport.zoom} vectorEffect="non-scaling-stroke"/>)}
         {catalogueTool?.Overlay && <catalogueTool.Overlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>} context={toolContextFor(catalogueTool.id)}/>}
