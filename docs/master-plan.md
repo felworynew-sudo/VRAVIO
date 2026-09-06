@@ -1,0 +1,1919 @@
+# Мастер-план: сведение ТЗ владельца в работу
+
+Собрано 6 сентября 2026 года по прямому запросу владельца: прочитать
+`C:\Users\shika\Documents\правки\тз.md` (11687 строк с учётом пустых строк
+между абзацами, 4209 непустых — набор конкретных жалоб плюс развёрнутый
+ChatGPT-разбор архитектуры и доноров по Raster/Vector/Audio/Video) вместе со
+всеми файлами, на которые там оставлены пути, и собрать большой план работ.
+
+**Честная поправка после повторной проверки в этой же сессии:** первый
+проход прочитал файл целиком, но при сведении в план часть материала была
+сжата слишком сильно и реально выпала — не была скопирована ни в одном виде.
+Второй проход (см. раздел 12 и далее) нашёл и дописал эти куски: полную
+спецификацию Contextual Task Bar, разбор Object Selection Tool, доноров для
+Harmonize, таблицу локальных AI-моделей с весами, потуловые списки доноров
+для Illustrator/Photoshop, эссе про философию интерфейса Photoshop и —
+отдельно — сам факт, что тз.md с первой же строки прямо просит включить в
+этот план раздел о том, как заливать в git, собирать и коммитить (раздел 0.1
+ниже), чего первый проход не сделал вовсе.
+
+Прочитаны целиком:
+
+- `C:\Users\shika\Documents\правки\тз.md` — сам список правок и советов;
+- `C:\Users\shika\Documents\правки\окна.txt` — список панелей Photoshop
+  (`Window ▾`), которые нужно повторить;
+- `C:\Users\shika\Documents\правки\панели кисти.txt` — подробный разбор
+  архитектуры Brush Settings/Brushes/Tool Presets Photoshop;
+- `D:\Данные\Редактор\Инструменты Растр РС.md` — чек-лист растровых
+  инструментов, коррекций, фильтров, слоёв и окон (без большого встроенного
+  скриншота, который раздувал файл до 560 КБ — он не нёс текстовой
+  информации).
+
+**Не прочитаны целиком** (тот же каталог `D:\Данные\Редактор\`, но не
+адресованы напрямую путём из тз.md — упомянуты здесь как источник для
+следующего прохода, если он понадобится): `ТЗ Редактор.md` (315 КБ),
+`GPT.md` (153 КБ), `Кисти растр.md`, `Слои растр.md`, `Горячие клавиши
+Растр и Вектор.md`, `Корректирующие слои и панели растр.md`, `Инструменты
+Вектор РС.md`, `Вектор РС.md`, `Аудио РС.md`, `Видео РС.md`, `функции аудио
+рс.md`, `Функции видео рс.md`, `ИИ модели.md`, `Интерфейс редактора.md`,
+`дополнительно.md`. Это ещё примерно 700 КБ текста той же природы — если
+план ниже разойдётся с ними, они не проверялись, но, зная как оформлены уже
+прочитанные файлы, я ожидаю там детализацию тех же тем, а не что-то новое.
+
+**`D:\Patchy`** — не исходный код, а установленная сборка (exe, Qt6 DLL,
+`README.md`, скриншоты). Ни `src/core/brush_dynamics.cpp`, ни
+`abr_reader.cpp`, ни другие файлы, упомянутые в тз.md как места для
+подглядывания, локально не существуют — их нужно смотреть в реальном
+репозитории `https://github.com/SethRobinson/Patchy` (MIT), не в этой
+папке. Эта папка полезна только чтобы посмотреть UI/поведение готового
+приложения глазами, не читать его код.
+
+Каждый пункт ниже сверен с текущим состоянием репозитория VRAVIO настолько,
+насколько это было возможно без построчного чтения всего кода — где
+сверка была сделана, это явно написано («Проверено:» с указанием файла).
+Где не проверено — тоже написано честно, а не подразумевается.
+
+---
+
+## 0. Как читать этот документ
+
+Это не этап `docs/vector-plan.md` (тот план — про один под-раздел одной
+среды, векторную геометрию). Этот документ гораздо шире: он сводит воедино
+правки и советы по ВСЕМ четырём средам (Raster/Vector/Audio/Video) плюс
+общей оболочке. Он **не разбит на «этапы 1…N» с фиксированным порядком** —
+вместо этого каждый раздел ниже независим, а порядок работы над ними —
+отдельное решение владельца (см. раздел 10, приоритеты).
+
+Чек-боксы `- [ ]` — то, что честно не сделано (хотя бы частично) на
+6 сентября 2026 года. Пункты, помеченные `[x]`, уже реализованы в текущем
+VRAVIO — они оставлены в списке, чтобы этот документ был полным
+отражением исходного ТЗ, а не только его невыполненной части, и чтобы было
+видно, что было проверено, а не просто предположено.
+
+---
+
+## 0.1. Как заливать, собирать и коммитить (для других агентов/программистов)
+
+тз.md с первой же строки прямо просит: «этот план должен быть другим
+агентам и программистам, поэтому оставь тут ещё информацию о том как
+заливать на гит, как компилировать и где и че коммитеть». Ниже —
+свод того, что уже задокументировано в `CLAUDE.md` этого репозитория
+(не дублируется целиком — только выжимка, актуальная на 6 сентября 2026,
+плюс прямая ссылка на первоисточник).
+
+**Перед любым коммитом — обязательно, без исключений** (`CLAUDE.md`,
+раздел 7):
+
+```bash
+npx pnpm -r exec tsc --noEmit
+npx pnpm -r test --run
+```
+
+На Windows (эта машина — не macOS, для которой писан общий раздел
+`CLAUDE.md`) `pnpm`/`npx` не в PATH вовсе:
+
+```bash
+D:/node.exe apps/web/node_modules/typescript/bin/tsc --noEmit -p apps/web/tsconfig.json
+D:/node.exe apps/web/node_modules/typescript/bin/tsc --noEmit -p packages/env-raster/tsconfig.json
+D:/node.exe apps/web/node_modules/typescript/bin/tsc --noEmit -p packages/kernel/tsconfig.json
+D:/node.exe apps/web/node_modules/typescript/bin/tsc --noEmit -p packages/env-vector/tsconfig.json
+D:/node.exe apps/web/node_modules/vitest/vitest.mjs run --maxWorkers=1 --no-isolate
+```
+
+`--maxWorkers=1 --no-isolate` — не опционально на этой машине: она держит
+мало свободной памяти (8 ГБ, часто <0.5 ГБ свободно), голый прогон
+периодически падает с `FATAL ERROR: JavaScript heap out of memory` не
+из-за баги в тестах, а от нехватки памяти на параллельные форки.
+
+**Дев-сервер:**
+
+```bash
+cd apps/web && D:/node.exe node_modules/vite/bin/vite.js --port 5174 --strictPort
+```
+
+**Пуш в git** — токен лежит в `/d/github-token.txt`, не в keychain:
+
+```bash
+TOKEN=$(cat /d/github-token.txt | tr -d '[:space:]') && git push "https://${TOKEN}@github.com/felworynew-sudo/VRAVIO.git" main 2>&1 | sed "s/${TOKEN}/***TOKEN***/g"
+```
+
+Финальный `sed` обязателен — иначе токен уйдёт в вывод команды дословно.
+Репозиторий: `felworynew-sudo/VRAVIO`, ветка `main`, PR не используются —
+коммитить и пушить прямо в `main` после того, как обе команды выше зелёные.
+
+**Десктоп (Tauri)**, если задача касается `apps/desktop`: из
+`apps/desktop` — `D:/node.exe node_modules/@tauri-apps/cli/tauri.js build`.
+Нужен `pnpm` в PATH (ставится шимом через `corepack enable
+--install-directory <dir> pnpm`, потому что `beforeBuildCommand` внутри
+Tauri зовёт именно его) и закрытое собранное приложение (иначе линковка
+упрётся в занятый `vravio.exe`). Первая сборка с нуля — около 10 минут,
+дальше пересобирается только своя оболочка (Rust-крейты кэшируются в
+`target/`, в `.gitignore`).
+
+**Что коммитить, а что нет:** никогда не трогать содержимое каталога
+`icons/` (см. предупреждение ниже в этом документе — это правило уже
+собственного `CLAUDE.md` этого репозитория, не тз.md). `git add` —
+поимённо конкретные файлы, не `-A`/`.`, и после `git add` смотреть `git
+status`, а не только код возврата (несуществующий путь роняет всю команду
+молча). Коммит-сообщения заканчиваются строкой `Co-Authored-By: Claude
+Sonnet 5 <noreply@anthropic.com>`. Полный текст всех этих правил, включая
+разбор реальных инцидентов, из-за которых они появились, — в `CLAUDE.md` в
+корне репозитория; он читается автоматически в начале каждой сессии
+Claude Code и является приоритетным источником истины над этим кратким
+пересказом, если они когда-нибудь разойдутся.
+
+---
+
+## 1. Растровая среда — баги и системные проблемы
+
+### 1.1. Деформация (Warp Transform)
+
+- [ ] Деформация визуально не выглядит как искажение — пиксели не
+      интерполируются между соседними точками сетки корректно. Донор:
+      `D:\Patchy` → GitHub `SethRobinson/Patchy` (MIT), реализация warp
+      mesh уже есть и по описанию Smart Objects именно неразрушающая
+      (см. скриншот `smart_objects.png` в README Patchy — Bézier cage
+      прямо на канвасе).
+- [ ] Добавить пресеты искажения (Arc, Bulge, Flag, Wave, Fisheye и
+      прочие 15 стилей — тот же список, что и у `Warp Text`, см. раздел 3.2)
+      — подсмотреть у Patchy же.
+
+### 1.2. Марионеточная деформация (Puppet Warp)
+
+- [ ] Реализовать по мотивам `https://github.com/mikecokina/puppet-warp`.
+      Три типа пинов, как в Photoshop:
+  - [ ] Position pin — фиксирует XY;
+  - [ ] Rotation pin — фиксирует XY + rotation;
+  - [ ] Fixed pin — не двигается вообще.
+- [ ] Опционально, но желательно (сверх Photoshop) — Rigidity Brush, как
+      в OpenToonz: кисть, которой красят карту жёсткости прямо по mesh
+      (лицо — жёсткое, локоть — мягкий, волосы — очень мягкие). OpenToonz
+      уже имеет эту концепцию как готовый референс.
+
+### 1.3. Пластика (Liquify)
+
+- [ ] Инструмент скручивания (twirl) требует постоянного движения кисти,
+      чтобы накопить эффект — то есть равномерное скручивание в одной
+      точке без движения сделать невозможно. То же для раздувания/сжатия.
+      Нужен режим «применяется по времени удержания», не только «по
+      движению курсора».
+- [ ] Раздувание может «продырявить» пиксели (вероятно, экстраполяция
+      сетки деформации выходит за свои собственные пределы при большой
+      силе) — нужно ограничение.
+
+### 1.4. Инструмент «Фигура» — переключение растр/вектор
+
+- [ ] Сейчас `raster.shape` рисует растровые фигуры напрямую в пиксели.
+      Нужно сделать так, чтобы фигура **оставалась фигурой**: rectangle
+      сохраняет radius, star — число лучей, редактируемые через неделю, а
+      не только во время рисования. Правильная архитектура — не второй
+      геометрический движок в растре, а **векторный shape layer**,
+      использующий уже существующий `packages/env-vector` для геометрии:
+      ```
+      Raster Workspace → Shape Tool → Vector Shape Layer → общий env-vector geometry
+      ```
+      Проверено: `RasterLayerKind` (`packages/env-raster/src/types.ts:4`)
+      **уже включает** `"shape"` как отдельный вид слоя — модель данных
+      частично готова принять это, но нужно проверить, ссылается ли
+      `shape`-слой на реальную векторную геометрию `env-vector` или
+      хранит что-то своё (не проверено в этом проходе — нужен отдельный
+      разбор `RasterShapeSource`/аналогичного поля, если оно есть).
+- [ ] Остальные выделительные (недеструктивные) инструменты должны
+      воспринимать векторную фигуру как растровую для целей выделения.
+      Деструктивные инструменты (кисть, ластик и т. п.), применённые к
+      shape-слою, должны показывать предупреждение «фигуре нужны пиксели,
+      растрировать?» вместо тихого игнорирования или падения.
+
+### 1.5. Курсоры/прицелы, масштабируемые зумом (P0 — уже частично исправлено в этой сессии)
+
+- [ ] тз.md прямо называет пипетку и штамп как курсоры, которые
+      масштабируются зумом и не совпадают с фактической точкой клика.
+      **Это тот же класс бага**, что уже задокументирован и частично
+      починен в `CLAUDE.md` (раздел 2, `vector-effect:non-scaling-stroke`
+      не отменяет CSS-трансформацию родителя) — но, судя по прямой жалобе
+      в ТЗ, чинилось не везде. Обязательная проверка перед тем, как
+      считать что-то из этого раздела законченным:
+      ```
+      grep -rn "vectorEffect=\"non-scaling-stroke\"\|vector-effect:non-scaling-stroke" apps/web/src
+      ```
+      См. также уже заведённую в этой сессии отдельную задачу
+      (`spawn_task`, «Fix raster UI scaling-with-zoom bug») — растровые
+      обводки выделения/трансформации/превью фигуры/текстового фрейма
+      были найдены с той же болезнью и вынесены владельцу отдельным
+      пунктом; она перечисляется здесь для полноты, а не дублируется.
+- [ ] Общее правило зафиксировано в `CLAUDE.md` разделе 1 уже ДО этого
+      ТЗ («интерфейс не масштабируется зумом»), но, как показала практика
+      этой же сессии, одной формулировки недостаточно — конкретный курсор
+      пипетки/штампа нужно физически проверить и, если он всё ещё
+      завязан на зум, починить тем же способом, что и курсор кисти
+      (`RasterWorkspace.tsx`, слой вне `.raster-stage`, координаты через
+      `documentOriginX/Y`).
+
+### 1.6. Смещение (Displace — «закручивающая кисть» из тз.md, п. 33)
+
+- [ ] Новый инструмент «Смещение» — Photoshop-подобный: вертикальное
+      движение кисти снизу вверх сдвигает пиксели влево, сверху вниз —
+      вправо; движение по часовой стрелке увеличивает объект, против —
+      уменьшает; горизонтальное движение слева направо сдвигает пиксели
+      вверх, справа налево — вниз. Владелец прямо просит искать готовую
+      реализацию, не изобретать самому — ни один конкретный донор в
+      тз.md для ЭТОГО конкретного жеста не назван; ближайшая по духу
+      механика — `GIMP`'s Warp transform tool (`tools/gimpwarptool.c`) и
+      Krita's Deform brush engine (упомянут в общем списке кистей Krita,
+      раздел 6.2 ниже) — нужно свериться отдельно перед реализацией,
+      это не подтверждённое соответствие, а моя собственная догадка по
+      смежности механики.
+
+### 1.7. Классический Displacement Map (отдельно от 1.6)
+
+- [ ] Сейчас (если вообще есть) Photoshop требует сохранить слой в
+      отдельный PSD, выбрать его файлом, применить, посмотреть,
+      переделать. Нужно: `Layer → Displace Source: другой слой` с живым
+      превью прямо в интерфейсе, без файлового круга. Донор: GIMP —
+      `Filters → Map → Displace` уже умеет напрямую выбирать другой
+      открытый слой как X/Y displacement map с превью.
+
+### 1.8. Марширующие муравьи и свечение выделения
+
+- [ ] Текущая реализация marching ants (`.selection-overlay` в
+      `styles.css`) визуально не читается как «муравьи» (нужно
+      подтверждение живым скриншотом — не проверялось в этом проходе,
+      верю жалобе владельца на слово).
+- [ ] Добавить опциональное свечение внутрь выделения. **Обязательное
+      условие, прямо подчёркнутое владельцем**: свечение масштабируется
+      исключительно под монитор (константный экранный размер), НЕ
+      масштабируется зумом документа — тот же принцип раздела 1.5/§2
+      CLAUDE.md.
+
+---
+
+## 2. Растровая среда — инструменты (сводная таблица зрелости)
+
+Таблица — прямая выжимка из ChatGPT-разбора в тз.md (раздел «Да. Я
+прошёлся по всему текущему тулбару VRAVIO»), сверенная построчно с
+`apps/web/src/tools.ts` (список из 25 raster-инструментов подтверждён:
+`grep -oE 'id: "raster\.[a-zA-Z]+"'` дал ровно этот список). Оценки
+зрелости (🟢/🟡/🔴, X/10) — мнение внешнего ревьюера из ТЗ, не
+самостоятельно измеренная метрика; приведены как есть, для трассировки
+происхождения приоритетов.
+
+| Инструмент | Оценка | Не хватает (по ТЗ) | Донор |
+|---|---|---|---|
+| Move | 🟢 8/10 | numeric transform, pivot, точный perspective/warp | GIMP, Krita |
+| Hand | 🟢 9/10 | — | — |
+| Rotate View | 🟢 8/10 | snap 15/90°, Reset View | Krita |
+| Zoom | 🟢 8/10 | Fit/100%, доп. режимы | GIMP |
+| Rectangular/Elliptical Marquee | 🟡 7/10 | fixed ratio/size, AA, numeric geometry | GIMP |
+| Lasso | 🟡 6/10 | Polygonal Lasso, Magnetic Lasso (отдельные инструменты) | GIMP/Krita |
+| Magic Wand | 🔴 5/10 | Contiguous toggle, AA, color distance, sample modes | GIMP |
+| Brush | 🔴 5.5/10 | вся система Brush Settings (см. раздел 6) | Patchy + Krita |
+| Pencil | 🟡 6/10 | pixel-perfect, dynamics | Krita |
+| Highlighter | 🟡 5/10 | мало уникального — логичнее как brush preset | MyPaint/Krita |
+| Eraser | 🟡 6.5/10 | brush dynamics, presets | Patchy/Krita |
+| Blur/Sharpen (как кисть) | 🟡 6/10 | dynamics, Sample All Layers | GIMP |
+| Smudge | 🔴 4.5/10 | Smudge Length/Radius, Smearing/Dulling, Color Rate, HSV dynamics — перепроектировать поверх общего Brush Engine | Krita Color Smudge |
+| Dodge/Burn | 🟡 6.5/10 | Protect Tones | Patchy/GIMP |
+| Remove AI | 🟢 7.5/10 | UX (назвать модели «Auto/Fast/Quality», не «MI-GAN/LaMa»), add/subtract mask, feather, retry | IOPaint |
+| Paint Bucket (Fill) | 🔴 5/10 | Contiguous, Sample All Layers, AA, Pattern | GIMP |
+| Eyedropper | 🟢 8/10 | больше режимов слоёв/цветовых данных | GIMP/Krita |
+| Type (растровый текст) | 🟡 6.5/10 | полноценная типографика (раздел 3) | Scribus/Inkscape |
+| Shape | 🔴 5/10 | перевести на vector-backed shape layer (раздел 1.4) | Patchy/Inkscape |
+| Crop | 🔴 3.5/10 | почти вся продуктовая оболочка (раздел 2.1 ниже) | Patchy/GIMP |
+| Clone Stamp | 🟢 7.5/10 | Clone Source panel (несколько источников, transform, Sample Layers) | GIMP |
+| Spot Healing | 🟢 7/10 | несколько healing algorithms/modes | GIMP/Patchy |
+| Patch | 🟡 6/10 | Transparent, Sample All Layers | Patchy |
+
+### 2.1. Crop — самый голый инструмент (по мнению ревью)
+
+Проверено: `raster.crop` в `apps/web/src/tools.ts` действительно почти
+без опций относительно других инструментов. Нужная продуктовая оболочка
+(из ТЗ, раздел «в инструмент "рамка"»):
+
+```
+┌ Crop │ Ratio ▾ │ W │ H │ Resolution │ Swap │ Clear │ Straighten │ Grid ▾ ┐
+│ ☐ Delete Cropped Pixels    ☐ Content-Aware / Generative Expand          │
+└──────────────────────────────────────────────────────────────  ✕   ✓ ─┘
+```
+
+- [ ] Ratio dropdown: Unconstrained, Original Ratio, 1:1, 4:5, 5:7, 2:3,
+      16:9, W×H×Resolution, New Crop Preset…
+- [ ] Overlays: Thirds, Grid, Diagonal, Triangle, Golden Ratio, Golden
+      Spiral
+- [ ] Delete Cropped Pixels toggle, Allow Canvas Extension, Content-Aware
+      / AI Expand
+- [ ] Straighten (провести линию для выравнивания горизонта)
+- [ ] Донор №1 — Patchy (MIT): рамка, resize/move, поворот для
+      выравнивания, presets соотношений, расширение canvas.
+      Донор №2 — GIMP: Fixed Aspect Ratio/Width/Height/Size, Position,
+      Expand from Center, Allow Growing, затемнение области с opacity,
+      guides (Center Lines/Thirds/Fifths/Golden Sections/Diagonal), Auto
+      Shrink, работа по merged layers.
+      Донор №3 — Krita: точные X/Y/W/H, блокировка aspect ratio,
+      центрирование, кадрирование Image/Canvas/Layer/Frame отдельно.
+
+### 2.2. Одиночный клик фигурным инструментом → окно параметров
+
+- [ ] Клик (не протяжка) любым фигурным инструментом по холсту должен
+      вызывать модальное окошко с полями «высота»/«ширина» (и, в общем
+      случае, любое подобное окно ввода размеров) с поддержкой суффиксов
+      единиц (px/см/мм и т. д., локализованных). Ограничить максимум
+      размером самого холста.
+
+### 2.3. Selection Engine как общий слой поверх выделительных инструментов
+
+- [x] Rect/Ellipse/Lasso уже имеют Replace/Add/Subtract/Intersect/Feather
+      (подтверждено ревью в тз.md как уже хороший фундамент — не
+      проверялось заново в этом проходе, доверяю оценке ТЗ).
+- [ ] Собрать явный общий Selection Engine, чтобы Rectangle, Ellipse,
+      Lasso, Polygonal Lasso, Magnetic Lasso, Magic Wand, Select By
+      Color, Quick/Foreground Select делили одни и те же New/Add/
+      Subtract/Intersect/Feather/Anti-alias параметры вместо того, чтобы
+      каждый инструмент решал их по-своему.
+- [ ] Разделить по GIMP-образцу как отдельные инструменты, а не режимы
+      одного: Fuzzy Select (Magic Wand) / Select By Color / Foreground
+      Select / Scissors Select.
+- [ ] Переключатель "выделение-холст" — нужно реализовать (пока неясно,
+      что делает текущий переключатель layer/group — владелец прямо
+      пишет «не понимаю, делает ли что-то»; см. также раздел 8.7).
+
+### 2.4. Fill + Gradient
+
+- [ ] Paint Bucket: добавить Pattern fill, Mode, Contiguous, Sample All
+      Layers, Anti-alias (сейчас только Color + Tolerance).
+- [ ] **Gradient Tool отсутствует в тулбаре — это прямая дыра**, как в
+      растре, так и в векторе (см. раздел 5). Донор: GIMP Gradient —
+      полноценный инструмент с сохранёнными градиентами и разными
+      формами (linear/radial/angle/reflected/diamond — этот список форм
+      явно назван и в `Инструменты Растр РС.md`, раздел «Типы
+      градиента»).
+
+---
+
+## 3. Текст (единый Text Engine для растра и вектора)
+
+### 3.1. Архитектурная рекомендация ChatGPT
+
+- [ ] Собрать единый `Text Engine`, которым пользуются обе среды:
+      ```
+                    Text Engine
+                        │
+                 ┌──────┴──────┐
+                 │             │
+             Raster UI     Vector UI
+      ```
+      вместо двух постепенно расходящихся текстовых систем. Проверено:
+      `RasterLayer.text?: RasterTextData` в `packages/env-raster/src/types.ts`
+      существует как отдельное поле у произвольного слоя с
+      `kind: "text"` — то есть модель данных для нередеструктивного
+      текстового слоя УЖЕ заложена в типах (в отличие от того, что
+      предполагает критика ChatGPT — «Raster Type Tool пока коммитит
+      текст в пиксели»). Действительно ли текст остаётся редактируемым
+      после снятия выделения слоя (а не только во время начального
+      ввода) — **не проверено живьём в этом проходе**, нужен отдельный
+      живой тест: создать текстовый слой, кликнуть в сторону, вернуться,
+      попробовать отредактировать текст ещё раз.
+- [ ] Векторный `vector.text` сейчас заметно беднее растрового — на
+      уровне Tool Options буквально Color + Font Size (проверено:
+      `apps/web/src/tools.ts`, `id: "vector.text"` действительно имеет
+      только эти два параметра). Растровый текст уже имеет Point/
+      Paragraph, Text on Path, Dynamic Circle/Arch/Bow, Font, Size,
+      Color — то есть вектор должен как минимум догнать растр, а не
+      наоборот.
+
+### 3.2. Dynamic Text (Block / Circle / Arch / Bow / Dynamic Fit)
+
+- [ ] Block — автомасштабирование и перенос текста внутри
+      прямоугольного блока.
+- [ ] Circle — текст по окружности между начальной/конечной точками.
+- [ ] Arch — дуга вверх.
+- [ ] Bow — дуга вниз.
+- [ ] Dynamic Fit — произвольный path/shape, размер текста
+      автоматически пересчитывается, чтобы заполнить весь путь целиком
+      при любой длине строки.
+      Донор геометрии: Inkscape (Text on Path, Flow into Frame) и Krita
+      5.3/6.0 (text on path, text inside shape, wrap прямо на холсте).
+      Алгоритм автоподгонки размера (собственно Dynamic Fit) явно
+      назван как «относительно небольшой» и который стоит писать
+      самостоятельно поверх геометрии Inkscape/Krita, а не искать donor
+      один-в-один — готового аналога именно этому алгоритму ChatGPT не
+      назвал.
+      Референс на реализацию auto-fit: `Scribus_Fit_Text_To_Frame`
+      (открытый скрипт для Scribus).
+
+### 3.3. Полный список типографики (Character/Paragraph, из тз.md и окна.txt)
+
+- [ ] Font browser, Font Style, Variable axes, Size, Leading, Kerning,
+      Tracking, Baseline, Horizontal/Vertical scale, OpenType features
+      (лигатуры, альтернативные глифы, дроби, старостильные цифры),
+      Anti-aliasing (None/Sharp/Crisp/Strong/Smooth).
+- [ ] Paragraph: Align, Indent, Spacing, Hyphenation, Justification.
+- [ ] Character Styles / Paragraph Styles — сохраняемые наборы (панели
+      уже перечислены в `окна.txt`, ни одна не реализована — проверено:
+      нет `Character`/`Paragraph`/`CharacterStyles`/`ParagraphStyles` в
+      текущем реестре панелей).
+- [ ] Остальные пункты текстового выпадающего меню Photoshop (полный
+      список — см. `тз.md`, строки 284–329): More from Adobe Fonts
+      (заменить на свой источник/менеджер шрифтов, не Adobe-сервис),
+      Panels→(Character/Paragraph/Character Styles/Paragraph Styles),
+      Anti-Alias, Orientation (horizontal/vertical), OpenType submenu,
+      Create Work Path, Convert to Shape, Rasterize Type Layer, Convert
+      to Paragraph/Point Text, Convert to Dynamic Text, Warp Text
+      (Arc/Wave/Flag/Bulge и другие + Bend, Horizontal/Vertical
+      Distortion), Match Font, Font Preview Size, Language Options,
+      Update All Text Layers, Manage Missing Fonts, Paste Lorem Ipsum,
+      Load/Save Default Type Styles.
+      Донор для всего этого куста — Scribus + Inkscape по геометрии
+      текста, Penpot как пример современного UX (point text и fixed
+      textbox, rich text, family/style/line-height/letter-spacing/case
+      уже встроены прямо в текстовый объект).
+
+---
+
+## 4. Векторная среда — глубина существующих инструментов
+
+Этот раздел **дополняет**, а не заменяет `docs/vector-plan.md` — тот план
+уже довёл векторную среду до реального Canvas/артбордов (этап 15,
+завершён 6 сентября 2026 в этой же сессии), символов (этап 13), реального
+шейпинга текста (этап 11), ICC-цвета (этап 14, частично). Раздел ниже —
+чисто про **глубину шести существовавших инструментов** (Select/Nodes/
+Pen/Rectangle/Ellipse/Text) плюс новые инструменты, которых пока нет в
+палитре вовсе (плюс Artboard Tool, который уже добавлен этапом 15 —
+исключён из списка «отсутствует»).
+
+### 4.1. Vector Select — приоритет №1 по мнению ревью
+
+Проверено: `apps/web/src/environments/vector/tools/definitions/select.tsx`
+уже делает single selection, drag-move со snapping (этапы 2/5 vector-plan)
+и transform handles (rect + 4 угла, этап Stage 12 добавил корректный
+constant-screen-size). Не реализовано:
+
+- [ ] Shift multi-select (несколько фигур одновременно)
+- [ ] Box selection (marquee по фигурам — есть готовая инфраструктура:
+      `shapesInRect` в `packages/env-vector/src/spatial-index.ts`,
+      написана ещё в 4-м этапе `vector-plan.md`, но **ни один инструмент
+      её не вызывает** — "инфраструктура опережает потребителя", в
+      точности такая же ситуация, что уже была честно описана в
+      `spatial-index.ts`'s собственном doc comment)
+- [ ] Scale/rotate/skew с pivot (сейчас есть только resize через угловые
+      ручки, без skew)
+- [ ] Alt-drag duplicate
+- [ ] Enter group / Isolation mode
+- [ ] Align / Distribute (X/Y/W/H/Rotation панель)
+
+### 4.2. Node Tool — «сердце любого серьёзного vector editor»
+
+Проверено: `apps/web/src/environments/vector/tools/definitions/nodes.tsx`
+уже умеет anchor hit-testing, handleIn/handleOut drag с зеркалированием,
+Alt для разрыва ручек (настоящая Bézier-модель, подтверждено чтением
+файла в этой же сессии при починке масштабирования ручек, см. коммит
+`93fdc6e`). Не хватает (сравнение с Penpot path editor):
+
+- [ ] Multiple node selection, box select nodes
+- [ ] Add node on segment (сейчас можно только через существующие точки
+      пера — не проверено, есть ли уже add/delete anchor у Node Tool)
+- [ ] Delete node preserving curve shape (не просто удалить точку, а
+      сохранить форму соседних сегментов)
+- [ ] Corner / Smooth / Symmetric / Auto-smooth как явно переключаемые
+      режимы точки (сейчас, по всей видимости, единственное состояние —
+      «есть ручки или нет», без промежуточных Smooth/Symmetric/Auto)
+- [ ] Join / Break / Close / Open / Reverse Path Direction
+- [ ] Align nodes / Distribute nodes
+- [ ] Snap to nodes
+
+### 4.3. Pen — почти вся математика уже есть (см. также раздел 9 vector-plan.md)
+
+Этот пункт уже полностью описан как «Долг: инструмент Перо» в
+`docs/vector-plan.md`, раздел 9 (добавлено 6 сентября по этому же
+внешнему обзору) — **не дублируется здесь повторно**, см. тот раздел
+напрямую для полного списка (rubber-band preview, click-to-close,
+Shift 45°, Alt break handles, Ctrl→временный Node Tool, continuation of
+existing path, snapping integration, cursor states).
+
+### 4.4. Rectangle / Ellipse — слишком минимальны
+
+Проверено: `apps/web/src/tools.ts`, `vector.rectangle` имеет только
+`color` + `radius`; `vector.ellipse` — только `color`.
+
+- [ ] Fill / Stroke / Stroke width / Stroke alignment / Dash — общий
+      набор для обеих фигур
+- [ ] W/H, X/Y числовые поля
+- [ ] Shift → пропорционально, Alt → от центра (во время рисования)
+- [ ] Rectangle: per-corner radius (сейчас один общий `radius`)
+- [ ] Ellipse: start angle / end angle / pie / arc режим
+- [ ] Параметры должны оставаться редактируемыми после создания фигуры
+      (Penpot хранит Rectangle/Ellipse как настоящие primitives) —
+      частично уже верно для VRAVIO, поскольку `env-vector`'s
+      `VectorShape` типы для rectangle/ellipse хранят x/y/width/height/
+      cornerRadius как обычные поля документа (не растрируются), но
+      *расширенные* поля выше (per-corner radius, start/end angle) в
+      типе `VectorShape` сейчас не существуют — проверено:
+      `packages/env-vector/src/types.ts`, `rectangle`/`ellipse` варианты
+      не содержат этих полей.
+
+### 4.5. Новые инструменты первой очереди (Vector v1, по списку ChatGPT)
+
+Из большого списка «минимальный Vector v1» в тз.md — то, чего у VRAVIO
+ещё нет вовсе (Select/Nodes/Pen/Rectangle/Ellipse/Text уже есть, Union/
+Subtract/Intersect уже частично сделаны как WASM-геометрия в этапе 7/8
+`vector-plan.md`, не повторяется здесь):
+
+- [ ] Pencil / Freehand (рисование свободной линии со сглаживанием)
+- [ ] Line
+- [ ] Polygon
+- [ ] Star
+- [ ] Gradient Tool (векторный) — та же дыра, что и в растре (раздел 2.4)
+- [ ] Eyedropper (векторный)
+- [ ] Compound Path (Combine/Break Apart) — объединение контуров в один
+      объект без геометрического слияния (кольцо из двух окружностей)
+- [ ] Offset Path — контур наружу/внутрь на заданное расстояние.
+      Проверено: `docs/vector-plan.md` этап 8 уже реализовал
+      `offset_path` через `kurbo` в WASM (`crates/vector-geometry`) —
+      **математика уже есть**, не хватает именно UI-инструмента поверх
+      неё (тот же паттерн «математика обгоняет UI», что и весь раздел 4
+      в целом).
+- [ ] Outline Stroke / Stroke to Path — то же самое: `stroke_to_fill` в
+      `kurbo`-геометрии этапа 8 `vector-plan.md` уже есть как функция,
+      инструмента/пункта меню поверх неё нет.
+- [ ] Join / Break / Close Path как явные операции меню (Close Path у
+      пера уже реализован — `closePath()` в `pen.tsx`, см.
+      `vector-plan.md` раздел 9)
+
+### 4.6. Следующий уровень (Vector v2)
+
+- [ ] Shape Builder — интерактивное объединение/вычитание областей
+      мышью (не через меню Boolean)
+- [ ] Knife / Scissors — разрезание контуров
+- [ ] Width Tool — локальное изменение толщины stroke (донор: Inkscape
+      PowerStroke LPE)
+- [ ] Corner Tool — интерактивное скругление/фаска отдельных углов
+      (донор: Inkscape LPE Corners)
+- [ ] Mesh Gradient — SVG mesh gradients (донор: Inkscape поддерживает
+      нативно)
+- [ ] **Live Boolean** — неразрушающая версия существующих boolean-
+      операций: сейчас (этап 7/8 `vector-plan.md`) boolean — это
+      однократная WASM-операция, результат которой заменяет исходные
+      фигуры. Правильная архитектура по Penpot:
+      ```
+      Boolean Group
+      ├ Rectangle
+      ├ Circle
+      └ Operation: Subtract   (можно менять A/B — результат обновляется сам)
+      ```
+      с явным «Expand/Flatten», когда пользователь готов зафиксировать
+      результат в обычный Path. Это архитектурное расширение поверх уже
+      существующей WASM-геометрии, не с нуля.
+- [ ] Live Offset / Live Corner / Live Repeat — та же идея неразрушающих
+      операций, что и Live Boolean, применённая к Offset Path, скруглению
+      углов и повторению объекта (Grid/Radial/Mirror).
+- [ ] Blend (промежуточные формы между двумя фигурами)
+- [ ] Envelope / Bend / Warp для вектора (донор: Inkscape LPE)
+- [ ] Pattern Along Path (донор: Inkscape LPE)
+- [ ] Procedural Repeat/Tiling/Clones — донор: Inkscape Tiling LPE /
+      Tiled Clones (offset, scale, rotation, randomization, mirroring)
+
+### 4.7. Сводная карта доноров по функциям (из тз.md)
+
+| Функция | Донор №1 | Донор №2 |
+|---|---|---|
+| Select/transform handles | Penpot | SVG-Edit |
+| Pen, Node Tool | Inkscape | — |
+| Pencil/Freehand | Inkscape | Krita |
+| Rectangle/Ellipse | Penpot | SVG-Edit |
+| Polygon/Star | Inkscape | — |
+| Union/Difference/Intersect/XOR | Clipper2 | Inkscape |
+| Divide | Paper.js | Inkscape |
+| Compound Path | Inkscape | Paper.js |
+| Offset Path | Clipper2 | — |
+| Stroke → Path | Inkscape | lib2geom |
+| Simplify | lib2geom | Paper.js |
+| Smooth Path | Paper.js | Inkscape |
+| Join/Break | Inkscape | — |
+| Corner Tool | Inkscape LPE | — |
+| Knife | Inkscape | — |
+| Shape Builder | Inkscape booleans | свой UI поверх |
+| Gradient/Mesh Gradient | Inkscape | SVG-Edit |
+| Width Tool | Inkscape PowerStroke | — |
+| Text on Path | Inkscape | — |
+| Envelope/Bend/Pattern Along Path | Inkscape LPE | — |
+| Repeat/clones | Inkscape | — |
+| Live Boolean | Penpot | — |
+| Snapping | Inkscape | (уже частично сделано, этап 5/12 vector-plan) |
+
+Четыре главных репозитория, если сокращать до минимума (прямая цитата
+ревью): **Inkscape** (почти весь функционал Illustrator, GPL — только как
+энциклопедия поведения, не для копирования кода дословно, см. уже
+существующее предупреждение в `docs/vector-plan.md` раздел 4), **lib2geom**
+(Bézier/path математика, geometric ядро самого Inkscape, MIT-подобная
+лицензия — уточнить точную лицензию перед копированием кода), **Clipper2**
+(Boost 1.0, уже в доноре `docs/vector-plan.md`), **Penpot** (MPL 2.0,
+современный web UX + live/non-destructive boolean архитектура — уже
+частично донор `docs/vector-plan.md` этапа 15, теперь и для Live Boolean).
+
+---
+
+## 5. Брендовый движок кисти (Brush Engine)
+
+Полностью описано во втором прочитанном файле (`панели кисти.txt`),
+конспект и приоритеты — ниже. Это самый детально расписанный раздел всего
+ТЗ, и по мнению того же ревью — второй по важности пункт после Vector
+Select/Node Tool.
+
+### 5.1. Модель данных — не путать четыре сущности
+
+- [ ] **Brush Tip** — форма одного отпечатка (grayscale alpha-маска,
+      `BrushMask(x,y) ∈ [0,1]`).
+- [ ] **Brush Settings** — поведение последовательности отпечатков
+      (13 секций, см. 5.3).
+- [ ] **Brush Preset** — сохранённая комбинация tip + settings.
+- [ ] **Tool Preset** — настройки самого инструмента (Mode/Opacity/Flow/
+      Smoothing/Airbrush), которые *опционально* могут быть включены в
+      Brush Preset (`Include Tool Settings`), но не обязаны храниться
+      внутри него по умолчанию.
+
+Рекомендованная владельцем-ревьюером структура типов:
+
+```
+BrushPreset {
+    Tip tip;
+    BrushTipSettings tipSettings;
+    ShapeDynamics shapeDynamics;
+    ScatterSettings scattering;
+    TextureSettings texture;
+    DualBrushSettings dualBrush;
+    ColorDynamics colorDynamics;
+    TransferSettings transfer;
+    BrushPose pose;
+    bool noise; bool wetEdges; bool buildUp; bool smoothing; bool protectTexture;
+}
+
+BrushToolSettings {
+    BlendMode mode; float opacity; float flow;
+    SmoothingSettings smoothing; bool airbrush;
+}
+```
+
+Явно НЕ смешивать `opacity`/`flow`/`blendMode`/`sampleAllLayers` внутрь
+`BrushPreset` — это `BrushToolSettings`, отдельная сущность.
+
+Проверено: текущий `raster.brush` в `apps/web/src/tools.ts` уже имеет
+`Size, Hardness, Spacing, Roundness, Angle, Opacity, Flow, Pressure→Size,
+Pressure→Opacity` — то есть нижние 20–30% от полной модели (оценка ревью,
+не независимо измерено).
+
+### 5.2. Пайплайн рендера мазка (рекомендованный порядок)
+
+```
+Pointer Events → Stroke Smoothing → Stroke Resampling → Stamp Positions
+  → для каждого stamp: Pressure/Tilt/Rotation/Velocity
+      → Shape Dynamics → Scatter → Color Dynamics → Transfer
+      → Primary Tip → Dual Brush → Texture → Wet Edge/Noise → Flow
+      → Blend Mode → Canvas
+```
+
+### 5.3. 13 секций Brush Settings — детальный чек-лист
+
+- [ ] **Brush Tip Shape** — Size, Use Sample Size, Flip X/Y, Angle,
+      Roundness, Hardness, Spacing (в процентах от размера — «один из
+      важнейших параметров», рекомендовано реализовать раньше почти
+      всего остального).
+- [ ] **Общая система Jitter+Control** — `Base value + Jitter + Controller
+      + Minimum` для любого применимого параметра; контроллеры: Off,
+      Fade (по числу stamps, не по времени/пикселям — важная деталь:
+      «динамика Photoshop во многом считается по событиям stamp, а не
+      просто по времени»), Pen Pressure, Pen Tilt, Stylus Wheel,
+      Rotation, Direction, Initial Direction, иногда Dial.
+- [ ] **Shape Dynamics** — Size Jitter (+Control, Minimum Diameter, Tilt
+      Scale), Angle Jitter (+Control: Direction/Initial Direction),
+      Roundness Jitter (+Minimum Roundness), Brush Projection (tilt/
+      rotation реально меняют форму отпечатка).
+- [ ] **Scattering** — Scatter, Both Axes, Count, Count Jitter.
+- [ ] **Texture** — Pattern, Invert, Scale, Brightness/Contrast, Texture
+      Each Tip (on/off — принципиальная разница между «единое полотно
+      текстуры» и «текстура на каждый stamp отдельно»), Mode, Depth
+      (+Minimum, +Jitter).
+- [ ] **Dual Brush** — второй наконечник поверх первого (пересечение
+      областей, не сумма); Mode, Diameter, Spacing, Scatter, Count.
+- [ ] **Color Dynamics** — Apply Per Tip (весь stroke один случайный цвет
+      / каждый stamp свой), Foreground/Background Jitter, Hue/Saturation/
+      Brightness Jitter, Purity (глобальный bias насыщенности −100…+100).
+- [ ] **Transfer** — Opacity Jitter, Flow Jitter, оба с Control. **Важно
+      не путать Opacity и Flow**: Opacity — потолок результата ОДНОГО
+      stroke; Flow — скорость накопления краски К этому потолку при
+      повторных stamps без отпускания кнопки (Opacity=100%+Flow=10% даёт
+      постепенное накопление 10%→19%→27%… к 100%, а не мгновенные 10%).
+- [ ] **Brush Pose** — ручной override Tilt X/Y, Rotation, Pressure
+      (полезно и как инструмент отладки для авторов кистей).
+- [ ] **Noise** — простой toggle, добавляет зерно в полупрозрачные
+      области tip.
+- [ ] **Wet Edges** — имитация накопления жидкости по краям (акварельный
+      эффект).
+- [ ] **Build-up** (airbrush-поведение) — краска продолжает
+      накапливаться, пока кнопка удерживается на месте, без движения.
+- [ ] **Smoothing** — не просто галочка, а 0–100% плюс отдельные режимы:
+      Pulled String Mode, Stroke Catch-up, Catch-up on Stroke End, Adjust
+      for Zoom.
+- [ ] **Protect Texture** — общая текстура сохраняется при переключении
+      между разными пресетами кисти (художник хочет, чтобы все кисти
+      рисовали «на одном холсте»).
+- [ ] **Lock 🔒 у каждой секции** — при переборе пресетов заблокированная
+      секция не меняется вместе с остальными настройками нового пресета.
+
+### 5.4. Специализированные типы наконечников (вторая версия движка)
+
+- [ ] Bristle Tip — Shape, Bristles, Length, Thickness, Stiffness, Angle,
+      Spacing (щетина, особенно хороша с Mixer Brush).
+- [ ] Erodible Tip — Size, Softness, Shape, Sharpen Tip, Spacing
+      (карандаш/мел/пастель/уголь, наконечник физически изнашивается).
+- [ ] Airbrush Tip (не Build-up-режим обычной кисти, а отдельный тип
+      наконечника) — Size, Hardness, Distortion, Granularity, Spatter
+      Size, Spatter Amount, Spacing.
+- [ ] Mixer Brush — отдельный инструмент, не настройка обычной Brush:
+      Wet, Load, Mix, Flow, Sample All Layers (простая симуляция
+      живописи, смешивание краски на кисти с краской на холсте).
+
+### 5.5. Библиотека кистей и пресетов
+
+- [ ] Панель Brushes: библиотека, группы/папки, drag-and-drop
+      организация, live preview мазка при наведении, поиск, Recent
+      Brushes.
+- [ ] `New Brush Preset` — сохранение полного поведения настроенной
+      кисти, с опциями `Capture Brush Size in Preset`, `Include Tool
+      Settings`, `Include Color`.
+- [ ] `Define Brush Preset` (из выделения/картинки) — отдельная функция
+      от `New Brush Preset`: создаёт именно **Tip** (grayscale alpha) из
+      изображения, максимальный размер выделения 2500×2500 px, цвет
+      отбрасывается. Опциональный Feather перед созданием — контролирует
+      мягкость края.
+- [ ] Импорт/экспорт `.abr` (Adobe Brush) — **владелец ставит это очень
+      высоко приоритетно**: «если VRAVIO сможет нормально кушать
+      существующие Photoshop-кисти, пользователь сразу получает гигантскую
+      экосистему готовых кистей вместо пустой библиотеки на старте».
+
+### 5.6. UI-архитектура панелей кисти (Options Bar / Preset Picker / Brushes / Brush Settings / Tool Presets)
+
+Полное построчное ASCII-макетирование каждого из пяти уровней UI уже
+записано в самом `панели кисти.txt` (главы 1–10) — не копируется сюда
+целиком, файл лежит по пути `C:\Users\shika\Documents\правки\панели
+кисти.txt` и должен читаться при реализации UI этого раздела напрямую.
+Ключевые архитектурные решения оттуда:
+
+- [ ] **Options Bar** остаётся максимально компактным — Size/Opacity/
+      Flow/Smoothing видны всегда, всё сложное спрятано за кнопкой
+      `[Brush Settings]`.
+- [ ] **Brush Preset Picker** (маленькое всплывающее окно при клике на
+      миниатюру кисти в Options Bar) — это НЕ то же самое, что большая
+      панель Brushes. Preset Picker = «быстро выбрать», Brushes Panel =
+      «управлять коллекцией». Две разные задачи, два разных окна.
+- [ ] **Brush Settings** — левая колонка одновременно навигация и список
+      включённых модулей (чекбокс `☑` = «участвует в кисти», клик по
+      тексту = «показать настройки справа»); можно иметь пять модулей
+      включёнными, но редактировать в моменте только один. Внизу —
+      постоянный live stroke preview.
+- [ ] Единая грамматика параметра во всех секциях: `Slider/Number +
+      Jitter + Control ▾ (Off/Fade/Pen Pressure/Pen Tilt/Stylus Wheel/…)`.
+- [ ] Владелец-ревьюер предлагает **чуть упростить** относительно
+      Photoshop, сохранив всю мощь: одна панель с двумя вкладками
+      `[Library] [Settings]` вместо четырёх формально разных панелей
+      (Brushes/Brush Settings/Preset Picker/Tool Presets), чтобы
+      новичок не путался «мне сейчас Brushes или Brush Settings?».
+
+### 5.7. Доноры для brush engine — рейтинг из тз.md
+
+| Проект | Photoshop-подобие | Brush engine | ABR | Лицензия | Что брать |
+|---|---|---|---|---|---|
+| **Patchy** | 🔥🔥🔥🔥🔥 | 🔥🔥🔥🔥 | 🔥🔥🔥🔥🔥 | MIT | главный донор |
+| Krita | 🔥🔥 | 🔥🔥🔥🔥🔥 | 🔥🔥 | GPL | архитектура/спец. engines |
+| libmypaint | 🔥 | 🔥🔥🔥🔥🔥 | ❌ | ISC | готовое ядро painting |
+| GIMP | 🔥🔥🔥 | 🔥🔥🔥 | 🔥🔥🔥 | GPL | ABR parser + dynamics |
+| OpenShop | 🔥🔥🔥🔥 | 🔥🔥 | 🔥🔥🔥 | open source | web-реализация для сверки |
+| PhotoGIMP | UI 🔥🔥🔥🔥🔥 | — | — | GPL | только layout/UX, не код |
+
+**Важно про ABR-парсер конкретно**: Patchy (`src/core/abr_reader.cpp` в
+реальном GitHub-репозитории, не в локальной папке `D:\Patchy`, см.
+предисловие документа) не просто вытаскивает картинку наконечника, а
+парсит настоящие Photoshop-descriptor-структуры и восстанавливает Shape
+Dynamics/Scattering/Transfer/Texture/Dual Brush/Color Dynamics/Wet Edges
+и все Control-источники прямо из `.abr`. GIMP (`app/core/gimpbrush-load.c`)
+и Krita умеют читать сам tip из `.abr`, но не гарантируют полное
+восстановление Photoshop dynamics (reverse-engineered формат, официально
+не опубликован Adobe). Для цели «VRAVIO открывает чужой `.abr` и кисть
+ведёт себя максимально похоже на оригинал» — Patchy эталон, GIMP/Krita —
+запасной вариант только для самого tip.
+
+Итоговая рекомендованная связка (прямая цитата тз.md):
+```
+          VRAVIO Brush System
+                  │
+        ┌─────────┴─────────┐
+        │                   │
+ Photoshop Engine      Other Engines
+        │                   │
+    Patchy model      MyPaint / Krita ideas
+        │
+ ┌──────┼────────┐
+ │      │        │
+ABR   Dynamics  Presets
+```
+
+### 5.8. Приоритеты первой версии (прямая цитата тз.md, порядок сохранён)
+
+🔥🔥🔥 (обязательно для v1): Custom grayscale Brush Tip, Size/Hardness,
+Angle/Roundness, Spacing, Pressure→Size, Pressure→Opacity, Opacity/Flow
+раздельно, Shape Dynamics, Scattering, Smoothing, Brush groups, Preset
+save/load, `.abr` import.
+
+🔥🔥 (сразу после): Texture, Color Dynamics, `.abr` export, Dual Brush.
+
+🔥 (можно отложить): Wet Edges, Bristle simulation, Erodible.
+
+Отдельным большим этапом: Mixer Brush.
+
+---
+
+## 6. Прочие растровые системы из ChatGPT-советов (тз.md)
+
+### 6.1. Типизированная модель слоёв
+
+- [x] Частично уже сделано лучше, чем предполагает сама критика.
+      Проверено: `RasterLayerKind` (`packages/env-raster/src/types.ts:4`)
+      уже `"pixel" | "text" | "adjustment" | "fill" | "group" | "smart" |
+      "shape" | "3d"` — то есть единая типизированная модель уже
+      существует, а не «Raster Type Tool коммитит текст в пиксели», как
+      написано в самом ChatGPT-совете. Насколько КАЖДЫЙ из этих видов
+      реально нередеструктивен в UI (можно ли, например, взять `smart`-
+      слой через неделю и отредактировать содержимое) — не проверялось
+      построчно в этом проходе для каждого вида отдельно.
+- [ ] Маски: `Mask { Pixel Mask, Vector Mask, Filter Mask, Transform
+      Mask }` — проверено: `RasterLayer.mask?: RasterLayerMask` существует
+      как одно поле, но **не проверено**, различает ли `RasterLayerMask`
+      внутри себя эти четыре разных вида, особенно два незнакомых: Filter
+      Mask (см. 6.4) и **Transform Mask** — отдельная сущность у Krita,
+      где transform существует как отдельный неразрушающий узел, а не
+      Smart Object-обёртка:
+      ```
+      Layer
+       └─ Transform Mask
+            ├ Scale
+            ├ Rotate
+            ├ Perspective
+            └ Transform
+      ```
+      Донор: Krita (`libs/image/kis_transform_mask.h` и соседние файлы
+      в реальном репозитории `KDE/krita`).
+
+### 6.2. 16/32-bit и Color Management
+
+- [x] Проверено: `RasterDocumentState.bitDepth: 8 | 16 | 32` уже
+      существует как поле документа (`packages/env-raster/src/types.ts`)
+      — то есть модель данных для этого уже заложена, вопреки тому, что
+      предполагает сама критика («raster buffer в основном 8-bit RGBA»).
+      Действительно ли ВСЯ цепочка (Brush/Filters/Compositing/
+      Adjustments/Blend modes/Masks/Export/Sampling/Histogram/AI
+      preprocessing) корректно работает при 16/32 бит, а не только сам
+      флаг существует в типе — **не проверялось** в этом проходе,
+      требует отдельного прогона с реальным 16/32-битным документом.
+- [x] Проверено этой же сессией: `docs/vector-plan.md` этап 14 уже
+      добавил реальное ICC-цветоуправление через `qcms` (Mozilla) для
+      **векторной** среды (`crates/vector-color`), с честно
+      задокументированным ограничением (только CMYK→sRGB, не обратно —
+      см. этап 14 `vector-plan.md` для полной технической причины). Для
+      **растровой** среды то же цветоуправление ещё предстоит подключить
+      — `crates/vector-color` архитектурно ничем не привязан к vector-
+      среде конкретно и может быть переиспользован растром напрямую
+      (это WASM-пакет уровня kernel, а не vector-специфичный).
+- [ ] LittleCMS как альтернативный/дополнительный референс полного
+      ICC v2/v4 (профили sRGB/Adobe RGB/Display P3/CMYK/принтер/монитор)
+      — рассмотреть, если ограничение `qcms` (только одно направление
+      CMYK→RGB, см. `crates/vector-color/README.md`) окажется
+      неприемлемым; LittleCMS — C-библиотека, тот же вопрос
+      wasm32-компиляции без Emscripten, что уже возникал с Clipper2
+      (`docs/vector-plan.md` этап 7) — нужно отдельно проверить, ЕСЛИ
+      будет решено идти этим путём, а не считать это готовым решением.
+- [ ] `babl` (GIMP/GEGL) — для внутренних преобразований pixel format/
+      color space.
+- [ ] OpenColorIO — если/когда появится Video/3D/VFX pipeline
+      (ACES/scene-linear/LUTs).
+
+### 6.3. Настоящие многостраничные документы (DTP)
+
+- [ ] Отдельно от векторных артбордов (`docs/vector-plan.md` этап 15,
+      уже сделано) — полноценная DTP-система: master pages, нумерация
+      страниц, связанные текстовые блоки (text flow между страницами),
+      bleed, margins, styles. Донор: Scribus (главный open-source
+      референс DTP).
+      **Важно не путать с этапом 15**: артборды `vector-plan.md` — это
+      прямоугольники-метаданные на общем canvas без text flow между
+      ними; полноценный DTP с перетекающим текстом между страницами —
+      качественно другая, ещё не начатая система.
+
+### 6.4. Non-destructive filter stack (GEGL-модель)
+
+- [ ] Сейчас (предположительно) фильтры применяются напрямую к пикселям
+      слоя; нужна возможность навесить Blur/Noise/Sharpen/Distort на
+      обычный слой как стек эффектов и свободно их переставлять/включать/
+      выключать — без обязательного превращения слоя в Smart Object:
+      ```
+      Layer
+       └ Effects
+          ├ Blur
+          ├ Curves
+          ├ Noise
+          └ Sharpen
+      ```
+      Донор: GEGL (image processing backend GIMP) уже реализует это как
+      граф узлов; GIMP 3 уже имеет стек редактируемых GEGL-эффектов
+      непосредственно на слоях.
+
+### 6.5. Node Graph для сложного композитинга (отдельный, более глубокий уровень)
+
+- [ ] Вместо вложенных Smart Object внутри Smart Object — узловой граф:
+      ```
+      Image ── Blur ── Grade ──┐
+                                Merge ── Output
+      Texture ─ Transform ─────┘
+      ```
+      Донор: Natron (полноценный open-source node compositor). Это
+      явно помечено в самом ТЗ как более глубокий, не первоочередной
+      уровень.
+
+### 6.6. Cryptomatte
+
+- [ ] Для 3D/VFX импорта EXR с object ID — клик по объекту даёт маску
+      этого объекта. Спецификация + реализации:
+      `https://github.com/Psyop/Cryptomatte`; готовый keyer для Natron —
+      `https://github.com/NatronGitHub/natron-plugins`.
+
+### 6.7. Художественная система выбора цвета
+
+- [ ] Krita-уровня цветовые инструменты: Artistic Color Selector,
+      Advanced Color Selector, gamut masks, HSI/HSY цветовые колёса,
+      palette groups, именованные/spot colors, импорт ACO/ASE/ACT/GPL.
+      Донор: Krita.
+
+### 6.8. Perspective / Drawing Assistants
+
+- [ ] Направляющие, к которым прилипает кисть: 1/2/3-point perspective,
+      параллельные линии, эллипс в перспективе, fisheye, curvilinear
+      4/5/6-point, isometric/dimetric. Донор: Krita (Assistants —
+      огромная система).
+
+### 6.9. Reference Images поверх холста
+
+- [ ] Не отдельным документом, а плавающим объектом прямо над canvas:
+      двигать/крутить/масштабировать/менять opacity-saturation,
+      сохранять наборы референсов. Донор: Krita Reference Images Tool.
+
+### 6.10. Более свободные Clipping Groups
+
+- [ ] Сейчас (как и в Photoshop) ограничение на группировку внутри
+      clipping stack вынуждает дублировать маски/использовать Smart
+      Objects. Донор: Krita Alpha Inheritance — более гибкие цепочки на
+      основе результирующей альфы нескольких слоёв.
+
+### 6.11. Генератор Luminosity Masks
+
+- [ ] Кнопка `Lights 1/2/3 → Darks 1/2/3 → Midtones`, обычно в
+      Photoshop это actions/плагины, не штатная функция. Готовые
+      реализации для GIMP: `https://github.com/Davide-sd/GIMP-Plugins`,
+      `https://github.com/edoardogiacomello/gimp-mask`.
+
+### 6.12. Frequency Separation
+
+- [ ] Полноценный встроенный инструмент, не набор слоёв/actions вручную.
+      Донор: GIMP Wavelet Decompose
+      (`https://github.com/mrossini-ethz/gimp-wavelet-decompose`) — даёт
+      несколько масштабов деталей, не просто High/Low раздел.
+
+### 6.13. Локальный AI (Local AI режим)
+
+- [ ] Режим генерации без обязательного облака: пользовательская модель,
+      без интернета, без кредитов, свои LoRA, ControlNet (Pose/Depth/
+      Canny), Reference Image, свой inpaint model. Донор: Krita AI
+      Diffusion (`https://github.com/Acly/krita-ai-diffusion`) — уже
+      показывает, как это встраивается внутрь нормального графического
+      редактора (inpaint/outpaint, ControlNet, live painting, upscale,
+      очередь генераций).
+
+---
+
+## 7. Форматы файлов, RAW, печать, PSD, собственный формат
+
+### 7.1. Экспорт/импорт — полная матрица форматов из тз.md
+
+**Растр — экспорт:** PSD, PSB, JPEG/JPG, PNG, GIF, WebP, AVIF, HEIF/HEIC,
+TIFF/TIF, BMP, TGA/TARGA, JPEG 2000/JP2/J2K, OpenEXR/EXR, Radiance HDR,
+JPEG XL/JXL, PFM, PDF, EPS, DCS 1.0/2.0, Cineon/CIN, DICOM/DCM, IFF, PCX,
+Pixar/PXR, PBM, Scitex CT, Photoshop Raw, WBMP.
+
+**Вектор — экспорт:** AI, AIT, PDF, EPS, SVG, SVGZ, PSD, JPEG/JPG, PNG,
+TIFF/TIF, WebP, BMP, TGA/TARGA, DWG, DXF, EMF, WMF, CSS, TXT. Проверено:
+`docs/vector-plan.md` этап 10 уже реализовал SVG-экспорт (не SVGZ) через
+собственный сериализатор + `usvg`/`resvg` для сверки — из всего этого
+большого списка сделан **один** формат.
+
+**Растр — импорт:** PSD, PSB, JPEG/JPG, PNG, GIF, WebP, AVIF, HEIF/HEIC,
+TIFF/TIF, BMP, JPEG 2000/JP2/J2K, OpenEXR/EXR, Radiance HDR, Cineon/CIN,
+DICOM/DCM, IFF, PCX, EPS, DCS, PDF, TGA/TARGA, Pixar/PXR, PBM, Scitex CT,
+Photoshop Raw, PICT, + RAW-семейство: DNG, CR2, CR3, NEF, NRW, ARW, RAF,
+ORF, RW2, PEF, RWL, 3FR, FFF, IIQ, X3F, MRW, KDC, DCR.
+
+**Вектор — импорт:** AI, AIT, PDF, EPS, EPSF, PS, SVG, SVGZ, CDR, DWG,
+DXF, CGM, EMF, WMF, PSD, PDD, JPEG/JPG, PNG, WebP, AVIF, HEIC/HEIF, GIF,
+BMP, DIB, RLE, TIFF/TIF, JPEG 2000/JP2, TGA/TARGA, PCX, Pixar/PXR, TXT,
+RTF, DOC, DOCX. Проверено: `docs/vector-plan.md` этап 10 сделал SVG-
+импорт через `usvg`.
+
+**Форматов, которых у Photoshop штатно нет, но хочет владелец:**
+ORA/OpenRaster, DDS, KTX, KTX2, XCF, KRA, QOI, APNG, полноценный SVG
+import/editing (частично уже сделано, см. выше), SVGZ, Basis Universal.
+
+**Приоритет ChatGPT-совета** (P0 в его собственной формулировке): PSD
+read++ (расширить существующий, добавить CMYK/ZIP-channel decode/
+adjustment/text/vector layer data), PSD write (сейчас, по всей видимости,
+только чтение — не проверялось в этом проходе, требует отдельной
+проверки наличия `writePsd`-аналога в кодовой базе), PSB, ORA, SVG (уже
+частично сделано), PDF. Затем: KRA, XCF, AI/EPS import. Мотивация прямо
+названа: не ради галочки «100 форматов», а чтобы «пользователь мог уйти
+из VRAVIO и вернуться обратно» — отсутствие vendor lock-in.
+
+### 7.2. Доноры по конкретным форматам/подсистемам
+
+- [ ] PSD read/write — донор Patchy (максимальный round-trip), `ag-psd`
+      (TypeScript-парсер, ближе всего к стеку VRAVIO), `psd-tools`
+      (детальный разбор бинарного формата PSD/PSB — low-level parser/
+      writer, compositing, RLE/ZIP compression).
+- [ ] RAW-декодирование — LibRaw (все распространённые камеры одним
+      разом, не писать 20+ декодеров самому).
+- [ ] RAW-проявка (pipeline) — RawTherapee как референс глубины
+      контроля (demosaic, highlight recovery, white balance, exposure,
+      curves, denoise, sharpening, wavelets, lens corrections, color
+      management).
+- [ ] Печать и весь пайплайн экспорта файлов — **прямая цитата тз.md**:
+      «слизать у Patchy всё, что касается печати и экспорта файлов».
+- [ ] Форматы изображений в целом (EXR/TIFF/HDR/DPX/texture-VFX
+      форматы, высокий bit depth, metadata) — OpenImageIO как
+      профессиональный «хвост» форматов, оставляя специализированные
+      быстрые кодеки для PNG/JPEG/WebP/AVIF отдельно.
+- [ ] Собственный формат документа `.vravio` (или короче, если найдётся
+      удачное сокращение) — по образцу `.psd`. Формат сериализации
+      документа/асетов/истории в VRAVIO уже частично существует
+      (kernel document model — уже есть `documents.get(id).state`,
+      сериализация упоминается в `packages/kernel`), но **отдельный
+      персистентный ФАЙЛОВЫЙ формат** (что именно пишется на диск при
+      «Сохранить как .vravio», в каком контейнере — не проверялось в
+      этом проходе) нуждается в отдельном явном описании как формат, а
+      не только как in-memory модель документа.
+
+---
+
+## 8. Оболочка (Shell) — окна, панели, UI-баги, полировка
+
+### 8.1. Панель "окна.txt" — полный список Window ▾ Photoshop
+
+Полный список из `окна.txt`, сверенный с текущим состоянием VRAVIO.
+Проверено: текущий реестр панелей растровой среды (`environments/raster/
+windows/definitions/*.ts`) содержит `properties, layers, history, assets,
+color, navigator, effects, scripts` — то есть 8 панелей уже есть;
+векторная среда после этой сессии (этапы 13/15 `vector-plan.md`) имеет
+`properties, layers, artboards, symbols, history, color, scripts` — 7
+панелей. Ниже — то, чего из полного Photoshop-списка ещё нет ни в одной
+из сред:
+
+- [ ] Actions — запись/запуск/организация макросов
+- [ ] Adjustments (быстрая панель создания корректирующих слоёв —
+      отдельно от самого модуля коррекций, который уже есть)
+- [ ] Brush Settings (см. раздел 5 целиком)
+- [ ] Brushes (библиотека, см. раздел 5.5)
+- [ ] Channels
+- [ ] Character / Character Styles (см. раздел 3.3)
+- [ ] Clone Source (расширенные настройки Clone/Healing — несколько
+      источников, поворот, масштаб, смещение, отражение)
+- [ ] Content Credentials (метаданные происхождения/авторства/AI-
+      использования — низкий приоритет по духу самого ТЗ, но отмечен)
+- [ ] Glyphs
+- [ ] Gradients (библиотека пресетов, отдельно от самого Gradient Tool)
+- [ ] Histogram
+- [ ] Layer Comps (сохранение разных состояний видимости/положения/
+      оформления слоёв документа)
+- [ ] Measurement Log (для Measure/Ruler tool, экспорт данных)
+- [ ] Notes (текстовые заметки, привязанные к месту на изображении —
+      **уже частично помечено `- [ ]` без чекбокса** прямо в `окна.txt`,
+      то есть даже сам источник не уверен в приоритете этого пункта)
+- [ ] Paragraph / Paragraph Styles (см. раздел 3.3)
+- [ ] Paths (векторные пути/рабочие контуры/clipping paths внутри
+      растровой среды — отдельно от самого векторного окружения)
+- [ ] Patterns (библиотека паттернов)
+- [ ] Shapes (библиотека Custom Shapes)
+- [ ] Styles (готовые Layer Effects комбинации, `.asl`)
+- [ ] Swatches (библиотека сохранённых цветов и групп)
+- [ ] Tool Presets (сохраняет состояние целого инструмента — Brush +
+      opacity + mode + flow разом, см. раздел 5.6)
+- [ ] Contextual Task Bar — не обычная панель, а плавающая контекстная
+      полоска рядом с объектом/выделением, меняющаяся по текущей задаче
+
+### 8.2. Модель докинга панелей — полный пересмотр (тз.md, п. 27)
+
+Владелец прямо описывает, что текущая реализация неправильная. Требуемая
+модель состояний панели:
+
+- [ ] Закреплённая (в доке) / незакреплённая (плавает где угодно на
+      экране)
+- [ ] Свёрнута полностью (только иконка)
+- [ ] Свёрнута частично (иконка + текст справа)
+- [ ] Развёрнута (полная панель)
+- [ ] Развёрнута и прикреплена
+- [ ] Свёрнутые (и развёрнутые) иконки можно прикреплять справа или
+      слева от развёрнутых панелей, образуя вертикальную полоску —
+      «как панель инструментов»
+- [ ] Клик по свёрнутой/частично свёрнутой иконке открывает окошко
+      панели рядом, не сворачивая другие
+- [ ] Кнопка свернуть — справа сверху окна панели; кнопка развернуть —
+      справа сверху от иконки/полоски
+- [ ] Группы иконок на полоске: клик по иконке из группы открывает эту
+      панель, но сверху появляются вкладки для переключения между
+      панелями именно этой группы (не всех панелей вообще)
+- [ ] **Никакого вертикального текста нигде** — прямая, буквальная
+      формулировка владельца
+
+Проверено: текущий dock (`apps/web/src/DockLayout.tsx`, `dockview-react`)
+уже умеет схлопывание правой колонки до 43px иконок (см. описание в
+самом же тз.md, раздел «Что уже получилось очень удачно» — «dock-система
+уже взрослая: правая колонка стартует около 280px, минимум 220px, может
+схлопываться до 43px иконок») — то есть часть модели («свёрнуто
+полностью») уже есть, но полный набор состояний (незакреплённое плавающее
+окно, свёрнуто-частично с текстом, произвольное докание слева/справа
+иконок группами с вкладками) — не проверено и, судя по прямой жалобе
+владельца, отсутствует.
+
+### 8.3. Раскрывающиеся списки не закрываются по клику в сторону
+
+- [x] Починено в этой сессии — не для ЭТОЙ конкретной жалобы напрямую
+      (та касалась общего поведения dropdown), но найден и починен
+      смежный z-index баг того же класса: `.menu-bar` (родитель верхних
+      dropdown-меню Файл/Правка/Окно и т. д.) имел z-index:5, из-за чего
+      dockview-панели визуально перекрывали открытое меню — исправлено в
+      коммите `dae9696` этой же сессии (z-index:30). **Это НЕ то же
+      самое**, что жалоба «списки не закрываются по клику в сторону» —
+      тот механизм (закрытие по outside-click) отдельно **не
+      реализован**, судя по коду `Menu`-компонента в `App.tsx`, где
+      `openMenu` управляется только явными кликами по кнопкам меню, без
+      `document`-уровневого обработчика клика вне области.
+- [ ] Реализовать закрытие ЛЮБОГО раскрывающегося списка/меню (не
+      только верхнего меню Файл/Правка) по клику в любое место вне его
+      — сейчас приходится нажимать ровно ту же кнопку, что открыла
+      список, чтобы его закрыть.
+
+### 8.4. Линейки — пять отдельных багов
+
+- [ ] Линейки перекрывают раскрывающиеся списки (тот же класс проблемы,
+      что и 8.3 — z-index/порядок наложения).
+- [ ] Линейки нельзя двигать инструментом перемещения после того, как
+      они установлены (направляющие — guides — должны перетаскиваться
+      Move Tool'ом).
+- [ ] Линейки обрезаются холстом — неправильно; должны показывать
+      деления по всей видимой области рабочего пространства, а не
+      только в границах документа. **Это именно то, что уже было
+      найдено и починено этой сессией для векторной среды** (`docs/
+      vector-plan.md`, коммит `17a4569`, «направляющие внутри
+      масштабируемого холста» — но починка была для vector guide-
+      overlay; растровые линейки самого документа, судя по формулировке
+      жалобы, отдельная, всё ещё не проверенная область).
+- [ ] Отметка «0» линейки не строго совпадает с началом холста.
+- [ ] У линеек нет собственного раскрывающегося списка по клику левой
+      кнопкой (настройки единиц измерения, отображение линеек) —
+      стандартное поведение Photoshop: клик по линейке правой кнопкой
+      меняет единицы измерения; здесь владелец говорит именно про
+      левый клик и полноценный dropdown, не просто contextmenu.
+
+### 8.5. Панель инструментов — drag-переставление
+
+- [ ] Инструменты в панели должны переставляться прямым перетаскиванием
+      (не только через существующий отдельный редактор тулбара с drag-
+      and-drop, если он не покрывает именно «перетащить прямо на месте»
+      — проверено: `apps/web/src/toolbar/ToolbarEditor.tsx` уже
+      реализует drag-and-drop реорганизацию, но это ОТДЕЛЬНЫЙ диалог
+      редактирования, не перетаскивание прямо в рабочей панели
+      инструментов). Порог чувствительности должен быть настроен так,
+      чтобы не активировать перетаскивание случайно во время обычной
+      работы (особенно важно при частом клике по инструменту «Перо»).
+
+### 8.6. Z (Zoom Tool) — Photoshop press-and-hold поведение
+
+- [ ] Зажатие Z, масштабирование, отпускание Z → должен вернуться
+      предыдущий активный инструмент. Зажатие Z без масштабирования,
+      затем отпускание (не сразу) → тоже должен вернуться предыдущий
+      инструмент. Сейчас (судя по формулировке — «кнопка Z призывает
+      лупу, это правильно, но...») лупа переключается корректно, но
+      **не возвращает** предыдущий инструмент по отпусканию клавиши.
+
+### 8.7. Выравнивание — перепутанные иконки, неясный переключатель
+
+- [ ] Иконки выравнивания по вертикали и по горизонтали перепутаны
+      местами (нужна прямая визуальная проверка панели Align — не
+      проводилась в этом проходе).
+- [ ] Неясно, делает ли что-либо переключатель layer/group в контексте
+      выравнивания — нужно почитать код панели Align или проверить
+      живьём, что означает и куда ведёт этот переключатель сейчас.
+- [ ] Нужно реализовать переключатель «выделение ↔ холст» как точку
+      отсчёта выравнивания (align relative to selection vs relative to
+      canvas) — по образцу того, как это работает в Photoshop.
+
+### 8.8. Палитра цветов
+
+- [ ] Сделать подробнее и удобнее — донор:
+      `https://github.com/Drommedhar/sable`.
+
+### 8.9. Прочие точечные интерфейсные пункты
+
+- [ ] Для 3D-моделей — ручки вращения модели и света прямо на слое (на
+      холсте), не только в панели Свойства.
+- [ ] Импорт 3D-моделей на холст перетаскиванием ИЛИ через меню Файл, с
+      максимально широкой поддержкой форматов файлов.
+- [ ] При открытии PSD — поддержка встроенных Smart Objects, если её
+      сейчас нет (не проверялось в этом проходе, требует отдельного
+      разбора PSD-импорта на предмет обработки Smart Object-данных).
+- [ ] Панели могут «срезаться» при масштабировании интерфейса — нужно
+      исключить это в корне (связано с общим пунктом 8.11, UI Scale).
+- [ ] В окне «Фильтр» большинство кнопок ведёт в одно и то же место —
+      развести по смыслу: Blur Gallery → окно предпросмотра именно
+      размытий; Filter Gallery → окно с художественными/стилизующими
+      фильтрами БЕЗ размытия; убрать дубли, которые по сути об одном и
+      том же.
+- [ ] Шум в Filter Gallery работает некорректно (нужна живая проверка —
+      не проводилась в этом проходе).
+- [ ] На панель фильтров добавить отдельный «Шум» (окно с добавлением
+      шума, предпросмотром, monochrome-переключателем).
+- [ ] В выпадающий список фильтров добавить: Уменьшение шума,
+      Устранение цветового шума, аналог «Пыль и царапины» (в один
+      подсписок вместе), Краевой контраст.
+
+### 8.10. Command Palette — возможно, слишком массивная кнопка
+
+- [ ] Кнопка `⌘ Commands Ctrl K` в title bar может быть избыточно
+      крупной для постоянного отображения. Рекомендация ревью: оставить
+      как есть на раннем этапе (для discoverability), позже — сделать
+      маленькой иконкой/лупой либо дать возможность отключать в
+      настройках.
+
+### 8.11. UI Scale
+
+- [ ] Добавить масштаб интерфейса: 80/90/100/110/125% либо хотя бы
+      Compact/Normal/Comfortable. Сейчас в настройках есть тема и
+      цвета, но масштаба интерфейса нет (проверено — не найдено такой
+      настройки при беглом поиске по `SettingsDialog.tsx` в контексте
+      этой же сессии; полноценно не перепроверялось заново для этого
+      документа).
+
+### 8.12. Индивидуальность интерфейса (общая рекомендация ревью)
+
+Не редизайн — владелец/ревью прямо предупреждает не делать «красивее»
+всю оболочку сразу. Точечные усиления:
+
+- [ ] Функциональные акценты цветом среды документа (сейчас цвет
+      Raster/Vector/Audio/Video виден в основном на welcome screen и
+      полоске вкладки, но не в самой рабочей области):
+      ```
+      Raster   purple → brush/mask/layer accent
+      Vector   blue   → nodes/paths/handles
+      Audio    amber  → playhead/selected clips
+      Video    red    → timeline/selected clip
+      ```
+      Не красить панели целиком — только функциональные акценты (тонкая
+      линия у Options Bar, выбранный инструмент, focus панели).
+- [ ] Часть уверенности/характера welcome screen (крупная типографика,
+      glow, environment-card) перенести внутрь самого редактора, а не
+      оставлять «нейтральный Adobe-like editor» ощущением рабочей
+      области.
+- [ ] Единая грамматика оболочки для ВСЕХ четырёх сред одинаково важна:
+      Menu/Title → Documents → Tool Options → Tools|Canvas|Panels →
+      Status — даже когда наполнение Audio/Video принципиально другое
+      (timeline вместо canvas, mixer вместо layers), СТРУКТУРА рамки
+      должна быть той же, чтобы переключение вкладки не ощущалось как
+      «открыл другое приложение». Прямо подтверждена находка: `registry`
+      Audio/Video сейчас вообще не имеет panel catalogue (проверено этой
+      сессией — `environmentsWithWindows` тест ожидает ровно
+      `["raster", "vector"]`).
+
+---
+
+## 9. Audio и Video — доноры для быстрого набора функциональности
+
+Обе среды у VRAVIO сейчас реализованы одним общим `MediaWorkspace.tsx`
+(проверено — нет `packages/env-audio`/`packages/env-video`, нет
+отдельного panel registry). Ниже — сведённые из тз.md донорские стеки.
+**Владелец прямо подтвердил** («да, нужно слизать ВЕСЬ функционал»), что
+это не выборочные идеи, а целевой полный набор функций обеих сред.
+
+### 9.1. Видео
+
+Главная связка доноров: **OpenCut Classic** (UI/timeline, TS/React —
+ближе всего к стеку VRAVIO) → **MLT** (настоящее NLE-ядро, на нём
+построены Kdenlive/Shotcut) → **Kdenlive** (UX профессионального
+монтажа — Select/Blade/Slip/Ripple/Spacer/Insert/Overwrite/Lift/Extract)
+→ **FFmpeg** (media I/O, кодеки, фильтры, экспорт — фундаментальная
+инфраструктура, не внешняя утилита) → **libplacebo** (GPU preview/цвет/
+HDR) → **Natron** (masks/tracking/roto/node-compositing, только когда
+понадобится продвинутый композитинг).
+
+Малые специализированные доноры: **LosslessCut** (lossless trim,
+keyframe-aware cut, remux, scene detection — GPL-2.0-only, смотреть
+алгоритмы, не копировать код), **frei0r** (100+ готовых видеоэффектов,
+уже используется Kdenlive/Shotcut/MLT/FFmpeg), **OpenTimelineIO**
+(interchange формат таймлайна между NLE — на перспективу), альтернативный
+backend **GStreamer Editing Services** (если MLT не подойдёт).
+
+Первый практический этап (v0.1), из чек-листа OpenCut Classic — прямая
+цитата, порядок сохранён:
+
+- [ ] Media Bin
+- [ ] Video Track
+- [ ] Audio Track
+- [ ] Clip { source, timelineStart, sourceIn, sourceOut, duration,
+      position, scale, opacity, crop, volume, mute }
+- [ ] timeline position
+- [ ] trim
+- [ ] split (blade)
+- [ ] move
+- [ ] multi-select
+- [ ] snapping
+- [ ] playhead
+- [ ] mute
+- [ ] lock
+- [ ] visibility
+- [ ] transform (position/scale/opacity)
+- [ ] crop
+- [ ] undo/redo
+- [ ] export
+
+**Явно не на этом этапе**: transitions, LUT, keyframe editor, node
+compositor (Natron) — отложить намеренно.
+
+### 9.2. Аудио
+
+Главная связка: **waveform-playlist** (главный донор для нынешнего React/
+web-стека VRAVIO — уже разделён на `core/engine/browser/playout/
+recording/spectrogram`, framework-agnostic timeline engine, MIT) +
+**Tracktion Engine** (архитектурные идеи модели данных — `Edit → Track →
+Clip/Plugins/Automation`, специально без UI) + **AudioMass** (простые
+эффекты и UX завершённого маленького Audacity-подобного редактора, тоже
+MIT, код проще для чтения) + **Audacity 4** (эталон поведения — non-
+destructive clips, realtime effect stack — но GPL и огромный C++/Qt,
+смотреть только как референс поведения, не донор кода) + **Ardour**
+(когда понадобится настоящий Mixer/Buses/Sends/Routing) + **JUCE**
+(нативный audio/plugin hosting для будущего desktop VRAVIO).
+
+Специализированные библиотеки: **Signalsmith Stretch** (time-stretch/
+pitch-shift, есть WASM-версия), **aubio** (BPM/beat/pitch/transient
+detection), **RNNoise** (AI noise reduction для речи), **libebur128**
+(LUFS/True Peak/LRA — готовая реализация EBU R128), **libsndfile**
+(WAV/AIFF/FLAC/OGG/Opus/MP3 и т. д.), **miniaudio** (маленький native
+audio engine playback/capture/mixing, кроссплатформенный).
+
+Первый практический этап (v0.1), из чек-листа waveform-playlist —
+прямая цитата:
+
+- [ ] waveform
+- [ ] tracks
+- [ ] clips
+- [ ] move
+- [ ] trim
+- [ ] split
+- [ ] overlap
+- [ ] fades
+- [ ] crossfade
+- [ ] gain
+- [ ] pan
+- [ ] mono/stereo
+- [ ] mute
+- [ ] solo
+- [ ] zoom
+- [ ] playhead
+- [ ] recording
+- [ ] mixdown
+- [ ] WAV export
+
+Затем из AudioMass: normalize, reverse, EQ, compressor, reverb, delay,
+pitch, speed, repair. Затем из Audacity 4: realtime effect stack, plugin
+architecture, advanced recording, ripple editing, spectrogram,
+automation.
+
+### 9.3. Прямая рекомендация порядка работы (обе среды)
+
+Прямая цитата вывода ChatGPT: «на первом этапе тебе гораздо важнее, чтобы
+clips нормально двигались, резались, перекрывались, фейдились и
+проигрывались без рассинхрона, чем чтобы редактор уже умел открывать
+800 VST-плагинов. Когда базовая timeline-модель кривая, её потом
+исправлять намного больнее, чем прикрутить ещё один DSP-эффект» — то же
+верно и для video-таймлайна.
+
+---
+
+## 10. Расстановка приоритетов
+
+### 10.1. Собственная P0/P1/P2 лестница ChatGPT (тз.md, дословно)
+
+```
+P0 — ФУНДАМЕНТ
+├ License
+├ Native .vravio document format
+├ Audio → env-audio
+├ Video → env-video
+├ unified layer/type model        (частично уже есть, см. раздел 6.1)
+├ editable Text Layer             (частично уже есть, см. раздел 3.1)
+├ 16/32-bit pipeline              (поле уже есть в типе, см. раздел 6.2)
+└ color management / ICC          (частично сделано для вектора, этап 14 vector-plan)
+
+P1 — ОСНОВНЫЕ РАБОЧИЕ СИСТЕМЫ
+├ complete Brush Engine           (раздел 5)
+├ masks
+├ smart/non-destructive effects   (раздел 6.4)
+├ Crop                            (раздел 2.1)
+├ PSD write
+├ vector tool surface             (в значительной части уже закрыто этапами 1–15 vector-plan.md)
+├ typography                      (раздел 3)
+└ import/export matrix            (раздел 7)
+
+P2 — ГЛУБИНА
+├ Audio mixer/effects
+├ real Video NLE
+├ advanced vector effects         (раздел 4.6)
+├ reference images                (раздел 6.9)
+├ assistants                      (раздел 6.8)
+├ richer AI                       (раздел 6.13)
+└ advanced 3D
+```
+
+### 10.2. Собственная очерёдность доработки инструментов (тз.md, дословно, с пометкой уже сделанного)
+
+| # | Инструмент/система | Почему | Статус на 6 сентября 2026 |
+|---|---|---|---|
+| 1 | 🔴 Vector Select | без хорошего выделения весь Vector кажется слабым | не сделано (раздел 4.1) |
+| 2 | 🔴 Node Tool | сердце любого серьёзного vector editor | не сделано (раздел 4.2) |
+| 3 | 🔴 Brush System | сердце raster painting | не сделано (раздел 5) |
+| 4 | 🔴 Crop | простой инструмент, выглядит явно незавершённым | не сделано (раздел 2.1) |
+| 5 | 🟡 Pen | почти вся математика есть — легко улучшить | описано в `vector-plan.md` разделе 9, не сделано |
+| 6 | 🔴 Vector Text | сильно отстаёт от растрового | не сделано (раздел 3.1) |
+| 7 | 🔴 Smudge | большая разница с Krita | не сделано (раздел 2, таблица) |
+| 8 | 🔴 Raster Shape | перевести на vector-backed shape layers | не сделано (раздел 1.4) |
+| 9 | 🔴 Fill + Gradient | закончить базовый paint/fill набор | не сделано (раздел 2.4) |
+| 10 | 🔴 Magic Wand + selection family | полноценная система выделения | не сделано (раздел 2.3) |
+
+Не трогать сейчас (по мнению того же ревью — уже достаточны): Move, Hand,
+Rotate View, Zoom, Eyedropper, Clone, Spot Healing, Remove AI.
+
+**Важное замечание, дословно из тз.md**: «VRAVIO сейчас не страдает от
+недостатка инструментов. Он страдает от того, что часть инструментов
+глубиной 8/10 соседствует с инструментами глубиной 3/10» — рекомендация
+не расширять тулбар, пока не доведены Select → Nodes → Pen → Brush →
+Crop → Text.
+
+### 10.3. Что этот документ сознательно не решает
+
+Порядок работы над разделами 1–9 — решение владельца, не автоматическое
+следствие таблиц выше. В частности: часть уже произошедшей работы этой
+сессии (`docs/vector-plan.md`, все 15 этапов) фактически ЗАКРЫВАЕТ
+существенный кусок пункта «vector tool surface» из P1, и почти весь
+раздел 4.5 (Offset Path/Outline Stroke — математика уже есть) — то есть
+некоторые формально «не сделанные» по списку выше пункты на деле
+дешевле, чем выглядят по этой таблице, потому что фундамент под ними уже
+готов. Верно и обратное: раздел 5 (Brush Engine) и раздел 9 (Audio/
+Video) — с нуля, без какого-либо существующего фундамента в текущем
+репозитории VRAVIO под них.
+
+---
+
+## 11. Contextual Task Bar — плавающая контекстная панель на холсте
+
+Это отдельная сущность интерфейса, не Properties и не Options Bar. Adobe
+описывает её как «следующие наиболее вероятные действия» — плавающая панель
+рядом с объектом/выделением, которая полностью меняет набор кнопок в
+зависимости от состояния документа. В первом проходе этого документа она
+была сжата до одной строки (было в разделе 8) — здесь полная спецификация.
+
+### 11.1. Конкретные состояния (все 16, из тз.md дословно разобраны)
+
+- [ ] **Пустой/прозрачный слой, нет выделения** → `Generate Image` (не
+      `Generative Fill`, потому что нечего заполнять).
+- [ ] **Обычный pixel layer, нет выделения** → `Prompt to Edit` (AI-правка
+      всего изображения текстом) + `Adjust Colors` + `Actions`.
+- [ ] **На фото есть очевидный субъект** → `Remove Background`.
+- [ ] **После Remove Background** (слой стал прозрачным вокруг субъекта) →
+      `Generate Background` (prompt / цвет / импорт своей картинки).
+- [ ] **Вставленный поверх другого слой (subject inserted)** →
+      `Harmonize` — см. раздел 13 ниже, отдельный большой блок именно про
+      Harmonize и его открытые донора.
+- [ ] **Есть частичное pixel-выделение** → `Generative Fill` + `Remove` +
+      `Create Mask`. Явное разделение состояний: no selection/entire image
+      → `Prompt to Edit`; partial selection → `Generative Fill`.
+- [ ] **Generative Fill нажат** → сама панель превращается в мини-форму:
+      `[Model ▾] [Describe what to generate...] [Generate]` + кнопка
+      Reference Image — то есть Contextual Task Bar не открывает отдельное
+      окно, а сама становится интерфейсом операции.
+- [ ] **Выбран Remove Tool** → панель показывает параметры инструмента
+      (`Find Distractions ▾`: Wires and cables / People / General
+      distractions, Brush Size/Hardness), синхронизированные с Options Bar.
+- [ ] **Готовое AI-выделение (после Select Subject/Object Selection)** →
+      `Generative Fill` / `Remove` / `Create Mask` / `Adjust` / `Invert
+      Selection` / `Deselect`.
+- [ ] **Adjustment Brush** — двухфазный state machine: до применения —
+      `[Brightness/Contrast ▾] Size Hardness [Apply to object]`; после —
+      `[+Add][-Subtract][Overlay][Invert] [Hue/Saturation ▾] [+New
+      Adjustment]`.
+- [ ] **Adjust Colors** → раскрывается в цветовые «таблетки»
+      (доминирующие цвета изображения, определённые автоматически) +
+      Hue/Saturation/Lightness слайдеры на выбранный диапазон +
+      eyedropper — мини-версия Hue/Saturation прямо на холсте.
+- [ ] **Выбран текстовый слой** → быстрый доступ к font/style/size/
+      align/spacing прямо в панели.
+- [ ] **Dynamic Text для текста** → `[Block][Circle][Arch][Bow][Dynamic
+      Fit]` — прямая связь с разделом 3.2 этого документа.
+- [ ] **Crop расширяет канвас наружу исходного изображения** →
+      `Generative Expand`, при нажатии превращается в
+      `[Model ▾] [Prompt...] [Generate]`.
+- [ ] **Actions** → вход в панель Actions с категориями Basic
+      Adjustments / Subject & Background / Creative Effects / Guides /
+      Resize / Export.
+- [ ] Панель плавает над канвасом, но её можно **таскать, закреплять,
+      сбрасывать позицию и скрывать** через `Window → Contextual Task Bar`
+      — то есть это не фиксированный toolbar, а элемент с собственным
+      состоянием позиции.
+
+### 11.2. Точные размеры (для VRAVIO — фиксировать конкретно)
+
+Adobe не документирует фиксированный размер (панель динамическая), но по
+актуальным скриншотам и системе Adobe Spectrum (control-height-100 = 32px)
+выводятся конкретные числа, которые стоит взять как отправную точку:
+
+```
+height: 40px;          /* почти всегда, независимо от состояния */
+min-height: 40px;
+padding: 4px;
+button-height: 32px;
+icon-button: 32px;
+border-radius: 8px;
+gap: 4px;
+width: fit-content;
+min-width: 180px;      /* компактное состояние, напр. Vector boolean-панель */
+max-width: 720px;       /* большое AI-состояние с prompt-полем */
+```
+
+### 11.3. Архитектура для VRAVIO — общая для всех 4 сред, не только Raster
+
+Ключевая идея тз.md, которую стоит выделить отдельно: не копировать
+Photoshop-панель один в один под растр, а сделать её общим
+«что дальше?»-слоем интерфейса для всех четырёх сред сразу — это даже
+полезнее, чем в самом Photoshop, потому что у VRAVIO четыре разные среды
+с одним kernel.
+
+```
+Context {
+    environment
+    activeTool
+    selection
+    selectedObjects
+    selectedLayers
+    layerTypes
+    clipboard
+    operation
+    documentState
+}
+
+ContextAction {
+    id
+    priority
+    when(context): boolean
+    execute()
+}
+```
+
+Пример правила: `remove-background` — `when: env=raster, selectedLayers=1,
+layerType=pixel, hasTransparency=false`, `priority: HIGH`. Тогда одна и та
+же панель работает по-разному в каждой среде без единого захардкоженного
+компонента `RasterContextBar.tsx` с двадцатью `if`:
+
+- **Raster**, есть selection → `Remove / Fill / Mask / Adjust`
+- **Vector**, выбрано 2 фигуры → `Union / Subtract / Intersect / Exclude`
+- **Audio**, два перекрывающихся клипа → `Crossfade / Normalize / Group`
+- **Video**, выбран клип → `Split / Speed / Stabilize / Remove BG`
+
+**Не проверено:** есть ли в текущем VRAVIO хоть какой-то прообраз этой
+сущности (что-то вроде `commandDefinitions`/`catalogueTool` могло бы стать
+основой `ContextAction`, но `when(context)`-диспетчер поверх контекста
+выделения в явном виде не искался в этом проходе) — грепнуть перед
+реализацией: `grep -rn "ContextAction\|ContextualTaskBar\|contextBar" apps/web/src`.
+
+---
+
+## 12. Object Selection Tool — полный разбор (Photoshop)
+
+Пропущено в первом проходе целиком. Это не один инструмент, а целая
+цепочка, у которой в Photoshop запутанно (сам тз.md называет это «не
+всегда информационно чистым») — три входа в одну и ту же функцию:
+
+```
+LEFT TOOLBAR
+└─ Object Selection [W]
+       └── OPTIONS BAR
+           ├ New / Add / Subtract / Intersect
+           ├ Mode: Rectangle / Lasso
+           ├ Object Finder (☑ наведение подсвечивает объект)
+           ├ Select People (список найденных людей, per-person чекбоксы:
+           │   Entire person / Facial skin / Hair / Eyebrows / Eyes /
+           │   Lips / Teeth / Beard / Clothes / Accessories)
+           ├ Sample All Layers
+           ├ Hard Edge
+           ├ Select Subject (дублируется в меню Select → Select Subject
+           │   и в Discover → Quick Actions — три пути к одной функции)
+           └ Select and Mask... → отдельный workspace:
+                  ├ Refine Edge Brush (кисть по проблемной границе,
+                  │   напр. волосы, для частичной прозрачности)
+                  ├ Refine Hair (специализированное уточнение волос,
+                  │   путь: Object Selection → Select Subject → Select
+                  │   and Mask → Refine Hair)
+                  ├ View Mode, Refine Mode (Color Aware/Object Aware)
+                  ├ Edge Detection Radius
+                  ├ Global Refine: Smooth / Feather / Contrast / Shift Edge
+                  └ Output: Selection / Layer Mask / New Layer / etc.
+```
+
+- [ ] `Remove Background` — отдельная Quick Action (не внутри Object
+      Selection tool): `Layers → выбрать слой → Discover → Browse → Quick
+      Actions → Remove Background`. Сам тз.md отмечает, что это неудобно
+      спрятано — **рекомендация для VRAVIO**: не повторять Photoshop-путь
+      через Discover, а держать `Remove Background`/`Select Subject` прямо
+      в `Properties → Quick Actions`.
+- [ ] Device/Cloud переключатель для AI-инференса — в Photoshop спрятан в
+      Preferences → Image Processing (`Select Subject and Remove
+      Background: [Device ▾]`), Device — по умолчанию.
+
+**Рекомендованная для VRAVIO раскладка** (из тз.md, явно предложенная как
+улучшение относительно Photoshop):
+
+```
+OBJECT SELECT TOOL — OPTIONS BAR
+[New][+][-][∩]  Mode [Object Finder ▾]  ☑ Auto Detect
+☐ Sample All Layers  ☐ Hard Edge
+[ Select Subject ] [ Select People ] [ Refine... ]
+
+PROPERTIES — Quick Actions (глобально, не привязано к инструменту)
+[ Remove Background ]
+[ Select Subject ]
+```
+
+Донор для самой AI-сегментации — MobileSAM (`https://github.com/
+ChaoningZhang/MobileSAM`, ~20–50 МБ), см. таблицу локальных AI-моделей
+в разделе 14.
+
+---
+
+## 13. Harmonize — открытые доноры (пропущено в первом проходе)
+
+тз.md отдельно исследовал открытые аналоги именно для Harmonize —
+согласование цвета/света/тени вставленного объекта с фоном. Ни один пункт
+этого исследования не попал в первый проход документа.
+
+- [ ] **Harmonizer** (`High-Resolution Image/Video Harmonization`) —
+      первый кандидат. Вход: Background + вставленный объект + маска
+      объекта. Модель ≈20 МБ, поддерживает до 8K, real-time на Full HD на
+      GPU. Предсказывает понятные преобразования изображения, а не
+      генерирует всё заново.
+- [ ] **PCT-Net** (`pixel-wise color transformations`, full-resolution
+      harmonization) — параметры трансформации считаются на уменьшенной
+      копии (~256×256), применяются к полному разрешению только на
+      foreground. Есть CNN- и ViT-варианты, инференс можно гонять даже на
+      CPU. Рекомендация тз.md: сравнить Harmonizer и PCT-Net на 50–100
+      реальных композитах и выбрать один как базовый.
+- [ ] **DCCF** (`Deep Comprehensible Color Filter`) — вместо непрозрачного
+      «AI → новые пиксели» предсказывает цветовые фильтры, что даёт
+      потенциал для контролируемых слайдеров (`Harmonize Strength`,
+      `Color Match`, `Brightness Match`, `Contrast Match`) вместо одного
+      чёрного ящика.
+- [ ] **CDTNet** — соединяет pixel-to-pixel и color-to-color
+      трансформации; есть облегчённый `CDTNet(sim)` только на
+      color-to-color для скорости.
+- [ ] **libcom** (`https://github.com/[owner]/libcom` — открытый toolbox,
+      не одна модель) — Image Harmonization (PCT-Net, LBM), Painterly
+      Harmonization, Harmony Score (оценка «вписанности» объекта),
+      Inharmonious Localization, Object Placement, **Shadow Generation**
+      (GPSDiffusion) и **Reflection Generation** (RGDiffusion) — то есть
+      ближе к полному Photoshop Harmonize (согласование ещё и теней),
+      чем любая одна harmonization-модель.
+
+**Предложенная для VRAVIO раскладка** (два режима, чтобы не гонять тяжёлую
+генеративную модель на каждый клик):
+
+```
+HARMONIZE
+Mode [Fast ▾]  (Fast / Quality)
+Strength 100%
+☑ Match color  ☑ Match brightness  ☑ Match contrast  ☑ Match lighting
+□ Generate shadow   □ Generate reflection
+
+Fast    → Harmonizer (~20 МБ)
+Quality → PCT-Net / модель потяжелее из libcom
+Generate Shadow/Reflection → отдельные модели, по требованию
+```
+
+---
+
+## 14. Таблица локальных AI-моделей с весами (пропущено в первом проходе)
+
+тз.md собрал конкретный список моделей под каждую AI-функцию с
+приблизительным весом — это была отдельная таблица, полностью выпавшая
+при сведении в первый проход документа:
+
+| Функция | Модель | Вес | Приоритет |
+|---|---|---|---|
+| Object Selection | MobileSAM | ~20–50 МБ | 🔥 обязательно |
+| Object Finder | MobileSAM / MobileSAMv2 | те же веса | 🔥 |
+| Select Subject | U²-Net-P / MobileSAM automatic masks | ~5 МБ / MobileSAM | 🔥 |
+| Remove Background (человек) | MODNet | ~25 МБ | 🔥 |
+| Refine Hair (портрет) | MODNet + classic edge refinement | входит в MODNet | 🔥 |
+| Sky Selection | U²-Net-P sky model | ~5 МБ | 🔥 |
+| Harmonize | Harmonizer | 20 МБ | 🔥 |
+| Remove / Spot AI | MI-GAN 512 | десятки МБ | 🔥 |
+| Quality Remove | LaMa | ~100 МБ класс | 🟡 optional |
+| AI Upscale | Real-ESRGAN General x4v3 | 4.9 МБ | 🔥 |
+| AI Denoise | NAFNet width32 | десятки МБ | 🟡 |
+| AI Deblur / Sharpen | NAFNet GoPro | десятки МБ | 🟡 |
+| Depth / Lens Blur | Depth Anything V2 Small | 49.6 МБ FP16 / 27.3 МБ q8 | 🔥 |
+| Reflection Removal | DExNet | lightweight | 🟡 |
+| Быстрый Reflection Removal | tiny DINOv3 variant | 24.2 МБ | 🟡 |
+| Sky Replacement | U²-Net sky + GPU-композиция | ~5 МБ AI | 🟡 |
+
+**Проверено:** в текущем VRAVIO уже есть MI-GAN и LaMa для Remove Tool
+(`тз.md`'s собственная оценка Raster-инструментов ставит `Remove AI` 🟢
+7.5/10 именно за это — см. раздел 2 этого документа). Остальные модели из
+таблицы (MobileSAM, MODNet, Real-ESRGAN, Depth Anything V2, DExNet/DINOv3)
+— **не проверено**, есть ли для них уже интеграция в `onnxruntime-web`
+конвейере VRAVIO; грепнуть перед реализацией: `grep -rln
+"MobileSAM\|MODNet\|Real-ESRGAN\|Depth Anything" apps/web/src`.
+
+---
+
+## 15. Полный потуловый список доноров — Illustrator и Photoshop
+
+Пропущено в первом проходе целиком (было учтено только агрегированно, в
+разделах 4.7/7.2). тз.md по прямому запросу владельца выдал список из
+каждого инструмента toolbar (включая скрытые) обеих программ, один донор
+на инструмент. Это отдельная, более гранулярная опись, чем таблица
+доноров по функциям — полезна как чек-лист при портировании конкретного
+инструмента, а не архитектуры целиком.
+
+### 14.1. Illustrator (~70 инструментов)
+
+Полный список сохранён без сокращения — структура тз.md по группам
+(Выделение / Навигация / Контуры и рисование / Символы / Графики /
+Web-Perspective / Заливки / Текст / Трансформация и деформация), каждый
+инструмент с однострочным описанием и донором. Все инструменты рисования
+контуров, узлов, символов, mesh-градиентов и деформаций (Twirl/Pucker/
+Bloat/Scallop/Crystallize/Wrinkle — фактически Inkscape Tweak tool) через
+один донор — **Inkscape** (`https://gitlab.com/inkscape/inkscape`), кроме:
+Rotate View/Vertical Type — **Krita**; Print Tiling/Vertical Area Type —
+**Scribus**; графики (Column/Bar/Line/Area/Scatter/Pie/Radar Graph) —
+**LibreOffice** (`https://github.com/LibreOffice/core`); Slice/Slice
+Selection — **GIMP**; Dimension — **LibreCAD**
+(`https://github.com/LibreCAD/LibreCAD`); Puppet Warp — **puppet-warp**
+(`https://github.com/mikecokina/puppet-warp`, уже упомянут в разделе 1.2);
+Curvature — **Penpot**.
+
+**Не проверено против текущего кода VRAVIO** — это список Illustrator-
+инструментов, ни один из которых не существует в текущем vector-toolbar
+VRAVIO (см. раздел 4, там всего 6 инструментов), так что сверка «сделано/
+не сделано» здесь неприменима — весь список является backlog по
+определению.
+
+### 14.2. Photoshop (~60 инструментов)
+
+Аналогично, по группам тз.md (Перемещение и выделение / Crop-Layout /
+Измерение и цвет / Healing-Retouch / Кисти / Clone-Pattern-History /
+Eraser / Fill / Blur-Detail / Tone / Paths / Text / Vector Selection-
+Shapes / Навигация). Основной донор для Photoshop-специфичного
+UX/поведения — **Patchy** (`https://github.com/SethRobinson/Patchy`,
+уже названо основным донором в разделе 4.7/7.2), для классической
+растровой кухни — **GIMP**, для brush-related — **Krita**. Специфические
+одноразовые донора, которых не было в предыдущих разделах документа:
+Content-Aware Move — **Resynthesizer**
+(`https://github.com/bootchk/resynthesizer`); Count tool — ближайший
+донор **ImageJ** (`https://github.com/imagej/ImageJ`); History
+Brush/Art History Brush — у обоих тз.md прямо пишет «точного 1:1 аналога
+почти нет», ближайший — Krita brush engines (архитектурная отсылка, не
+готовый код); Object Selection — **MobileSAM**.
+
+**Проверено частично:** 25 из этих инструментов (Raster) уже
+реализованы в `apps/web/src/tools.ts` с той или иной глубиной — см.
+таблицу зрелости в разделе 2 этого документа, которая их перечисляет с
+оценкой. Инструменты, которых в текущем VRAVIO toolbar вообще нет
+(Single Row/Column Marquee, Slice/Slice Select, Color Sampler, Note,
+Count, Red Eye, Mixer Brush, History/Art History Brush, Background/Magic
+Eraser, Content-Aware Move, Frame, Perspective Crop) — не проверялись
+отдельно, вероятно отсутствуют полностью (не в оценочной таблице раздела
+2, которая покрывает только 25 уже существующих).
+
+---
+
+## 16. Философия интерфейса Photoshop — эссе из тз.md (для раздела 8.12)
+
+Первый проход дал общую рекомендацию «дать среде характера» (раздел
+8.12), но выпустил само рассуждение тз.md о том, что делает интерфейс
+Photoshop именно таким — это прямая опора для решений по дизайну, а не
+просто общие слова.
+
+- **Canvas first, tools around it.** Всё остальное существует вокруг
+  изображения, а не наоборот.
+- **Очень высокая плотность информации** — Options Bar умещает `Brush 45px
+  Mode: Normal Opacity 100% Flow 80% Smoothing 10%` в одну строку;
+  философия «не пытаться быть понятным новичку — стать быстрым после
+  обучения».
+- **Иерархия управления одной сущностью в 4 уровня**: toolbar (выбор
+  инструмента) → Options Bar (частые параметры) → Panel (пресеты) →
+  Advanced Dialog/Settings (редкие, глубокие настройки). Правило:
+  «частое — рядом, редкое — глубже».
+- **Панели модульные**, не фиксированный sidebar: пользователь собирает
+  свой Dock под свою задачу (фотограф — Layers/Properties/Histogram/
+  Adjustments; иллюстратор — Layers/Brushes/Brush Settings/Color/
+  Swatches; дизайнер — Layers/Properties/Character/Paragraph/Libraries).
+- **Контекстность как основной принцип**: интерфейс отслеживает что
+  выбрано/какой инструмент/есть ли selection/тип слоя и меняет доступные
+  действия — воплощено сильнее всего именно в Contextual Task Bar
+  (раздел 11).
+- **Почти монохромная UI-палитра** (`black/dark gray/gray/light gray/
+  white`) — цвет несёт содержимое (swatches, layer labels, selection
+  overlay, guides), не декор интерфейса, чтобы сама фотография/артворк
+  оставались единственным цветным объектом на экране.
+- **Иконки функциональные, не декоративные** — маленькие, монохромные,
+  геометричные, неизменны десятилетиями, цель — чтобы пользователь со
+  временем перестал их «читать» и начал узнавать формы.
+- **Состояние показывается тонко**: активный tool чуть светлее фона,
+  выбранная вкладка — тонкая разница, hover — лёгкое изменение —
+  низкоконтрастная иерархия, чтобы UI не конкурировал с изображением.
+- **Служебная типографика**: `Size: [45 px]`, а не `Choose the size of
+  your brush` — компактно, без разъяснительных подписей.
+- **Не всё превращается в визуальные controls** — часть функциональности
+  сознательно живёт только в меню/shortcut'ах (`Edit → Transform →
+  Perspective`, `Select → Modify → Contract`), чтобы не раздувать
+  постоянный интерфейс.
+- **Progressive disclosure** как сквозной паттерн: Tool → Options Bar →
+  Panel → Advanced Dialog на любой сущности (Color: swatch → Color panel
+  → Color Picker; Brush: tool → Options Bar → Brushes → Brush Settings;
+  Selection: tool → Options → Select and Mask).
+
+**Главный недостаток, названный самим тз.md** (прямая цитата смысла):
+Photoshop развивается десятилетиями и накопил исторические слои — одну и
+ту же задачу часто можно сделать через tool, menu, panel, contextual bar,
+quick action или shortcut одновременно (пример: `Remove Background`
+встречается в нескольких местах, `Select Subject` — ещё в нескольких,
+`Select and Mask` — отдельно). Итоговая формулировка тз.md: *«Photoshop
+очень функционально зрелый, но не всегда информационно чистый»*. Прямой
+вывод для VRAVIO, уже частично отражённый в разделе 11.3 (единая
+`Context`/`ContextAction` архитектура вместо копий одной функции в разных
+местах): **не повторять эту избыточность** — если функция логически одна,
+у неё должна быть одна каноничная точка входа, а остальные — либо явные
+шорткаты к ней, либо не создаются вообще. Это тот же принцип «единственная
+дверь», что уже описан в `CLAUDE.md` раздел 4, только применённый не к
+данным, а к путям навигации пользователя.
+
+---
+
+## 17. Открытые вопросы к владельцу
+
+- [ ] Лицензия проекта не выбрана (`LICENSE`-файла нет — проверено).
+      Выбор лицензии определяет, можно ли вообще брать код из GPL-
+      донор (Inkscape/GIMP/Krita/Audacity) — сейчас в `docs/vector-
+      plan.md` уже есть явное предупреждение не переносить код Inkscape
+      дословно именно из-за неопределённости лицензии VRAVIO. Это
+      решение владельца, не техническое.
+- [ ] `lib2geom` в тз.md назван «MIT/Apache-подобной», но точная
+      лицензия не проверялась в этом проходе — нужно свериться перед
+      тем, как опираться на неё как на MIT-совместимый донор кода
+      (`docs/vector-plan.md` уже держит подобные лицензионные пометки в
+      разделе 4 «Доноры» для других библиотек — этот пункт стоило бы
+      добавить туда по тому же образцу, когда лицензия будет
+      подтверждена).
+- [ ] Оставшиеся ~700 КБ файлов в `D:\Данные\Редактор\` (см. предисловие
+      документа) не прочитаны — сказать, нужен ли по ним отдельный
+      проход, прежде чем приступать к реализации разделов, которые они,
+      предположительно, детализируют (в первую очередь `Кисти
+      растр.md`/`Слои растр.md`/`Корректирующие слои и панели растр.md`
+      — по названиям это может быть более детальная версия разделов 5/
+      6.1/2 этого документа).
