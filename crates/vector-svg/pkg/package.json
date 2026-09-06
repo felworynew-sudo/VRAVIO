@@ -1,0 +1,17 @@
+{
+  "name": "@vravio/vector-svg",
+  "type": "module",
+  "description": "SVG import (usvg) and cross-check rendering (resvg) for VRAVIO's vector environment — Stage 10 of docs/vector-plan.md.",
+  "version": "0.0.1",
+  "license": "UNLICENSED",
+  "files": [
+    "vector_svg_bg.wasm",
+    "vector_svg.js",
+    "vector_svg.d.ts"
+  ],
+  "main": "vector_svg.js",
+  "types": "vector_svg.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

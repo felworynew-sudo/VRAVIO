@@ -38,7 +38,9 @@ import { windowsFor } from "./windows/registry";
 import { windowTitle } from "./windows/types";
 import { PANEL_CHANGED_EVENT, readVisiblePanelIds, requestPanelVisibility } from "./windows/runtime";
 import { duplicateActiveVectorShape, deleteActiveVectorShapes, groupActiveVectorShapes, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
-import { isVectorDocumentState } from "@vravio/env-vector";
+import { addShape, importedShapesFromJson, isVectorDocumentState, type VectorDocumentState } from "@vravio/env-vector";
+import { exportVectorDocumentToSvg } from "./vector-svg-export";
+import { importSvgToJson } from "./vector-svg-wasm";
 import { luminanceHistogram } from "./raster-adjustments/histogram";
 import "./styles.css";
 
@@ -50,6 +52,7 @@ export function App() {
   const [openToolGroup, setOpenToolGroup] = useState<string | null>(null);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const openImageRef = useRef<HTMLInputElement>(null);
+  const importSvgAsVectorRef = useRef<HTMLInputElement>(null);
   const [transformMetrics, setTransformMetrics] = useState<{ active: boolean; x: number; y: number; width: number; height: number; rotation: number } | null>(null);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
@@ -94,6 +97,43 @@ export function App() {
     kernel.documents.update<RasterDocumentState>(id, (state) => { state.layers = result.document.layers; state.activeLayerId = result.document.activeLayerId; });
   };
 
+  /**
+   * Stage 10 of docs/vector-plan.md: a *separate* action from the regular
+   * `importImage` picker, deliberately — `.svg` is already a valid input
+   * there, rasterized onto a new raster document (`decodeImportedImage`),
+   * and that existing behavior stays the default for "open this picture."
+   * "Open this SVG as editable vector shapes" is a different intent a user
+   * has to ask for on purpose, not a silent change to what `.svg` already
+   * means everywhere else in the app.
+   */
+  const importSvgAsVector = async (file: File) => {
+    const svgText = await file.text();
+    let shapes: ReturnType<typeof importedShapesFromJson>;
+    try {
+      shapes = importedShapesFromJson(await importSvgToJson(svgText));
+    } catch (error) {
+      const because = error instanceof Error ? error.message : String(error);
+      diagnostic("error", "file.import", `Could not import ${file.name} as vector: ${because}`);
+      errorModal({ title: text(store.language, "Could not import the file", "Не удалось импортировать файл"), message: text(store.language, `"${file.name}" is not an SVG this build can parse.`, `«${file.name}» — не тот SVG, который эта сборка умеет разобрать.`), detail: because });
+      return;
+    }
+    // The new document's canvas is sized from the source file's own
+    // width/height or viewBox — not `usvg`'s resolved shape geometry — so
+    // the imported picture lands at the size its own markup actually
+    // declares, the same size it would open at anywhere else.
+    const viewBoxMatch = svgText.match(/viewBox=["']\s*[\d.+-]+\s+[\d.+-]+\s+([\d.]+)\s+([\d.]+)/);
+    const widthMatch = svgText.match(/<svg[^>]*\swidth=["']([\d.]+)/);
+    const heightMatch = svgText.match(/<svg[^>]*\sheight=["']([\d.]+)/);
+    const width = Number(widthMatch?.[1] ?? viewBoxMatch?.[1]) || 1280;
+    const height = Number(heightMatch?.[1] ?? viewBoxMatch?.[2]) || 720;
+    store.openDocument("vector", { name: file.name, width, height, resolution: 72, resolutionUnit: "ppi", backgroundColor: null, pixelAspectRatio: 1 });
+    const id = useShellStore.getState().activeDocumentId; if (!id) return;
+    kernel.documents.update<VectorDocumentState>(id, (state) => {
+      for (const shape of shapes) addShape(state, shape);
+      state.selection = shapes.map((shape) => shape.id);
+    });
+  };
+
   const importImage = async (file: File) => {
     const extension = rawExtensionOf(file.name);
     if (extension && (rawFileExtensions as readonly string[]).includes(extension)) {
@@ -113,6 +153,16 @@ export function App() {
     kernel.documents.update<RasterDocumentState>(id, (state) => { setLayerPixels(state.layers[0]!, context.getImageData(0, 0, state.width, state.height).data, state.width, state.height); });
   };
   const download = (blob: Blob, name: string) => { void kernel.platform.fs.saveFile({ name, mime: blob.type || "application/octet-stream", data: blob }).catch((error) => diagnostic("error", "file.save", error instanceof Error ? error.message : String(error), error)); };
+  /** Stage 10 of docs/vector-plan.md: the whole export pipeline is a pure
+   * function (`exportVectorDocumentToSvg`) plus this one line of platform
+   * glue — the same `saveFile` port every other export in this file
+   * already goes through, not a bespoke vector-only save path. */
+  const exportActiveVectorAsSvg = () => {
+    if (!active || !isVectorDocumentState(active.state)) return;
+    const svg = exportVectorDocumentToSvg(active.state);
+    const name = `${active.name.replace(/\s*\([^()]*\)\s*$/, "").replace(/\.[^.]+$/, "").trim() || "untitled"}.svg`;
+    download(new Blob([svg], { type: "image/svg+xml" }), name);
+  };
   const projectFileName = (name: string) => `${name.replace(/\s*\([^()]*\)\s*$/, "").replace(/\.[^.]+$/, "").trim() || "untitled"}.vravio.json`;
   const projectBlob = () => { const replacer = (_key: string, value: unknown) => value instanceof Uint8ClampedArray ? { __type: "Uint8ClampedArray", data: Array.from(value) } : value; return new Blob([JSON.stringify(active?.state, replacer)], { type: "application/json" }); };
   /** Save writes through the platform port and clears the dirty flag; Save a Copy deliberately leaves it set. */
@@ -338,10 +388,12 @@ export function App() {
           ["New… (Новый…)", "Ctrl+N", () => store.requestNewDocument("raster")],
           ["Open… (Открыть…)", "Ctrl+O", () => openImageRef.current?.click()],
           ["Import… (Импортировать…)", "", () => openImageRef.current?.click()],
+          ["Import SVG as Vector… (Импортировать SVG как вектор…)", "", () => importSvgAsVectorRef.current?.click()],
           ["Save (Сохранить)", "Ctrl+S", () => void saveProject(), !active],
           ["Save As… (Сохранить как…)", "Ctrl+Shift+S", () => void saveProject(), !active],
           ["Save a Copy… (Сохранить копию…)", "Ctrl+Alt+S", () => void saveProject(false), !active],
           ["Export… (Экспортировать…)", "Ctrl+Shift+E", () => setExportOpen(true), !active || !isRasterDocumentState(active.state)],
+          ["Export as SVG… (Экспортировать в SVG…)", "", exportActiveVectorAsSvg, !active || !isVectorDocumentState(active.state)],
           ["Print… (Печать…)", "Ctrl+P", () => window.print(), !active],
           ["Settings… (Настройки…)", "", () => store.setSettingsOpen(true)],
           ["Close (Закрыть)", "Ctrl+W", () => active && store.closeDocument(active.id), !active],
@@ -409,6 +461,7 @@ export function App() {
           attribute means nothing without Tauri's injected drag handler. */}
       <div className="titlebar-drag" data-tauri-drag-region="true"/>
       <input ref={openImageRef} hidden type="file" accept={`image/png,image/jpeg,image/webp,image/gif,image/avif,image/svg+xml,.svg,.psd,.psb,${rawFileExtensions.map((extension) => `.${extension}`).join(",")}`} onChange={(event) => { const file = event.target.files?.[0]; if (file) void importImage(file); event.currentTarget.value = ""; }}/>
+      <input ref={importSvgAsVectorRef} hidden type="file" accept="image/svg+xml,.svg" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importSvgAsVector(file); event.currentTarget.value = ""; }}/>
       <button className="palette-button" onClick={() => store.setPaletteOpen(true)}>⌘ {store.language === "ru" ? "Команды" : "Commands"} <kbd>Ctrl K</kbd></button>
       {/* Native window chrome, folded into the same row as the menu — the
           OS title bar is switched off entirely (tauri.conf.json's

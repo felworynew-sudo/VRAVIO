@@ -40,6 +40,9 @@ importers:
       '@vravio/vector-geometry':
         specifier: workspace:*
         version: link:../../crates/vector-geometry/pkg
+      '@vravio/vector-svg':
+        specifier: workspace:*
+        version: link:../../crates/vector-svg/pkg
       dockview:
         specifier: 8.2.0
         version: 8.2.0
@@ -94,6 +97,8 @@ importers:
         version: 4.1.11(@types/node@26.4.0)(vite@8.2.2(@types/node@26.4.0))
 
   crates/vector-geometry/pkg: {}
+
+  crates/vector-svg/pkg: {}
 
   packages/env-raster:
     dependencies:

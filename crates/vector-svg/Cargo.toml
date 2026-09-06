@@ -1,0 +1,22 @@
+[package]
+name = "vector-svg"
+version = "0.0.1"
+edition = "2021"
+description = "SVG import (usvg) and cross-check rendering (resvg) for VRAVIO's vector environment — Stage 10 of docs/vector-plan.md."
+license = "UNLICENSED"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+usvg = { version = "0.48", default-features = false, features = ["text"] }
+resvg = { version = "0.48", default-features = false, features = ["text"] }
+tiny-skia = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
