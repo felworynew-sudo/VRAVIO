@@ -1,4 +1,4 @@
-import { createSymbolFromShapes, detachInstance, duplicateShape, groupShapes, moveShapeInStack, placeSymbolInstance, redefineSymbolFromShapes, removeShapes, ungroupShapes, type Artboard, type VectorDocumentState, type VectorShape, type ZOrderMove } from "@vravio/env-vector";
+import { createSymbolFromShapes, detachInstance, duplicateShape, groupShapes, moveShapeInStack, placeSymbolInstance, redefineSymbolFromShapes, removeShapes, ungroupShapes, type Artboard, type PaletteColor, type VectorDocumentState, type VectorShape, type ZOrderMove } from "@vravio/env-vector";
 import { kernel } from "./kernel";
 
 /**
@@ -14,10 +14,10 @@ import { kernel } from "./kernel";
  * artboards at all — caught live, not in a test: the Artboards panel's own
  * delete button visibly did nothing.
  */
-export interface VectorSnapshot { shapes: VectorShape[]; activeShapeId: string | null; selection: readonly string[]; artboards: Artboard[]; activeArtboardId: string | null }
+export interface VectorSnapshot { shapes: VectorShape[]; activeShapeId: string | null; selection: readonly string[]; artboards: Artboard[]; activeArtboardId: string | null; palette: PaletteColor[] }
 
 export function snapshotVector(state: VectorDocumentState): VectorSnapshot {
-  return { shapes: structuredClone(state.shapes), activeShapeId: state.activeShapeId, selection: state.selection, artboards: structuredClone(state.artboards), activeArtboardId: state.activeArtboardId };
+  return { shapes: structuredClone(state.shapes), activeShapeId: state.activeShapeId, selection: state.selection, artboards: structuredClone(state.artboards), activeArtboardId: state.activeArtboardId, palette: structuredClone(state.palette) };
 }
 
 function assignVectorSnapshot(documentId: string, snapshot: VectorSnapshot): void {
@@ -27,6 +27,7 @@ function assignVectorSnapshot(documentId: string, snapshot: VectorSnapshot): voi
     state.selection = snapshot.selection;
     state.artboards = structuredClone(snapshot.artboards);
     state.activeArtboardId = snapshot.activeArtboardId;
+    state.palette = structuredClone(snapshot.palette);
   });
 }
 
@@ -59,9 +60,9 @@ export async function changeVectorDocument(documentId: string, label: string, mu
   if (!document || !history) return;
 
   const before = snapshotVector(document.state);
-  const working: VectorDocumentState = { ...document.state, shapes: structuredClone(document.state.shapes), artboards: structuredClone(document.state.artboards) };
+  const working: VectorDocumentState = { ...document.state, shapes: structuredClone(document.state.shapes), artboards: structuredClone(document.state.artboards), palette: structuredClone(document.state.palette) };
   if (!mutate(working)) return;
-  const after: VectorSnapshot = { shapes: working.shapes, activeShapeId: working.activeShapeId, selection: working.selection, artboards: working.artboards, activeArtboardId: working.activeArtboardId };
+  const after: VectorSnapshot = { shapes: working.shapes, activeShapeId: working.activeShapeId, selection: working.selection, artboards: working.artboards, activeArtboardId: working.activeArtboardId, palette: working.palette };
 
   const assign = (snapshot: VectorSnapshot): void => assignVectorSnapshot(documentId, snapshot);
   await history.execute({ label, memoryEstimate: 0, redo: () => assign(after), undo: () => assign(before) });

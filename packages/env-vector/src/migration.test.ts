@@ -36,11 +36,17 @@ function v2Document(): unknown {
   };
 }
 
-describe("vector document v2 → v6 migration", () => {
+describe("vector document v2 → v7 migration", () => {
   it("accepts a v2 document as valid and upgrades it all the way to the current schemaVersion", () => {
     const raw = v2Document();
     expect(isVectorDocumentState(raw)).toBe(true);
-    expect((raw as VectorDocumentState).schemaVersion).toBe(6);
+    expect((raw as VectorDocumentState).schemaVersion).toBe(7);
+  });
+
+  it("gives a pre-palette document an empty palette rather than inventing entries", () => {
+    const raw = v2Document();
+    isVectorDocumentState(raw);
+    expect((raw as VectorDocumentState).palette).toEqual([]);
   });
 
   it("turns the boolean artboards flag into an empty array, not a truthy/falsy re-encoding of it", () => {

@@ -21,7 +21,7 @@ describe("window catalogues", () => {
   });
 
   it("discovers the vector panels", () => {
-    expect(windowsFor("vector").map((panel) => panel.id)).toEqual(["properties", "layers", "artboards", "symbols", "history", "color", "scripts"]);
+    expect(windowsFor("vector").map((panel) => panel.id)).toEqual(["properties", "layers", "artboards", "symbols", "history", "color", "palette", "scripts"]);
   });
 
   it("keeps each environment's panels to itself", () => {

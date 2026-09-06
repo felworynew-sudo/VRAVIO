@@ -1,4 +1,4 @@
-import { cssToColor } from "@vravio/kernel";
+import { cssToColor, type Color } from "@vravio/kernel";
 import { solidFill, solidStroke, type VectorStyle } from "./appearance";
 import type { GeometryModifier } from "./modifiers/types";
 import type { LengthUnit } from "./units";
@@ -125,9 +125,29 @@ export interface Artboard {
   height: number;
 }
 
+/**
+ * One named colour in the document's own palette — docs/vector-plan.md
+ * section 8's "Плашечные цвета и палитры документа" (stage 6 addition):
+ * a swatch list that travels *with the document*, unlike
+ * `ColorPickerDialog.tsx`'s own recent-colours list (`localStorage`,
+ * shared across every document in the browser, never saved or loaded with
+ * a file). `color.space === "spot"` for an actual spot/Pantone-style
+ * colour (its real definition sits in the asset store, per `Color`'s own
+ * `profile` field in `packages/kernel/src/color.ts`); any other space is
+ * a plain named process colour a designer wants to reuse across shapes
+ * without redefining it — both are "a colour saved with this document",
+ * the same concept a palette entry is in Illustrator/Inkscape regardless
+ * of which one backs a given swatch.
+ */
+export interface PaletteColor {
+  readonly id: string;
+  name: string;
+  color: Color;
+}
+
 export interface VectorDocumentState {
   readonly kind: "vector";
-  readonly schemaVersion: 6;
+  readonly schemaVersion: 7;
   width: number;
   height: number;
   artboards: Artboard[];
@@ -150,6 +170,9 @@ export interface VectorDocumentState {
   shapes: VectorShape[];
   activeShapeId: string | null;
   selection: readonly string[];
+  /** The document's own saved colour swatches — see `PaletteColor`'s own
+   * doc comment for what this is and isn't. */
+  palette: PaletteColor[];
 }
 
 /**
@@ -183,6 +206,10 @@ export interface VectorDocumentState {
  *   document already behaved as if it had none (there was no canvas for a
  *   second artboard to be reachable on at all), so `null` reproduces that
  *   exactly rather than guessing at `artboards[0]?.id`.
+ * - v6 → v7 (section 8's stage 6 addition): `palette` defaults to `[]` —
+ *   every v6 document already behaved as if it had no saved swatches
+ *   (there was no field for one to live in), so an empty list reproduces
+ *   that exactly rather than inventing entries from nothing.
  */
 export function migrateVectorDocumentState(state: VectorDocumentState): VectorDocumentState {
   const candidate = state as unknown as {
@@ -190,12 +217,14 @@ export function migrateVectorDocumentState(state: VectorDocumentState): VectorDo
     activeArtboardId?: string | null;
     resolution?: number;
     displayUnit?: LengthUnit;
+    palette?: PaletteColor[];
     shapes: Array<Record<string, unknown>>;
   };
   if (typeof candidate.artboards === "boolean" || candidate.artboards === undefined) candidate.artboards = [];
   candidate.activeArtboardId ??= null;
   candidate.resolution ??= 72;
   candidate.displayUnit ??= "px";
+  candidate.palette ??= [];
 
   candidate.shapes.forEach((shape, index) => {
     if (typeof shape.parentId === "undefined") shape.parentId = null;
@@ -228,7 +257,7 @@ export function migrateVectorDocumentState(state: VectorDocumentState): VectorDo
     }
   });
 
-  (state as { schemaVersion: number }).schemaVersion = 6;
+  (state as { schemaVersion: number }).schemaVersion = 7;
   return state;
 }
 
@@ -260,7 +289,7 @@ export function isVectorDocumentState(value: unknown): value is VectorDocumentSt
   if (!value || typeof value !== "object") return false;
   const state = value as { kind?: unknown; shapes?: unknown; schemaVersion?: unknown };
   if (state.kind !== "vector" || !Array.isArray(state.shapes)) return false;
-  if (![2, 3, 4, 5, 6].includes(state.schemaVersion as number)) return false;
+  if (![2, 3, 4, 5, 6, 7].includes(state.schemaVersion as number)) return false;
   migrateVectorDocumentState(value as VectorDocumentState);
   return true;
 }

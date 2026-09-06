@@ -19,7 +19,8 @@ import { rasterAdjustmentById, rasterAdjustments } from "./raster-adjustments/re
 import { environmentsWithWindows, windowById, windowsFor } from "./windows/registry";
 import { windowTitle } from "./windows/types";
 import { PANEL_REQUEST_EVENT, persistVisiblePanelIds, readVisiblePanelIds, type PanelVisibilityDetail } from "./windows/runtime";
-import { deleteArtboard, duplicateArtboard, isVectorDocumentState, listSymbols, renameArtboard, shapeBounds, updateShape, vectorShapeRows, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { addPaletteColor, deleteArtboard, duplicateArtboard, isVectorDocumentState, listSymbols, removePaletteColor, renameArtboard, renamePaletteColor, shapeBounds, updateShape, vectorShapeRows, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { colorToCss, cssToColor } from "@vravio/kernel";
 import { vectorTextMeasurer } from "./vector-text-metrics";
 import { changeVectorDocument, createSymbolFromActiveSelection, deleteActiveVectorShapes, detachActiveVectorInstance, duplicateActiveVectorShape, groupActiveVectorShapes, placeVectorSymbolInstance, redefineSymbolFromActiveSelection, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
 import { exportVectorDocumentToSvg } from "./vector-svg-export";
@@ -685,6 +686,45 @@ function ArtboardsPanel() {
   </div>;
 }
 
+/**
+ * Docs/vector-plan.md section 8's "Плашечные цвета и палитры документа" —
+ * a swatch list that lives *in the document* (`state.palette`), not
+ * `ColorPickerDialog.tsx`'s own `localStorage` recent-colours list, which
+ * is per-browser and never saved or loaded with a file. Rename is a plain
+ * `window.prompt`, same as `ArtboardsPanel`'s own — real and undoable, not
+ * a polished inline text field.
+ */
+function PalettePanel() {
+  const documents = useDocuments();
+  const activeDocumentId = useShellStore((state) => state.activeDocumentId);
+  const language = useShellStore((state) => state.language);
+  const foregroundColor = useShellStore((state) => state.foregroundColor);
+  const setForegroundColor = useShellStore((state) => state.setForegroundColor);
+  const active = documents.find((document) => document.id === activeDocumentId);
+  if (!active || !isVectorDocumentState(active.state)) return <div className="dock-panel-body"><div className="empty-row">{text(language, "Open a vector document to use the palette.", "Откройте векторный документ, чтобы работать с палитрой.")}</div></div>;
+
+  const state = active.state;
+  return <div className="dock-panel-body">
+    <button className="panel-action" onClick={() => void changeVectorDocument(active.id, "Add Palette Color (Добавить цвет в палитру)", (draft) => { addPaletteColor(draft, cssToColor(foregroundColor)); return true; })}>
+      ＋ {text(language, "Add Current Color", "Добавить текущий цвет")}
+    </button>
+    {state.palette.length === 0
+      ? <div className="empty-row">{text(language, "No saved colors yet.", "Сохранённых цветов пока нет.")}</div>
+      : <div className="layer-list">
+        {state.palette.map((entry) => <div className="artboard-row" key={entry.id}>
+          <button onClick={() => setForegroundColor(colorToCss(entry.color))} title={text(language, "Set as foreground color", "Сделать основным цветом")}>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: "6px" }}>
+              <span style={{ width: "12px", height: "12px", borderRadius: "2px", background: colorToCss(entry.color), border: "1px solid var(--border)", display: "inline-block" }}/>
+              {entry.name}
+            </span>
+          </button>
+          <button onClick={() => void changeVectorDocument(active.id, "Rename Palette Color (Переименовать цвет)", (draft) => { const name = window.prompt(text(language, "Color name", "Название цвета"), entry.name); if (!name?.trim()) return false; renamePaletteColor(draft, entry.id, name.trim()); return true; })} title={text(language, "Rename", "Переименовать")}>✎</button>
+          <button onClick={() => void changeVectorDocument(active.id, "Delete Palette Color (Удалить цвет)", (draft) => { removePaletteColor(draft, entry.id); return true; })} title={text(language, "Delete", "Удалить")}>✕</button>
+        </div>)}
+      </div>}
+  </div>;
+}
+
 const components = {
   viewport: ViewportPanel,
   inspector: InspectorPanel,
@@ -696,6 +736,7 @@ const components = {
   navigator: NavigatorPanel,
   scripts: ScriptsPanel,
   symbols: SymbolsPanel,
+  palette: PalettePanel,
   artboards: ArtboardsPanel,
 };
 
