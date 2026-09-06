@@ -1,0 +1,17 @@
+{
+  "name": "@vravio/vector-text",
+  "type": "module",
+  "description": "Real text shaping and layout (Parley/HarfRust) for VRAVIO's vector environment — Stage 11 of docs/vector-plan.md.",
+  "version": "0.0.1",
+  "license": "UNLICENSED",
+  "files": [
+    "vector_text_bg.wasm",
+    "vector_text.js",
+    "vector_text.d.ts"
+  ],
+  "main": "vector_text.js",
+  "types": "vector_text.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

@@ -43,6 +43,9 @@ importers:
       '@vravio/vector-svg':
         specifier: workspace:*
         version: link:../../crates/vector-svg/pkg
+      '@vravio/vector-text':
+        specifier: workspace:*
+        version: link:../../crates/vector-text/pkg
       dockview:
         specifier: 8.2.0
         version: 8.2.0
@@ -99,6 +102,8 @@ importers:
   crates/vector-geometry/pkg: {}
 
   crates/vector-svg/pkg: {}
+
+  crates/vector-text/pkg: {}
 
   packages/env-raster:
     dependencies:

@@ -18,6 +18,7 @@
     "@vravio/kernel": "workspace:*",
     "@vravio/vector-geometry": "workspace:*",
     "@vravio/vector-svg": "workspace:*",
+    "@vravio/vector-text": "workspace:*",
     "dockview": "8.2.0",
     "dockview-react": "8.2.0",
     "jspdf": "4.2.1",

@@ -1,0 +1,20 @@
+[package]
+name = "vector-text"
+version = "0.0.1"
+edition = "2021"
+description = "Real text shaping and layout (Parley/HarfRust) for VRAVIO's vector environment — Stage 11 of docs/vector-plan.md."
+license = "UNLICENSED"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+parley = "0.11"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
