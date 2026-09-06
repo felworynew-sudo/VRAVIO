@@ -281,7 +281,15 @@ export function translateShape(state: VectorDocumentState, id: string, dx: numbe
   if (!shape) return;
   if (shape.kind === "rectangle" || shape.kind === "ellipse" || shape.kind === "text" || shape.kind === "image") updateShape(state, id, { x: shape.x + dx, y: shape.y + dy });
   else if (shape.kind === "line") updateShape(state, id, { x1: shape.x1 + dx, y1: shape.y1 + dy, x2: shape.x2 + dx, y2: shape.y2 + dy });
-  else if (shape.kind === "path") updateShape(state, id, { points: shape.points.map((point) => ({ x: point.x + dx, y: point.y + dy })) });
+  // `...point` first: `handleIn`/`handleOut` are offsets *from* the anchor
+  // (see `VectorPoint`'s own doc comment), so a translate must carry them
+  // over untouched — only the anchor itself moves. A bare `{ x, y }` here
+  // silently discarded every curve handle on drag, turning a curvy path into
+  // straight corner segments the moment it was moved with the Selection tool
+  // (found live: draw a wavy closed path with the Pen tool, drag it with
+  // Selection — every point instantly lost its handles and the shape snapped
+  // to a straight-edged polygon of the same points).
+  else if (shape.kind === "path") updateShape(state, id, { points: shape.points.map((point) => ({ ...point, x: point.x + dx, y: point.y + dy })) });
   // A group and an instance have no x/y of their own — `transform` is their
   // whole position, so moving "in local space" means composing the
   // translation as the innermost operation (applied before whatever

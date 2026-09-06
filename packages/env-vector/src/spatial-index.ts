@@ -75,7 +75,18 @@ export function buildShapeSpatialIndex(shapes: readonly VectorShape[], measurer?
     // shapeAt's own reasoning for skipping it. Indexing it too would only
     // ever produce a candidate shapeAtIndexed immediately discards.
     if (shape.kind === "group") continue;
-    if (!isShapeEffectivelyVisible(shape, shapes) || isShapeEffectivelyLocked(shape, shapes)) continue;
+    // Visible only, *not* also unlocked: this same index backs two different
+    // questions — "what can a click pick?" (`shapeAtIndexed`, which must
+    // skip a locked shape) and "what should this frame paint?"
+    // (`shapesInRect`, used by `VectorWorkspace.tsx`'s viewport culling,
+    // which must not — a locked shape is still visible content, only
+    // unselectable). Excluding locked shapes here — as this line used to —
+    // made them invisible to *both* questions, so a locked shape silently
+    // vanished from the canvas entirely (found live: lock a shape in the
+    // layers panel, watch it disappear, though `shape.visible` never
+    // changed). Locked-ness is now filtered only where it actually belongs:
+    // inside `shapeAtIndexed` itself.
+    if (!isShapeEffectivelyVisible(shape, shapes)) continue;
     entries.push({ id: shape.id, minX: box.x, minY: box.y, maxX: box.x + box.width, maxY: box.y + box.height });
   }
   const tree = new RBush<IndexedEntry>();
@@ -96,6 +107,11 @@ export function shapeAtIndexed(index: ShapeSpatialIndex, shapes: readonly Vector
     .filter((shape): shape is VectorShape => Boolean(shape))
     .sort((a, b) => (index.paintOrder.get(b.id) ?? -1) - (index.paintOrder.get(a.id) ?? -1));
   for (const shape of ordered) {
+    // The index itself no longer excludes locked shapes (they still need to
+    // render — see buildShapeSpatialIndex's own comment), so the "unlocked"
+    // half of this function's contract is enforced here instead, same as
+    // `shapeAt`'s own inline check.
+    if (isShapeEffectivelyLocked(shape, shapes)) continue;
     const inverse = invertMatrix(worldTransform(shape, shapes));
     if (!inverse) continue;
     const local = applyMatrix(inverse, { x, y });
