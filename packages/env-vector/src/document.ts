@@ -11,7 +11,7 @@ export interface VectorDocumentOptions {
 
 export function createVectorDocument(width = 1280, height = 720, options: VectorDocumentOptions = {}): VectorDocumentState {
   return {
-    kind: "vector", schemaVersion: 10, width, height,
+    kind: "vector", schemaVersion: 11, width, height,
     artboards: [], activeArtboardId: null, resolution: options.resolution ?? 72, displayUnit: options.displayUnit ?? "px",
     shapes: [], activeShapeId: null, selection: [], palette: [],
     guides: [], rulerOrigin: null, rulerMode: "global",
@@ -97,7 +97,7 @@ export function createShape(kind: VectorShapeKind, x: number, y: number, style: 
   if (kind === "rectangle") return { ...base, kind, x, y, width: 160, height: 100, cornerRadius: 0, name: `Rectangle (Прямоугольник) ${id}` };
   if (kind === "ellipse") return { ...base, kind, x, y, width: 160, height: 100, name: `Ellipse (Эллипс) ${id}` };
   if (kind === "line") return { ...base, kind, x1: x, y1: y, x2: x + 160, y2: y, name: `Line (Линия) ${id}` };
-  if (kind === "text") return { ...base, kind, x, y, value: "Text (Текст)", fontSize: 32, fontFamily: "Arial", align: "left", name: `Text (Текст) ${id}` };
+  if (kind === "text") return { ...base, kind, x, y, value: "Text (Текст)", fontSize: 32, fontFamily: "Arial", align: "left", frameWidth: null, name: `Text (Текст) ${id}` };
   if (kind === "group") return { ...base, kind, expanded: true, name: `Group (Группа) ${id}` };
   return { ...base, kind: "path", points: [{ x, y }], closed: false, name: `Path (Контур) ${id}` };
 }

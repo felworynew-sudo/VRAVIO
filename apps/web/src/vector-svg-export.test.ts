@@ -94,6 +94,42 @@ describe("exportVectorDocumentToSvg", () => {
     expect(svg).toContain('width="200000"'); // the oversized rect standing in for "the rest of the plane"
   });
 
+  it("a point text shape (frameWidth: null) writes its whole value as one <text>, no <tspan>", () => {
+    const state = createVectorDocument(200, 200);
+    const shape = createShape("text", 0, 0, { ...emptyVectorStyle(), fills: [solidFill(srgb(0, 0, 0))] });
+    if (shape.kind === "text") { shape.value = "hello world"; shape.frameWidth = null; }
+    state.shapes.push(shape);
+    const svg = exportVectorDocumentToSvg(state);
+    expect(svg).toContain("<text");
+    expect(svg).toContain("hello world<");
+    expect(svg).not.toContain("<tspan");
+  });
+
+  it("a framed text shape with a measurer wraps into multiple <tspan>s", () => {
+    const state = createVectorDocument(200, 200);
+    const shape = createShape("text", 0, 0, { ...emptyVectorStyle(), fills: [solidFill(srgb(0, 0, 0))] });
+    if (shape.kind === "text") { shape.value = "one two three four five"; shape.frameWidth = 50; shape.fontSize = 16; }
+    state.shapes.push(shape);
+    const fixedWidthMeasurer = { measure: (value: string) => ({ width: value.length * 8, ascent: 12, descent: 3 }) };
+    const svg = exportVectorDocumentToSvg(state, undefined, fixedWidthMeasurer);
+    const tspanCount = svg.match(/<tspan/g)?.length ?? 0;
+    expect(tspanCount).toBeGreaterThan(1);
+    // Every word from the source string still shows up somewhere — wrapping
+    // splits into lines, it never drops a word.
+    for (const word of ["one", "two", "three", "four", "five"]) expect(svg).toContain(word);
+  });
+
+  it("a framed text shape with no measurer falls back to one unwrapped line rather than throwing", () => {
+    const state = createVectorDocument(200, 200);
+    const shape = createShape("text", 0, 0, { ...emptyVectorStyle(), fills: [solidFill(srgb(0, 0, 0))] });
+    if (shape.kind === "text") { shape.value = "one two three four five"; shape.frameWidth = 50; }
+    state.shapes.push(shape);
+    expect(() => exportVectorDocumentToSvg(state)).not.toThrow();
+    const svg = exportVectorDocumentToSvg(state);
+    expect(svg).not.toContain("<tspan");
+    expect(svg).toContain("one two three four five<");
+  });
+
   it("a gradient fill gets a <linearGradient> in <defs> and a url() fill reference", () => {
     const state = createVectorDocument(200, 200);
     const gradient = { kind: "linear" as const, stops: [{ offset: 0, color: srgb(0, 0, 0) }, { offset: 1, color: srgb(255, 255, 255) }], from: { x: 0, y: 0 }, to: { x: 1, y: 0 } };

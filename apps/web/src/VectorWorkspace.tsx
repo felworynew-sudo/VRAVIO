@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent as ReactDragEvent, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { addShape, buildShapeSpatialIndex, computeCanvasBounds, createImageShape, isIdentityMatrix, isVectorDocumentState, matrixToCss, pathData, removeShapes, resolveAppearance, shapeAtIndexed, shapesInRect, shapeWorldBoundsIndexed, siblingsOf, snapSources, type GradientDef, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { addShape, buildShapeSpatialIndex, computeCanvasBounds, createImageShape, isIdentityMatrix, isVectorDocumentState, matrixToCss, pathData, removeShapes, resolveAppearance, shapeAtIndexed, shapesInRect, shapeWorldBoundsIndexed, siblingsOf, snapSources, TEXT_LINE_HEIGHT, wrapText, type GradientDef, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
 import { RASTER_ASSET_MIME, decodeRasterAsset, encodeRasterAsset } from "@vravio/env-raster";
 import { colorToCss } from "@vravio/kernel";
 import type { AssetId, VravioDocument } from "@vravio/kernel";
@@ -190,7 +190,23 @@ function renderShape(shape: VectorShape, modifiedPath: string | undefined, proof
 
   const { Tag, props } = geometryOrModified(shape, modifiedPath);
   const resolved = resolveAppearance(shape.style, shape.id);
-  const textValue = shape.kind === "text" ? shape.value : undefined;
+  // Stage 11's text-in-frame: a framed shape's own `value` becomes one
+  // `<tspan>` per wrapped line rather than a single string child — each
+  // starting at the same `x` (the parent `<text>`'s own `text-anchor`
+  // already centres/right-aligns each line individually, the same way it
+  // already aligned the single line before frames existed) and stepping
+  // down by `dy` on every line after the first, using the one
+  // `TEXT_LINE_HEIGHT` constant every reader of a framed shape's lines
+  // shares (`text-wrap.ts`'s own doc comment) so this and
+  // `vector-svg-export.ts`'s export copy can never quietly disagree on
+  // line spacing.
+  const textValue = shape.kind === "text"
+    ? (shape.frameWidth
+      ? wrapText(shape.value, shape.fontFamily, shape.fontSize, shape.frameWidth, vectorTextMeasurer).map((line, index) => (
+        <tspan key={index} x={shape.x} dy={index === 0 ? 0 : shape.fontSize * TEXT_LINE_HEIGHT}>{line}</tspan>
+      ))
+      : shape.value)
+    : undefined;
   // Stage 14's softproof: a resolved solid colour's own css string is the
   // key `useCmykSoftproof` built its map with (see that hook's own doc
   // comment) — an empty map (proofing off, or nothing proofed yet) makes

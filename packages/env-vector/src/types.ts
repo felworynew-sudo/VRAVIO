@@ -66,7 +66,18 @@ export type VectorShape =
   | (VectorShapeBase & { kind: "ellipse"; x: number; y: number; width: number; height: number })
   | (VectorShapeBase & { kind: "line"; x1: number; y1: number; x2: number; y2: number })
   | (VectorShapeBase & { kind: "path"; points: readonly VectorPoint[]; closed: boolean })
-  | (VectorShapeBase & { kind: "text"; x: number; y: number; value: string; fontSize: number; fontFamily: string; align: "left" | "center" | "right" })
+  | (VectorShapeBase & {
+      kind: "text"; x: number; y: number; value: string; fontSize: number; fontFamily: string; align: "left" | "center" | "right";
+      /** Stage 11's "text in a frame" — `null` (point text, the original
+       * and still-default behaviour) never wraps, its own width is just
+       * whatever the string measures as. A number turns this into area
+       * type: `value` word-wraps to fit within it, multiple lines instead
+       * of one. See `text-wrap.ts`'s own doc comment for why wrapping is
+       * plain word-measurement (the same `TextMeasurer` `shapeBounds`
+       * already takes), not `crates/vector-text`'s Parley engine, despite
+       * that engine existing for exactly this kind of layout. */
+      frameWidth: number | null;
+    })
   | (VectorShapeBase & {
       kind: "image"; x: number; y: number; width: number; height: number;
       /**
@@ -153,7 +164,7 @@ export interface PaletteColor {
 
 export interface VectorDocumentState {
   readonly kind: "vector";
-  readonly schemaVersion: 10;
+  readonly schemaVersion: 11;
   width: number;
   height: number;
   artboards: Artboard[];
@@ -279,6 +290,11 @@ export interface VectorGuide {
  *   `null`, `softproof` to `false` — a v9 document already behaved as if
  *   it had no profile assigned and proofing off (there was no on-screen
  *   proof at all), so these reproduce that exactly.
+ * - v10 → v11 (stage 11's text-in-frame): every `text` shape gets
+ *   `frameWidth: null` — a v10 text shape already behaved as point text
+ *   (never wrapped, no frame at all), so `null` reproduces that exactly
+ *   rather than inventing a frame width from the string's own measured
+ *   length.
  */
 export function migrateVectorDocumentState(state: VectorDocumentState): VectorDocumentState {
   const candidate = state as unknown as {
@@ -320,6 +336,7 @@ export function migrateVectorDocumentState(state: VectorDocumentState): VectorDo
     }
     delete shape.rotation;
     if (!Array.isArray(shape.geometry)) shape.geometry = [];
+    if (shape.kind === "text" && shape.frameWidth === undefined) shape.frameWidth = null;
 
     const style = shape.style as { fill?: unknown; stroke?: unknown; strokeWidth?: unknown; opacity?: unknown; fills?: unknown; strokes?: unknown } | undefined;
     if (!style) return;
@@ -337,7 +354,7 @@ export function migrateVectorDocumentState(state: VectorDocumentState): VectorDo
     }
   });
 
-  (state as { schemaVersion: number }).schemaVersion = 10;
+  (state as { schemaVersion: number }).schemaVersion = 11;
   return state;
 }
 
@@ -369,7 +386,7 @@ export function isVectorDocumentState(value: unknown): value is VectorDocumentSt
   if (!value || typeof value !== "object") return false;
   const state = value as { kind?: unknown; shapes?: unknown; schemaVersion?: unknown };
   if (state.kind !== "vector" || !Array.isArray(state.shapes)) return false;
-  if (![2, 3, 4, 5, 6, 7, 8, 9, 10].includes(state.schemaVersion as number)) return false;
+  if (![2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(state.schemaVersion as number)) return false;
   migrateVectorDocumentState(value as VectorDocumentState);
   return true;
 }

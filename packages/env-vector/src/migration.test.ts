@@ -36,11 +36,11 @@ function v2Document(): unknown {
   };
 }
 
-describe("vector document v2 → v10 migration", () => {
+describe("vector document v2 → v11 migration", () => {
   it("accepts a v2 document as valid and upgrades it all the way to the current schemaVersion", () => {
     const raw = v2Document();
     expect(isVectorDocumentState(raw)).toBe(true);
-    expect((raw as VectorDocumentState).schemaVersion).toBe(10);
+    expect((raw as VectorDocumentState).schemaVersion).toBe(11);
   });
 
   it("gives a pre-palette document an empty palette rather than inventing entries", () => {
@@ -74,6 +74,16 @@ describe("vector document v2 → v10 migration", () => {
     const state = raw as VectorDocumentState;
     expect(state.cmykProfileAssetId).toBeNull();
     expect(state.softproof).toBe(false);
+  });
+
+  it("gives a pre-frame text shape frameWidth: null — point text, unchanged", () => {
+    const raw = v2Document() as { shapes: Array<Record<string, unknown>> };
+    raw.shapes.push({ id: "text-1", kind: "text", name: "T", visible: true, locked: false, x: 0, y: 0, value: "hi", fontSize: 32, fontFamily: "Arial", align: "left", style: { fill: null, stroke: null, strokeWidth: 1, opacity: 1 } });
+    isVectorDocumentState(raw);
+    const state = raw as unknown as VectorDocumentState;
+    const text = state.shapes.find((shape) => shape.kind === "text");
+    expect(text).toBeDefined();
+    if (text?.kind === "text") expect(text.frameWidth).toBeNull();
   });
 
   it("turns the boolean artboards flag into an empty array, not a truthy/falsy re-encoding of it", () => {

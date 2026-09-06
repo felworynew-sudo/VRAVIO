@@ -40,6 +40,7 @@ import { PANEL_CHANGED_EVENT, readVisiblePanelIds, requestPanelVisibility } from
 import { applyPathfinderOp, convertActiveTextToOutlines, createSymbolFromActiveSelection, detachActiveVectorInstance, duplicateActiveVectorShape, deleteActiveVectorShapes, groupActiveVectorShapes, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
 import { importedShapesFromJson, isVectorDocumentState, type VectorDocumentState } from "@vravio/env-vector";
 import { exportVectorDocumentToSvg } from "./vector-svg-export";
+import { vectorTextMeasurer } from "./vector-text-metrics";
 import { importSvgToJson } from "./vector-svg-wasm";
 import { luminanceHistogram } from "./raster-adjustments/histogram";
 import "./styles.css";
@@ -163,7 +164,7 @@ export function App() {
    * already goes through, not a bespoke vector-only save path. */
   const exportActiveVectorAsSvg = () => {
     if (!active || !isVectorDocumentState(active.state)) return;
-    const svg = exportVectorDocumentToSvg(active.state);
+    const svg = exportVectorDocumentToSvg(active.state, undefined, vectorTextMeasurer);
     const name = `${active.name.replace(/\s*\([^()]*\)\s*$/, "").replace(/\.[^.]+$/, "").trim() || "untitled"}.svg`;
     download(new Blob([svg], { type: "image/svg+xml" }), name);
   };

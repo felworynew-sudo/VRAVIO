@@ -5,6 +5,7 @@ import {
 } from "./geometry";
 import { applyMatrix, invertMatrix, multiplyMatrix, translationMatrix } from "./matrix";
 import { flattenVectorShapes, isShapeEffectivelyLocked, isShapeEffectivelyVisible, reorderSiblings, siblingsOf, vectorShapeDescendantIds, worldTransform } from "./tree";
+import { TEXT_LINE_HEIGHT, wrapText } from "./text-wrap";
 import { makeVectorOrderKey } from "./types";
 import type { VectorDocumentState, VectorShape } from "./types";
 
@@ -57,6 +58,17 @@ function shapeFillBounds(shape: VectorShape, measurer?: TextMeasurer): VectorBou
   if (shape.kind === "line") return { x: Math.min(shape.x1, shape.x2), y: Math.min(shape.y1, shape.y2), width: Math.abs(shape.x2 - shape.x1), height: Math.abs(shape.y2 - shape.y1) };
   if (shape.kind === "text") {
     if (!measurer) return estimateTextBounds(shape);
+    if (shape.frameWidth) {
+      // Stage 11's text-in-frame: the box is the frame's own fixed width,
+      // never the measured width of any one line — that is the entire
+      // point of a frame (the shape's footprint doesn't change as the
+      // text inside it is edited, only how many lines it wraps to).
+      const lines = wrapText(shape.value, shape.fontFamily, shape.fontSize, shape.frameWidth, measurer);
+      const lineHeight = shape.fontSize * TEXT_LINE_HEIGHT;
+      const metrics = measurer.measure(shape.value || " ", shape.fontFamily, shape.fontSize);
+      const left = shape.align === "center" ? shape.x - shape.frameWidth / 2 : shape.align === "right" ? shape.x - shape.frameWidth : shape.x;
+      return { x: left, y: shape.y - metrics.ascent, width: shape.frameWidth, height: metrics.ascent + metrics.descent + lineHeight * (lines.length - 1) };
+    }
     const metrics = measurer.measure(shape.value, shape.fontFamily, shape.fontSize);
     // measureText's x is the anchor the shape's own `align` already accounts
     // for at render time (textAnchor: start/middle/end) — shapeBounds reports

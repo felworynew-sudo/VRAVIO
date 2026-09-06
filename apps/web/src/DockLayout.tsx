@@ -103,6 +103,13 @@ function InspectorPanel({ params }: IDockviewPanelProps<{ kind?: string }>) {
         {shape.kind === "text" && <>
           <label>{text(language, "Text", "Текст")}<textarea value={shape.value} onChange={(event) => commit({ value: event.target.value })} /></label>
           <label>{text(language, "Font size", "Размер шрифта")}<input type="number" min={1} value={shape.fontSize} onChange={(event) => commit({ fontSize: Math.max(1, event.target.valueAsNumber) })} /></label>
+          {/* Stage 11's text-in-frame: empty/0 means point text (the
+              original behaviour, `frameWidth: null`) — a real number turns
+              this into area type, wrapping `value` to fit. Panel-based,
+              not a canvas drag-to-create-frame gesture — the same
+              "real and undoable, not polished" tradeoff this file's other
+              `window.prompt`-based actions already make. */}
+          <label>{text(language, "Frame width (0 = point text)", "Ширина рамки (0 — точечный текст)")}<input type="number" min={0} value={shape.frameWidth ?? 0} onChange={(event) => commit({ frameWidth: event.target.valueAsNumber > 0 ? event.target.valueAsNumber : null })} /></label>
         </>}
         {shape.kind === "image" && <button className="secondary-action" onClick={() => void kernel.commands.execute("image.openElsewhere", { activeDocumentId: document.id })}>{text(language, "Edit in Raster Environment…", "Открыть в растровой среде…")}</button>}
         {shape.kind !== "image" && <AppearancePanel style={shape.style} language={language} onChange={(style) => commitStyle(style)}/>}
@@ -671,7 +678,7 @@ function ArtboardsPanel() {
   // shape CLAUDE.md §3 rules out for a tool option.
   const exportArtboard = (artboard: { name: string; x: number; y: number; width: number; height: number; bleed: number }) => {
     const crop = { x: artboard.x - artboard.bleed, y: artboard.y - artboard.bleed, width: artboard.width + artboard.bleed * 2, height: artboard.height + artboard.bleed * 2 };
-    const svg = exportVectorDocumentToSvg(state, crop);
+    const svg = exportVectorDocumentToSvg(state, crop, vectorTextMeasurer);
     const name = `${artboard.name.replace(/\s*\([^()]*\)\s*$/, "").trim() || "artboard"}.svg`;
     void kernel.platform.fs.saveFile({ name, mime: "image/svg+xml", data: new Blob([svg], { type: "image/svg+xml" }) });
   };
