@@ -11,10 +11,11 @@ export interface VectorDocumentOptions {
 
 export function createVectorDocument(width = 1280, height = 720, options: VectorDocumentOptions = {}): VectorDocumentState {
   return {
-    kind: "vector", schemaVersion: 9, width, height,
+    kind: "vector", schemaVersion: 10, width, height,
     artboards: [], activeArtboardId: null, resolution: options.resolution ?? 72, displayUnit: options.displayUnit ?? "px",
     shapes: [], activeShapeId: null, selection: [], palette: [],
     guides: [], rulerOrigin: null, rulerMode: "global",
+    cmykProfileAssetId: null, softproof: false,
   };
 }
 

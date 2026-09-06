@@ -14,16 +14,17 @@ import { kernel } from "./kernel";
  * artboards at all — caught live, not in a test: the Artboards panel's own
  * delete button visibly did nothing. `palette` (section 8's addition) hit
  * the exact same bug the same way, live again; `guides`/`rulerOrigin`/
- * `rulerMode` (stage 15's rulers) were added to all three spots — this
- * type, `snapshotVector`, and both `assign`/`working`/`after` sites in
+ * `rulerMode` (stage 15's rulers) and `cmykProfileAssetId`/`softproof`
+ * (stage 14's proof) were each added to all three spots — this type,
+ * `snapshotVector`, and both `assign`/`working`/`after` sites in
  * `changeVectorDocument` below — in the same commit that introduced them,
  * on the strength of that pattern, rather than waiting to rediscover it a
  * third time live.
  */
-export interface VectorSnapshot { shapes: VectorShape[]; activeShapeId: string | null; selection: readonly string[]; artboards: Artboard[]; activeArtboardId: string | null; palette: PaletteColor[]; guides: VectorGuide[]; rulerOrigin: { x: number; y: number } | null; rulerMode: "global" | "artboard" }
+export interface VectorSnapshot { shapes: VectorShape[]; activeShapeId: string | null; selection: readonly string[]; artboards: Artboard[]; activeArtboardId: string | null; palette: PaletteColor[]; guides: VectorGuide[]; rulerOrigin: { x: number; y: number } | null; rulerMode: "global" | "artboard"; cmykProfileAssetId: string | null; softproof: boolean }
 
 export function snapshotVector(state: VectorDocumentState): VectorSnapshot {
-  return { shapes: structuredClone(state.shapes), activeShapeId: state.activeShapeId, selection: state.selection, artboards: structuredClone(state.artboards), activeArtboardId: state.activeArtboardId, palette: structuredClone(state.palette), guides: structuredClone(state.guides), rulerOrigin: state.rulerOrigin, rulerMode: state.rulerMode };
+  return { shapes: structuredClone(state.shapes), activeShapeId: state.activeShapeId, selection: state.selection, artboards: structuredClone(state.artboards), activeArtboardId: state.activeArtboardId, palette: structuredClone(state.palette), guides: structuredClone(state.guides), rulerOrigin: state.rulerOrigin, rulerMode: state.rulerMode, cmykProfileAssetId: state.cmykProfileAssetId, softproof: state.softproof };
 }
 
 function assignVectorSnapshot(documentId: string, snapshot: VectorSnapshot): void {
@@ -37,6 +38,8 @@ function assignVectorSnapshot(documentId: string, snapshot: VectorSnapshot): voi
     state.guides = structuredClone(snapshot.guides);
     state.rulerOrigin = snapshot.rulerOrigin;
     state.rulerMode = snapshot.rulerMode;
+    state.cmykProfileAssetId = snapshot.cmykProfileAssetId;
+    state.softproof = snapshot.softproof;
   });
 }
 
@@ -71,7 +74,7 @@ export async function changeVectorDocument(documentId: string, label: string, mu
   const before = snapshotVector(document.state);
   const working: VectorDocumentState = { ...document.state, shapes: structuredClone(document.state.shapes), artboards: structuredClone(document.state.artboards), palette: structuredClone(document.state.palette), guides: structuredClone(document.state.guides) };
   if (!mutate(working)) return;
-  const after: VectorSnapshot = { shapes: working.shapes, activeShapeId: working.activeShapeId, selection: working.selection, artboards: working.artboards, activeArtboardId: working.activeArtboardId, palette: working.palette, guides: working.guides, rulerOrigin: working.rulerOrigin, rulerMode: working.rulerMode };
+  const after: VectorSnapshot = { shapes: working.shapes, activeShapeId: working.activeShapeId, selection: working.selection, artboards: working.artboards, activeArtboardId: working.activeArtboardId, palette: working.palette, guides: working.guides, rulerOrigin: working.rulerOrigin, rulerMode: working.rulerMode, cmykProfileAssetId: working.cmykProfileAssetId, softproof: working.softproof };
 
   const assign = (snapshot: VectorSnapshot): void => assignVectorSnapshot(documentId, snapshot);
   await history.execute({ label, memoryEstimate: 0, redo: () => assign(after), undo: () => assign(before) });

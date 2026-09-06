@@ -97,7 +97,7 @@ function drive(
     get state() { return effects.state; },
     setState: (next) => { effects.state = next; effects.stateHistory.push(next); },
     mutate: (fn) => fn(document),
-    snapshot: () => ({ shapes: structuredClone(document.shapes), activeShapeId: document.activeShapeId, selection: document.selection, artboards: structuredClone(document.artboards), activeArtboardId: document.activeArtboardId, palette: structuredClone(document.palette), guides: structuredClone(document.guides), rulerOrigin: document.rulerOrigin, rulerMode: document.rulerMode }),
+    snapshot: () => ({ shapes: structuredClone(document.shapes), activeShapeId: document.activeShapeId, selection: document.selection, artboards: structuredClone(document.artboards), activeArtboardId: document.activeArtboardId, palette: structuredClone(document.palette), guides: structuredClone(document.guides), rulerOrigin: document.rulerOrigin, rulerMode: document.rulerMode, cmykProfileAssetId: document.cmykProfileAssetId, softproof: document.softproof }),
     commitDrag: (before, label) => { effects.dragCommits.push({ before, label }); },
     changeDocument: async (label, mutateFn) => { const applied = mutateFn(document); effects.documentChanges.push({ label, applied }); },
   };

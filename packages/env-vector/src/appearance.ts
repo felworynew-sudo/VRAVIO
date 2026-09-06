@@ -40,12 +40,14 @@ export type Paint = { readonly kind: "color"; readonly color: Color } | { readon
 
 export type StrokeCap = "butt" | "round" | "square";
 export type StrokeJoin = "miter" | "round" | "bevel";
-/** Data-only for this stage — every stroke still renders centered on the
- * path regardless of this field. SVG has no native inner/outer stroke; the
- * honest way to get one is to render at double width and clip to (or
- * subtract) the fill's own shape, which is real, separate rendering work
- * this stage does not include. The field exists now so a document saved
- * today does not need another migration once that rendering lands. */
+/** SVG's own `stroke` has no native inner/outer alignment — it is always
+ * centered on the path. `"inner"`/`"outer"` render at double width,
+ * confined to (or excluded from) the shape's own geometry via a
+ * `<clipPath>`/`<mask>` — see `VectorWorkspace.tsx`'s `renderShape` and
+ * `vector-svg-export.ts`'s `strokeMarkup` for the actual technique and the
+ * cross-renderer bug (`clipRule="evenodd"` across separate SVG elements
+ * does not reliably combine the way two subpaths of one `<path>` do) that
+ * shaped it. */
 export type StrokeAlignment = "center" | "inner" | "outer";
 
 export interface FillLayer {

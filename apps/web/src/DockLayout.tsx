@@ -23,6 +23,7 @@ import { addPaletteColor, clearGuides, deleteArtboard, duplicateArtboard, isVect
 import { colorToCss, cssToColor } from "@vravio/kernel";
 import { vectorTextMeasurer } from "./vector-text-metrics";
 import { changeVectorDocument, createSymbolFromActiveSelection, deleteActiveVectorShapes, detachActiveVectorInstance, duplicateActiveVectorShape, groupActiveVectorShapes, placeVectorSymbolInstance, redefineSymbolFromActiveSelection, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
+import { validateIccProfile } from "./vector-color-wasm";
 import { exportVectorDocumentToSvg } from "./vector-svg-export";
 import { useContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { luminanceHistogram } from "./raster-adjustments/histogram";
@@ -741,11 +742,39 @@ function PalettePanel() {
   const language = useShellStore((state) => state.language);
   const foregroundColor = useShellStore((state) => state.foregroundColor);
   const setForegroundColor = useShellStore((state) => state.setForegroundColor);
+  const iccInputRef = useRef<HTMLInputElement>(null);
   const active = documents.find((document) => document.id === activeDocumentId);
   if (!active || !isVectorDocumentState(active.state)) return <div className="dock-panel-body"><div className="empty-row">{text(language, "Open a vector document to use the palette.", "Откройте векторный документ, чтобы работать с палитрой.")}</div></div>;
 
   const state = active.state;
+  const iccAssets = kernel.assets.list().filter((asset) => asset.meta.icc === true);
+  const importIccProfile = async (file: File) => {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (!(await validateIccProfile(bytes))) { window.alert(text(language, "Not a valid ICC profile.", "Это не корректный ICC-профиль.")); return; }
+    const assetId = await kernel.assets.importAsset(bytes, { kind: "binary", mime: "application/vnd.iccprofile", name: file.name, meta: { icc: true } });
+    void changeVectorDocument(active.id, "Assign CMYK Profile (Назначить CMYK-профиль)", (draft) => { draft.cmykProfileAssetId = assetId; return true; });
+  };
+
   return <div className="dock-panel-body">
+    {/* Stage 14 of docs/vector-plan.md: on-screen colour proof — an ICC
+        profile picked here is what `useCmykSoftproof` (vector-softproof.ts)
+        round-trips every solid colour through when "Softproof" is on;
+        assigning one is the "attach an ICC profile" UI path that section
+        8's own earlier write-up flagged as the only piece
+        `kernel.assets.importAsset` didn't already give for free. */}
+    <div className="appearance-section">
+      <div className="appearance-section-header"><span>{text(language, "Color Proof", "Цветопроба")}</span></div>
+      <select value={state.cmykProfileAssetId ?? ""} onChange={(event) => void changeVectorDocument(active.id, "Assign CMYK Profile (Назначить CMYK-профиль)", (draft) => { draft.cmykProfileAssetId = event.target.value || null; return true; })}>
+        <option value="">{text(language, "No profile", "Без профиля")}</option>
+        {iccAssets.map((asset) => <option key={asset.id} value={asset.id}>{asset.name}</option>)}
+      </select>
+      <button onClick={() => iccInputRef.current?.click()}>{text(language, "Import ICC Profile…", "Импортировать ICC-профиль…")}</button>
+      <input ref={iccInputRef} type="file" accept=".icc,.icm" style={{ display: "none" }} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void importIccProfile(file); }}/>
+      <label style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+        <input type="checkbox" checked={state.softproof} disabled={!state.cmykProfileAssetId} onChange={(event) => void changeVectorDocument(active.id, "Toggle Softproof (Переключить цветопробу)", (draft) => { draft.softproof = event.target.checked; return true; })}/>
+        {text(language, "Softproof", "Цветопроба на экране")}
+      </label>
+    </div>
     <button className="panel-action" onClick={() => void changeVectorDocument(active.id, "Add Palette Color (Добавить цвет в палитру)", (draft) => { addPaletteColor(draft, cssToColor(foregroundColor)); return true; })}>
       ＋ {text(language, "Add Current Color", "Добавить текущий цвет")}
     </button>

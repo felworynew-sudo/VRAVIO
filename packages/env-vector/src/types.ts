@@ -153,7 +153,7 @@ export interface PaletteColor {
 
 export interface VectorDocumentState {
   readonly kind: "vector";
-  readonly schemaVersion: 9;
+  readonly schemaVersion: 10;
   width: number;
   height: number;
   artboards: Artboard[];
@@ -196,6 +196,22 @@ export interface VectorDocumentState {
    * ruler mode works — falls back to `"global"` behaviour when there is no
    * active artboard to be relative to. */
   rulerMode: "global" | "artboard";
+  /** Stage 14's on-screen colour proof: which imported ICC CMYK profile
+   * (an asset id, same "reference, not a copy" convention `pixelAssetId`
+   * above already uses) `softproof` below simulates through — `null`
+   * means none chosen, and `softproof` has nothing to show even if `true`.
+   * `packages/env-vector/src/softproof.ts`'s own doc comment explains why
+   * the actual sRGB↔CMYK roundtrip isn't computed in this package. */
+  cmykProfileAssetId: string | null;
+  /** Whether the canvas should currently show `cmykProfileAssetId`'s own
+   * roundtrip instead of each shape's true sRGB colour — a view setting,
+   * not a document edit in the usual sense (nothing about the artwork
+   * itself changes), but it lives on the document rather than shell UI
+   * state because "what this specific file proofs against" is exactly the
+   * kind of thing that should travel with the file, the same reasoning
+   * `activeArtboardId` already established for "which page is showing".
+   */
+  softproof: boolean;
 }
 
 /**
@@ -259,6 +275,10 @@ export interface VectorGuide {
  *   already behaved exactly like an empty-guides, zero-origin, global-mode
  *   one (there was no ruler for vector documents at all), so these
  *   reproduce that rather than inventing a saved ruler state from nothing.
+ * - v9 → v10 (stage 14's softproof): `cmykProfileAssetId` defaults to
+ *   `null`, `softproof` to `false` — a v9 document already behaved as if
+ *   it had no profile assigned and proofing off (there was no on-screen
+ *   proof at all), so these reproduce that exactly.
  */
 export function migrateVectorDocumentState(state: VectorDocumentState): VectorDocumentState {
   const candidate = state as unknown as {
@@ -270,6 +290,8 @@ export function migrateVectorDocumentState(state: VectorDocumentState): VectorDo
     guides?: VectorGuide[];
     rulerOrigin?: { x: number; y: number } | null;
     rulerMode?: "global" | "artboard";
+    cmykProfileAssetId?: string | null;
+    softproof?: boolean;
     shapes: Array<Record<string, unknown>>;
   };
   if (typeof candidate.artboards === "boolean" || candidate.artboards === undefined) candidate.artboards = [];
@@ -278,6 +300,8 @@ export function migrateVectorDocumentState(state: VectorDocumentState): VectorDo
   candidate.resolution ??= 72;
   candidate.displayUnit ??= "px";
   candidate.palette ??= [];
+  candidate.cmykProfileAssetId ??= null;
+  candidate.softproof ??= false;
   candidate.guides ??= [];
   candidate.rulerOrigin ??= null;
   candidate.rulerMode ??= "global";
@@ -313,7 +337,7 @@ export function migrateVectorDocumentState(state: VectorDocumentState): VectorDo
     }
   });
 
-  (state as { schemaVersion: number }).schemaVersion = 9;
+  (state as { schemaVersion: number }).schemaVersion = 10;
   return state;
 }
 
@@ -345,7 +369,7 @@ export function isVectorDocumentState(value: unknown): value is VectorDocumentSt
   if (!value || typeof value !== "object") return false;
   const state = value as { kind?: unknown; shapes?: unknown; schemaVersion?: unknown };
   if (state.kind !== "vector" || !Array.isArray(state.shapes)) return false;
-  if (![2, 3, 4, 5, 6, 7, 8, 9].includes(state.schemaVersion as number)) return false;
+  if (![2, 3, 4, 5, 6, 7, 8, 9, 10].includes(state.schemaVersion as number)) return false;
   migrateVectorDocumentState(value as VectorDocumentState);
   return true;
 }

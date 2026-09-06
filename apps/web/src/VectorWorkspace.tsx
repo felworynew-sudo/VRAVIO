@@ -14,6 +14,7 @@ import type { ToolContext, ToolPointer } from "./environments/vector/tools/types
 import { vectorTextMeasurer } from "./vector-text-metrics";
 import { useModifierResults } from "./vector-modifiers";
 import { useVectorRulerGuides } from "./vector-ruler-guides";
+import { useCmykSoftproof } from "./vector-softproof";
 
 /**
  * Stage 5 of docs/migration-plan.md: the vector counterpart of
@@ -182,7 +183,7 @@ function geometryOrModified(shape: Exclude<VectorShape, { kind: "image" } | { ki
   return geometryFor(shape);
 }
 
-function renderShape(shape: VectorShape, modifiedPath: string | undefined): ReactNode {
+function renderShape(shape: VectorShape, modifiedPath: string | undefined, proofColors: ReadonlyMap<string, string>): ReactNode {
   if (!shape.visible) return null;
   if (shape.kind === "image") return <VectorImageShape key={shape.id} shape={shape}/>;
   if (shape.kind === "group" || shape.kind === "instance") return null; // neither paints anything of its own — see renderShapeTree, which wraps a group's children (or, for an instance, its symbol's) in a transformed <g> instead of calling this
@@ -190,11 +191,19 @@ function renderShape(shape: VectorShape, modifiedPath: string | undefined): Reac
   const { Tag, props } = geometryOrModified(shape, modifiedPath);
   const resolved = resolveAppearance(shape.style, shape.id);
   const textValue = shape.kind === "text" ? shape.value : undefined;
+  // Stage 14's softproof: a resolved solid colour's own css string is the
+  // key `useCmykSoftproof` built its map with (see that hook's own doc
+  // comment) — an empty map (proofing off, or nothing proofed yet) makes
+  // this a no-op lookup, never a blocking one; a gradient's `css` is a
+  // `url(#...)` reference, never a key this map has, so it always falls
+  // through unproofed exactly as `softproof.ts`'s own documented scope
+  // says it should.
+  const proof = (css: string) => proofColors.get(css) ?? css;
 
   return <g key={shape.id} transform={shapeTransform(shape)} opacity={shape.style.opacity} style={blendStyle(shape.style.blendMode)}>
     {resolved.gradientDefs.length > 0 && <defs>{resolved.gradientDefs.map(renderGradientDef)}</defs>}
     {resolved.fills.filter((fill) => fill.layer.visible).map((fill, index) => (
-      <Tag key={`fill-${index}`} {...props} fill={fill.css} stroke="none" opacity={fill.layer.opacity} style={blendStyle(fill.layer.blendMode)}>{textValue}</Tag>
+      <Tag key={`fill-${index}`} {...props} fill={proof(fill.css)} stroke="none" opacity={fill.layer.opacity} style={blendStyle(fill.layer.blendMode)}>{textValue}</Tag>
     ))}
     {resolved.strokes.filter((stroke) => stroke.layer.visible).map((stroke, index) => {
       // Stage 6's own honest gap, closed: SVG's `stroke` primitive is
@@ -221,12 +230,12 @@ function renderShape(shape: VectorShape, modifiedPath: string | undefined): Reac
       // has actually been checked to define the same way.
       const alignment = stroke.layer.alignment;
       if (alignment === "center") {
-        return <Tag key={`stroke-${index}`} {...props} fill="none" stroke={stroke.css} strokeWidth={stroke.layer.width}
+        return <Tag key={`stroke-${index}`} {...props} fill="none" stroke={proof(stroke.css)} strokeWidth={stroke.layer.width}
           strokeDasharray={stroke.layer.dash.length ? stroke.layer.dash.join(" ") : undefined} strokeLinecap={stroke.layer.cap} strokeLinejoin={stroke.layer.join}
           opacity={stroke.layer.opacity} style={blendStyle(stroke.layer.blendMode)}>{textValue}</Tag>;
       }
       const confineId = `stroke-align-${shape.id}-${index}`;
-      const strokeElement = <Tag {...props} fill="none" stroke={stroke.css} strokeWidth={stroke.layer.width * 2} {...(alignment === "inner" ? { clipPath: `url(#${confineId})` } : { mask: `url(#${confineId})` })}
+      const strokeElement = <Tag {...props} fill="none" stroke={proof(stroke.css)} strokeWidth={stroke.layer.width * 2} {...(alignment === "inner" ? { clipPath: `url(#${confineId})` } : { mask: `url(#${confineId})` })}
         strokeDasharray={stroke.layer.dash.length ? stroke.layer.dash.join(" ") : undefined} strokeLinecap={stroke.layer.cap} strokeLinejoin={stroke.layer.join}
         opacity={stroke.layer.opacity} style={blendStyle(stroke.layer.blendMode)}>{textValue}</Tag>;
       return <g key={`stroke-${index}`}>
@@ -264,10 +273,10 @@ function renderShape(shape: VectorShape, modifiedPath: string | undefined): Reac
  * always recurses; the cost this saves is per rendered *leaf* shape, and an
  * empty `<g>` left behind by a fully-offscreen group costs nothing real.
  */
-function renderShapeTree(shapes: readonly VectorShape[], parentId: string | null, modifierResults: ReadonlyMap<string, string>, visibleIds?: ReadonlySet<string>): ReactNode[] {
+function renderShapeTree(shapes: readonly VectorShape[], parentId: string | null, modifierResults: ReadonlyMap<string, string>, proofColors: ReadonlyMap<string, string>, visibleIds?: ReadonlySet<string>): ReactNode[] {
   return siblingsOf(shapes, parentId).map((shape) => {
     if (!shape.visible) return null;
-    if (shape.kind === "group") return <g key={shape.id} transform={shapeTransform(shape)}>{renderShapeTree(shapes, shape.id, modifierResults, visibleIds)}</g>;
+    if (shape.kind === "group") return <g key={shape.id} transform={shapeTransform(shape)}>{renderShapeTree(shapes, shape.id, modifierResults, proofColors, visibleIds)}</g>;
     if (visibleIds && !visibleIds.has(shape.id)) return null;
     if (shape.kind === "instance") return (
       // Stage 13: the symbol's own children live in `shapes` too (parented
@@ -284,9 +293,9 @@ function renderShapeTree(shapes: readonly VectorShape[], parentId: string | null
       // itself, and a symbol's content is expected to stay small regardless
       // of how many times it is instanced (that is the whole feature), so
       // there is nothing worth culling again inside it.
-      <g key={shape.id} transform={shapeTransform(shape)}>{renderShapeTree(shapes, shape.symbolId, modifierResults)}</g>
+      <g key={shape.id} transform={shapeTransform(shape)}>{renderShapeTree(shapes, shape.symbolId, modifierResults, proofColors)}</g>
     );
-    return renderShape(shape, modifierResults.get(shape.id));
+    return renderShape(shape, modifierResults.get(shape.id), proofColors);
   });
 }
 
@@ -323,6 +332,11 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   // async (offset/simplify/boolean go through WASM) and cached by revision
   // — see vector-modifiers.ts's own doc comment.
   const modifierResults = useModifierResults(state, document.revision);
+  // Stage 14: which solid colours currently proof to something else, empty
+  // whenever softproof is off or no profile is set — see
+  // vector-softproof.ts's own doc comment for why this needs the same
+  // cache-by-revision shape `useModifierResults` above already uses.
+  const proofColors = useCmykSoftproof(state, document.revision);
 
   // docs/vector-plan.md stage 5: what a drag should snap to, read straight
   // from live Settings (Guides & Grid) so a tool never has to know those
@@ -618,7 +632,7 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
           {page.bleed > 0 && <rect className="vector-artboard-bleed" x={page.x - page.bleed} y={page.y - page.bleed} width={page.width + page.bleed * 2} height={page.height + page.bleed * 2} strokeWidth={1 / viewport.zoom}/>}
           {page.name && <text className="vector-artboard-label" x={page.x} y={page.y - labelSize * 0.6} fontSize={labelSize}>{page.name}</text>}
         </g>)}
-        {renderShapeTree(state.shapes, null, modifierResults, visibleIds)}
+        {renderShapeTree(state.shapes, null, modifierResults, proofColors, visibleIds)}
         {bounds && <rect className="vector-selection" x={bounds.x} y={bounds.y} width={bounds.width} height={bounds.height} strokeWidth={1 / viewport.zoom}/>}
         {bounds && [[bounds.x, bounds.y], [bounds.x + bounds.width, bounds.y], [bounds.x, bounds.y + bounds.height], [bounds.x + bounds.width, bounds.y + bounds.height]].map(([x, y]) => <circle className="vector-handle" key={`${x}-${y}`} cx={x} cy={y} r={5 / viewport.zoom} strokeWidth={1 / viewport.zoom}/>)}
         {catalogueTool?.Overlay && <catalogueTool.Overlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>} context={toolContextFor(catalogueTool.id)}/>}

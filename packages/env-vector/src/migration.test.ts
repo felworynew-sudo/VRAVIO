@@ -36,11 +36,11 @@ function v2Document(): unknown {
   };
 }
 
-describe("vector document v2 → v9 migration", () => {
+describe("vector document v2 → v10 migration", () => {
   it("accepts a v2 document as valid and upgrades it all the way to the current schemaVersion", () => {
     const raw = v2Document();
     expect(isVectorDocumentState(raw)).toBe(true);
-    expect((raw as VectorDocumentState).schemaVersion).toBe(9);
+    expect((raw as VectorDocumentState).schemaVersion).toBe(10);
   });
 
   it("gives a pre-palette document an empty palette rather than inventing entries", () => {
@@ -66,6 +66,14 @@ describe("vector document v2 → v9 migration", () => {
     expect(state.guides).toEqual([]);
     expect(state.rulerOrigin).toBeNull();
     expect(state.rulerMode).toBe("global");
+  });
+
+  it("gives a pre-softproof document no CMYK profile and proofing off", () => {
+    const raw = v2Document();
+    isVectorDocumentState(raw);
+    const state = raw as VectorDocumentState;
+    expect(state.cmykProfileAssetId).toBeNull();
+    expect(state.softproof).toBe(false);
   });
 
   it("turns the boolean artboards flag into an empty array, not a truthy/falsy re-encoding of it", () => {

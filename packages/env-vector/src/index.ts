@@ -22,3 +22,4 @@ export * from "./svg-import";
 export * from "./path-segment-ops";
 export * from "./palette-ops";
 export * from "./guide-ops";
+export * from "./softproof";
