@@ -602,7 +602,7 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   // page at (0,0,width,height) for a document with none at all, so a
   // plain single-page document still looks exactly as it always did
   // rather than showing a bare grey canvas with nothing on it.
-  const pages = state.artboards.length > 0 ? state.artboards : [{ id: "__default__", name: "", x: 0, y: 0, width: state.width, height: state.height }];
+  const pages = state.artboards.length > 0 ? state.artboards : [{ id: "__default__", name: "", x: 0, y: 0, width: state.width, height: state.height, bleed: 0 }];
   const labelSize = 12 / viewport.zoom;
 
   return <div ref={workspaceRef} className="vector-workspace" data-active-tool={activeToolId} onWheel={handleWheel} onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
@@ -611,6 +611,7 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
         {pages.map((page) => <g key={page.id}>
           <rect className="vector-artboard-page" x={page.x} y={page.y} width={page.width} height={page.height}/>
           <rect className={page.id === state.activeArtboardId ? "vector-artboard-outline active" : "vector-artboard-outline"} x={page.x} y={page.y} width={page.width} height={page.height} strokeWidth={(page.id === state.activeArtboardId ? 1.5 : 1) / viewport.zoom}/>
+          {page.bleed > 0 && <rect className="vector-artboard-bleed" x={page.x - page.bleed} y={page.y - page.bleed} width={page.width + page.bleed * 2} height={page.height + page.bleed * 2} strokeWidth={1 / viewport.zoom}/>}
           {page.name && <text className="vector-artboard-label" x={page.x} y={page.y - labelSize * 0.6} fontSize={labelSize}>{page.name}</text>}
         </g>)}
         {renderShapeTree(state.shapes, null, modifierResults, visibleIds)}

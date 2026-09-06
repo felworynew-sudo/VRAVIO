@@ -45,10 +45,36 @@ let artboardCounter = 0;
  * "add" action, both funnel through this. */
 export function createArtboardAt(state: VectorDocumentState, x: number, y: number, width: number, height: number, name?: string): Artboard {
   artboardCounter += 1;
-  const artboard: Artboard = { id: `artboard-${artboardCounter}`, name: name ?? `Artboard (Монтажная область) ${state.artboards.length + 1}`, x, y, width, height };
+  const artboard: Artboard = { id: `artboard-${artboardCounter}`, name: name ?? `Artboard (Монтажная область) ${state.artboards.length + 1}`, x, y, width, height, bleed: 0 };
   state.artboards.push(artboard);
   state.activeArtboardId = artboard.id;
   return artboard;
+}
+
+/**
+ * Raises *this* module's own `artboardCounter` past whatever a
+ * just-restored document already contains — `document.ts`'s
+ * `reseedShapeIdCounters` doc comment claims to already cover artboards,
+ * but it only ever raised `document.ts`'s own separate (and, in live use,
+ * dead) `createArtboard`/`artboardCounter` pair, never this file's —
+ * the one `createArtboardAt` above (the Artboard tool, the Artboards
+ * panel's own "add"/duplicate) actually mints ids from. A fresh session
+ * reloading a document with `artboard-3` already in it could mint a
+ * colliding `artboard-1`/`artboard-2` for its own first new artboard — the
+ * exact bug class `reseedShapeIdCounters` and `reseedPaletteIdCounter`
+ * were each written to close, left open here under a different module.
+ * Called from the same choke point they are (`apps/web/src/kernel.ts`,
+ * right after `autosave.restore()`).
+ */
+export function reseedArtboardIdCounter(state: VectorDocumentState): void {
+  let max = 0;
+  for (const artboard of state.artboards) {
+    const match = /-(\d+)$/.exec(artboard.id);
+    if (!match) continue;
+    const value = Number(match[1]);
+    if (value > max) max = value;
+  }
+  artboardCounter = Math.max(artboardCounter, max);
 }
 
 export function duplicateArtboard(state: VectorDocumentState, id: string): Artboard | null {
@@ -57,7 +83,14 @@ export function duplicateArtboard(state: VectorDocumentState, id: string): Artbo
   // Offset so the copy doesn't sit exactly on top of the original,
   // unreachable underneath it — same "obviously a copy, not a ghost"
   // convention `duplicateShape` already uses.
-  return createArtboardAt(state, source.x + 40, source.y + 40, source.width, source.height, `${source.name} copy (копия)`);
+  const copy = createArtboardAt(state, source.x + 40, source.y + 40, source.width, source.height, `${source.name} copy (копия)`);
+  copy.bleed = source.bleed;
+  return copy;
+}
+
+export function setArtboardBleed(state: VectorDocumentState, id: string, bleed: number): void {
+  const artboard = state.artboards.find((item) => item.id === id);
+  if (artboard) artboard.bleed = Math.max(0, bleed);
 }
 
 /** Removes the artboard's own rectangle — never the artwork sitting under

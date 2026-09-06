@@ -1,6 +1,6 @@
 import { AssetStore, AutosaveManager, CommandRegistry, DocumentSnapshotStore, DocumentStore, EnvironmentRegistry, GPUContext, HistoryManager, KeymapManager, ModelStore, ResilientStorageAdapter, RoundTripManager } from "@vravio/kernel";
 import { RasterEnvironment } from "@vravio/env-raster";
-import { isVectorDocumentState, reseedPaletteIdCounter, reseedShapeIdCounters } from "@vravio/env-vector";
+import { isVectorDocumentState, reseedArtboardIdCounter, reseedPaletteIdCounter, reseedShapeIdCounters } from "@vravio/env-vector";
 import { createWebPlatform } from "./webPlatform";
 import { VectorEnvironment } from "./vector-environment";
 
@@ -39,7 +39,7 @@ const autosave = new AutosaveManager(documentsStore, new DocumentSnapshotStore(s
 // `reseedShapeIdCounters`'s own doc comment (packages/env-vector/src/document.ts)
 // for the id-collision bug this closes and how it was found.
 const sessionReady = autosave.restore().then((restored) => {
-  for (const document of restored) if (isVectorDocumentState(document.state)) { reseedShapeIdCounters(document.state); reseedPaletteIdCounter(document.state); }
+  for (const document of restored) if (isVectorDocumentState(document.state)) { reseedShapeIdCounters(document.state); reseedPaletteIdCounter(document.state); reseedArtboardIdCounter(document.state); }
   return restored;
 }).finally(() => autosave.start());
 

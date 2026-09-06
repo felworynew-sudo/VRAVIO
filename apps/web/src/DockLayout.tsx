@@ -19,7 +19,7 @@ import { rasterAdjustmentById, rasterAdjustments } from "./raster-adjustments/re
 import { environmentsWithWindows, windowById, windowsFor } from "./windows/registry";
 import { windowTitle } from "./windows/types";
 import { PANEL_REQUEST_EVENT, persistVisiblePanelIds, readVisiblePanelIds, type PanelVisibilityDetail } from "./windows/runtime";
-import { addPaletteColor, deleteArtboard, duplicateArtboard, isVectorDocumentState, listSymbols, rearrangeArtboardsGrid, reorderArtboard, removePaletteColor, renameArtboard, renamePaletteColor, shapeBounds, updateShape, vectorShapeRows, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { addPaletteColor, deleteArtboard, duplicateArtboard, isVectorDocumentState, listSymbols, rearrangeArtboardsGrid, renameArtboard, renamePaletteColor, reorderArtboard, removePaletteColor, setArtboardBleed, shapeBounds, updateShape, vectorShapeRows, type Artboard, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
 import { colorToCss, cssToColor } from "@vravio/kernel";
 import { vectorTextMeasurer } from "./vector-text-metrics";
 import { changeVectorDocument, createSymbolFromActiveSelection, deleteActiveVectorShapes, detachActiveVectorInstance, duplicateActiveVectorShape, groupActiveVectorShapes, placeVectorSymbolInstance, redefineSymbolFromActiveSelection, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
@@ -663,10 +663,23 @@ function ArtboardsPanel() {
     kernel.documents.update<VectorDocumentState>(active.id, (current) => { current.activeArtboardId = id; });
     setViewport(active.id, { mode: "fit" });
   };
-  const exportArtboard = (artboard: { name: string; x: number; y: number; width: number; height: number }) => {
-    const svg = exportVectorDocumentToSvg(state, artboard);
+  // Bleed is included by default — an artboard that has one set it because
+  // its own artwork is meant to run past the trim edge, so the plain
+  // "export this artboard" action already has to include that margin or
+  // the setting would do nothing at export time, the same dead-checkbox
+  // shape CLAUDE.md §3 rules out for a tool option.
+  const exportArtboard = (artboard: { name: string; x: number; y: number; width: number; height: number; bleed: number }) => {
+    const crop = { x: artboard.x - artboard.bleed, y: artboard.y - artboard.bleed, width: artboard.width + artboard.bleed * 2, height: artboard.height + artboard.bleed * 2 };
+    const svg = exportVectorDocumentToSvg(state, crop);
     const name = `${artboard.name.replace(/\s*\([^()]*\)\s*$/, "").trim() || "artboard"}.svg`;
     void kernel.platform.fs.saveFile({ name, mime: "image/svg+xml", data: new Blob([svg], { type: "image/svg+xml" }) });
+  };
+  const editBleed = (artboard: Artboard) => {
+    const input = window.prompt(text(language, "Bleed (document units, 0 for none)", "Вылет под обрез (в единицах документа, 0 — без вылета)"), String(artboard.bleed));
+    if (input === null) return;
+    const bleed = Number(input);
+    if (!Number.isFinite(bleed)) return;
+    void changeVectorDocument(active.id, "Set Artboard Bleed (Вылет под обрез)", (draft) => { setArtboardBleed(draft, artboard.id, bleed); return true; });
   };
 
   const rearrangeAll = () => {
@@ -696,7 +709,8 @@ function ArtboardsPanel() {
             <button disabled={index === 0} onClick={() => void changeVectorDocument(active.id, "Reorder Artboard (Изменить порядок монтажной области)", (draft) => { reorderArtboard(draft, artboard.id, -1); return true; })} title={text(language, "Move earlier in export order", "Сдвинуть раньше в порядке экспорта")} aria-label="Move up">↑</button>
             <button disabled={index === state.artboards.length - 1} onClick={() => void changeVectorDocument(active.id, "Reorder Artboard (Изменить порядок монтажной области)", (draft) => { reorderArtboard(draft, artboard.id, 1); return true; })} title={text(language, "Move later in export order", "Сдвинуть позже в порядке экспорта")} aria-label="Move down">↓</button>
             <button onClick={() => void changeVectorDocument(active.id, "Rename Artboard (Переименовать монтажную область)", (draft) => { const name = window.prompt(text(language, "Artboard name", "Название монтажной области"), artboard.name); if (!name?.trim()) return false; renameArtboard(draft, artboard.id, name.trim()); return true; })} title={text(language, "Rename", "Переименовать")}>✎</button>
-            <button onClick={() => exportArtboard(artboard)} title={text(language, "Export this artboard as SVG", "Экспортировать эту область как SVG")}>⇩</button>
+            <button className={artboard.bleed > 0 ? "active" : ""} onClick={() => editBleed(artboard)} title={text(language, "Bleed", "Вылет под обрез") + (artboard.bleed > 0 ? ` (${artboard.bleed})` : "")}>⛶</button>
+            <button onClick={() => exportArtboard(artboard)} title={text(language, "Export this artboard as SVG (includes bleed)", "Экспортировать эту область как SVG (с учётом вылета)")}>⇩</button>
             <button onClick={() => void changeVectorDocument(active.id, "Duplicate Artboard (Дублировать монтажную область)", (draft) => Boolean(duplicateArtboard(draft, artboard.id)))} title={text(language, "Duplicate", "Дублировать")}>⧉</button>
             <button onClick={() => void changeVectorDocument(active.id, "Delete Artboard (Удалить монтажную область)", (draft) => { deleteArtboard(draft, artboard.id); return true; })} title={text(language, "Delete (keeps the artwork)", "Удалить (артворк останется)")}>✕</button>
           </div>)}

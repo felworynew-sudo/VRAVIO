@@ -123,6 +123,12 @@ export interface Artboard {
   y: number;
   width: number;
   height: number;
+  /** Print bleed (docs/vector-plan.md stage 15) — an extra margin outside
+   * the artboard's own rectangle that "Export this artboard" includes, and
+   * `VectorWorkspace.tsx` draws as a dashed outline around it. `0` (the
+   * default) means no bleed, drawn as no extra outline at all rather than
+   * a dashed line sitting exactly on top of the solid one. */
+  bleed: number;
 }
 
 /**
@@ -147,7 +153,7 @@ export interface PaletteColor {
 
 export interface VectorDocumentState {
   readonly kind: "vector";
-  readonly schemaVersion: 7;
+  readonly schemaVersion: 8;
   width: number;
   height: number;
   artboards: Artboard[];
@@ -210,6 +216,9 @@ export interface VectorDocumentState {
  *   every v6 document already behaved as if it had no saved swatches
  *   (there was no field for one to live in), so an empty list reproduces
  *   that exactly rather than inventing entries from nothing.
+ * - v7 → v8 (stage 15's bleed): every artboard gets `bleed: 0` — a v7
+ *   artboard already behaved as if it had none (nothing read the field,
+ *   nothing drew a margin), so `0` reproduces that exactly.
  */
 export function migrateVectorDocumentState(state: VectorDocumentState): VectorDocumentState {
   const candidate = state as unknown as {
@@ -221,6 +230,7 @@ export function migrateVectorDocumentState(state: VectorDocumentState): VectorDo
     shapes: Array<Record<string, unknown>>;
   };
   if (typeof candidate.artboards === "boolean" || candidate.artboards === undefined) candidate.artboards = [];
+  for (const artboard of candidate.artboards as Array<{ bleed?: number }>) artboard.bleed ??= 0;
   candidate.activeArtboardId ??= null;
   candidate.resolution ??= 72;
   candidate.displayUnit ??= "px";
@@ -257,7 +267,7 @@ export function migrateVectorDocumentState(state: VectorDocumentState): VectorDo
     }
   });
 
-  (state as { schemaVersion: number }).schemaVersion = 7;
+  (state as { schemaVersion: number }).schemaVersion = 8;
   return state;
 }
 
@@ -289,7 +299,7 @@ export function isVectorDocumentState(value: unknown): value is VectorDocumentSt
   if (!value || typeof value !== "object") return false;
   const state = value as { kind?: unknown; shapes?: unknown; schemaVersion?: unknown };
   if (state.kind !== "vector" || !Array.isArray(state.shapes)) return false;
-  if (![2, 3, 4, 5, 6, 7].includes(state.schemaVersion as number)) return false;
+  if (![2, 3, 4, 5, 6, 7, 8].includes(state.schemaVersion as number)) return false;
   migrateVectorDocumentState(value as VectorDocumentState);
   return true;
 }

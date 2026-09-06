@@ -36,17 +36,27 @@ function v2Document(): unknown {
   };
 }
 
-describe("vector document v2 → v7 migration", () => {
+describe("vector document v2 → v8 migration", () => {
   it("accepts a v2 document as valid and upgrades it all the way to the current schemaVersion", () => {
     const raw = v2Document();
     expect(isVectorDocumentState(raw)).toBe(true);
-    expect((raw as VectorDocumentState).schemaVersion).toBe(7);
+    expect((raw as VectorDocumentState).schemaVersion).toBe(8);
   });
 
   it("gives a pre-palette document an empty palette rather than inventing entries", () => {
     const raw = v2Document();
     isVectorDocumentState(raw);
     expect((raw as VectorDocumentState).palette).toEqual([]);
+  });
+
+  it("gives a pre-bleed artboard bleed: 0 rather than inventing a margin", () => {
+    // A real v7 document could already have artboards (unlike v2Document's
+    // own boolean-artboards fixture, which exercises a different step) —
+    // this one is shaped like what stage 15's Reorder/Rearrange work would
+    // have produced before `bleed` existed at all.
+    const raw = { ...v2Document(), schemaVersion: 7, artboards: [{ id: "artboard-1", name: "Page 1", x: 0, y: 0, width: 800, height: 600 }], activeArtboardId: null, palette: [] };
+    isVectorDocumentState(raw);
+    expect((raw as VectorDocumentState).artboards[0]!.bleed).toBe(0);
   });
 
   it("turns the boolean artboards flag into an empty array, not a truthy/falsy re-encoding of it", () => {

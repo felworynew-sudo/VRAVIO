@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeCanvasBounds, createArtboardAt, deleteArtboard, duplicateArtboard, moveArtboard, rearrangeArtboardsGrid, renameArtboard, reorderArtboard, shapesIntersectingRect } from "./artboard-ops";
+import { computeCanvasBounds, createArtboardAt, deleteArtboard, duplicateArtboard, moveArtboard, rearrangeArtboardsGrid, renameArtboard, reorderArtboard, reseedArtboardIdCounter, setArtboardBleed, shapesIntersectingRect } from "./artboard-ops";
 import { createShape, createVectorDocument } from "./document";
 import { addShape, shapeWorldBounds } from "./shape-ops";
 
@@ -223,5 +223,59 @@ describe("artboard-ops (stage 15 of docs/vector-plan.md)", () => {
     const state = createVectorDocument();
     expect(() => rearrangeArtboardsGrid(state, 2, 20, "row", false)).not.toThrow();
     expect(state.artboards).toHaveLength(0);
+  });
+
+  it("setArtboardBleed clamps negative input to 0 and leaves other artboards alone", () => {
+    const state = createVectorDocument();
+    const a = createArtboardAt(state, 0, 0, 100, 100, "A");
+    const b = createArtboardAt(state, 200, 0, 100, 100, "B");
+
+    setArtboardBleed(state, a.id, 15);
+    setArtboardBleed(state, b.id, -5);
+
+    expect(state.artboards.find((artboard) => artboard.id === a.id)?.bleed).toBe(15);
+    expect(state.artboards.find((artboard) => artboard.id === b.id)?.bleed).toBe(0);
+  });
+
+  it("duplicateArtboard copies the source's own bleed onto the copy", () => {
+    const state = createVectorDocument();
+    const original = createArtboardAt(state, 0, 0, 100, 100);
+    setArtboardBleed(state, original.id, 9);
+    const copy = duplicateArtboard(state, original.id)!;
+    expect(copy.bleed).toBe(9);
+  });
+
+  /**
+   * The real bug this closes (found while implementing `bleed`, not
+   * something invented to have something to test): `document.ts`'s own
+   * `reseedShapeIdCounters` raises a *different*, dead `artboardCounter` —
+   * the one behind its own unused-in-the-live-app `createArtboard`. The
+   * Artboard tool and this panel's own "add"/duplicate mint ids from
+   * *this* module's `createArtboardAt`, whose counter was never reseeded
+   * on document restore at all until now.
+   */
+  it("reseedArtboardIdCounter raises createArtboardAt's own counter past a persisted document's ids", () => {
+    const persisted = createVectorDocument();
+    persisted.artboards = [{ id: "artboard-7", name: "Restored", x: 0, y: 0, width: 100, height: 100, bleed: 0 }];
+    reseedArtboardIdCounter(persisted);
+
+    const created = createArtboardAt(persisted, 200, 0, 50, 50);
+    expect(created.id).not.toBe("artboard-7");
+    expect(persisted.artboards.filter((artboard) => artboard.id === created.id)).toHaveLength(1);
+  });
+
+  it("reseedArtboardIdCounter never lowers the counter a denser document already raised", () => {
+    const dense = createVectorDocument();
+    dense.artboards = [{ id: "artboard-40", name: "Dense", x: 0, y: 0, width: 10, height: 10, bleed: 0 }];
+    reseedArtboardIdCounter(dense);
+    const highWaterMark = createArtboardAt(dense, 0, 0, 10, 10).id;
+
+    const sparse = createVectorDocument();
+    sparse.artboards = [{ id: "artboard-1", name: "Sparse", x: 0, y: 0, width: 10, height: 10, bleed: 0 }];
+    reseedArtboardIdCounter(sparse);
+
+    const createdAfterSparse = createArtboardAt(sparse, 0, 0, 10, 10);
+    expect(createdAfterSparse.id).not.toBe("artboard-1");
+    expect(createdAfterSparse.id).not.toBe(highWaterMark);
   });
 });

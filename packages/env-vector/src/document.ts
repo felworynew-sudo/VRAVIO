@@ -11,7 +11,7 @@ export interface VectorDocumentOptions {
 
 export function createVectorDocument(width = 1280, height = 720, options: VectorDocumentOptions = {}): VectorDocumentState {
   return {
-    kind: "vector", schemaVersion: 7, width, height,
+    kind: "vector", schemaVersion: 8, width, height,
     artboards: [], activeArtboardId: null, resolution: options.resolution ?? 72, displayUnit: options.displayUnit ?? "px",
     shapes: [], activeShapeId: null, selection: [], palette: [],
   };
@@ -20,7 +20,7 @@ export function createVectorDocument(width = 1280, height = 720, options: Vector
 let artboardCounter = 0;
 export function createArtboard(x: number, y: number, width: number, height: number, name?: string): Artboard {
   artboardCounter += 1;
-  return { id: `artboard-${artboardCounter}`, name: name ?? `Artboard (Монтажная область) ${artboardCounter}`, x, y, width, height };
+  return { id: `artboard-${artboardCounter}`, name: name ?? `Artboard (Монтажная область) ${artboardCounter}`, x, y, width, height, bleed: 0 };
 }
 
 let counter = 0;
@@ -45,15 +45,27 @@ function maxNumericSuffix(ids: Iterable<string>): number {
 }
 
 /**
- * Raises `nextId`'s and `createArtboard`'s counters so the *next* shape or
- * artboard this session creates cannot collide with one already in
- * `state` — called once when a persisted document re-enters the live app
- * (`apps/web/src/kernel.ts`, right after `autosave.restore()`), the one
- * door every document takes back into the session regardless of which
- * environment it belongs to. Only ever raises the counters, never lowers
- * them — restoring several documents in the same session (several open
- * tabs' worth) must not let a later, sparser document undo the headroom
- * an earlier, denser one already established.
+ * Raises `nextId`'s counter so the *next* shape this session creates
+ * cannot collide with one already in `state` — called once when a
+ * persisted document re-enters the live app (`apps/web/src/kernel.ts`,
+ * right after `autosave.restore()`), the one door every document takes
+ * back into the session regardless of which environment it belongs to.
+ * Only ever raises the counter, never lowers it — restoring several
+ * documents in the same session (several open tabs' worth) must not let a
+ * later, sparser document undo the headroom an earlier, denser one
+ * already established.
+ *
+ * Also raises this file's own `artboardCounter` — but that counter backs
+ * `createArtboard` above, which only `store.ts`'s "new document with a
+ * default artboard" path actually calls; the Artboard tool and the
+ * Artboards panel's own "add"/duplicate mint ids from a *separate*
+ * `artboardCounter` living in `artboard-ops.ts`'s `createArtboardAt`, which
+ * this function does not touch. See `reseedArtboardIdCounter` there for
+ * the counter that matters for a restored document with any real
+ * artboards in it — found only after `bleed` (stage 15) required touching
+ * this area anyway, so a document with `artboard-3` already in it could,
+ * until this was noticed, mint a colliding `artboard-1` for its first new
+ * one, the same id-collision bug this very function was written to close.
  */
 export function reseedShapeIdCounters(state: VectorDocumentState): void {
   counter = Math.max(counter, maxNumericSuffix(state.shapes.map((shape) => shape.id)));
