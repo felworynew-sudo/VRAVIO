@@ -1,4 +1,4 @@
-import { duplicateShape, groupShapes, moveShapeInStack, removeShapes, ungroupShapes, type VectorDocumentState, type VectorShape, type ZOrderMove } from "@vravio/env-vector";
+import { createSymbolFromShapes, detachInstance, duplicateShape, groupShapes, moveShapeInStack, placeSymbolInstance, redefineSymbolFromShapes, removeShapes, ungroupShapes, type VectorDocumentState, type VectorShape, type ZOrderMove } from "@vravio/env-vector";
 import { kernel } from "./kernel";
 
 export interface VectorSnapshot { shapes: VectorShape[]; activeShapeId: string | null; selection: readonly string[] }
@@ -100,4 +100,40 @@ export function ungroupActiveVectorGroup(documentId: string): void {
   const id = document?.state.activeShapeId;
   if (!id) return;
   void changeVectorDocument(documentId, "Ungroup (Разгруппировать)", (state) => ungroupShapes(state, id));
+}
+
+/** Stage 13: wraps the current selection into a new symbol, leaving one
+ * instance where the selection used to be — the Symbols panel's own
+ * "Create Symbol from Selection", and the Object menu's mirror of it. */
+export function createSymbolFromActiveSelection(documentId: string): void {
+  const document = kernel.documents.get<VectorDocumentState>(documentId);
+  const ids = document?.state.selection;
+  if (!ids?.length) return;
+  void changeVectorDocument(documentId, "Create Symbol (Создать символ)", (state) => Boolean(createSymbolFromShapes(state, ids)));
+}
+
+/** "Break Link" (Разорвать связь) — a no-op unless the active shape is
+ * actually an instance, the same guard `detachInstance` itself already has. */
+export function detachActiveVectorInstance(documentId: string): void {
+  const document = kernel.documents.get<VectorDocumentState>(documentId);
+  const id = document?.state.activeShapeId;
+  if (!id) return;
+  void changeVectorDocument(documentId, "Break Link (Разорвать связь)", (state) => Boolean(detachInstance(state, id)));
+}
+
+/** "Redefine Symbol" (Переопределить символ) — folds the current selection
+ * into an existing symbol's definition, replacing what it used to contain;
+ * every instance of it updates immediately since none of them ever held a
+ * copy to begin with. */
+export function redefineSymbolFromActiveSelection(documentId: string, symbolId: string): void {
+  const document = kernel.documents.get<VectorDocumentState>(documentId);
+  const ids = document?.state.selection;
+  if (!ids?.length) return;
+  void changeVectorDocument(documentId, "Redefine Symbol (Переопределить символ)", (state) => redefineSymbolFromShapes(state, symbolId, ids));
+}
+
+/** Places a new instance of an existing symbol at the given document-space
+ * point — the Symbols panel's own "place" action. */
+export function placeVectorSymbolInstance(documentId: string, symbolId: string, x: number, y: number): void {
+  void changeVectorDocument(documentId, "Place Symbol Instance (Разместить экземпляр символа)", (state) => Boolean(placeSymbolInstance(state, symbolId, x, y)));
 }

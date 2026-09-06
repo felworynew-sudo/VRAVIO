@@ -84,6 +84,26 @@ export type VectorShape =
        * flag, never consulted by geometry, paint order or hit-testing, the
        * same separation `RasterLayer`'s own `expanded` keeps. */
       expanded: boolean;
+    })
+  | (VectorShapeBase & {
+      /**
+       * Stage 13 of docs/vector-plan.md: a placed reference to a symbol
+       * definition, not a copy of its geometry — the whole point of the
+       * stage's own test ("a hundred instances don't store a hundred
+       * copies"). A symbol's actual content is an ordinary `group` shape
+       * living in `state.shapes` like any other, parented to
+       * `SYMBOLS_ROOT_ID` (`symbol-ops.ts`) instead of the document root or
+       * a real group — which is what keeps it out of normal paint order,
+       * the layers panel, and hit-testing, without needing a second,
+       * differently-shaped tree or a schema version bump for this file
+       * alone. `symbolId` is that group's own `id`. An instance's `x`/`y` of
+       * its own do not exist — like a group, `transform` alone places it,
+       * and its content renders exactly the way a group's children do (see
+       * `VectorWorkspace.tsx`'s `renderShapeTree`), just sourced from the
+       * symbol's children instead of this shape's own.
+       */
+      kind: "instance";
+      symbolId: string;
     });
 
 export type VectorShapeKind = VectorShape["kind"];
@@ -196,6 +216,21 @@ export function migrateVectorDocumentState(state: VectorDocumentState): VectorDo
   (state as { schemaVersion: number }).schemaVersion = 5;
   return state;
 }
+
+/**
+ * Stage 13's symbol library lives inside `state.shapes` itself, as ordinary
+ * `group` shapes parented here instead of to the document root or a real
+ * group — see the `instance` shape kind's own doc comment above for why.
+ * Not a real shape id (no shape is ever created with this as its own `id`),
+ * so it can never collide with one; every existing reader that walks
+ * `parentId` chains (`siblingsOf`, `flattenVectorShapes`,
+ * `vectorShapeRows`, ...) already treats an unresolvable parent id as "not
+ * found" and simply stops there, which is exactly what keeps a symbol
+ * definition's own content out of normal paint order, the layers panel, and
+ * top-level hit-testing without any of those functions needing to know this
+ * constant exists.
+ */
+export const SYMBOLS_ROOT_ID = "@@symbols@@";
 
 /** A sortable order key from a plain index — `document.ts`'s
  * `appendShapeAt`/`createVectorGroup` and this migration are the only

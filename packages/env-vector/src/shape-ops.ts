@@ -3,7 +3,7 @@ import {
   distanceToPolyline, ellipseOutline, flattenPathOutline, pathSegmentBounds, pointInPolygon, roundedRectOutline,
   type Point,
 } from "./geometry";
-import { applyMatrix, invertMatrix } from "./matrix";
+import { applyMatrix, invertMatrix, multiplyMatrix, translationMatrix } from "./matrix";
 import { flattenVectorShapes, isShapeEffectivelyLocked, isShapeEffectivelyVisible, reorderSiblings, siblingsOf, vectorShapeDescendantIds, worldTransform } from "./tree";
 import { makeVectorOrderKey } from "./types";
 import type { VectorDocumentState, VectorShape } from "./types";
@@ -46,13 +46,13 @@ function estimateTextBounds(shape: Extract<VectorShape, { kind: "text" }>): Vect
  * would be lying about what is on screen.
  */
 export function shapeBounds(shape: VectorShape, measurer?: TextMeasurer): VectorBounds {
-  if (shape.kind === "group") return { x: 0, y: 0, width: 0, height: 0 }; // see shapeWorldBounds — a group's extent depends on its children, which this signature has no way to see
+  if (shape.kind === "group" || shape.kind === "instance") return { x: 0, y: 0, width: 0, height: 0 }; // see shapeWorldBounds — both a group's and an instance's extent depend on children/symbol content this signature has no way to see
   const fill = shapeFillBounds(shape, measurer);
   return shape.kind === "image" ? fill : padForStroke(fill, shape);
 }
 
 function shapeFillBounds(shape: VectorShape, measurer?: TextMeasurer): VectorBounds {
-  if (shape.kind === "group") return { x: 0, y: 0, width: 0, height: 0 }; // unreachable via shapeBounds, which guards this itself; guarded again here so this function's own type is sound on its own
+  if (shape.kind === "group" || shape.kind === "instance") return { x: 0, y: 0, width: 0, height: 0 }; // unreachable via shapeBounds, which guards this itself; guarded again here so this function's own type is sound on its own
   if (shape.kind === "rectangle" || shape.kind === "ellipse" || shape.kind === "image") return { x: shape.x, y: shape.y, width: shape.width, height: shape.height };
   if (shape.kind === "line") return { x: Math.min(shape.x1, shape.x2), y: Math.min(shape.y1, shape.y2), width: Math.abs(shape.x2 - shape.x1), height: Math.abs(shape.y2 - shape.y1) };
   if (shape.kind === "text") {
@@ -71,7 +71,7 @@ function shapeFillBounds(shape: VectorShape, measurer?: TextMeasurer): VectorBou
 }
 
 function padForStroke(bounds: VectorBounds, shape: VectorShape): VectorBounds {
-  if (shape.kind === "group" || shape.kind === "image") return bounds;
+  if (shape.kind === "group" || shape.kind === "instance" || shape.kind === "image") return bounds;
   const pad = maxVisibleStrokeWidth(shape.style) / 2;
   if (pad === 0) return bounds;
   return { x: bounds.x - pad, y: bounds.y - pad, width: bounds.width + pad * 2, height: bounds.height + pad * 2 };
@@ -90,6 +90,10 @@ export function shapeWorldBounds(shape: VectorShape, shapes: readonly VectorShap
     const minX = Math.min(...boxes.map((box) => box.x)), minY = Math.min(...boxes.map((box) => box.y));
     const maxX = Math.max(...boxes.map((box) => box.x + box.width)), maxY = Math.max(...boxes.map((box) => box.y + box.height));
     return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  }
+  if (shape.kind === "instance") {
+    const symbolBounds = symbolContentWorldBounds(shape, shapes, measurer);
+    return symbolBounds ?? { x: 0, y: 0, width: 0, height: 0 };
   }
   const world = worldTransform(shape, shapes);
   const local = shapeBounds(shape, measurer);
@@ -122,7 +126,7 @@ const MIN_LINE_HIT_TOLERANCE = 4;
  */
 export function hitTestShape(shape: VectorShape, x: number, y: number, measurer?: TextMeasurer): boolean {
   const point: Point = { x, y };
-  if (shape.kind === "group") return false;
+  if (shape.kind === "group" || shape.kind === "instance") return false; // an instance's own content hit-test needs the document's full shape list to resolve its symbol — see shapeAt's own instance branch, which never reaches this generic function for one
   if (shape.kind === "image") { const b = shapeBounds(shape); return x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height; }
   if (shape.kind === "text") { const b = shapeBounds(shape, measurer); return x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height; } // real glyph outlines are stage 11's job
   const strokeWidth = maxVisibleStrokeWidth(shape.style);
@@ -149,6 +153,60 @@ export function hitTestShape(shape: VectorShape, x: number, y: number, measurer?
 }
 
 /**
+ * Every leaf (non-group) shape a symbol instance actually paints, mapped as
+ * it appears through THIS instance specifically: each leaf's own real
+ * `worldTransform` (which composes correctly up through nested groups
+ * inside the symbol and terminates at the master, since the master's own
+ * parent — `SYMBOLS_ROOT_ID` — resolves to no real shape) composed with the
+ * instance's own real document-space placement. `null` when the instance's
+ * `symbolId` no longer resolves to a symbol (a dangling reference — deleting
+ * a symbol currently leaves any instance of it pointing at nothing; a known
+ * gap recorded in docs/vector-plan.md rather than silently patched over
+ * here with a fallback shape).
+ */
+function symbolLeavesThroughInstance(instance: Extract<VectorShape, { kind: "instance" }>, shapes: readonly VectorShape[]): { leaf: VectorShape; worldFromInstance: ReturnType<typeof worldTransform> }[] | null {
+  const master = shapes.find((candidate) => candidate.id === instance.symbolId && candidate.kind === "group");
+  if (!master) return null;
+  const instanceWorld = worldTransform(instance, shapes);
+  return flattenVectorShapes(shapes, master.id)
+    .filter((shape) => shape.kind !== "group")
+    .map((leaf) => ({ leaf, worldFromInstance: multiplyMatrix(instanceWorld, worldTransform(leaf, shapes)) }));
+}
+
+function symbolContentWorldBounds(instance: Extract<VectorShape, { kind: "instance" }>, shapes: readonly VectorShape[], measurer?: TextMeasurer): VectorBounds | null {
+  const leaves = symbolLeavesThroughInstance(instance, shapes);
+  if (!leaves || leaves.length === 0) return null;
+  const boxes = leaves.map(({ leaf, worldFromInstance }) => {
+    const local = shapeBounds(leaf, measurer);
+    const corners = [
+      applyMatrix(worldFromInstance, { x: local.x, y: local.y }), applyMatrix(worldFromInstance, { x: local.x + local.width, y: local.y }),
+      applyMatrix(worldFromInstance, { x: local.x, y: local.y + local.height }), applyMatrix(worldFromInstance, { x: local.x + local.width, y: local.y + local.height }),
+    ];
+    const xs = corners.map((corner) => corner.x), ys = corners.map((corner) => corner.y);
+    return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
+  });
+  const minX = Math.min(...boxes.map((box) => box.x)), minY = Math.min(...boxes.map((box) => box.y));
+  const maxX = Math.max(...boxes.map((box) => box.x + box.width)), maxY = Math.max(...boxes.map((box) => box.y + box.height));
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
+/** A click on any of an instance's painted content selects the instance as
+ * a whole — the same "click a symbol, get the symbol" a user expects from
+ * Illustrator/Figma; reaching into the definition itself is `symbol-ops.ts`'s
+ * job (edit the shared definition directly), not a hit-testing concern. */
+function hitTestInstanceContent(instance: Extract<VectorShape, { kind: "instance" }>, shapes: readonly VectorShape[], x: number, y: number, measurer?: TextMeasurer): boolean {
+  const leaves = symbolLeavesThroughInstance(instance, shapes);
+  if (!leaves) return false;
+  for (const { leaf, worldFromInstance } of leaves) {
+    const inverse = invertMatrix(worldFromInstance);
+    if (!inverse) continue;
+    const local = applyMatrix(inverse, { x, y });
+    if (hitTestShape(leaf, local.x, local.y, measurer)) return true;
+  }
+  return false;
+}
+
+/**
  * Topmost shape under a document-space point, mirroring how a click picks
  * the frontmost overlapping layer.
  *
@@ -159,7 +217,8 @@ export function hitTestShape(shape: VectorShape, x: number, y: number, measurer?
  * transforms exist. A group itself is never picked — same reasoning as
  * `shapeBounds`'s `{0,0,0,0}` for a group, there is nothing of a group's own
  * to click on, only what is in it, which is why it is skipped rather than
- * tested with an empty box.
+ * tested with an empty box. An instance, unlike a group, IS picked as a
+ * whole (`hitTestInstanceContent`) — see that function's own doc comment.
  */
 export function shapeAt(state: VectorDocumentState, x: number, y: number, measurer?: TextMeasurer): VectorShape | null {
   const painted = flattenVectorShapes(state.shapes);
@@ -167,6 +226,7 @@ export function shapeAt(state: VectorDocumentState, x: number, y: number, measur
     const shape = painted[index]!;
     if (shape.kind === "group") continue;
     if (!isShapeEffectivelyVisible(shape, state.shapes) || isShapeEffectivelyLocked(shape, state.shapes)) continue;
+    if (shape.kind === "instance") { if (hitTestInstanceContent(shape, state.shapes, x, y, measurer)) return shape; continue; }
     const inverse = invertMatrix(worldTransform(shape, state.shapes));
     if (!inverse) continue;
     const local = applyMatrix(inverse, { x, y });
@@ -210,6 +270,17 @@ export function translateShape(state: VectorDocumentState, id: string, dx: numbe
   if (shape.kind === "rectangle" || shape.kind === "ellipse" || shape.kind === "text" || shape.kind === "image") updateShape(state, id, { x: shape.x + dx, y: shape.y + dy });
   else if (shape.kind === "line") updateShape(state, id, { x1: shape.x1 + dx, y1: shape.y1 + dy, x2: shape.x2 + dx, y2: shape.y2 + dy });
   else if (shape.kind === "path") updateShape(state, id, { points: shape.points.map((point) => ({ x: point.x + dx, y: point.y + dy })) });
+  // A group and an instance have no x/y of their own — `transform` is their
+  // whole position, so moving "in local space" means composing the
+  // translation as the innermost operation (applied before whatever
+  // ancestor transform already sits in `transform`), not editing a field
+  // that does not exist. Stage 13 needs this for real (an instance is a
+  // directly draggable, single-click-selectable shape — unlike a group,
+  // which `shapeAt` never itself returns); a plain top-level group getting
+  // the same fix here is a side effect of writing the general case
+  // correctly, not a separate change — nothing previously handled a
+  // top-level group's own translate call at all.
+  else if (shape.kind === "group" || shape.kind === "instance") updateShape(state, id, { transform: multiplyMatrix(shape.transform, translationMatrix(dx, dy)) });
 }
 
 export type ZOrderMove = "front" | "back" | "forward" | "backward";

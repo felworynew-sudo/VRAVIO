@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendShapeAt, createShape, createVectorDocument, createVectorGroup, emptyVectorStyle, solidFill, solidStroke } from "@vravio/env-vector";
+import { addShape, appendShapeAt, createShape, createSymbolFromShapes, createVectorDocument, createVectorGroup, emptyVectorStyle, placeSymbolInstance, solidFill, solidStroke } from "@vravio/env-vector";
 import { srgb } from "@vravio/kernel";
 import { exportVectorDocumentToSvg } from "./vector-svg-export";
 
@@ -55,5 +55,23 @@ describe("exportVectorDocumentToSvg", () => {
     appendShapeAt(state, rect, group.id);
     const svg = exportVectorDocumentToSvg(state);
     expect(svg).toMatch(/<g[^>]*><g[^>]*>.*rgba\(0, 0, 255, 1\)/s);
+  });
+
+  it("a symbol becomes a real <symbol>, each instance a <use> referencing it once, not a copy per instance", () => {
+    const state = createVectorDocument(400, 400);
+    const rect = createShape("rectangle", 0, 0, { ...emptyVectorStyle(), fills: [solidFill(srgb(255, 128, 0))] });
+    addShape(state, rect);
+    const symbolId = (createSymbolFromShapes(state, [rect.id])! as unknown as { symbolId: string }).symbolId;
+    placeSymbolInstance(state, symbolId, 100, 100);
+    placeSymbolInstance(state, symbolId, 200, 200);
+
+    const svg = exportVectorDocumentToSvg(state);
+    // The definition's own markup (the orange fill) is written exactly
+    // once, inside a <symbol> — not once per instance, which is the same
+    // "shared, not copied" property symbol-ops.test.ts already checks for
+    // the in-app document, now checked for what actually leaves the app.
+    expect(svg.match(/rgba\(255, 128, 0, 1\)/g)).toHaveLength(1);
+    expect(svg).toMatch(new RegExp(`<symbol id="${symbolId}">`));
+    expect(svg.match(/<use href="#/g)).toHaveLength(3); // the instance createSymbolFromShapes itself placed, plus the two above
   });
 });

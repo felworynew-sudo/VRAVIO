@@ -37,7 +37,7 @@ import { adjustedPixels } from "./raster-adjustments/apply";
 import { windowsFor } from "./windows/registry";
 import { windowTitle } from "./windows/types";
 import { PANEL_CHANGED_EVENT, readVisiblePanelIds, requestPanelVisibility } from "./windows/runtime";
-import { duplicateActiveVectorShape, deleteActiveVectorShapes, groupActiveVectorShapes, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
+import { createSymbolFromActiveSelection, detachActiveVectorInstance, duplicateActiveVectorShape, deleteActiveVectorShapes, groupActiveVectorShapes, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
 import { addShape, importedShapesFromJson, isVectorDocumentState, type VectorDocumentState } from "@vravio/env-vector";
 import { exportVectorDocumentToSvg } from "./vector-svg-export";
 import { importSvgToJson } from "./vector-svg-wasm";
@@ -422,6 +422,8 @@ export function App() {
           ["Delete (Удалить)", "Delete", () => active && deleteActiveVectorShapes(active.id)],
           ["Group (Сгруппировать)", "Ctrl+G", () => active && groupActiveVectorShapes(active.id)],
           ["Ungroup (Разгруппировать)", "Ctrl+Shift+G", () => active && ungroupActiveVectorGroup(active.id)],
+          ["Create Symbol from Selection (Создать символ из выделения)", "", () => active && createSymbolFromActiveSelection(active.id)],
+          ["Break Link to Symbol (Разорвать связь с символом)", "", () => active && detachActiveVectorInstance(active.id)],
           ["Bring to Front (На передний план)", "", () => active && reorderActiveVectorShape(active.id, "front")],
           ["Bring Forward (Переместить выше)", "", () => active && reorderActiveVectorShape(active.id, "forward")],
           ["Send Backward (Переместить ниже)", "", () => active && reorderActiveVectorShape(active.id, "backward")],

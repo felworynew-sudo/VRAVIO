@@ -16,12 +16,12 @@ import { NavigatorPanel } from "./NavigatorPanel";
 import { ScriptsPanel } from "./scripts/ScriptsPanel";
 import type { Language } from "./store";
 import { rasterAdjustmentById, rasterAdjustments } from "./raster-adjustments/registry";
-import { windowById, windowsFor } from "./windows/registry";
+import { environmentsWithWindows, windowById, windowsFor } from "./windows/registry";
 import { windowTitle } from "./windows/types";
 import { PANEL_REQUEST_EVENT, persistVisiblePanelIds, readVisiblePanelIds, type PanelVisibilityDetail } from "./windows/runtime";
-import { isVectorDocumentState, shapeBounds, updateShape, vectorShapeRows, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { isVectorDocumentState, listSymbols, shapeBounds, updateShape, vectorShapeRows, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
 import { vectorTextMeasurer } from "./vector-text-metrics";
-import { changeVectorDocument, deleteActiveVectorShapes, duplicateActiveVectorShape, groupActiveVectorShapes, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
+import { changeVectorDocument, createSymbolFromActiveSelection, deleteActiveVectorShapes, detachActiveVectorInstance, duplicateActiveVectorShape, groupActiveVectorShapes, placeVectorSymbolInstance, redefineSymbolFromActiveSelection, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
 import { useContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { luminanceHistogram } from "./raster-adjustments/histogram";
 import { changeRasterDocument } from "./commands";
@@ -584,6 +584,60 @@ function EffectsPanel() {
   return <div className="dock-panel-body"><div className="empty-row">{text(language, "Open Layer Style by double-clicking a layer row.", "Откройте «Стиль слоя» двойным щелчком по строке слоя.")}</div></div>;
 }
 
+/**
+ * Stage 13 of docs/vector-plan.md: symbols and instances, the same
+ * "definition once, place many times" idea `AssetsPanel` names for pixels
+ * but this document kind implements for real. "Create Symbol" needs 1+
+ * shapes selected; "Redefine" replaces an existing symbol's content with
+ * whatever is currently selected (own guard: it is a no-op with nothing
+ * selected, same as `createSymbolFromActiveSelection`); "Place" adds a new
+ * instance at the centre of the current viewport rather than always (0,0),
+ * so a repeatedly placed symbol does not stack instances invisibly on top
+ * of each other.
+ */
+function SymbolsPanel() {
+  const documents = useDocuments();
+  const activeDocumentId = useShellStore((state) => state.activeDocumentId);
+  const language = useShellStore((state) => state.language);
+  const active = documents.find((document) => document.id === activeDocumentId);
+  if (!active || !isVectorDocumentState(active.state)) return <div className="dock-panel-body"><div className="empty-row">{text(language, "Open a vector document to use symbols.", "Откройте векторный документ, чтобы работать с символами.")}</div></div>;
+
+  const state = active.state;
+  const symbols = listSymbols(state);
+  const hasSelection = state.selection.length > 0;
+  // The document's own centre, not the current viewport's — simple and
+  // predictable regardless of how far the user has panned or zoomed;
+  // dragging a freshly placed instance into position is one drag either
+  // way.
+  const placeAt = { x: state.width / 2, y: state.height / 2 };
+
+  return <div className="dock-panel-body">
+    <button className="panel-action" disabled={!hasSelection} onClick={() => createSymbolFromActiveSelection(active.id)}>
+      ＋ {text(language, "Create Symbol from Selection", "Создать символ из выделения")}
+    </button>
+    {symbols.length === 0
+      ? <div className="empty-row">{text(language, "No symbols yet — select shapes and create one.", "Символов пока нет — выделите фигуры и создайте один.")}</div>
+      : <div className="layer-list">
+        {symbols.map((symbol) => <div className="layer-row" key={symbol.id}>
+          <button onClick={() => placeVectorSymbolInstance(active.id, symbol.id, placeAt.x, placeAt.y)} title={text(language, "Place an instance", "Разместить экземпляр")}>
+            <span>{symbol.name}</span>
+          </button>
+          <button
+            disabled={!hasSelection}
+            onClick={() => redefineSymbolFromActiveSelection(active.id, symbol.id)}
+            title={text(language, "Redefine from current selection", "Переопределить из текущего выделения")}
+          >{symbol.instanceCount}× ⟲</button>
+        </div>)}
+      </div>}
+    <footer className="history-footer">
+      <button
+        disabled={state.shapes.find((shape) => shape.id === state.activeShapeId)?.kind !== "instance"}
+        onClick={() => detachActiveVectorInstance(active.id)}
+      >{text(language, "Break Link", "Разорвать связь")}</button>
+    </footer>
+  </div>;
+}
+
 const components = {
   viewport: ViewportPanel,
   inspector: InspectorPanel,
@@ -594,6 +648,7 @@ const components = {
   color: ColorPanel,
   navigator: NavigatorPanel,
   scripts: ScriptsPanel,
+  symbols: SymbolsPanel,
 };
 
 /**
@@ -605,7 +660,13 @@ const components = {
  * different things. They are used as CSS masks, so the colour comes from the
  * theme and not from the file.
  */
-const panelIcons: Record<string, string> = Object.fromEntries(windowsFor("raster").map((panel) => [panel.id, panel.icon]));
+// Every environment's own panels, not just raster's — every id used to be
+// one raster already had too (layers/history/color/properties/scripts, by
+// coincidence of both environments sharing those names), which is what let
+// this get away with reading only raster's list. Stage 13's "symbols" panel
+// is the first vector-only id, and would otherwise silently fall back to
+// the generic default icon below.
+const panelIcons: Record<string, string> = Object.fromEntries(environmentsWithWindows.flatMap((kind) => windowsFor(kind)).map((panel) => [panel.id, panel.icon]));
 panelIcons.viewport = "/РАДИО.svg";
 function PanelTab({ api }: IDockviewPanelHeaderProps) {
   return <div className="panel-tab" title={api.title}><i aria-hidden="true" style={{ "--panel-mask": `url("${panelIcons[api.id] ?? "/ПАРАМЕТРЫ.svg"}")` } as CSSProperties}/><span>{api.title}</span></div>;

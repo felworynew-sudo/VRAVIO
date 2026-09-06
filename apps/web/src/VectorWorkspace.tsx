@@ -130,7 +130,7 @@ function VectorImageShape({ shape }: { shape: Extract<VectorShape, { kind: "imag
  * is how "two fills, three strokes" on one object actually renders), so
  * paint had to stop being baked into each kind's own JSX branch. */
 type GeometryTag = "rect" | "ellipse" | "line" | "path" | "text";
-function geometryFor(shape: Exclude<VectorShape, { kind: "image" } | { kind: "group" }>): { Tag: GeometryTag; props: Record<string, unknown> } {
+function geometryFor(shape: Exclude<VectorShape, { kind: "image" } | { kind: "group" } | { kind: "instance" }>): { Tag: GeometryTag; props: Record<string, unknown> } {
   if (shape.kind === "rectangle") return { Tag: "rect", props: { x: shape.x, y: shape.y, width: shape.width, height: shape.height, rx: shape.cornerRadius } };
   if (shape.kind === "ellipse") return { Tag: "ellipse", props: { cx: shape.x + shape.width / 2, cy: shape.y + shape.height / 2, rx: shape.width / 2, ry: shape.height / 2 } };
   if (shape.kind === "line") return { Tag: "line", props: { x1: shape.x1, y1: shape.y1, x2: shape.x2, y2: shape.y2 } };
@@ -165,7 +165,7 @@ const blendStyle = (mode: string): CSSProperties | undefined => mode === "normal
  * shape never flashes blank or stale while its WASM-backed modifiers catch
  * up to a fast edit.
  */
-function geometryOrModified(shape: Exclude<VectorShape, { kind: "image" } | { kind: "group" }>, modifiedPath: string | undefined): { Tag: GeometryTag; props: Record<string, unknown> } {
+function geometryOrModified(shape: Exclude<VectorShape, { kind: "image" } | { kind: "group" } | { kind: "instance" }>, modifiedPath: string | undefined): { Tag: GeometryTag; props: Record<string, unknown> } {
   if (shape.geometry.length > 0 && modifiedPath !== undefined) return { Tag: "path", props: { d: modifiedPath } };
   return geometryFor(shape);
 }
@@ -173,7 +173,7 @@ function geometryOrModified(shape: Exclude<VectorShape, { kind: "image" } | { ki
 function renderShape(shape: VectorShape, modifiedPath: string | undefined): ReactNode {
   if (!shape.visible) return null;
   if (shape.kind === "image") return <VectorImageShape key={shape.id} shape={shape}/>;
-  if (shape.kind === "group") return null; // a group has no visual of its own — see renderShapeTree, which wraps its children in a transformed <g> instead of calling this
+  if (shape.kind === "group" || shape.kind === "instance") return null; // neither paints anything of its own — see renderShapeTree, which wraps a group's children (or, for an instance, its symbol's) in a transformed <g> instead of calling this
 
   const { Tag, props } = geometryOrModified(shape, modifiedPath);
   const resolved = resolveAppearance(shape.style, shape.id);
@@ -222,6 +222,23 @@ function renderShapeTree(shapes: readonly VectorShape[], parentId: string | null
     if (!shape.visible) return null;
     if (shape.kind === "group") return <g key={shape.id} transform={shapeTransform(shape)}>{renderShapeTree(shapes, shape.id, modifierResults, visibleIds)}</g>;
     if (visibleIds && !visibleIds.has(shape.id)) return null;
+    if (shape.kind === "instance") return (
+      // Stage 13: the symbol's own children live in `shapes` too (parented
+      // to the symbol's group id, itself parented to `SYMBOLS_ROOT_ID` —
+      // see that constant's own doc comment), so this is the exact same
+      // "wrap a subtree in a transformed `<g>`" a real group above already
+      // does, just sourcing children from a different id than this shape's
+      // own. `visibleIds` is deliberately NOT threaded into this inner
+      // call: it was built from this instance's own (correctly computed,
+      // see shapeWorldBounds' instance case) world bounds, not from where
+      // each of its individual leaves would sit if they were placed
+      // unscaled at the symbol library's own (irrelevant) position — culling
+      // already happened one level up, in the check on this instance
+      // itself, and a symbol's content is expected to stay small regardless
+      // of how many times it is instanced (that is the whole feature), so
+      // there is nothing worth culling again inside it.
+      <g key={shape.id} transform={shapeTransform(shape)}>{renderShapeTree(shapes, shape.symbolId, modifierResults)}</g>
+    );
     return renderShape(shape, modifierResults.get(shape.id));
   });
 }

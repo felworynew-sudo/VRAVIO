@@ -2,7 +2,32 @@ import RBush from "rbush";
 import { applyMatrix, invertMatrix } from "./matrix";
 import { type TextMeasurer, type VectorBounds, hitTestShape, shapeWorldBounds } from "./shape-ops";
 import { flattenVectorShapes, isShapeEffectivelyLocked, isShapeEffectivelyVisible, worldTransform } from "./tree";
+import { SYMBOLS_ROOT_ID } from "./types";
 import type { VectorShape } from "./types";
+
+/**
+ * Stage 13: a symbol definition's own content (an ordinary `group` parented
+ * to `SYMBOLS_ROOT_ID`, and everything inside it) is never a valid direct
+ * hit-test or paint target — only an `instance` referencing it is. Without
+ * this check, every leaf shape inside every symbol definition would get
+ * indexed with its *library-local* bounds (as if it sat, unplaced, wherever
+ * the definition happens to live), which could then wrongly hit-test or
+ * cull an instance's actual on-canvas content against completely unrelated
+ * coordinates. `flattenVectorShapes` (used for `paintOrder` below) already
+ * excludes this content on its own, since it only ever walks from the real
+ * document root; this is the same exclusion for the R-tree and bounds map.
+ */
+function isSymbolLibraryContent(shape: VectorShape, shapes: readonly VectorShape[]): boolean {
+  let current: VectorShape | undefined = shape;
+  const seen = new Set<string>();
+  while (current) {
+    if (current.parentId === SYMBOLS_ROOT_ID) return true;
+    if (seen.has(current.id)) return false;
+    seen.add(current.id);
+    current = current.parentId ? shapes.find((candidate) => candidate.id === current!.parentId) : undefined;
+  }
+  return false;
+}
 
 interface IndexedEntry { id: string; minX: number; minY: number; maxX: number; maxY: number }
 
@@ -42,6 +67,7 @@ export function buildShapeSpatialIndex(shapes: readonly VectorShape[], measurer?
   const bounds = new Map<string, VectorBounds>();
   const entries: IndexedEntry[] = [];
   for (const shape of shapes) {
+    if (isSymbolLibraryContent(shape, shapes)) continue;
     const box = shapeWorldBounds(shape, shapes, measurer);
     bounds.set(shape.id, box);
     // A group has no visual of its own (shapeWorldBounds already returns the
