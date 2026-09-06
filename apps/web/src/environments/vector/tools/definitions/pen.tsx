@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { addShape, closestPointOnPath, createShape, emptyVectorStyle, insertPointOnPathSegment, resolveSnapForBounds, solidFill, solidStroke, type VectorDocumentState } from "@vravio/env-vector";
 import { cssToColor } from "@vravio/kernel";
 import type { VectorSnapshot } from "../../../../vector-commands";
+import { applyNodeMove, hitTestNode, type NodePart } from "./nodes";
 import type { ToolContext, ToolPointer, VectorToolDefinition } from "../types";
 
 /**
@@ -44,9 +45,20 @@ export interface PenState {
    * `onPointerMove` updates this even when no handle is being dragged
    * (hovering between clicks), which no other vector tool needs to do. */
   readonly cursor: { readonly x: number; readonly y: number } | null;
+  /**
+   * `Ctrl`/`Cmd` held down temporarily borrows `vector.nodes`'s own anchor/
+   * handle drag — docs/vector-plan.md section 9, second priority ("Временный
+   * Node Tool через Ctrl/Cmd, зажатый во время рисования пером"). Separate
+   * from `handle` (which is Pen's own just-placed-point handle, always
+   * mirrored/broken by Shift/Alt, never by a Ctrl check) so an in-progress
+   * `draft`/`handle` gesture is left untouched underneath — releasing Ctrl
+   * mid-drag does not need to "hand back" anything, because nothing about
+   * the draft ever stopped existing.
+   */
+  readonly nodeEdit: { readonly shapeId: string; readonly pointIndex: number; readonly part: NodePart; readonly before: VectorSnapshot } | null;
 }
 
-const empty: PenState = { draft: null, handle: null, cursor: null };
+const empty: PenState = { draft: null, handle: null, cursor: null, nodeEdit: null };
 
 /** Rounds `angle` (radians) to the nearest multiple of 45° — `Shift`'s
  * constraint, both for a handle drag and for placing a new point, per
@@ -125,6 +137,24 @@ const pen: VectorToolDefinition<PenState> = {
   createState: () => empty,
 
   onPointerDown(context, pointer: ToolPointer) {
+    // `Ctrl`/`Cmd` temporarily borrows vector.nodes' own anchor/handle drag
+    // — checked first, before any of Pen's own click handling, and against
+    // *both* the shape currently being drawn (if any) and the document's
+    // active shape, so this works whether or not a path is mid-draft. Falls
+    // through to Pen's normal behaviour when the modifier is held but
+    // nothing is actually under the pointer — holding Ctrl over empty
+    // canvas must not silently swallow a click that would otherwise place
+    // a point.
+    if (pointer.ctrlKey || pointer.metaKey) {
+      const tolerance = firstPointToleranceScreenPx / context.viewport.zoom;
+      const draftShape = context.state.draft ? context.document.shapes.find((item) => item.id === context.state.draft!.shapeId) : null;
+      const candidate = draftShape ?? context.activeShape;
+      const hit = candidate ? hitTestNode(candidate, pointer.point, tolerance) : null;
+      if (candidate && hit) {
+        context.setState({ ...context.state, nodeEdit: { shapeId: candidate.id, pointIndex: hit.pointIndex, part: hit.part, before: context.snapshot() } });
+        return;
+      }
+    }
     const draft = context.state.draft;
     if (draft) {
       const { shapeId } = draft;
@@ -172,7 +202,7 @@ const pen: VectorToolDefinition<PenState> = {
         const target = document.shapes.find((item) => item.id === shapeId);
         if (target?.kind === "path") { target.points = [...target.points, { x: placedPoint.x, y: placedPoint.y }]; pointIndex = target.points.length - 1; }
       });
-      if (pointIndex >= 0) context.setState({ draft, handle: { shapeId, pointIndex, anchor: placedPoint }, cursor: placedPoint });
+      if (pointIndex >= 0) context.setState({ draft, handle: { shapeId, pointIndex, anchor: placedPoint }, cursor: placedPoint, nodeEdit: null });
       // A double-click finishes the path — the same `event.detail >= 2` test
       // the pre-port code read straight off the native PointerEvent.
       if (pointer.detail >= 2) finishPath(context);
@@ -239,7 +269,7 @@ const pen: VectorToolDefinition<PenState> = {
       // other already-placed point does.
       const lastIndex = continuation.points.length - 1;
       const lastPoint = continuation.points[lastIndex]!;
-      context.setState({ draft: { shapeId: continuation.id, before }, handle: { shapeId: continuation.id, pointIndex: lastIndex, anchor: { x: lastPoint.x, y: lastPoint.y } }, cursor: { x: lastPoint.x, y: lastPoint.y } });
+      context.setState({ draft: { shapeId: continuation.id, before }, handle: { shapeId: continuation.id, pointIndex: lastIndex, anchor: { x: lastPoint.x, y: lastPoint.y } }, cursor: { x: lastPoint.x, y: lastPoint.y }, nodeEdit: null });
       return;
     }
 
@@ -281,11 +311,16 @@ const pen: VectorToolDefinition<PenState> = {
       fills: [solidFill(cssToColor(context.foregroundColor))],
       strokes: [{ ...solidStroke(cssToColor(context.foregroundColor), strokeWidth), visible: false }],
     });
-    context.setState({ draft: { shapeId: shape.id, before }, handle: { shapeId: shape.id, pointIndex: 0, anchor: pointer.point }, cursor: pointer.point });
+    context.setState({ draft: { shapeId: shape.id, before }, handle: { shapeId: shape.id, pointIndex: 0, anchor: pointer.point }, cursor: pointer.point, nodeEdit: null });
     context.mutate((document: VectorDocumentState) => addShape(document, shape));
   },
 
   onPointerMove(context, pointer) {
+    const nodeEdit = context.state.nodeEdit;
+    if (nodeEdit) {
+      context.mutate((document) => applyNodeMove(document, nodeEdit.shapeId, nodeEdit.pointIndex, nodeEdit.part, pointer.point, !pointer.altKey));
+      return;
+    }
     if (context.state.draft) context.setState({ ...context.state, cursor: pointer.point });
     const handle = context.state.handle;
     if (!handle) return;
@@ -308,6 +343,12 @@ const pen: VectorToolDefinition<PenState> = {
   },
 
   onGestureEnd(context) {
+    const nodeEdit = context.state.nodeEdit;
+    if (nodeEdit) {
+      context.setState({ ...context.state, nodeEdit: null });
+      context.commitDrag(nodeEdit.before, "Edit Path (Изменить контур)");
+      return;
+    }
     // No commit here — placing a point is already live via `mutate` above,
     // and the path as a whole only commits on finish/close/double-click.
     if (context.state.handle) context.setState({ ...context.state, handle: null });

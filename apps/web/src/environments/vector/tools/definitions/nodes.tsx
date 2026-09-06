@@ -15,9 +15,9 @@ import type { ToolContext, ToolPointer, VectorToolDefinition } from "../types";
  * this out explicitly ("Fall through to the select-tool behavior below").
  */
 
-type NodePart = "anchor" | "handleIn" | "handleOut";
+export type NodePart = "anchor" | "handleIn" | "handleOut";
 
-function nodePosition(point: VectorPoint, part: NodePart): { x: number; y: number } {
+export function nodePosition(point: VectorPoint, part: NodePart): { x: number; y: number } {
   if (part === "anchor") return { x: point.x, y: point.y };
   const handle = point[part];
   return handle ? { x: point.x + handle.x, y: point.y + handle.y } : { x: point.x, y: point.y };
@@ -25,8 +25,11 @@ function nodePosition(point: VectorPoint, part: NodePart): { x: number; y: numbe
 
 /** Closest anchor/handle of a path within `tolerance` document units of `at`,
  * preferring handles (they sit on top visually) over anchors when both are in
- * range — read verbatim off the pre-port `hitTestNode`. */
-function hitTestNode(shape: VectorShape, at: { x: number; y: number }, tolerance: number): { pointIndex: number; part: NodePart } | null {
+ * range — read verbatim off the pre-port `hitTestNode`. Exported so
+ * `vector.pen`'s temporary-Node-Tool-under-Ctrl gesture (docs/vector-plan.md
+ * section 9) hit-tests exactly the same way, rather than a second,
+ * independently-drifting implementation. */
+export function hitTestNode(shape: VectorShape, at: { x: number; y: number }, tolerance: number): { pointIndex: number; part: NodePart } | null {
   if (shape.kind !== "path") return null;
   type Best = { pointIndex: number; part: NodePart; distance: number };
   let best: Best | null = null;
@@ -39,6 +42,27 @@ function hitTestNode(shape: VectorShape, at: { x: number; y: number }, tolerance
     });
   });
   return best ? { pointIndex: (best as Best).pointIndex, part: (best as Best).part } : null;
+}
+
+/**
+ * Moves one anchor/handle of `shapeId`'s path to `to` — the same mutation
+ * `vector.nodes`'s own `onPointerMove` performs, pulled out so `vector.pen`'s
+ * Ctrl-held temporary node-editing can call the exact same code rather than
+ * a second copy that could silently drift from this one (`CLAUDE.md`
+ * section 4's "single door"). `mirror` matches `!pointer.altKey` at every
+ * call site — passed in rather than reading `pointer` here, so this stays a
+ * pure document-mutation function with no `ToolPointer` of its own to agree on.
+ */
+export function applyNodeMove(document: VectorDocumentState, shapeId: string, pointIndex: number, part: NodePart, to: { x: number; y: number }, mirror: boolean): void {
+  const shape = document.shapes.find((item) => item.id === shapeId);
+  if (shape?.kind !== "path" || !shape.points[pointIndex]) return;
+  shape.points = shape.points.map((current, index) => {
+    if (index !== pointIndex) return current;
+    if (part === "anchor") return { ...current, x: to.x, y: to.y };
+    const offset = { x: to.x - current.x, y: to.y - current.y };
+    const opposite: NodePart = part === "handleOut" ? "handleIn" : "handleOut";
+    return { ...current, [part]: offset, ...(mirror ? { [opposite]: { x: -offset.x, y: -offset.y } } : {}) };
+  });
 }
 
 interface NodeDrag { readonly shapeId: string; readonly pointIndex: number; readonly part: NodePart; readonly before: VectorSnapshot }
@@ -75,18 +99,7 @@ const nodes: VectorToolDefinition<NodesState> = {
     const { nodeDrag, shapeDrag } = context.state;
     if (nodeDrag) {
       const { shapeId, pointIndex, part } = nodeDrag;
-      context.mutate((draft) => {
-        const shape = draft.shapes.find((item) => item.id === shapeId);
-        if (shape?.kind !== "path" || !shape.points[pointIndex]) return;
-        shape.points = shape.points.map((current, index) => {
-          if (index !== pointIndex) return current;
-          if (part === "anchor") return { ...current, x: pointer.point.x, y: pointer.point.y };
-          const offset = { x: pointer.point.x - current.x, y: pointer.point.y - current.y };
-          const mirror = !pointer.altKey;
-          const opposite: NodePart = part === "handleOut" ? "handleIn" : "handleOut";
-          return { ...current, [part]: offset, ...(mirror ? { [opposite]: { x: -offset.x, y: -offset.y } } : {}) };
-        });
-      });
+      context.mutate((draft) => applyNodeMove(draft, shapeId, pointIndex, part, pointer.point, !pointer.altKey));
       return;
     }
     if (shapeDrag) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildShapeSpatialIndex, createVectorDocument, type VectorDocumentState } from "@vravio/env-vector";
+import { buildShapeSpatialIndex, createVectorDocument, emptyVectorStyle, IDENTITY_MATRIX, type VectorDocumentState } from "@vravio/env-vector";
 import pen, { closePath, finishPath, type PenState } from "./definitions/pen";
 import type { ToolContext, ToolPointer } from "./types";
 
@@ -282,6 +282,68 @@ describe("vector.pen — gestures added for docs/vector-plan.md section 9", () =
     pen.onGestureEnd!(context, pointerAt(100, 100));
     pen.onPointerMove!(context, pointerAt(180, 140));
     finishPath(context);
-    expect(context.state).toEqual({ draft: null, handle: null, cursor: null });
+    expect(context.state).toEqual({ draft: null, handle: null, cursor: null, nodeEdit: null });
+  });
+
+  describe("Ctrl/Cmd — temporary Node Tool", () => {
+    it("Ctrl-dragging an anchor of the active shape moves it, without adding a new point or starting a draft", () => {
+      const document = createVectorDocument(400, 300);
+      document.shapes = [{
+        id: "path-1", kind: "path", visible: true, locked: false,
+        style: emptyVectorStyle(), parentId: null, orderKey: "a0", transform: IDENTITY_MATRIX, geometry: [],
+        points: [{ x: 100, y: 100 }, { x: 200, y: 100 }], closed: false, name: "Test Path",
+      }];
+      document.activeShapeId = "path-1";
+      const { context } = makeContext(document);
+
+      pen.onPointerDown!(context, pointerAt(100, 100, { ctrlKey: true }));
+      pen.onPointerMove!(context, pointerAt(130, 160, { ctrlKey: true }));
+      pen.onGestureEnd!(context, pointerAt(130, 160, { ctrlKey: true }));
+
+      const path = firstPath(document);
+      expect(path.points).toHaveLength(2); // no point added
+      expect(path.points[0]).toEqual({ x: 130, y: 160 });
+      expect(context.state.draft).toBeNull(); // no drawing gesture started
+    });
+
+    it("Ctrl-dragging a handle of the shape currently being drawn moves that handle, leaving the draft intact so drawing can resume", () => {
+      const document = createVectorDocument(400, 300);
+      const { context } = makeContext(document);
+      pen.onPointerDown!(context, pointerAt(100, 100));
+      pen.onPointerMove!(context, pointerAt(140, 100)); // pulls a handleOut on point 0
+      pen.onGestureEnd!(context, pointerAt(140, 100));
+      expect(firstPath(document).points[0]!.handleOut).toEqual({ x: 40, y: 0 });
+
+      // Ctrl-drag that same handle to a new offset — a plain Node Tool move,
+      // not a new pen point, and mirrored onto handleIn exactly like
+      // vector.nodes would (Alt not held here).
+      pen.onPointerDown!(context, pointerAt(140, 100, { ctrlKey: true }));
+      pen.onPointerMove!(context, pointerAt(100, 60, { ctrlKey: true }));
+      pen.onGestureEnd!(context, pointerAt(100, 60, { ctrlKey: true }));
+
+      const path = firstPath(document);
+      expect(path.points).toHaveLength(1); // still the single in-progress point
+      expect(path.points[0]!.handleOut).toEqual({ x: 0, y: -40 });
+      // `-0`, not `0` — see the earlier Alt-handle test's own comment on
+      // why this is compared by magnitude rather than bit-for-bit sign.
+      expect(path.points[0]!.handleIn!.x).toBeCloseTo(0, 10);
+      expect(path.points[0]!.handleIn!.y).toBe(40);
+      expect(context.state.draft).not.toBeNull(); // drawing gesture still in progress
+
+      // Drawing resumes normally after the Ctrl-edit ends.
+      pen.onPointerDown!(context, pointerAt(200, 100));
+      finishPath(context);
+      expect(firstPath(document).points).toHaveLength(2);
+    });
+
+    it("holding Ctrl over empty canvas falls through to Pen's normal click behaviour instead of silently doing nothing", () => {
+      const document = createVectorDocument(400, 300);
+      const { context } = makeContext(document);
+      pen.onPointerDown!(context, pointerAt(100, 100, { ctrlKey: true }));
+      pen.onGestureEnd!(context, pointerAt(100, 100, { ctrlKey: true }));
+      finishPath(context);
+      expect(document.shapes).toHaveLength(1);
+      expect(firstPath(document).points).toEqual([{ x: 100, y: 100 }]);
+    });
   });
 });
