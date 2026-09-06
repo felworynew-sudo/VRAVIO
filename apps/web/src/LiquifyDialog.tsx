@@ -27,6 +27,9 @@ export function LiquifyDialog({ layer, onApply, onClose, language }: { layer: Ra
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const dragRef = useRef<{ x: number; y: number } | null>(null);
   const frameRef = useRef<number | null>(null);
+  const holdTimerRef = useRef<number | null>(null);
+  const toolRef = useRef(tool);
+  toolRef.current = tool;
   const cursorRef = useRef<HTMLDivElement>(null);
   const proxyPixels = useMemo(() => {
     if (displayWidth === layer.width && displayHeight === layer.height) return layer.pixels;
@@ -87,6 +90,30 @@ export function LiquifyDialog({ layer, onApply, onClose, language }: { layer: Ra
     const rect = event.currentTarget.getBoundingClientRect(), cursor = cursorRef.current;
     if (cursor) cursor.style.transform = `translate(${event.clientX - rect.left - brushPreviewSize / 2}px, ${event.clientY - rect.top - brushPreviewSize / 2}px)`;
   };
+  // Twirl/Pucker/Bloat/Smooth/Reconstruct/Freeze/Thaw have no notion of
+  // "motion" — GIMP's own Warp Transform tool applies these the same way,
+  // via a periodic timer (`gimp_warp_tool_stroke_timer`, capped at 20 fps)
+  // that keeps re-stamping the last cursor position while the button stays
+  // down, not only on pointermove. Without it, holding the brush still on
+  // one spot is a no-op — accumulating twirl/pucker/bloat in place is
+  // impossible, exactly the reported bug. Warp itself is excluded: its
+  // effect is a motion delta, and a zero delta is genuinely a no-op, not a
+  // missing feature.
+  const startHoldTimer = () => {
+    if (holdTimerRef.current !== null) return;
+    holdTimerRef.current = window.setInterval(() => {
+      const point = dragRef.current;
+      if (!point || toolRef.current === "warp") return;
+      applyStroke(point.x, point.y, null);
+      scheduleRender();
+    }, 50);
+  };
+  const stopHoldTimer = () => {
+    if (holdTimerRef.current === null) return;
+    window.clearInterval(holdTimerRef.current);
+    holdTimerRef.current = null;
+  };
+  useEffect(() => stopHoldTimer, []);
   const onPointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
     const point = toLayerCoords(event);
@@ -94,6 +121,7 @@ export function LiquifyDialog({ layer, onApply, onClose, language }: { layer: Ra
     dragRef.current = point;
     moveCursor(event);
     scheduleRender();
+    startHoldTimer();
   };
   const onPointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
     moveCursor(event);
@@ -105,7 +133,7 @@ export function LiquifyDialog({ layer, onApply, onClose, language }: { layer: Ra
     dragRef.current = point;
     scheduleRender();
   };
-  const onPointerUp = (event: React.PointerEvent<HTMLCanvasElement>) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); dragRef.current = null; };
+  const onPointerUp = (event: React.PointerEvent<HTMLCanvasElement>) => { if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId); dragRef.current = null; stopHoldTimer(); };
 
   const restoreAll = () => { stateRef.current = createLiquifyState(displayWidth, displayHeight); setVersion((value) => value + 1); };
   const apply = () => {

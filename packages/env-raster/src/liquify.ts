@@ -68,8 +68,20 @@ export function liquifyTwirl(state: LiquifyState, x: number, y: number, radius: 
 export function liquifyPuckerBloat(state: LiquifyState, x: number, y: number, radius: number, strength: number, sign: 1 | -1, density = 0.5): void {
   forEachBrushNode(state, x, y, radius, (index, weight, ox, oy) => {
     const pull = weight * strength * 0.12 * sign;
-    state.dx[index]! += ox * pull;
-    state.dy[index]! += oy * pull;
+    const nextX = state.dx[index]! + ox * pull, nextY = state.dy[index]! + oy * pull;
+    // Held in place (now possible since LiquifyDialog re-applies every stroke
+    // on a timer, not only on pointer motion — see its holdTimerRef), bloat
+    // keeps adding to the same node every tick with nothing to stop it: past
+    // a certain magnitude the inverse-sampled source point crosses the brush
+    // centre or runs off the layer edge, and the fold reads on screen as a
+    // punched-through hole rather than a smooth bulge. Clamping the node's
+    // total displacement to the brush radius keeps the source sample inside
+    // the same local neighbourhood the brush is deforming, however long the
+    // tool is held.
+    const length = Math.hypot(nextX, nextY);
+    const scale = length > radius ? radius / length : 1;
+    state.dx[index] = nextX * scale;
+    state.dy[index] = nextY * scale;
   }, density);
 }
 
