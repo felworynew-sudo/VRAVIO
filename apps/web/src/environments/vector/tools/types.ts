@@ -133,6 +133,22 @@ export interface VectorToolDefinition<TState = unknown> {
   onDeactivate?(context: ToolContext<TState>): void;
 
   /**
+   * A CSS `cursor` value for the current hover position, or `undefined` to
+   * fall back to the tool's static default (`.vector-stage svg{cursor:...}`
+   * in `styles.css`). Added for `vector.pen` — docs/vector-plan.md section 9,
+   * second priority ("Состояния курсора... чтобы результат клика был
+   * предсказуем до самого клика"): whether a click will place a corner
+   * point, delete an existing one, close the path, resume an open one, or
+   * add a node on a segment, are five genuinely different outcomes at the
+   * same tool, and Pen picking the wrong one silently (no visual hint
+   * beforehand) is exactly what this exists to prevent. Optional and on the
+   * shared tool contract, not a `vector.pen`-specific host hook, since any
+   * future tool with the same "several different outcomes for the same
+   * click" shape can reuse it.
+   */
+  cursorFor?(context: ToolContext<TState>, pointer: ToolPointer): string | undefined;
+
+  /**
    * Anything the tool draws over the canvas, inside the same `<svg>` the
    * shapes render into (not a separate overlay layer — a vector canvas has no
    * pixel/vector split to keep apart the way raster's canvas-plus-HTML-overlay

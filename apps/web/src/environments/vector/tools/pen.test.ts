@@ -346,4 +346,58 @@ describe("vector.pen — gestures added for docs/vector-plan.md section 9", () =
       expect(firstPath(document).points).toEqual([{ x: 100, y: 100 }]);
     });
   });
+
+  describe("cursorFor — hover preview of which of the five outcomes a click will produce", () => {
+    it("hints a plain new point (no override) over empty canvas with no draft", () => {
+      const document = createVectorDocument(400, 300);
+      const { context } = makeContext(document);
+      expect(pen.cursorFor!(context, pointerAt(200, 200))).toBeUndefined();
+    });
+
+    it("hints closing over the draft's own first point", () => {
+      const document = createVectorDocument(400, 300);
+      const { context } = makeContext(document);
+      pen.onPointerDown!(context, pointerAt(100, 100));
+      pen.onGestureEnd!(context, pointerAt(100, 100));
+      pen.onPointerDown!(context, pointerAt(160, 100));
+      pen.onGestureEnd!(context, pointerAt(160, 100));
+      expect(pen.cursorFor!(context, pointerAt(101, 101))).toBe("alias");
+      // Away from the first point, mid-draft, is a plain next point.
+      expect(pen.cursorFor!(context, pointerAt(300, 200))).toBeUndefined();
+    });
+
+    it("hints delete over an existing point, but not over an open path's continuable last point", () => {
+      const document = createVectorDocument(400, 300);
+      const { context } = makeContext(document);
+      pen.onPointerDown!(context, pointerAt(100, 100));
+      pen.onGestureEnd!(context, pointerAt(100, 100));
+      pen.onPointerDown!(context, pointerAt(160, 100));
+      finishPath(context);
+      expect(pen.cursorFor!(context, pointerAt(101, 101))).toBe("not-allowed");
+      expect(pen.cursorFor!(context, pointerAt(161, 101))).toBe("grab"); // the continuable end
+    });
+
+    it("hints add-node (copy) over a segment, once no more specific hit (delete/continue) applies", () => {
+      const document = createVectorDocument(400, 300);
+      const { context } = makeContext(document);
+      pen.onPointerDown!(context, pointerAt(100, 100));
+      pen.onGestureEnd!(context, pointerAt(100, 100));
+      pen.onPointerDown!(context, pointerAt(100, 200));
+      finishPath(context);
+      expect(pen.cursorFor!(context, pointerAt(100, 150))).toBe("copy");
+    });
+
+    it("hints grab over a node when Ctrl is held", () => {
+      const document = createVectorDocument(400, 300);
+      const { context } = makeContext(document);
+      pen.onPointerDown!(context, pointerAt(100, 100));
+      pen.onGestureEnd!(context, pointerAt(100, 100));
+      pen.onPointerDown!(context, pointerAt(200, 100));
+      finishPath(context);
+      document.activeShapeId = firstPath(document).id;
+      expect(pen.cursorFor!(context, pointerAt(101, 101, { ctrlKey: true }))).toBe("grab");
+      // Without Ctrl, the very same position hints delete instead.
+      expect(pen.cursorFor!(context, pointerAt(101, 101))).toBe("not-allowed");
+    });
+  });
 });

@@ -358,6 +358,55 @@ const pen: VectorToolDefinition<PenState> = {
     finishPath(context);
   },
 
+  /**
+   * Five genuinely different outcomes share this one tool's click, and a
+   * hover-only preview of which one is about to happen is exactly what
+   * docs/vector-plan.md section 9's "Состояния курсора" asks for. Mirrors
+   * `onPointerDown`'s own priority order (Ctrl node-edit → close → delete →
+   * continue → add-on-segment → new point) without mutating anything — a
+   * read-only, best-effort echo of that logic, not a shared implementation
+   * of it: the two must be kept in step by hand if one changes, an accepted
+   * cost here because this function can be *wrong* far more cheaply than
+   * `onPointerDown` can (worst case, a stale cursor hint for one frame; the
+   * click itself always re-derives the real answer from scratch).
+   *
+   * Cursor choices are approximations — no CSS native cursor keyword means
+   * "will close this path" or "will delete this point" — but a wrong-shaped
+   * hint from the browser's own cursor set beats no hint at all: `grab` for
+   * anything node-tool-like (Ctrl-editing, resuming an open contour),
+   * `alias` for closing (most editors already use it for "attach/loop"),
+   * `not-allowed` for delete, `copy` for adding a node, `undefined` (falls
+   * back to the static `crosshair`) for placing an ordinary new point.
+   */
+  cursorFor(context, pointer) {
+    const tolerance = firstPointToleranceScreenPx / context.viewport.zoom;
+    if (pointer.ctrlKey || pointer.metaKey) {
+      const draftShape = context.state.draft ? context.document.shapes.find((item) => item.id === context.state.draft!.shapeId) : null;
+      const candidate = draftShape ?? context.activeShape;
+      if (candidate && hitTestNode(candidate, pointer.point, tolerance)) return "grab";
+    }
+    const draft = context.state.draft;
+    if (draft) {
+      const shape = context.document.shapes.find((item) => item.id === draft.shapeId);
+      const firstPoint = shape?.kind === "path" ? shape.points[0] : undefined;
+      if (firstPoint && shape?.kind === "path" && shape.points.length > 1 && Math.hypot(pointer.point.x - firstPoint.x, pointer.point.y - firstPoint.y) <= tolerance) return "alias";
+      return undefined;
+    }
+    for (const item of context.document.shapes) {
+      if (item.kind !== "path") continue;
+      const isContinuableEndpoint = (index: number) => !item.closed && index === item.points.length - 1 && item.points.length >= 2;
+      if (item.points.some((point, index) => !isContinuableEndpoint(index) && Math.hypot(pointer.point.x - point.x, pointer.point.y - point.y) <= tolerance)) return "not-allowed";
+    }
+    const continuation = context.document.shapes.some((item) => item.kind === "path" && !item.closed && item.points.length >= 2 && Math.hypot(pointer.point.x - item.points[item.points.length - 1]!.x, pointer.point.y - item.points[item.points.length - 1]!.y) <= tolerance);
+    if (continuation) return "grab";
+    for (const item of context.document.shapes) {
+      if (item.kind !== "path") continue;
+      const closest = closestPointOnPath(item.points, item.closed, pointer.point.x, pointer.point.y);
+      if (closest && closest.distance <= tolerance) return "copy";
+    }
+    return undefined;
+  },
+
   Overlay({ state, context, document }) {
     // Escape cancels the whole in-progress path — the pre-port code's own
     // global keydown handler did this by reading `pathDraft.current`

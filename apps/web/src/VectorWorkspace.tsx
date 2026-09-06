@@ -315,6 +315,13 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   const toolStatesRef = useRef(toolStates);
   toolStatesRef.current = toolStates;
 
+  // A tool-provided cursor hint (`VectorToolDefinition.cursorFor`) — added
+  // for vector.pen's several-different-outcomes-per-click gestures
+  // (docs/vector-plan.md section 9). `undefined` means "no hint right now",
+  // which the `<svg>`'s own inline `style` below simply omits, falling back
+  // to `styles.css`'s static `.vector-stage svg{cursor:crosshair}` rule.
+  const [dynamicCursor, setDynamicCursor] = useState<string | undefined>(undefined);
+
   // Stage 12's cheaper half (docs/vector-plan.md): the workspace's own pixel
   // size, tracked unconditionally (not just under "fit" mode, the way the
   // effect below only cares about it) so the culling below can convert it
@@ -400,6 +407,11 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
     if (previous === activeToolId || !previous) return;
     const leaving = vectorToolById.get(previous);
     leaving?.onDeactivate?.(toolContextFor(previous));
+    // A cursor hint from the tool being left must not linger on the one
+    // just switched to — it will set its own on the next pointer move, but
+    // there is a gap (right after switching, before the pointer moves
+    // again) that would otherwise still show the old tool's hint.
+    setDynamicCursor(undefined);
   });
 
   // Delete/Backspace deletes the shape selection — chrome that works under
@@ -439,7 +451,9 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
     if (!catalogueTool) return;
     const workspace = workspaceRef.current; if (!workspace) return;
     const point = toDocumentPoint(event, workspace, viewport, canvasBounds);
-    catalogueTool.onPointerMove?.(toolContextFor(catalogueTool.id), toolPointerFrom(event, point));
+    const pointer = toolPointerFrom(event, point);
+    catalogueTool.onPointerMove?.(toolContextFor(catalogueTool.id), pointer);
+    setDynamicCursor(catalogueTool.cursorFor?.(toolContextFor(catalogueTool.id), pointer));
   };
 
   const onPointerUp = (event: ReactPointerEvent<SVGSVGElement>) => {
@@ -558,7 +572,7 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
 
   return <div ref={workspaceRef} className="vector-workspace" data-active-tool={activeToolId} onWheel={handleWheel} onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
     <div className="vector-stage" style={stageStyle}>
-      <svg width={canvasBounds.width} height={canvasBounds.height} viewBox={`${canvasBounds.x} ${canvasBounds.y} ${canvasBounds.width} ${canvasBounds.height}`} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={onPointerUp} onContextMenu={onCanvasContextMenu}>
+      <svg width={canvasBounds.width} height={canvasBounds.height} viewBox={`${canvasBounds.x} ${canvasBounds.y} ${canvasBounds.width} ${canvasBounds.height}`} style={dynamicCursor ? { cursor: dynamicCursor } : undefined} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={(event) => { onPointerUp(event); setDynamicCursor(undefined); }} onContextMenu={onCanvasContextMenu}>
         {pages.map((page) => <g key={page.id}>
           <rect className="vector-artboard-page" x={page.x} y={page.y} width={page.width} height={page.height}/>
           <rect className={page.id === state.activeArtboardId ? "vector-artboard-outline active" : "vector-artboard-outline"} x={page.x} y={page.y} width={page.width} height={page.height} strokeWidth={(page.id === state.activeArtboardId ? 1.5 : 1) / viewport.zoom}/>
