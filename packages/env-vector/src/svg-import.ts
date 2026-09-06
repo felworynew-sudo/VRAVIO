@@ -1,16 +1,17 @@
 import { srgb, type Color } from "@vravio/kernel";
 import { colorPaint, emptyVectorStyle, type FillLayer, type Gradient, type Paint, type StrokeCap, type StrokeJoin, type StrokeLayer } from "./appearance";
 import { createShape } from "./document";
-import type { VectorShape } from "./types";
+import { createVectorGroup } from "./group-ops";
+import { makeVectorOrderKey, type VectorShape } from "./types";
 
 /**
  * Stage 10 of docs/vector-plan.md: turning `crates/vector-svg`'s
  * `import_svg` JSON (parsed by `usvg`, see that crate's own doc comment for
- * its honest scope cuts — flattened groups, no patterns, no text) into
- * actual `VectorShape`s. This file has no WASM dependency itself — the
- * lazy loading is `apps/web/src/vector-svg-wasm.ts`'s job, the same split
- * Stage 7/8/9 already established (this package has no bundler of its own
- * to fetch a `.wasm` file with).
+ * its honest scope cuts — no patterns, no text) into actual `VectorShape`s.
+ * This file has no WASM dependency itself — the lazy loading is
+ * `apps/web/src/vector-svg-wasm.ts`'s job, the same split Stage 7/8/9
+ * already established (this package has no bundler of its own to fetch a
+ * `.wasm` file with).
  */
 
 interface ImportedStop { offset: number; color: [number, number, number]; opacity: number }
@@ -20,13 +21,23 @@ type ImportedPaint =
   | { kind: "radial"; center: { x: number; y: number }; radius: number; stops: ImportedStop[] };
 interface ImportedPaintStyle { paint: ImportedPaint; opacity: number }
 interface ImportedStrokeStyle { paint: ImportedPaint; opacity: number; width: number; dash: number[]; cap: string; join: string }
-interface ImportedShape {
-  kind: "path";
-  d: string;
+/** One entry of `crates/vector-svg`'s single, order-preserving `nodes`
+ * stream — `kind: "group"` carries `id` (for a later node's `parent_id` to
+ * reference) and nothing else; `kind: "path"` carries everything else and
+ * leaves `id` `null`. See that crate's own `ImportedNode` doc comment for
+ * why paths and groups share one ordered list rather than two separate
+ * ones — an SVG's own paint order can interleave a path and a sibling
+ * group at the same level, and two separately-counted lists have no way to
+ * recover which came first. */
+interface ImportedNode {
+  kind: "path" | "group";
+  id: number | null;
+  parent_id: number | null;
   transform: [number, number, number, number, number, number];
+  d: string | null;
   fill: ImportedPaintStyle | null;
   stroke: ImportedStrokeStyle | null;
-  opacity: number;
+  opacity: number | null;
 }
 
 function rgbColor([r, g, b]: [number, number, number], alpha: number): Color {
@@ -105,25 +116,63 @@ export function subpathsToPoints(d: string): { points: { x: number; y: number; h
   });
 }
 
-/** Parses `import_svg`'s JSON output into `VectorShape`s, ready to push
- * onto a document's `shapes` array. Every imported shape lands at the
- * document's top level (`parentId: null`) — see `crates/vector-svg`'s own
- * doc comment on why group nesting doesn't survive this pass. */
+/**
+ * Parses `import_svg`'s JSON output into `VectorShape`s, ready to push
+ * directly onto a fresh document's `shapes` array (in the returned order —
+ * not through `addShape`, which forces `parentId: null` unconditionally
+ * and would flatten the very hierarchy this function reconstructs).
+ *
+ * Group nesting is preserved (added 6 September 2026 — a real `usvg::Group`
+ * becomes a real `VectorShape` group, `parentId`/`orderKey` set correctly
+ * on every returned shape) rather than the earlier pass's flattened
+ * top-level list — see `crates/vector-svg`'s own doc comment for exactly
+ * what still isn't carried over (a group's own opacity/clip/mask) and why
+ * paths and groups arrive as one interleaved stream, not two separate
+ * lists, to keep the source's own paint order.
+ *
+ * `orderKey`s are computed fresh here, one running counter per parent —
+ * safe only because this always populates a *brand-new* document with no
+ * existing siblings to collide with (`apps/web/src/App.tsx`'s own
+ * `importSvgAsVector`, the only caller, opens a fresh document first).
+ */
 export function importedShapesFromJson(json: string): VectorShape[] {
-  const imported = JSON.parse(json) as ImportedShape[];
+  const imported = JSON.parse(json) as { nodes: ImportedNode[] };
+  const groupShapeIdByImportedId = new Map<number, string>();
+  const siblingIndexByParent = new Map<string | null, number>();
+  const nextOrderKey = (parentId: string | null): string => {
+    const index = siblingIndexByParent.get(parentId) ?? 0;
+    siblingIndexByParent.set(parentId, index + 1);
+    return makeVectorOrderKey(index);
+  };
+
   const shapes: VectorShape[] = [];
-  for (const item of imported) {
-    const subpaths = subpathsToPoints(item.d);
+  for (const node of imported.nodes) {
+    const parentId = node.parent_id !== null ? (groupShapeIdByImportedId.get(node.parent_id) ?? null) : null;
+    const transform = { a: node.transform[0], b: node.transform[1], c: node.transform[2], d: node.transform[3], e: node.transform[4], f: node.transform[5] };
+
+    if (node.kind === "group") {
+      const group = createVectorGroup();
+      group.parentId = parentId;
+      group.orderKey = nextOrderKey(parentId);
+      group.transform = transform;
+      groupShapeIdByImportedId.set(node.id!, group.id);
+      shapes.push(group);
+      continue;
+    }
+
+    const subpaths = subpathsToPoints(node.d ?? "");
     for (const { points, closed } of subpaths) {
       if (points.length < 2) continue;
-      const style = { ...emptyVectorStyle(), opacity: item.opacity };
-      if (item.fill) style.fills = [toFillLayer(item.fill)];
-      if (item.stroke) style.strokes = [toStrokeLayer(item.stroke)];
+      const style = { ...emptyVectorStyle(), opacity: node.opacity ?? 1 };
+      if (node.fill) style.fills = [toFillLayer(node.fill)];
+      if (node.stroke) style.strokes = [toStrokeLayer(node.stroke)];
       const shape = createShape("path", points[0]!.x, points[0]!.y, style);
       if (shape.kind !== "path") continue;
       shape.points = points;
       shape.closed = closed;
-      shape.transform = { a: item.transform[0], b: item.transform[1], c: item.transform[2], d: item.transform[3], e: item.transform[4], f: item.transform[5] };
+      shape.transform = transform;
+      shape.parentId = parentId;
+      shape.orderKey = nextOrderKey(parentId);
       shapes.push(shape);
     }
   }

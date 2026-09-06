@@ -38,7 +38,7 @@ import { windowsFor } from "./windows/registry";
 import { windowTitle } from "./windows/types";
 import { PANEL_CHANGED_EVENT, readVisiblePanelIds, requestPanelVisibility } from "./windows/runtime";
 import { applyPathfinderOp, convertActiveTextToOutlines, createSymbolFromActiveSelection, detachActiveVectorInstance, duplicateActiveVectorShape, deleteActiveVectorShapes, groupActiveVectorShapes, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
-import { addShape, importedShapesFromJson, isVectorDocumentState, type VectorDocumentState } from "@vravio/env-vector";
+import { importedShapesFromJson, isVectorDocumentState, type VectorDocumentState } from "@vravio/env-vector";
 import { exportVectorDocumentToSvg } from "./vector-svg-export";
 import { importSvgToJson } from "./vector-svg-wasm";
 import { luminanceHistogram } from "./raster-adjustments/histogram";
@@ -129,8 +129,12 @@ export function App() {
     store.openDocument("vector", { name: file.name, width, height, resolution: 72, resolutionUnit: "ppi", backgroundColor: null, pixelAspectRatio: 1 });
     const id = useShellStore.getState().activeDocumentId; if (!id) return;
     kernel.documents.update<VectorDocumentState>(id, (state) => {
-      for (const shape of shapes) addShape(state, shape);
-      state.selection = shapes.map((shape) => shape.id);
+      // Not `addShape` per shape: it forces `parentId: null` unconditionally,
+      // which would flatten the very group hierarchy `importedShapesFromJson`
+      // just reconstructed. Its own `parentId`/`orderKey` on every returned
+      // shape are already correct for a brand-new, empty document.
+      state.shapes.push(...shapes);
+      state.selection = shapes.filter((shape) => shape.parentId === null).map((shape) => shape.id);
     });
   };
 

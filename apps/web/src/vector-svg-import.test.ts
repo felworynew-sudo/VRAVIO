@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { importedShapesFromJson } from "@vravio/env-vector";
+import { importedShapesFromJson, worldTransform } from "@vravio/env-vector";
 import { importSvgToJson } from "./vector-svg-wasm";
 
 /**
@@ -60,17 +60,38 @@ describe("SVG import — real usvg", () => {
     expect(shapes.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("a group's transform is baked into each child's own absolute transform (groups are flattened — a documented gap)", async () => {
+  it("a group's own nesting survives the round trip — a real VectorShape group, the rect parented under it, not flattened", async () => {
     const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
       <g transform="translate(50,0)"><rect x="0" y="0" width="10" height="10" fill="#000000"/></g>
     </svg>`;
     const json = await importSvgToJson(svg);
     const shapes = importedShapesFromJson(json);
-    expect(shapes).toHaveLength(1);
-    // The rect's own points are still local (0,0)-(10,10); the group's translate(50,0) has to
-    // show up in the shape's transform.e, not in the point coordinates, for the picture to still
-    // land in the right place after group nesting was flattened away.
-    expect(shapes[0]!.transform.e).toBeCloseTo(50, 0);
+    expect(shapes).toHaveLength(2);
+    const group = shapes.find((shape) => shape.kind === "group")!;
+    const rect = shapes.find((shape) => shape.kind === "path")!;
+    expect(group).toBeDefined();
+    expect(rect.parentId).toBe(group.id);
+    // The group carries the translate(50,0) on its own transform, not baked
+    // into the child's — composing them back up via worldTransform (the
+    // same function VectorWorkspace.tsx's own renderer already uses)
+    // reproduces the same absolute (50, 0) origin the flattened pass used
+    // to bake into the child directly.
+    expect(group.transform.e).toBeCloseTo(50, 0);
+    const absolute = worldTransform(rect, shapes);
+    expect(absolute.e).toBeCloseTo(50, 0);
+  });
+
+  it("a path sitting alongside a sibling group keeps its true paint-order position, not sorted after every group", async () => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">
+      <rect x="0" y="0" width="5" height="5" fill="#111111"/>
+      <g transform="translate(20,0)"><rect x="0" y="0" width="5" height="5" fill="#222222"/></g>
+      <rect x="40" y="0" width="5" height="5" fill="#333333"/>
+    </svg>`;
+    const json = await importSvgToJson(svg);
+    const shapes = importedShapesFromJson(json);
+    const topLevel = shapes.filter((shape) => shape.parentId === null);
+    expect(topLevel.map((shape) => shape.kind)).toEqual(["path", "group", "path"]);
+    expect(topLevel.map((shape) => shape.orderKey).every((key, index, all) => index === 0 || key > all[index - 1]!)).toBe(true);
   });
 
   it("an invalid SVG string rejects rather than silently returning nothing", async () => {

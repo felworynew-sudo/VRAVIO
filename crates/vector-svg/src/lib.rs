@@ -14,13 +14,19 @@ use wasm_bindgen::prelude::*;
 /// **Honest, documented scope cuts for this pass**, matching every other
 /// stage's own practice of naming a gap rather than silently not handling
 /// it:
-/// - Group *nesting* is flattened. Every path/image comes out top-level
-///   with its correct **absolute** transform (`Node::abs_transform`) baked
-///   in, so the picture still looks right — but the original `<g>`
-///   hierarchy (and therefore the ability to select/move a former group as
-///   one unit) does not survive the round trip. Reconstructing nested
-///   `VectorShape` groups with each one's own *relative* transform is real,
-///   separate work.
+/// - Group *nesting* is preserved (added 6 September 2026 — was flattened
+///   before this). Every `usvg::Group` becomes its own `ImportedGroup`
+///   (an incrementing id, its parent's id or `None` at the root, and its
+///   own *local* transform via `Node::transform()` — not the fully-composed
+///   `abs_transform()` the old flattened pass used, since a real
+///   `VectorShape` group's transform is meant to compose with its
+///   ancestors' via `worldTransform`, not already have them baked in), and
+///   every path/image carries the id of the group it sits directly inside
+///   (`None` at the document's own top level). What is still not
+///   preserved: a group's own paint attributes (`usvg` can put opacity,
+///   a clip-path or a mask directly on a `<g>`) — those were never read
+///   even in the flattened pass, so this is not a new gap, just an old one
+///   that group nesting alone does not close.
 /// - `Paint::Pattern` (SVG `<pattern>` fills) falls back to a flat mid-gray
 ///   rather than being rendered — patterns are rare in hand-authored SVGs
 ///   and a genuine tiled-image paint is its own feature, not a a few-line
@@ -30,14 +36,45 @@ use wasm_bindgen::prelude::*;
 ///   loaded into `fontdb`, which is Stage 11's job (Parley/HarfRust) — an
 ///   import path that half-shapes text without that infrastructure would
 ///   be worse than one that honestly imports nothing for it yet.
+/// One imported node, `kind: "path"` or `kind: "group"` — a **single**
+/// ordered stream rather than two separate lists (paths in one, groups in
+/// another) on purpose: an SVG's own paint order can interleave a path and
+/// a sibling group at the same level (`<path/><g>...</g><path/>`), and two
+/// separate lists — each only counting its own kind — has no way to
+/// recover which came first. This list is emitted in exactly the depth-
+/// first, pre-order visitation `walk`/`walk_group` already do (a group
+/// entry, then everything nested inside it, before its next sibling), the
+/// same order a caller pushing each entry via `appendShapeAt` in sequence
+/// reproduces correctly — see `svg-import.ts`'s own `importedShapesFromJson`.
 #[derive(Serialize)]
-struct ImportedShape {
+struct ImportedNode {
     kind: &'static str,
-    d: String,
+    /// Only present on `kind: "group"` — the id a later node's `parent_id`
+    /// references to nest under this one.
+    id: Option<u32>,
+    /// Which group (by its own `id` above) this node sits directly inside
+    /// — `None` at the SVG's own top level, the same `parentId: null`
+    /// convention `VectorShape` already uses.
+    parent_id: Option<u32>,
+    /// For a group, this is `Node::transform()` — *local*, relative to
+    /// `parent_id`, composing back up through it via `worldTransform` the
+    /// same way every other shape's own transform already does. For a
+    /// path, `usvg` only ever hands back an *absolute* one (see
+    /// `usvg::Path::abs_transform`'s own doc comment: "this is not the
+    /// relative transform present in SVG"), so `walk` computes this path's
+    /// transform relative to its own immediate parent group by hand
+    /// (`parent_abs⁻¹ · absolute`) before this struct is ever built.
     transform: [f32; 6],
+    /// `None` for a group — nothing below is meaningful for one.
+    d: Option<String>,
     fill: Option<ImportedPaintStyle>,
     stroke: Option<ImportedStrokeStyle>,
-    opacity: f32,
+    opacity: Option<f32>,
+}
+
+#[derive(Serialize)]
+struct ImportResult {
+    nodes: Vec<ImportedNode>,
 }
 
 #[derive(Serialize)]
@@ -154,9 +191,9 @@ fn transform_to_array(t: usvg::Transform) -> [f32; 6] {
     [t.sx, t.ky, t.kx, t.sy, t.tx, t.ty]
 }
 
-fn walk(node: &Node, out: &mut Vec<ImportedShape>) {
+fn walk(node: &Node, parent_id: Option<u32>, parent_abs_transform: usvg::Transform, nodes: &mut Vec<ImportedNode>, next_id: &mut u32) {
     match node {
-        Node::Group(group) => walk_group(group, out),
+        Node::Group(group) => walk_group(group, parent_id, nodes, next_id),
         Node::Path(path) => {
             let bbox = path.data().bounds();
             let bbox_tuple = (bbox.x(), bbox.y(), bbox.width(), bbox.height());
@@ -169,26 +206,60 @@ fn walk(node: &Node, out: &mut Vec<ImportedShape>) {
                 cap: cap_name(stroke.linecap()),
                 join: join_name(stroke.linejoin()),
             });
-            out.push(ImportedShape { kind: "path", d: path_data(path.data()), transform: transform_to_array(path.abs_transform()), fill, stroke, opacity: 1.0 });
+            // `usvg::Path` only ever hands back an *absolute* transform
+            // (its own doc comment on `abs_transform`: "this is not the
+            // relative transform present in SVG — the SVG one would be set
+            // only on groups") — unlike `Group`, which does carry a real
+            // local one. So a path's transform *relative to its own
+            // immediate parent group* has to be computed here:
+            // `relative = parent_abs⁻¹ · absolute`, undoing exactly the
+            // ancestor transforms `parent_id`'s own chain already accounts
+            // for once `VectorShape.transform` is composed back up through
+            // `worldTransform` on the TypeScript side.
+            let relative = parent_abs_transform.invert().map(|parent_inv| path.abs_transform().post_concat(parent_inv)).unwrap_or_else(|| path.abs_transform());
+            nodes.push(ImportedNode { kind: "path", id: None, parent_id, transform: transform_to_array(relative), d: Some(path_data(path.data())), fill, stroke, opacity: Some(1.0) });
         }
-        // Images and text are this pass's other documented gaps alongside group nesting and
-        // pattern paints — see this module's own top-level doc comment.
+        // Images and text are this pass's other documented gaps alongside pattern paints —
+        // see this module's own top-level doc comment.
         Node::Image(_) | Node::Text(_) => {}
     }
 }
 
-fn walk_group(group: &Group, out: &mut Vec<ImportedShape>) {
+/// Pushes `group` itself as a new `kind: "group"` node (its own local
+/// transform, parented to whichever group this call is already inside),
+/// then walks its children under that new id, **in source order** — a
+/// child path or nested group is appended immediately after this group's
+/// own entry and before this group's *next* sibling, preserving the same
+/// single interleaved paint-order stream `ImportedNode`'s own doc comment
+/// explains. The root call (`import_svg`, `parent_id: None`) treats the
+/// SVG's own root `<svg>` group as the document's top level rather than a
+/// real group with nothing meaningful of its own to preserve
+/// (`usvg::Tree::root()` always returns one; giving it a real node would
+/// wrap every import in an extra, pointless outer group nobody asked for).
+fn walk_group(group: &Group, parent_id: Option<u32>, nodes: &mut Vec<ImportedNode>, next_id: &mut u32) {
+    let id = *next_id;
+    *next_id += 1;
+    nodes.push(ImportedNode { kind: "group", id: Some(id), parent_id, transform: transform_to_array(group.transform()), d: None, fill: None, stroke: None, opacity: None });
+    // `abs_transform()` is "cheap since already resolved" (the type's own
+    // doc comment) — reused here as the new parent context rather than
+    // recomputed by hand-composing every ancestor's local transform again.
     for child in group.children() {
-        walk(child, out);
+        walk(child, Some(id), group.abs_transform(), nodes, next_id);
     }
 }
 
 #[wasm_bindgen]
 pub fn import_svg(svg_text: &str) -> Result<String, JsError> {
     let tree = Tree::from_str(svg_text, &Options::default()).map_err(|error| JsError::new(&format!("vector-svg: failed to parse SVG: {error}")))?;
-    let mut shapes = Vec::new();
-    walk_group(tree.root(), &mut shapes);
-    serde_json::to_string(&shapes).map_err(|error| JsError::new(&format!("vector-svg: failed to serialize import result: {error}")))
+    let mut nodes = Vec::new();
+    let mut next_id = 0u32;
+    // The SVG's own root `<svg>` element is `tree.root()` — its children
+    // land at the document's own top level (`parent_id: None`), not nested
+    // one extra level inside a group nobody asked for.
+    for child in tree.root().children() {
+        walk(child, None, tree.root().abs_transform(), &mut nodes, &mut next_id);
+    }
+    serde_json::to_string(&ImportResult { nodes }).map_err(|error| JsError::new(&format!("vector-svg: failed to serialize import result: {error}")))
 }
 
 /// Stage 10's cross-check: rasterize an SVG string through `resvg` (a
