@@ -46,7 +46,11 @@ function makeContext(document: VectorDocumentState): { context: ToolContext<PenS
     mutate: (fn) => fn(document),
     snapshot: () => ({ shapes: structuredClone(document.shapes), activeShapeId: document.activeShapeId, selection: document.selection, artboards: structuredClone(document.artboards), activeArtboardId: document.activeArtboardId }),
     commitDrag: () => {},
-    changeDocument: async () => {},
+    // Applies the mutator synchronously (like the real implementation's
+    // own before-any-`await` ordering — see `vector-commands.ts`'s
+    // `changeDocument`) so a test calling this via `void context.changeDocument(...)`
+    // without awaiting still sees the effect on its very next assertion.
+    changeDocument: async (_label, mutateFn) => { mutateFn(document); },
   };
   return { context };
 }
@@ -178,7 +182,7 @@ describe("vector.pen — gestures added for docs/vector-plan.md section 9", () =
     expect(firstPath(document).points).toHaveLength(3);
   });
 
-  it("does not continue a closed path, or a path with only one point", () => {
+  it("does not continue a closed path — clicking one of its points deletes that point instead (see the dedicated delete-node tests below)", () => {
     const document = createVectorDocument(400, 300);
     const { context } = makeContext(document);
     pen.onPointerDown!(context, pointerAt(100, 100));
@@ -190,12 +194,85 @@ describe("vector.pen — gestures added for docs/vector-plan.md section 9", () =
     closePath(context);
     expect(document.shapes).toHaveLength(1);
 
-    // Click near the now-closed path's last point — must start a brand
-    // new path, not append to a closed one.
+    // Click near the now-closed path's last point: not "continue" (closed
+    // paths have no continuable endpoint) and not "start a brand new path"
+    // either — a closed path's points are all eligible for the delete-node
+    // gesture (see below), which takes priority here.
     pen.onPointerDown!(context, pointerAt(131, 161));
-    pen.onGestureEnd!(context, pointerAt(131, 161));
+    expect(document.shapes).toHaveLength(1);
+    expect(firstPath(document).points).toHaveLength(2);
+  });
+
+  it("does not continue a path with only one point (nothing meaningfully open to continue) — deletes the stray point instead, same as any other single click on an existing point", () => {
+    const document = createVectorDocument(400, 300);
+    const { context } = makeContext(document);
+    pen.onPointerDown!(context, pointerAt(100, 100));
+    pen.onGestureEnd!(context, pointerAt(100, 100));
     finishPath(context);
-    expect(document.shapes).toHaveLength(2);
+    expect(document.shapes).toHaveLength(1);
+
+    // A lone, already-committed 1-point path is not a continuable open
+    // path (nothing meaningful to extend), and the delete-node gesture
+    // takes over — the only way Pen could otherwise ever clean up a stray
+    // single point.
+    pen.onPointerDown!(context, pointerAt(101, 100));
+    expect(document.shapes).toHaveLength(0);
+  });
+
+  it("clicking an existing interior point of a committed path deletes it, without leaving the Pen tool", () => {
+    const document = createVectorDocument(400, 300);
+    const { context } = makeContext(document);
+    pen.onPointerDown!(context, pointerAt(100, 100));
+    pen.onGestureEnd!(context, pointerAt(100, 100));
+    pen.onPointerDown!(context, pointerAt(160, 100));
+    pen.onGestureEnd!(context, pointerAt(160, 100));
+    pen.onPointerDown!(context, pointerAt(160, 200));
+    pen.onGestureEnd!(context, pointerAt(160, 200));
+    pen.onPointerDown!(context, pointerAt(220, 200));
+    finishPath(context);
+    expect(firstPath(document).points).toHaveLength(4);
+
+    // (160,100) is an interior point — not the first, not the (now
+    // finished) last point of an open path.
+    pen.onPointerDown!(context, pointerAt(161, 101));
+    expect(firstPath(document).points).toHaveLength(3);
+    expect(firstPath(document).points.some((point) => Math.hypot(point.x - 160, point.y - 100) < 5)).toBe(false);
+  });
+
+  it("deleting a point down to 2 removes the whole path instead of leaving a degenerate 1-point shape", () => {
+    const document = createVectorDocument(400, 300);
+    const { context } = makeContext(document);
+    pen.onPointerDown!(context, pointerAt(100, 100));
+    pen.onGestureEnd!(context, pointerAt(100, 100));
+    pen.onPointerDown!(context, pointerAt(160, 100));
+    pen.onGestureEnd!(context, pointerAt(160, 100));
+    finishPath(context);
+    expect(document.shapes).toHaveLength(1);
+
+    // Both points of a 2-point path are "interior" in the sense that
+    // neither is a continuable-open-path endpoint once the path is
+    // finished and a fresh gesture starts (finishPath cleared the draft).
+    // Deleting either one leaves nothing meaningful — the whole shape
+    // goes, not a 1-point remainder.
+    pen.onPointerDown!(context, pointerAt(101, 101));
+    expect(document.shapes).toHaveLength(0);
+  });
+
+  it("clicking on a segment (not an endpoint) inserts a real new anchor there via De Casteljau, keeping a curved segment's exact shape", () => {
+    const document = createVectorDocument(400, 300);
+    const { context } = makeContext(document);
+    pen.onPointerDown!(context, pointerAt(100, 100));
+    pen.onGestureEnd!(context, pointerAt(100, 100));
+    pen.onPointerDown!(context, pointerAt(200, 100));
+    finishPath(context);
+    expect(firstPath(document).points).toHaveLength(2);
+
+    // Click on the midpoint of the straight segment between them.
+    pen.onPointerDown!(context, pointerAt(150, 100));
+    const path = firstPath(document);
+    expect(path.points).toHaveLength(3);
+    expect(path.points[1]!.x).toBeCloseTo(150, 0);
+    expect(path.points[1]!.y).toBeCloseTo(100, 0);
   });
 
   it("finishing the path clears cursor tracking along with the rest of the draft state", () => {

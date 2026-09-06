@@ -19,3 +19,4 @@ export * from "./modifiers/base-path";
 export * from "./modifiers/apply";
 export * from "./modifiers/registry";
 export * from "./svg-import";
+export * from "./path-segment-ops";

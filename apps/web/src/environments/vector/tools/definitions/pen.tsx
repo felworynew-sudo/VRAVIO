@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { addShape, createShape, emptyVectorStyle, resolveSnapForBounds, solidFill, solidStroke, type VectorDocumentState } from "@vravio/env-vector";
+import { addShape, closestPointOnPath, createShape, emptyVectorStyle, insertPointOnPathSegment, resolveSnapForBounds, solidFill, solidStroke, type VectorDocumentState } from "@vravio/env-vector";
 import { cssToColor } from "@vravio/kernel";
 import type { VectorSnapshot } from "../../../../vector-commands";
 import type { ToolContext, ToolPointer, VectorToolDefinition } from "../types";
@@ -180,6 +180,41 @@ const pen: VectorToolDefinition<PenState> = {
     }
     const before = context.snapshot();
 
+    // Clicking an existing point of an already-committed path deletes it,
+    // without leaving the Pen tool — docs/vector-plan.md section 9, second
+    // priority ("удаление — кликом по существующему узлу, без выхода из
+    // инструмента «Перо»"). Checked *before* the continuation case below,
+    // and explicitly excludes the last point of an open path (that click
+    // means "resume drawing here", not "delete this point" — Illustrator
+    // draws the same distinction between an open path's endpoint and any
+    // other anchor). A path with only 2 points left has nothing sensible
+    // left to delete down to (a 1-point "path" is not a shape); deleting
+    // there removes the whole shape instead, the same floor `deleteLastPoint`
+    // already respects for a path still being drawn.
+    const toleranceDocumentUnitsForDelete = firstPointToleranceScreenPx / context.viewport.zoom;
+    for (const item of context.document.shapes) {
+      if (item.kind !== "path") continue;
+      const isContinuableEndpoint = (index: number) => !item.closed && index === item.points.length - 1 && item.points.length >= 2;
+      const hitIndex = item.points.findIndex((point, index) => !isContinuableEndpoint(index) && Math.hypot(pointer.point.x - point.x, pointer.point.y - point.y) <= toleranceDocumentUnitsForDelete);
+      if (hitIndex < 0) continue;
+      if (item.points.length <= 2) {
+        void context.changeDocument("Delete Point (Удалить точку)", (document) => {
+          const index = document.shapes.findIndex((shape) => shape.id === item.id);
+          if (index < 0) return false;
+          document.shapes = document.shapes.filter((shape) => shape.id !== item.id);
+          return true;
+        });
+      } else {
+        void context.changeDocument("Delete Point (Удалить точку)", (document) => {
+          const target = document.shapes.find((shape) => shape.id === item.id);
+          if (target?.kind !== "path") return false;
+          target.points = target.points.filter((_, index) => index !== hitIndex);
+          return true;
+        });
+      }
+      return;
+    }
+
     // Clicking near the open end of an existing path continues it instead
     // of always starting a new one — docs/vector-plan.md section 9, second
     // priority ("продолжение существующего открытого контура кликом по его
@@ -205,6 +240,26 @@ const pen: VectorToolDefinition<PenState> = {
       const lastIndex = continuation.points.length - 1;
       const lastPoint = continuation.points[lastIndex]!;
       context.setState({ draft: { shapeId: continuation.id, before }, handle: { shapeId: continuation.id, pointIndex: lastIndex, anchor: { x: lastPoint.x, y: lastPoint.y } }, cursor: { x: lastPoint.x, y: lastPoint.y } });
+      return;
+    }
+
+    // Clicking on a segment (not one of its endpoints — those are the two
+    // cases above) inserts a real new anchor there, via De Casteljau
+    // subdivision so a curved segment keeps its exact shape either side of
+    // the new point — docs/vector-plan.md section 9, second priority
+    // ("Добавление узла кликом по существующему сегменту"). Geometry lives
+    // in `path-segment-ops.ts`, shared with whatever `vector.nodes` gesture
+    // eventually wants the same insertion, not reimplemented here.
+    for (const item of context.document.shapes) {
+      if (item.kind !== "path") continue;
+      const closest = closestPointOnPath(item.points, item.closed, pointer.point.x, pointer.point.y);
+      if (!closest || closest.distance > toleranceDocumentUnitsForDelete) continue;
+      void context.changeDocument("Add Point (Добавить точку)", (document) => {
+        const target = document.shapes.find((shape) => shape.id === item.id);
+        if (target?.kind !== "path") return false;
+        target.points = insertPointOnPathSegment(target.points, closest.segmentIndex, closest.t);
+        return true;
+      });
       return;
     }
 
