@@ -164,11 +164,11 @@ const nodes: VectorToolDefinition<NodesState> = {
       {active.points.map((point, pointIndex) => {
         const isSelected = state.selectedNode?.shapeId === active.id && state.selectedNode.pointIndex === pointIndex;
         return <g key={pointIndex}>
-          {showHandles && point.handleOut && <line className="vector-node-handle-line" x1={point.x} y1={point.y} x2={point.x + point.handleOut.x} y2={point.y + point.handleOut.y} vectorEffect="non-scaling-stroke"/>}
-          {showHandles && point.handleIn && <line className="vector-node-handle-line" x1={point.x} y1={point.y} x2={point.x + point.handleIn.x} y2={point.y + point.handleIn.y} vectorEffect="non-scaling-stroke"/>}
-          {showHandles && point.handleOut && <circle className="vector-node-handle" cx={point.x + point.handleOut.x} cy={point.y + point.handleOut.y} r={3.5 / zoom} vectorEffect="non-scaling-stroke"/>}
-          {showHandles && point.handleIn && <circle className="vector-node-handle" cx={point.x + point.handleIn.x} cy={point.y + point.handleIn.y} r={3.5 / zoom} vectorEffect="non-scaling-stroke"/>}
-          <rect className={isSelected ? "vector-node-anchor selected" : "vector-node-anchor"} x={point.x - 4 / zoom} y={point.y - 4 / zoom} width={8 / zoom} height={8 / zoom} vectorEffect="non-scaling-stroke"/>
+          {showHandles && point.handleOut && <line className="vector-node-handle-line" x1={point.x} y1={point.y} x2={point.x + point.handleOut.x} y2={point.y + point.handleOut.y} strokeWidth={1 / zoom}/>}
+          {showHandles && point.handleIn && <line className="vector-node-handle-line" x1={point.x} y1={point.y} x2={point.x + point.handleIn.x} y2={point.y + point.handleIn.y} strokeWidth={1 / zoom}/>}
+          {showHandles && point.handleOut && <circle className="vector-node-handle" cx={point.x + point.handleOut.x} cy={point.y + point.handleOut.y} r={3.5 / zoom} strokeWidth={1 / zoom}/>}
+          {showHandles && point.handleIn && <circle className="vector-node-handle" cx={point.x + point.handleIn.x} cy={point.y + point.handleIn.y} r={3.5 / zoom} strokeWidth={1 / zoom}/>}
+          <rect className={isSelected ? "vector-node-anchor selected" : "vector-node-anchor"} x={point.x - 4 / zoom} y={point.y - 4 / zoom} width={8 / zoom} height={8 / zoom} strokeWidth={1 / zoom}/>
         </g>;
       })}
     </>;
