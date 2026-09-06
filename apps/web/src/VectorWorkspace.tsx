@@ -15,6 +15,8 @@ import { vectorTextMeasurer } from "./vector-text-metrics";
 import { useModifierResults } from "./vector-modifiers";
 import { useVectorRulerGuides } from "./vector-ruler-guides";
 import { useCmykSoftproof } from "./vector-softproof";
+import { useVectorCanvasNavigation } from "./vector-navigation";
+import { clampZoom } from "./raster-coordinates";
 
 /**
  * Stage 5 of docs/migration-plan.md: the vector counterpart of
@@ -42,10 +44,6 @@ import { useCmykSoftproof } from "./vector-softproof";
  *   import are canvas chrome independent of the active tool, the same as
  *   pan/zoom/rotate are for raster.
  */
-
-function clampZoom(zoom: number): number {
-  return Math.max(0.01, Math.min(64, zoom));
-}
 
 /**
  * Screen-space pointer coordinates into document space, undoing the
@@ -406,23 +404,18 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   // to `styles.css`'s static `.vector-stage svg{cursor:crosshair}` rule.
   const [dynamicCursor, setDynamicCursor] = useState<string | undefined>(undefined);
 
-  // Stage 12's cheaper half (docs/vector-plan.md): the workspace's own pixel
-  // size, tracked unconditionally (not just under "fit" mode, the way the
-  // effect below only cares about it) so the culling below can convert it
-  // to a document-space visible rect on every pan/zoom/resize.
-  const [workspaceSize, setWorkspaceSize] = useState({ width: 0, height: 0 });
-  useEffect(() => {
-    const workspace = workspaceRef.current;
-    if (!workspace) return;
-    const measure = () => {
-      const rect = workspace.getBoundingClientRect();
-      setWorkspaceSize((current) => (current.width === rect.width && current.height === rect.height ? current : { width: rect.width, height: rect.height }));
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(workspace);
-    return () => observer.disconnect();
-  }, []);
+  // `vector.hand`/`vector.zoom` and their temporary overrides (space bar,
+  // middle mouse, the wheel) — the same `useCanvasNavigation` raster's own
+  // workspace drives, generalized (`canvas-navigation.ts`) so this is not a
+  // second copy of that gesture logic. Its own "fit to window" effect is
+  // disabled for vector (`disableFit: true` inside `useVectorCanvasNavigation`)
+  // because vector fits to the *active artboard*, not a fixed document size —
+  // that stays the dedicated effect below. `workspaceSize` (Stage 12's
+  // viewport-culling half) now comes from here instead of a second
+  // ResizeObserver doing the same measurement.
+  const { workspaceSize, beginNavigation, moveNavigation, endNavigation, handleWheel, navigating, spaceHeld } = useVectorCanvasNavigation({
+    documentId: document.id, workspaceRef, viewport, activeToolId, toolOptions, documentWidth: state.width, documentHeight: state.height,
+  });
 
   useEffect(() => {
     const workspace = workspaceRef.current;
@@ -606,14 +599,6 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
     ? new Set(shapesInRect(spatialIndex, state.shapes, visibleDocumentRect(workspaceSize, viewport, canvasBounds)).map((shape) => shape.id))
     : undefined;
 
-  const handleWheel = (event: React.WheelEvent) => {
-    if (event.ctrlKey || event.metaKey) {
-      event.preventDefault();
-      const zoom = clampZoom(viewport.zoom * Math.exp(-event.deltaY * 0.002));
-      setViewport(document.id, { zoom, mode: "custom" });
-    } else setViewport(document.id, { panX: viewport.panX - event.deltaX, panY: viewport.panY - event.deltaY, mode: "custom" });
-  };
-
   /** Decodes a dropped image file into an asset and places it as a new image shape, at up to
    * the document's own size — the same "picture, not a copy" reference an extracted asset gets,
    * so this placed picture is round-trip-editable in the raster environment from the moment it
@@ -657,7 +642,7 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   const showRulers = useShellStore((shell) => shell.preferences.showRulers);
   const showGuides = useShellStore((shell) => shell.preferences.showGuides);
 
-  return <div ref={workspaceRef} className="vector-workspace" data-active-tool={activeToolId} onWheel={handleWheel} onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
+  return <div ref={workspaceRef} className="vector-workspace" data-active-tool={activeToolId} data-space-held={spaceHeld || undefined} data-navigating={navigating || undefined} onPointerDownCapture={beginNavigation} onPointerMoveCapture={moveNavigation} onPointerUpCapture={endNavigation} onPointerCancelCapture={endNavigation} onWheel={handleWheel} onDragOver={(event) => event.preventDefault()} onDrop={onDrop}>
     <div className="vector-stage" style={stageStyle}>
       <svg width={canvasBounds.width} height={canvasBounds.height} viewBox={`${canvasBounds.x} ${canvasBounds.y} ${canvasBounds.width} ${canvasBounds.height}`} style={dynamicCursor ? { cursor: dynamicCursor } : undefined} onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerUp} onPointerLeave={(event) => { onPointerUp(event); setDynamicCursor(undefined); }} onContextMenu={onCanvasContextMenu}>
         {pages.map((page) => <g key={page.id}>

@@ -105,11 +105,13 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "tool.raster.z|Z|raster|Tools",
   "tool.vector.a|A|vector|Tools",
   "tool.vector.b|B|vector|Tools", // stage 15 of docs/vector-plan.md: the Artboard tool, added after this list's own stage-7 snapshot — a real new command, not a migration artifact, so it belongs here too.
+  "tool.vector.h|H|vector|Tools", // the vector Hand tool — raster always had one (raster.hand, below), vector never did; added alongside vector.zoom off a live bug report that vector had no dedicated pan/zoom tools at all.
   "tool.vector.o|O|vector|Tools",
   "tool.vector.p|P|vector|Tools",
   "tool.vector.r|R|vector|Tools",
   "tool.vector.t|T|vector|Tools",
   "tool.vector.v|V|vector|Tools",
+  "tool.vector.z|Z|vector|Tools", // the vector Zoom tool — same addition as vector.hand just above.
   "view.actual|Mod+1||View",
   "view.commandPalette|Mod+F||Edit",
   "view.fit|Mod+0||View",

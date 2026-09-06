@@ -4,7 +4,8 @@ import { srgb } from "@vravio/kernel";
 import { vectorTools } from "./registry";
 import { toolById } from "../../../tools";
 import { finishPath } from "./definitions/pen";
-import type { ToolContext, ToolPointer, VectorToolDefinition } from "./types";
+import type { NavigationContext, NavigationGesture, ToolContext, ToolPointer, VectorToolDefinition } from "./types";
+import type { DocumentViewport } from "../../../store";
 
 /**
  * The vector counterpart of `environments/raster/tools/contract.test.ts` —
@@ -132,18 +133,80 @@ const fullGesture = (context: ToolContext<unknown>, tool: VectorToolDefinition<u
   if (tool.id === "vector.pen") finishPath(context as ToolContext<import("./definitions/pen").PenState>);
 };
 
+/**
+ * Runs a whole navigation gesture against a recording context — the vector
+ * counterpart of raster's own `driveNavigation` in
+ * `environments/raster/tools/contract.test.ts`, same reasoning: a navigation
+ * tool has no canvas hooks at all, so driving it through `drive()` above
+ * would do nothing and every check would pass for the wrong reason.
+ */
+function driveNavigation(tool: VectorToolDefinition<unknown>, options: Record<string, string | number | boolean>, drag: { dx: number; dy: number }) {
+  const viewport: DocumentViewport = { mode: "custom", zoom: 1, panX: 0, panY: 0, rotation: 0 };
+  const calls: string[] = [];
+  const context: NavigationContext = {
+    viewport,
+    options,
+    setViewport: (patch) => calls.push(`setViewport ${JSON.stringify(patch)}`),
+    zoomAround: (zoom, x, y) => calls.push(`zoomAround ${zoom.toFixed(4)} @${x},${y}`),
+  };
+  const at = (dx: number, dy: number, moved: boolean): NavigationGesture => ({
+    pointerId: 1, startX: 100, startY: 100, clientX: 100 + dx, clientY: 100 + dy,
+    dx, dy, moved, altKey: false, shiftKey: false, initial: viewport,
+  });
+
+  const hooks = tool.navigation!;
+  const outcome = hooks.begin(context, at(0, 0, false));
+  if (outcome === "drag") {
+    hooks.move?.(context, at(drag.dx, drag.dy, true));
+    hooks.end?.(context, at(drag.dx, drag.dy, true));
+  }
+  return { outcome, calls };
+}
+
 describe("every tool in the vector catalogue keeps the contract", () => {
   it("has tools to check", () => {
     expect(vectorTools.length).toBeGreaterThan(0);
   });
 
-  it("has all seven tools from the plan's inventory (six plus stage 15's Artboard tool)", () => {
-    expect(new Set(vectorTools.map((tool) => tool.id))).toEqual(new Set(["vector.select", "vector.nodes", "vector.pen", "vector.rectangle", "vector.ellipse", "vector.text", "vector.artboard"]));
+  it("has all nine tools from the plan's inventory (six, plus stage 15's Artboard tool, plus Hand/Zoom)", () => {
+    expect(new Set(vectorTools.map((tool) => tool.id))).toEqual(new Set(["vector.select", "vector.nodes", "vector.pen", "vector.rectangle", "vector.ellipse", "vector.text", "vector.artboard", "vector.hand", "vector.zoom"]));
   });
 
   for (const tool of vectorTools) {
     const descriptor = toolById(tool.id);
     const options = Object.fromEntries((descriptor?.options ?? []).map((option) => [option.id, option.defaultValue]));
+
+    if (tool.navigation) {
+      describe(tool.id, () => {
+        it("is described in tools.ts, so the toolbar can show it", () => {
+          expect(descriptor, `${tool.id} has no entry in tools.ts`).toBeDefined();
+        });
+
+        it("drives the view and nothing else", () => {
+          expect(tool.onPointerDown, `${tool.id} has canvas hooks as well as navigation ones`).toBeUndefined();
+          expect(tool.onPointerMove).toBeUndefined();
+          expect(tool.onGestureEnd).toBeUndefined();
+        });
+
+        it("does something with the view when dragged", () => {
+          const { calls } = driveNavigation(tool, options, { dx: 40, dy: 25 });
+          expect(calls.length, `${tool.id} moved the view in no way at all`).toBeGreaterThan(0);
+        });
+
+        for (const option of descriptor?.options ?? []) {
+          it(`has no option that leaves the result unchanged: ${option.id}`, () => {
+            const changed = typeof option.defaultValue === "boolean" ? !option.defaultValue
+              : typeof option.defaultValue === "number" ? Number(option.defaultValue) + 1
+              : `${option.defaultValue}-other`;
+            const base = driveNavigation(tool, options, { dx: 40, dy: 25 });
+            const variant = driveNavigation(tool, { ...options, [option.id]: changed }, { dx: 40, dy: 25 });
+
+            expect(JSON.stringify(variant), `${tool.id}: option "${option.id}" changed nothing`).not.toBe(JSON.stringify(base));
+          });
+        }
+      });
+      continue;
+    }
 
     describe(tool.id, () => {
       it("is described in tools.ts, so the toolbar can show it", () => {

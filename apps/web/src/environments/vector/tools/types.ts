@@ -3,6 +3,9 @@ import type { ShapeSpatialIndex, SnapSource } from "@vravio/env-vector";
 import type { VectorDocumentState, VectorShape } from "@vravio/env-vector";
 import type { DocumentViewport } from "../../../store";
 import type { VectorSnapshot } from "../../../vector-commands";
+import type { NavigationHooks } from "../../navigation-types";
+
+export type { NavigationContext, NavigationGesture, NavigationHooks } from "../../navigation-types";
 
 /**
  * What a vector tool is, as a file the registry can pick up — the vector
@@ -116,6 +119,17 @@ export interface VectorToolDefinition<TState = unknown> {
   readonly id: string;
   /** Fresh state for this tool, held by the workspace and passed back in. */
   createState(): TState;
+
+  /**
+   * Present only on `vector.hand`/`vector.zoom` — the tools that move the
+   * view rather than edit the document. A tool has these hooks or the
+   * pointer hooks below, never both: same split raster's own contract
+   * makes (`environments/raster/tools/types.ts`), for the same reason —
+   * navigation claims the gesture in a capture-phase handler on the
+   * *workspace* element, before `VectorWorkspace.tsx`'s own `<svg>` ever
+   * sees it, so pointer hooks on a navigation tool would simply never run.
+   */
+  readonly navigation?: NavigationHooks;
 
   onPointerDown?(context: ToolContext<TState>, pointer: ToolPointer): void;
   onPointerMove?(context: ToolContext<TState>, pointer: ToolPointer): void;
