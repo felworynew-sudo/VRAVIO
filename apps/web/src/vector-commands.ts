@@ -1,5 +1,7 @@
-import { createSymbolFromShapes, detachInstance, duplicateShape, groupShapes, moveShapeInStack, placeSymbolInstance, redefineSymbolFromShapes, removeShapes, ungroupShapes, type Artboard, type PaletteColor, type VectorDocumentState, type VectorGuide, type VectorShape, type ZOrderMove } from "@vravio/env-vector";
+import { addShape, createSymbolFromShapes, detachInstance, duplicateShape, groupShapes, moveShapeInStack, pathShapeFromPolygon, placeSymbolInstance, redefineSymbolFromShapes, removeShapes, shapeOutlineWorldPolygon, ungroupShapes, type Artboard, type PaletteColor, type VectorDocumentState, type VectorGuide, type VectorShape, type ZOrderMove } from "@vravio/env-vector";
+import type { BooleanOpKind } from "@vravio/kernel";
 import { kernel } from "./kernel";
+import { createWasmGeometryPort } from "./vector-geometry-wasm";
 
 /**
  * `artboards`/`activeArtboardId` joined this snapshot in stage 15 of
@@ -158,4 +160,79 @@ export function redefineSymbolFromActiveSelection(documentId: string, symbolId: 
  * point — the Symbols panel's own "place" action. */
 export function placeVectorSymbolInstance(documentId: string, symbolId: string, x: number, y: number): void {
   void changeVectorDocument(documentId, "Place Symbol Instance (Разместить экземпляр символа)", (state) => Boolean(placeSymbolInstance(state, symbolId, x, y)));
+}
+
+let sharedGeometryPort: ReturnType<typeof createWasmGeometryPort> | null = null;
+
+const pathfinderLabels: Record<BooleanOpKind, string> = {
+  union: "Unite (Объединить)",
+  subtract: "Subtract (Вычесть)",
+  intersect: "Intersect (Пересечь)",
+  exclude: "Exclude (Исключить)",
+};
+const pathfinderResultNames: Record<BooleanOpKind, string> = {
+  union: "Unite Result (Результат объединения)",
+  subtract: "Subtract Result (Результат вычитания)",
+  intersect: "Intersect Result (Результат пересечения)",
+  exclude: "Exclude Result (Результат исключения)",
+};
+
+/**
+ * The Object menu's Pathfinder — Unite/Subtract/Intersect/Exclude on the
+ * current selection, finally calling the boolean-op engine stage 7 built
+ * (`crates/vector-geometry`, cross-checked and benchmarked there) from a
+ * real UI action, not just its own test suite. See `boolean-ops.ts`'s own
+ * doc comment for the honest limitations this inherits (no holes, straight
+ * edges, not curve-fitted) — carried through unchanged, not narrowed
+ * quietly.
+ *
+ * Shapes combine in `state.shapes`' own back-to-front order (how the
+ * selection actually looks stacked on the canvas), not the order clicks
+ * happened to add them to `state.selection` — chained pairwise, since
+ * `VectorGeometryPort.booleanOp` only ever takes two polygons. A `subtract`
+ * or `exclude` step can leave more than one output polygon (the engine's
+ * own "hole becomes a separate outer polygon" simplification — see that
+ * type's own doc comment); every later step in the chain runs against
+ * *each* surviving piece, and every surviving piece becomes its own result
+ * shape at the end, numbered when there's more than one, rather than
+ * silently keeping only the first and discarding the rest.
+ *
+ * `async`, unlike every other one-shot command in this file — the WASM
+ * boolean op has no synchronous path (`VectorGeometryPort`'s own doc
+ * comment). Computed entirely before `changeVectorDocument` is ever
+ * called, so the mutate callback it receives stays a plain, synchronous
+ * function applying an already-known result — the same shape
+ * `changeVectorDocument`'s own contract already requires of every caller.
+ */
+export async function applyPathfinderOp(documentId: string, op: BooleanOpKind): Promise<void> {
+  const document = kernel.documents.get<VectorDocumentState>(documentId);
+  if (!document) return;
+  const state = document.state as VectorDocumentState;
+  const selected = new Set(state.selection);
+  if (selected.size < 2) return;
+  const shapes = state.shapes.filter((shape) => selected.has(shape.id));
+  if (shapes.length < 2) return;
+  const polygons = shapes.map((shape) => shapeOutlineWorldPolygon(shape, state.shapes)).filter((polygon): polygon is Float64Array => polygon !== null);
+  if (polygons.length < 2) return; // fewer than 2 usable fill outlines in the selection (a line/text/group among them) — nothing to combine
+
+  sharedGeometryPort ??= createWasmGeometryPort();
+  let pieces: Float64Array[] = [polygons[0]!];
+  for (let index = 1; index < polygons.length; index += 1) {
+    const next: Float64Array[] = [];
+    for (const piece of pieces) next.push(...await sharedGeometryPort.booleanOp(op, piece, polygons[index]!));
+    pieces = next;
+  }
+  if (!pieces.length) return;
+
+  const style = shapes[0]!.style;
+  const baseName = pathfinderResultNames[op];
+  const results = pieces.map((piece, index) => pathShapeFromPolygon(piece, pieces.length > 1 ? `${baseName} ${index + 1}` : baseName, style));
+
+  await changeVectorDocument(documentId, pathfinderLabels[op], (draft) => {
+    removeShapes(draft, [...selected]);
+    for (const result of results) addShape(draft, result);
+    draft.selection = results.map((result) => result.id);
+    draft.activeShapeId = results[0]?.id ?? null;
+    return true;
+  });
 }

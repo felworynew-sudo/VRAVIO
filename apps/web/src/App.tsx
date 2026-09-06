@@ -37,7 +37,7 @@ import { adjustedPixels } from "./raster-adjustments/apply";
 import { windowsFor } from "./windows/registry";
 import { windowTitle } from "./windows/types";
 import { PANEL_CHANGED_EVENT, readVisiblePanelIds, requestPanelVisibility } from "./windows/runtime";
-import { createSymbolFromActiveSelection, detachActiveVectorInstance, duplicateActiveVectorShape, deleteActiveVectorShapes, groupActiveVectorShapes, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
+import { applyPathfinderOp, createSymbolFromActiveSelection, detachActiveVectorInstance, duplicateActiveVectorShape, deleteActiveVectorShapes, groupActiveVectorShapes, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
 import { addShape, importedShapesFromJson, isVectorDocumentState, type VectorDocumentState } from "@vravio/env-vector";
 import { exportVectorDocumentToSvg } from "./vector-svg-export";
 import { importSvgToJson } from "./vector-svg-wasm";
@@ -213,6 +213,7 @@ export function App() {
   const effectiveBackgroundColor = editingMaskLayerId ? (maskForegroundIsWhite ? "#000000" : "#ffffff") : store.backgroundColor;
   const activeTextLayer = (() => { if (!active || !isRasterDocumentState(active.state)) return null; const state = active.state; return state.layers.find((layer) => layer.id === state.activeLayerId && layer.kind === "text" && layer.text) ?? null; })();
   const activeImageShape = (() => { if (!active || !isVectorDocumentState(active.state)) return false; const state = active.state; return state.shapes.find((shape) => shape.id === state.activeShapeId)?.kind === "image"; })();
+  const pathfinderDisabled = !active || !isVectorDocumentState(active.state) || active.state.selection.length < 2;
   const unionBounds = (boxes: RasterRect[]): RasterRect => { const left = Math.min(...boxes.map((box) => box.x)), top = Math.min(...boxes.map((box) => box.y)), right = Math.max(...boxes.map((box) => box.x + box.width)), bottom = Math.max(...boxes.map((box) => box.y + box.height)); return { x: left, y: top, width: right - left, height: bottom - top }; };
   const alignOrDistributeLayers = (kind: "align" | "distribute", edge: AlignEdge) => {
     if (!active || !isRasterDocumentState(active.state)) return;
@@ -428,6 +429,12 @@ export function App() {
           ["Bring Forward (Переместить выше)", "", () => active && reorderActiveVectorShape(active.id, "forward")],
           ["Send Backward (Переместить ниже)", "", () => active && reorderActiveVectorShape(active.id, "backward")],
           ["Send to Back (На задний план)", "", () => active && reorderActiveVectorShape(active.id, "back")],
+          { label: "Pathfinder (Обработка контуров)", items: [
+            ["Unite (Объединить)", "", () => active && void applyPathfinderOp(active.id, "union"), pathfinderDisabled],
+            ["Subtract (Вычесть)", "", () => active && void applyPathfinderOp(active.id, "subtract"), pathfinderDisabled],
+            ["Intersect (Пересечь)", "", () => active && void applyPathfinderOp(active.id, "intersect"), pathfinderDisabled],
+            ["Exclude (Исключить)", "", () => active && void applyPathfinderOp(active.id, "exclude"), pathfinderDisabled],
+          ] },
           ["Edit Image in Raster Environment… (Открыть картинку в растровой среде…)", "", () => active && void kernel.commands.execute("image.openElsewhere", { activeDocumentId: active.id }), !activeImageShape],
           ["Edit Image as a Copy… (Открыть картинку копией…)", "", () => active && void kernel.commands.execute("image.openElsewhereBranch", { activeDocumentId: active.id }), !activeImageShape],
         ]}/>}

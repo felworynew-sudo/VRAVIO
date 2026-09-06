@@ -23,3 +23,4 @@ export * from "./path-segment-ops";
 export * from "./palette-ops";
 export * from "./guide-ops";
 export * from "./softproof";
+export * from "./boolean-ops";
