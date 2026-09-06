@@ -1,0 +1,63 @@
+# Публикация apps/web на GitHub Pages.
+#
+# Собранные .wasm-крейты (crates/*/pkg) лежат в git как обычные файлы, так что
+# сборке не нужен ни Rust, ни cargo — только pnpm install и обычный vite build.
+# GITHUB_PAGES=true переключает apps/web/vite.config.ts's `base` на "/VRAVIO/":
+# сайт живёт не в корне домена, а в подпути github.io/VRAVIO/, и без этой
+# переменной все абсолютные ссылки на JS/WASM/иконки указывали бы мимо.
+#
+# Триггер on: push: main — каждый пуш в main сам пересобирает и переразворачивает
+# сайт, отдельного шага не нужно. permissions/concurrency — минимум, который
+# требует сам actions/deploy-pages.
+name: GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm --filter @vravio/web build
+        env:
+          GITHUB_PAGES: "true"
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: apps/web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
