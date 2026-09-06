@@ -1,7 +1,10 @@
 /* tslint:disable */
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
+export const build_test_cmyk_profile: (a: number, b: number, c: number, d: number) => [number, number];
+export const build_test_cmyk_profile_a2b_only: (a: number, b: number) => [number, number];
 export const cmyk_to_srgb: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number];
+export const srgb_to_cmyk: (a: number, b: number, c: number, d: number, e: number) => [number, number];
 export const validate_icc_profile: (a: number, b: number) => number;
 export const qcms_transform_data_rgb_out_lut: (a: number, b: number, c: number, d: number) => void;
 export const qcms_transform_data_rgba_out_lut: (a: number, b: number, c: number, d: number) => void;

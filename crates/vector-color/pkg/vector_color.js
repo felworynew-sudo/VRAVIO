@@ -1,6 +1,64 @@
 /* @ts-self-types="./vector_color.d.ts" */
 
 /**
+ * Test-fixture-only: builds a minimal CMYK ICC profile carrying both an
+ * `A2B` and a `B2A` tag (`lut8Type`, 2 grid points per axis — the
+ * corners of the input hypercube are the only points actually stored,
+ * everything else is the reading library's own interpolation), via
+ * `moxcms`'s own `ColorProfile::encode()` rather than this crate hand-
+ * writing ICC binary layout a second time.
+ *
+ * Why this exists at all: there is no small, unambiguously-licensed
+ * real-world CMYK ICC profile this repo can commit and embed for
+ * `cmyk_to_srgb`/`srgb_to_cmyk`'s own tests, and a first attempt at
+ * hand-writing the ICC v2 header (correct enough for `qcms`, which barely
+ * validates it) failed `moxcms`'s parse with `InvalidProfile` for reasons
+ * that stayed opaque even after checking every header field `moxcms`'s
+ * own source validates (profile signature, version, colour space,
+ * PCS) — `moxcms` is the more particular reader of the two libraries
+ * this crate wraps, so its own encoder is the reliable way to produce
+ * bytes it (and, checked here, `qcms` too) will actually accept, rather
+ * than trusting a second from-scratch binary-format implementation this
+ * pass could not get to agree with the first.
+ *
+ * `a2b_corners` must be exactly 16×3 = 48 bytes (16 CMYK-hypercube
+ * corners, 3 output channels each, address order matching
+ * `apps/web/src/vector-color.test.ts`'s own `buildLut8Tag` bit ordering);
+ * `b2a_corners` must be exactly 8×4 = 32 bytes (8 XYZ-cube corners, 4
+ * output channels each). Panics on the wrong length — a test-fixture
+ * helper's caller is this repo's own test file, not untrusted input.
+ * @param {Uint8Array} a2b_corners
+ * @param {Uint8Array} b2a_corners
+ * @returns {Uint8Array}
+ */
+export function build_test_cmyk_profile(a2b_corners, b2a_corners) {
+    const ptr0 = passArray8ToWasm0(a2b_corners, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(b2a_corners, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ret = wasm.build_test_cmyk_profile(ptr0, len0, ptr1, len1);
+    var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v3;
+}
+
+/**
+ * Same shape as `build_test_cmyk_profile`, but the `B2A` tag omitted —
+ * for the test that checks `srgb_to_cmyk` honestly returns `None` on a
+ * profile that only carries the `cmyk_to_srgb` direction.
+ * @param {Uint8Array} a2b_corners
+ * @returns {Uint8Array}
+ */
+export function build_test_cmyk_profile_a2b_only(a2b_corners) {
+    const ptr0 = passArray8ToWasm0(a2b_corners, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.build_test_cmyk_profile_a2b_only(ptr0, len0);
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+/**
  * Converts one CMYK colour (each channel 0..255, matching qcms's own
  * `DataType::CMYK` byte convention — a caller working in this codebase's
  * own 0..1 convention, see `kernel/color.ts`'s `Color.components` doc
@@ -29,6 +87,36 @@ export function cmyk_to_srgb(c, m, y, k, profile_bytes) {
 }
 
 /**
+ * Converts one sRGB colour `(r, g, b)` through the given ICC CMYK
+ * profile's own **B2A** tag into CMYK ink percentages `[c, m, y, k]`
+ * (each 0..255) — real gamut mapping and black generation from the
+ * profile itself, not a re-derivation of `cmyk_to_srgb`'s A2B direction
+ * and not the naive `(1-r)/(1-k)`-style formula this crate exists to
+ * replace. `None` if `profile_bytes` doesn't parse as an ICC profile,
+ * or the profile has no CMYK colour space / no B2A tag `moxcms` can use
+ * to build this specific transform (a colour-managed *display* profile,
+ * for instance, typically has only the A2B direction `cmyk_to_srgb`
+ * already covers — that is a data problem to report honestly as `None`,
+ * not a bug to route around).
+ * @param {number} r
+ * @param {number} g
+ * @param {number} b
+ * @param {Uint8Array} profile_bytes
+ * @returns {Uint8Array | undefined}
+ */
+export function srgb_to_cmyk(r, g, b, profile_bytes) {
+    const ptr0 = passArray8ToWasm0(profile_bytes, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.srgb_to_cmyk(r, g, b, ptr0, len0);
+    let v2;
+    if (ret[0] !== 0) {
+        v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    }
+    return v2;
+}
+
+/**
  * Stage 14 of docs/vector-plan.md: real, ICC-based colour management —
  * not the naive `(1-c)(1-k)` formula `kernel/color.ts`'s own `colorToCss`
  * already documents as a placeholder for exactly this crate to replace,
@@ -48,21 +136,24 @@ export function cmyk_to_srgb(c, m, y, k, profile_bytes) {
  * `(RGB8, CMYK)` is not; every unlisted pair falls through to `None`. This
  * isn't a missing feature to work around with a few more lines: qcms was
  * built for *display* (show a CMYK JPEG correctly on an sRGB screen), a
- * job that only ever needs that one direction. Turning an arbitrary sRGB
- * colour into press-ready CMYK ink percentages is a different, genuinely
- * harder problem (gamut mapping, black generation/under colour removal
- * policy — the same reason ICC profiles ship both an A2B *and* a B2A
- * table rather than one invertible function) that a display-only CMM has
- * no reason to solve, and no pure-Rust, wasm32-compatible library this
- * pass found does either (the industry-standard answer, Little CMS, is a
- * C library — the same "needs a C toolchain wasm32-unknown-unknown
- * doesn't have" wall Clipper2 hit in stage 7).
+ * job that only ever needs that one direction.
  *
- * So: `cmyk_to_srgb` below is real, ICC-profile-accurate colour
- * management. The reverse (`srgb_to_cmyk`, and therefore a document's own
- * CMYK *export*) is not implemented here and is recorded as an open gap
- * in docs/vector-plan.md rather than faked with the same naive formula
- * this crate exists to move past.
+ * A second open-source search (6 September 2026, after the owner asked
+ * for the reverse direction explicitly rather than leaving it a
+ * documented gap) found one: **`moxcms`** — BSD-3-Clause OR Apache-2.0,
+ * pure Rust, `wasm32-unknown-unknown`-compatible (two dependencies,
+ * `num-traits` and `pxfm`, both pure Rust, no C/FFI), and — unlike
+ * qcms — a general ICC engine that reads a profile's **B2A** tag (PCS →
+ * device), not only its A2B (device → PCS) tag. That B2A tag is exactly
+ * where an ICC profile stores the gamut-mapping/black-generation policy
+ * this direction genuinely needs (`moxcms`'s own `Lut3x4`/`transform_lut3_to_4.rs`
+ * reads it as a real 3-in/4-out CLUT) — `srgb_to_cmyk` below still needs
+ * a real profile with that tag present to do anything (a profile with
+ * only an A2B tag, like a display profile, correctly yields `None` here,
+ * the same honest failure `cmyk_to_srgb` already gives for the reverse
+ * case). Little CMS remains the industry-standard answer and remains a C
+ * library out of reach on this target — the same wall Clipper2 hit in
+ * stage 7 — but this is no longer "no pure-Rust option exists at all".
  * @param {Uint8Array} bytes
  * @returns {boolean}
  */
