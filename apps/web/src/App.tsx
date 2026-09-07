@@ -675,14 +675,26 @@ function ToolPalette({ kind, language, activeToolId, openGroup, onOpenGroup, onS
   // put the tool back.
   const activeIsHidden = Boolean(activeToolId && layout.hidden.includes(activeToolId));
   const editLabel = text(language, "Customise toolbar", "Настроить панель инструментов");
+  // master-plan.md §1.9 item 13: a group's own visible icon used to fall
+  // straight back to `group[0]` — the group's declared first tool —
+  // whenever the globally active tool wasn't a member of that group,
+  // losing which tool in the group was actually used last. Photoshop
+  // remembers that per group, independent of whatever tool is active
+  // elsewhere; picking a tool from a flyout records it here, and it wins
+  // over `group[0]` right up until `activeToolId` itself becomes a member
+  // of the group again (which then takes priority, since it's the true
+  // current state, not a memory of a past one).
+  const [lastToolInGroup, setLastToolInGroup] = useState<Record<string, string>>({});
+  const select = (groupId: string, toolId: string) => { setLastToolInGroup((current) => ({ ...current, [groupId]: toolId })); onSelect(toolId); };
   return <>{groups.map((group) => {
     if (!group.length) return null;
     const groupId = group.map((tool) => tool.id).join("|");
-    const selected = group.find((tool) => tool.id === activeToolId) ?? group[0]!;
+    const remembered = group.find((tool) => tool.id === lastToolInGroup[groupId]);
+    const selected = group.find((tool) => tool.id === activeToolId) ?? remembered ?? group[0]!;
     return <div className="tool-group" key={groupId}>
-      <button className={group.some((tool) => tool.id === activeToolId) ? "active" : ""} title={`${resolveLabel(selected.label, language)} [${selected.shortcut}]`} aria-label={resolveLabel(selected.label, language)} onClick={() => onSelect(selected.id)}><ToolGlyph tool={selected} /></button>
+      <button className={group.some((tool) => tool.id === activeToolId) ? "active" : ""} title={`${resolveLabel(selected.label, language)} [${selected.shortcut}]`} aria-label={resolveLabel(selected.label, language)} onClick={() => select(groupId, selected.id)}><ToolGlyph tool={selected} /></button>
       {group.length > 1 && <button className="tool-group-arrow" aria-label={language === "ru" ? "Показать группу инструментов" : "Show tool group"} onClick={() => onOpenGroup(openGroup === groupId ? null : groupId)}>▾</button>}
-      {openGroup === groupId && <div className="tool-flyout">{group.map((tool) => <button key={tool.id} className={tool.id === activeToolId ? "active" : ""} onClick={() => onSelect(tool.id)}><ToolGlyph tool={tool} /><span>{resolveLabel(tool.label, language)}</span><kbd>{tool.shortcut}</kbd></button>)}</div>}
+      {openGroup === groupId && <div className="tool-flyout">{group.map((tool) => <button key={tool.id} className={tool.id === activeToolId ? "active" : ""} onClick={() => select(groupId, tool.id)}><ToolGlyph tool={tool} /><span>{resolveLabel(tool.label, language)}</span><kbd>{tool.shortcut}</kbd></button>)}</div>}
     </div>;
   })}
     {/* Photoshop's own affordance, in Photoshop's own place: the palette says
