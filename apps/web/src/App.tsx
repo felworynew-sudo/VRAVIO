@@ -730,7 +730,7 @@ function ColorWells({ foreground, background, monochrome = false, onForeground, 
   return <div className={`color-wells${monochrome ? " mask-colors" : ""}`} title={monochrome ? "Layer mask colors: black hides, white reveals (Цвета маски: чёрный скрывает, белый показывает)" : "Foreground / Background (Основной / дополнительный цвет)"}>
     <label className="background-color" style={{ "--swatch": background } as CSSProperties}><input type="color" value={background} onChange={(event) => onBackground(event.target.value)} aria-label="Background color (Дополнительный цвет)" /><span /></label>
     <label className="foreground-color" style={{ "--swatch": foreground } as CSSProperties}><input type="color" value={foreground} onChange={(event) => onForeground(event.target.value)} aria-label="Foreground color (Основной цвет)" /><span /></label>
-    <button className="swap-colors" onClick={onSwap} title="Swap colors [X]" aria-label="Swap colors">↔</button>
+    <button className="swap-colors" onClick={onSwap} title="Swap colors [X]" aria-label="Swap colors"><span className="swap-colors-icon" style={{ "--swap-colors-mask": `url("${import.meta.env.BASE_URL}ПОМЕНЯТЬ-ЦВЕТА.svg")` } as CSSProperties} /></button>
     <button className="reset-colors" onClick={onReset} title="Default colors [D]" aria-label="Default colors"><i/><i/></button>
   </div>;
 }
