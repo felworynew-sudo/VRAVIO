@@ -605,24 +605,32 @@ Claude Code и является приоритетным источником и
         `javascript_exec`, только для снятия скриншота — не правка
         кода) — глаз → стрелка-крюк → миниатюра, видно чётко на слое с
         `clipping:true`.
-      - **Обводка миниатюр (2) — не начато.** Найдены точки в Patchy
-        (`draw_thumbnail_frame` — рисует 1px рамку `theme().
-        layer_thumbnail_border` на каждом тайле 30×30 с центрированным
-        28px pixmap; отдельно `thumbnail->setProperty("layerTargetActive",
-        content_target_active)` управляет АКТИВНОЙ рамкой того
-        thumbnail'а, что сейчас редактируется — контент или маска), но
-        сама QSS-правка стиля под `[layerTargetActive="true"]` в
-        просмотренных файлах (`action_icons.cpp`,
-        `layer_list_widget.cpp`, `main_window_layer_panel.cpp`) не
-        нашлась — вероятно, в `main_window_theme.cpp`/
-        `theme_manager.cpp`/`theme_palette.cpp`, ни один из которых
-        ещё не скачан. Текущая VRAVIO-реализация (`.layer-thumb.
-        editing,.layer-mask-thumb.editing{outline:2px solid
-        var(--text);outline-offset:1px}` для активной цели редактирования,
-        `.layer-mask-thumb{border:1px solid var(--border)}` для
-        пассивной рамки) не менялась — соответствие донору не
-        проверено и не подтверждено. Продолжить с этого места в
-        следующей сессии.
+      - **Обводка миниатюр (2) — готово.** Найдено в
+        `theme_palette.cpp`/`main_window_theme.cpp` (скачаны отдельно —
+        не было сделано в прошлой сессии): пассивная рамка — 1px
+        `theme().layer_thumbnail_border` (серый), впечатана в сам
+        pixmap функцией `draw_thumbnail_frame` (не CSS); активная
+        рамка (текущая цель редактирования — `thumbnail->setProperty(
+        "layerTargetActive", content_target_active)` на content/mask/
+        vector-mask preview) стилизуется отдельным CSS-правилом в
+        `main_window_theme.cpp`: `QLabel#layerContentThumbnail
+        [layerTargetActive="true"], ... { border: 2px solid
+        @accent_bright; padding: 0; }` — то есть насыщенный акцентный
+        цвет, не нейтральный текстовый, и рамка **впритык**, без
+        отступа. VRAVIO уже верно использует `outline` вместо `border`
+        для активного состояния (у нас пассивная рамка — настоящий CSS
+        `border`, а не впечатанный в canvas pixmap, так что добавлять
+        поверх неё нужно именно внешнее кольцо, не заменять её — то же
+        решение, другой примитив по той же причине). Расхождение было
+        только в двух местах: цвет (`var(--text)`, нейтральный, вместо
+        акцентного) и отступ (`outline-offset:1px`, у Patchy — впритык).
+        Исправлено на `outline:2px solid var(--focus);outline-offset:0`
+        — `--focus` (`#84a8ff`) уже существующий токен VRAVIO той же
+        роли (насыщенный синий акцент), не буквальный hex Patchy
+        (`только цвета оставь наши`). Проверено живьём: `getComputedStyle`
+        на активной content-миниатюре вернул `outlineColor: rgb(132,
+        168, 255)` (= `--focus`), скриншотом подтверждена чёткая синяя
+        рамка без зазора вместо прежней белой с отступом.
 - [ ] **10.** Кнопка «Связать слои» не работает. Связанные слои должны
       быть закреплены друг за другом и двигаться одновременно (Move
       Tool на любом из них двигает всю группу связанных слоёв). В коде
