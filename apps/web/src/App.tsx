@@ -330,6 +330,28 @@ export function App() {
     return () => window.removeEventListener("vravio-transform-state", onTransformState);
   }, []);
 
+  // docs/master-plan.md §8.3: every custom dropdown (the top File/Edit/…
+  // menus and the toolbar's tool-group flyouts) only ever closed by
+  // clicking the exact button that opened it — there was no outside-click
+  // handler anywhere in the codebase for either one, confirmed by grepping
+  // for `document.addEventListener` before writing this. One listener
+  // here, not one per `Menu`/`ToolPalette` instance, closes whichever is
+  // open the moment a pointerdown lands outside both wrapper classes —
+  // `.closest()` still matches the toggle button itself and anything
+  // inside the open dropdown, so their own onClick handlers (which already
+  // toggle/act-then-close) run exactly as before.
+  useEffect(() => {
+    if (!openMenu && !openToolGroup) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (target?.closest(".main-menu, .tool-group")) return;
+      setOpenMenu(null);
+      setOpenToolGroup(null);
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [openMenu, openToolGroup]);
+
   useEffect(() => {
     const refresh = () => setDiagnostics(readDiagnostics());
     refresh(); window.addEventListener("vravio-diagnostics-change", refresh);
