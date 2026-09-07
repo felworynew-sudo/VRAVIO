@@ -16,6 +16,7 @@ import { kernel } from "./kernel";
 import { closeWindow, isDesktop, minimizeWindow, toggleMaximizeWindow } from "./desktop-window";
 import { EnvironmentIcon } from "./EnvironmentIcon";
 import { localized, resolveLabel, text } from "./i18n";
+import { useCloseOnOutsideClick } from "./useCloseOnOutsideClick";
 import { OptionRow } from "./ui/molecules/OptionRow";
 import { SettingsDialog } from "./SettingsDialog";
 import { ModalHost } from "./modals/ModalHost";
@@ -334,23 +335,15 @@ export function App() {
   // menus and the toolbar's tool-group flyouts) only ever closed by
   // clicking the exact button that opened it — there was no outside-click
   // handler anywhere in the codebase for either one, confirmed by grepping
-  // for `document.addEventListener` before writing this. One listener
-  // here, not one per `Menu`/`ToolPalette` instance, closes whichever is
-  // open the moment a pointerdown lands outside both wrapper classes —
-  // `.closest()` still matches the toggle button itself and anything
-  // inside the open dropdown, so their own onClick handlers (which already
-  // toggle/act-then-close) run exactly as before.
-  useEffect(() => {
-    if (!openMenu && !openToolGroup) return;
-    const handlePointerDown = (event: PointerEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target?.closest(".main-menu, .tool-group")) return;
-      setOpenMenu(null);
-      setOpenToolGroup(null);
-    };
-    document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
-  }, [openMenu, openToolGroup]);
+  // for `document.addEventListener` before writing this. `.closest()` still
+  // matches the toggle button itself and anything inside the open dropdown,
+  // so their own onClick handlers (which already toggle/act-then-close) run
+  // exactly as before. Shared `useCloseOnOutsideClick` — see its own
+  // comment for why this is a hook and not another one-off effect: a
+  // second dropdown (DockLayout.tsx's adjustment-layer list) already
+  // needed the identical fix once this one shipped.
+  useCloseOnOutsideClick(openMenu !== null, ".main-menu", () => setOpenMenu(null));
+  useCloseOnOutsideClick(openToolGroup !== null, ".tool-group", () => setOpenToolGroup(null));
 
   useEffect(() => {
     const refresh = () => setDiagnostics(readDiagnostics());
