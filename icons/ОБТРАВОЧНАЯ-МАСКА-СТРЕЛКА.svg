@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none">
-  <path d="M15 6 H8 V12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M11.5 9 L8 12.5 L4.5 9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+<!-- Exact shape from Patchy (github.com/SethRobinson/Patchy, MIT),
+     src/ui/action_icons.cpp's simple_icon("clip", ...): a bent arrow
+     dropping onto the base layer's top edge, drawn as QPainterPath with
+     these same coordinates — recolored to currentColor, otherwise
+     unchanged. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <path d="M20 6.5 V13 Q20 17.5 15.5 17.5 H10.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+  <path d="M10.5 17.5 L14 14 M10.5 17.5 L14 21" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="7" y1="24.5" x2="25" y2="24.5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
 </svg>

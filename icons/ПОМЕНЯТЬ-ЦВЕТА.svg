@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="none">
-  <path d="M6 4 H12 A4 4 0 0 1 16 8 V14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M8.5 1.5 L5.5 4 L8.5 6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M12.5 11.5 L16 15 L19.5 11.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+<!-- Same shape as GIMP's own swap-colors icon (id="gimp-swap-colors" in
+     gimp-data's icons/Default/color-scalable.svg, GNOME/gimp-data), just
+     re-based to a small viewBox — every relative path delta below is
+     copied unchanged from GIMP's own path, only the absolute start point
+     moved to fit a 0-20 box. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor">
+  <path d="m 5.7,4 -3.6751,2.58516 3.6751,2.955959 v -1.999119 h 2.45951 c 1.24403,0.01 1.43191,0.0895 1.45138,1.0976 l -0.0323,2.810359 h -1.9685 l 2.99188,3.67633 2.55277,-3.67633 h -1.59596 v -2.810359 c 0.026,-2.94358 -1.0432,-3.08725 -3.41065,-3.04551 h -2.4481 z"/>
 </svg>
