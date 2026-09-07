@@ -66,7 +66,16 @@ export interface RasterLayerMask {
   pixels: Uint8ClampedArray;
   assetId: string | null;
   enabled: boolean;
-  inverted: boolean;
+  // No `inverted` flag — deliberately removed (master-plan.md §19.2).
+  // Painting on the mask writes raw pixels (raster-pixel-buffers.ts's
+  // maskToRgba/rgbaToMask), with no idea a logical inversion could exist —
+  // a lazy `inverted` flag the compositor applied only at render time made
+  // white strokes hide instead of reveal the instant it became reachable
+  // through a UI command. "Invert Mask" physically rewrites pixels
+  // (255 - value) instead, so every mask consumer — brush, thumbnail,
+  // mask→selection, export — reads one consistent truth. Costs
+  // O(width×height) per invert click, not per frame; Patchy's own
+  // LayerMask does the same physical rewrite for the same reason.
   linked: boolean;
   density: number;
   feather: number;

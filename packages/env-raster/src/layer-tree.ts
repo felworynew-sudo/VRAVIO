@@ -97,7 +97,7 @@ export function pickLayerAt(
     if (!isLayerEffectivelyVisible(layer, state.layers)) continue;
 
     const mask = layer.mask?.enabled ? layer.mask : null;
-    const maskAlpha = mask ? ((mask.inverted ? 255 - mask.pixels[index]! : mask.pixels[index]!) / 255) * mask.density : 1;
+    const maskAlpha = mask ? (mask.pixels[index]! / 255) * mask.density : 1;
     // Read where the layer actually lives; its buffer is sized to its bounds.
     const coverage = (layerAlphaAt(layer, column, row) / 255) * maskAlpha * effectiveLayerOpacity(layer, state.layers) * (layer.fillOpacity ?? 1);
     if (coverage < threshold) continue;

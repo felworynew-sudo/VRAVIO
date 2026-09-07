@@ -19,7 +19,7 @@ export function createRasterGroup(width: number, height: number, name = "Group (
 export function createRasterLayerMask(width: number, height: number, reveal = true): RasterLayerMask {
   const pixels = new Uint8ClampedArray(width * height);
   if (reveal) pixels.fill(255);
-  return { pixels, assetId: null, enabled: true, inverted: false, linked: true, density: 1, feather: 0 };
+  return { pixels, assetId: null, enabled: true, linked: true, density: 1, feather: 0 };
 }
 
 /**
@@ -32,7 +32,7 @@ export function createRasterLayerMask(width: number, height: number, reveal = tr
  * selection's own buffer once the caller clears `document.selection`.
  */
 export function createRasterLayerMaskFromSelection(selection: PixelSelection): RasterLayerMask {
-  return { pixels: selection.mask.slice(), assetId: null, enabled: true, inverted: false, linked: true, density: 1, feather: 0 };
+  return { pixels: selection.mask.slice(), assetId: null, enabled: true, linked: true, density: 1, feather: 0 };
 }
 
 export function defaultAdjustment(kind: RasterAdjustment["kind"]): RasterAdjustment {

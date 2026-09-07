@@ -233,7 +233,7 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
       applyAdjustment(output, layer.adjustment, effectiveOpacity);
       if (before) for (let row = 0; row < outHeight; row += 1) for (let column = 0; column < outWidth; column += 1) {
         const index = (row * outWidth + column) * 4, documentIndex = (area.y + row * step) * width + (area.x + column * step);
-        const sample = layer.mask?.enabled ? (layer.mask.inverted ? 255 - layer.mask.pixels[documentIndex]! : layer.mask.pixels[documentIndex]!) : 255;
+        const sample = layer.mask?.enabled ? layer.mask.pixels[documentIndex]! : 255;
         const amount = sample / 255 * (layer.mask?.density ?? 1) * (clippingBase ? clippingBase[row * outWidth + column]! / 255 : 1);
         output[index] = Math.round(before[index]! + (output[index]! - before[index]!) * amount);
         output[index + 1] = Math.round(before[index + 1]! + (output[index + 1]! - before[index + 1]!) * amount);
@@ -279,7 +279,7 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
     const code = blendCode(layer.blendMode);
     const nonSeparable = isNonSeparable(code);
     const mask = layer.mask?.enabled ? layer.mask : null;
-    const maskPixels = mask?.pixels, maskInverted = mask?.inverted ?? false, maskDensity = mask?.density ?? 1;
+    const maskPixels = mask?.pixels, maskDensity = mask?.density ?? 1;
     const layerAlpha = effectiveOpacity * (layer.fillOpacity ?? 1);
     const clipping = layer.clipping === true;
     const opaqueNormal = code === NORMAL && layerAlpha >= 1 && !clipping;
@@ -294,7 +294,7 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
         const sourceX = area.x + column * step - sourceOriginX, sourceY = documentY - sourceOriginY;
         if (sourceX < 0 || sourceY < 0 || sourceX >= sourceWidth || sourceY >= (wholeCanvas ? state.height : layer.bounds.height)) continue;
         const sourceIndex = (sourceY * sourceWidth + sourceX) * 4;
-        const maskAlpha = maskPixels ? ((maskInverted ? 255 - maskPixels[documentIndex]! : maskPixels[documentIndex]!) / 255) * maskDensity : 1;
+        const maskAlpha = maskPixels ? (maskPixels[documentIndex]! / 255) * maskDensity : 1;
         const baseAlpha = clippingBase ? clippingBase[regionIndex]! / 255 : clipping ? 0 : 1;
         const rawAlpha = (renderedLayer[sourceIndex + 3]! / 255) * maskAlpha;
         if (ownAlpha) ownAlpha[regionIndex] = Math.round(rawAlpha * 255);

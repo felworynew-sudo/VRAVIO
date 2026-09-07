@@ -81,10 +81,15 @@ describe("composite output is stable", () => {
       state.layers[2]!.mask = mask;
     }), whole));
 
+    // "Inverted" is no longer a flag (master-plan.md §19.2 — a lazy
+    // `mask.inverted` the compositor applied only at render time let the
+    // brush write raw, uninverted pixels, so painting white on an inverted
+    // mask silently hid instead of revealing). Invert Mask now physically
+    // rewrites the buffer, so this digest exercises that: same pattern as
+    // `digests.mask` above, pixel values pre-inverted, expected to differ.
     digests.invertedMask = digest(compositeRasterRegion(scene((state) => {
       const mask = createRasterLayerMask(size, size);
-      for (let index = 0; index < mask.pixels.length; index += 1) mask.pixels[index] = (index * 7) % 256;
-      mask.inverted = true;
+      for (let index = 0; index < mask.pixels.length; index += 1) mask.pixels[index] = 255 - ((index * 7) % 256);
       state.layers[2]!.mask = mask;
     }), whole));
 

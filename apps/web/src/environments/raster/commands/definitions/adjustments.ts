@@ -32,17 +32,24 @@ const adjustment = (kind: string, label: LocalizedText, shortcut: string): Comma
 });
 
 /**
- * master-plan.md §1.9 item 3: Ctrl+I is context-sensitive, the same way
- * Photoshop's own is — it targets whichever mask is currently being edited
- * (`editingMaskLayerIdByDocument`, set by clicking a mask thumbnail) rather
- * than always opening the pixel Invert dialog. Confirmed against Patchy's
- * own mask model (`tests/ui/layer_mask_tests.cpp`,
+ * master-plan.md §1.9 item 3 / §19.2: Ctrl+I is context-sensitive, the same
+ * way Photoshop's own is — it targets whichever mask is currently being
+ * edited (`editingMaskLayerIdByDocument`, set by clicking a mask thumbnail)
+ * rather than always opening the pixel Invert dialog. Confirmed against
+ * Patchy's own mask model (`tests/ui/layer_mask_tests.cpp`,
  * `ui_layer_mask_target_paints_inverts_disables_and_applies`): a dedicated
- * `layerInvertMaskAction`, separate from the pixel invert, flips the mask.
- * VRAVIO already stores this as a lazy `RasterLayerMask.inverted` flag the
- * compositor reads at render time (`render.ts`, `layer-tree.ts`) — flipping
- * it is a flag toggle, not a pixel rewrite, cheaper than Patchy's own
- * (Qt raster ops are typically eager). Not a dialog: unlike the pixel
+ * `layerInvertMaskAction`, separate from the pixel invert, physically
+ * rewrites the mask's pixels (`value = 255 - value`) rather than toggling a
+ * flag. VRAVIO's first version of this used a lazy `RasterLayerMask.inverted`
+ * boolean the compositor applied only at render time — cheaper, but a real
+ * bug: painting on the mask (`raster-pixel-buffers.ts`'s `maskToRgba`/
+ * `rgbaToMask`) reads and writes raw `mask.pixels` with no idea an inversion
+ * exists, so a white brush stroke on an inverted mask *hid* instead of
+ * revealing. Removed the flag entirely (`RasterLayerMask` no longer has
+ * `inverted` — see its own comment) rather than leave a second consumer to
+ * remember it; this rewrites the buffer once per invert click, not per
+ * frame, so every mask consumer (brush, thumbnail, mask→selection, export)
+ * reads the one buffer as the single truth. Not a dialog: unlike the pixel
  * Invert, there is nothing to configure, so it applies immediately as one
  * undo step, matching `layerInvertMaskAction` being a plain trigger, not a
  * dialog opener, in Patchy's own test.
@@ -63,7 +70,8 @@ const invertCommand: CommandDefinition = {
       void changeRasterDocument(activeDocumentId, "Invert Layer Mask (Инвертировать маску слоя)", (current) => {
         const layer = current.layers.find((item) => item.id === maskLayerId);
         if (!layer || layer.kind === "group" || !layer.mask) return false;
-        layer.mask.inverted = !layer.mask.inverted;
+        const pixels = layer.mask.pixels;
+        for (let index = 0; index < pixels.length; index += 1) pixels[index] = 255 - pixels[index]!;
         return true;
       });
       return;
