@@ -134,7 +134,7 @@ describe("theme tokens", () => {
     // swatch colour, a row's indent depth, a clip's width. These are not
     // palette entries and have no business being declared in a theme; each
     // one below was checked to have a writer in a .tsx file.
-    for (const runtime of ["--tool-mask", "--panel-mask", "--icon-mask", "--accent", "--swatch", "--layer-depth", "--clip-width"]) defined.add(runtime);
+    for (const runtime of ["--tool-mask", "--panel-mask", "--icon-mask", "--mask-link-mask", "--accent", "--swatch", "--layer-depth", "--clip-width"]) defined.add(runtime);
 
     const missing = new Set<string>();
     for (const match of styles.matchAll(/var\(\s*(--[a-z0-9-]+)/gi)) {

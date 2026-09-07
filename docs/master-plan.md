@@ -437,14 +437,36 @@ Claude Code и является приоритетным источником и
       если скопировано с холста, вставка происходит в те же координаты
       документа, откуда было скопировано, а не в центр вьюпорта/со
       смещением, как обычный `Ctrl+V`.
-- [ ] **8.** Маска по умолчанию привязана (linked) к слою и двигается
-      вместе с ним; между миниатюрой маски и миниатюрой слоя есть иконка
-      цепи, снимающая эту связь (при разрыве — иконка меняется на
-      разорванную цепь, можно с красным акцентом). Сейчас эта иконка
-      либо отсутствует, либо плохо заметна/нефункциональна — сделать её
-      явно видимой и рабочей (клик реально переключает linked/unlinked,
-      а не просто меняет картинку — CLAUDE.md раздел 3: «настройка,
-      которая ничего не делает, хуже отсутствующей настройки»).
+- [x] **8. Исправлено 8 сентября 2026.** Иконка связи маски со слоем
+      была `mask.linked && <i>⛓</i>` — рендерилась только когда true, без
+      обработчика клика (чистая декорация — CLAUDE.md раздел 3). Теперь
+      видна всегда в обоих состояниях (`МАСКА-СВЯЗАНА.svg`/`МАСКА-НЕ-
+      СВЯЗАНА.svg`, разорванная цепь с красным `var(--danger)` акцентом
+      при unlinked) и клик реально переключает `mask.mask.linked` через
+      `changeRasterDocument`. Иконки — из
+      [adobe/spectrum-css-workflow-icons](https://github.com/adobe/spectrum-css-workflow-icons)
+      (Apache-2.0, уже на машине в `D:\icons`, см. §20.7) — `fill`
+      заменён на `currentColor`, отрисовка через тот же
+      `mask-image`-приём, что уже применяет `ToolGlyph` для остальных
+      SVG-иконок панели инструментов (`.tool-svg-icon`/`--tool-mask`),
+      не через `<img src>` — SVG за `<img>` не наследует CSS `color`,
+      первая попытка с `<img>`+`filter:invert` была отброшена именно
+      по этой причине. Подтверждено живьём: клик переключает CSS-класс,
+      маску иконки и цвет, и реально меняет `mask.linked` в состоянии
+      документа (проверено через `window.vravio`), не только визуально.
+      Владелец поправил дважды после первой живой проверки: (1) значок
+      сидел абсолютным позиционированием внутри `.layer-mask-thumb` и
+      налезал на её же превью и обводку `.editing` — переделано на
+      отдельный элемент потока между `LayerThumbnail` и
+      `LayerMaskThumbnail` внутри нового общего `.layer-thumbs`
+      flex-контейнера (`gap:4px`), не абсолютный оверлей; (2) сам
+      значок 12px оказался нечитаем — детализированный
+      многоштриховый Spectrum-глиф рассчитан на контекст 18–20px, не
+      на бейдж такого размера — увеличен до 15–16px. Кастомный
+      альтернативный рисунок (два пересекающихся кольца) был предложен
+      и отклонён владельцем явно — оставлен оригинальный Spectrum
+      `S2_Icon_Link_20_N.svg`/`S2_Icon_UnLink_20_N.svg`, не заменять
+      этот выбор без нового запроса.
 - [ ] **9.** Обтравочная маска (clipping mask) — горячая клавиша
       `Ctrl+Alt+G` (Windows). Альтернативные способы создания, оба
       обязательны, не только хоткей:
@@ -2940,3 +2962,936 @@ Photoshop, которым Patchy уже специализированно за�
 | Saved Alpha/Spot Channels | ❌ нет | ✅ |
 | Vector Mask (отдельная сущность) | ❌ нет | ✅ |
 | Smart Filter mask | ❌ нет | ✅ |
+
+## 20. Дефолтный Resource Pack — кисти, стрелки, паттерны, иконки, 8 сентября 2026
+
+Владелец разобрал, откуда взять стартовый набор ресурсов почти без
+рисования с нуля — по каждому виду ресурса свой лучший донор, не один
+проект на всё. Задачи ниже, с лицензией и вердиктом по каждому пункту.
+
+### 20.1. Кисти
+
+- [ ] **Импорт/экспорт `.myb` (MyPaint Brush)** — не воровать 20
+      дефолтных пресетов, а сделать формат-совместимость с экосистемой
+      MyPaint целиком. Донор: [mypaint/mypaint-brushes](https://github.com/mypaint/mypaint-brushes)
+      — официальный пакет пресетов, политика проекта требует, чтобы
+      сырые brush settings были **CC0/Public Domain** (упаковочные
+      скрипты — отдельная лицензия, сами настройки — нет). Модель
+      параметров — [mypaint/libmypaint](https://github.com/mypaint/libmypaint):
+      inputs (Pressure/Speed/Direction/Tilt/Stroke/Random) и settings
+      (Radius/Hardness/Opacity/Spacing/Smudge/Color dynamics/Dabs/
+      Tracking), описаны в `brushsettings.json`.
+- [ ] **Стартовый набор ~25 кистей**, отобранных из MyPaint, а не все
+      180: BASIC (Hard/Soft Round, Hard/Soft Pressure, Airbrush, Pixel),
+      DRAW (Pencil HB/2B, Mechanical Pencil, Ink, Technical Pen,
+      Marker), PAINT (Flat/Round Paint, Bristle, Wet Paint, Oil,
+      Gouache), TEXTURE (Chalk, Charcoal, Pastel, Dry Brush, Grain,
+      Sponge), UTILITY (Blend, Smudge, Erase Hard/Soft, Texture
+      Eraser). Остальное — через `More Brushes → Resource Manager`
+      (см. 20.6).
+- [ ] **5–10 CC0 Krita community presets** в дополнение к MyPaint —
+      конкретно [Nylnook Krita Brushes](https://nylnook.itch.io/)
+      (упомянут на официальной странице Krita community packs),
+      лицензирован CC0/Public Domain: ink, paint, pencil, markers,
+      rotation, texture. **Не** тащить весь дефолтный Krita bundle —
+      сама Krita GPLv3, отдельные ресурсы внутри могут иметь свою
+      лицензию, каждый смотреть отдельно.
+- [ ] **Brush tips — свои процедурные**, не донорские: Round, Square,
+      Chisel, Bristle, Chalk, Noise, Sponge. GIMP/Krita — только
+      референс формы, не источник файлов (см. 20.4 про GIMP Data).
+
+### 20.2. Стрелки и маркеры (Vector)
+
+- [ ] **Нативная поддержка SVG `<marker>`** — `Stroke → Start/Middle/
+      End: [none ▼]`, чтобы обычные SVG-arrowheads импортировались без
+      конвертации. Референс — [Inkscape stock markers.svg](https://gitlab.com/inkscape/inkscape/-/blob/master/share/markers/markers.svg):
+      Wide arrow, Wide rounded, Heavy, Triangle, Stylized triangle,
+      Dart, Concave triangle, Rounded arrow, dots, diamonds, pins.
+- [ ] **VRAVIO Basic Markers** — стартовый набор (Arrow, Arrow Wide,
+      Arrow Rounded, Triangle, Triangle Open, Chevron, Diamond, Circle,
+      Square, Bar, Slash, Dot) на основе [manu-mannattil/markers](https://github.com/manu-mannattil/markers)
+      — **Public Domain / Unlicense**, можно адаптировать свободно, с
+      небольшим визуальным cleanup.
+- [ ] **`Selected Vector Object → Add as Marker`** — пользователь
+      создаёт свои маркеры из любой векторной фигуры, не только из
+      встроенного набора.
+
+### 20.3. Векторные паттерны
+
+- [ ] **Основной набор — параметрический, не растровые тайлы.**
+      Донор: [Pattern Monster](https://github.com/pattern-monster/pattern-monster)
+      (MIT) — сотни кастомизируемых seamless SVG patterns (Lines,
+      Waves, Circles, Plaid, Tartan, Geometric, Triangles, Chevron,
+      Grid, Dots). Брать генераторную модель (`Scale`/`Angle`/`Stroke`/
+      `Color A`/`Color B`/`Offset` как живые параметры одного паттерна
+      «Chevron»), не сохранённые файлы `pattern-red-20px.svg` × N.
+- [ ] **Procedural Pattern Generator** — [GeoPattern](https://github.com/btmills/geopattern)
+      (MIT): repeatable SVG из seed-строки, каждый seed — вариация.
+      Плюс идеи API из [svg-patterns](https://github.com/derhuerst/svg-patterns)
+      (ISC): lines/squares/waves/woven/rhombic3d с
+      scale/fill/stroke/strokeWidth/background как параметрами.
+- [ ] **Hatches — свой маленький процедурный генератор**: single,
+      cross, triple, dots, grid. Код настолько простой, что тащить
+      GPL-ассеты Inkscape для этого смысла нет.
+- [ ] **Расширенный pattern-референс (не для прямого копирования
+      ассетов)**: [Inkscape share/paint](https://gitlab.com/inkscape/inkscape/-/tree/master/share/paint)
+      — Asian patterns, Decoratives, Geometrical, Grids, Halftones,
+      Hatches, Nature patterns, Shading, Textures. **Важное НО**: часть
+      stock-pattern файлов Inkscape отдельно переведена под GPL2+ —
+      структуру/идеи брать можно, конкретные ассеты — только после
+      license check по файлу.
+
+### 20.4. Прочие ресурсы для изучения (не для прямого копирования)
+
+- [ ] **GNOME/gimp-data** ([репозиторий](https://github.com/GNOME/gimp-data)) —
+      `brushes/`, `patterns/`, `icons/`, `cursors/`, `tools/`: полезно
+      как референс «каким минимальным набором десятилетиями
+      комплектовался обычный raster editor», особенно brushes/patterns.
+      Политика GIMP требует CC0 для новых data, но у части очень старых
+      historical data происхождение лицензии определить уже невозможно
+      — референс и источник **проверенных конкретных** CC0-ресурсов, не
+      `Ctrl+A → Copy → VRAVIO`.
+- [ ] **Палитры и градиенты** — Inkscape/GIMP как формат-референс (GPL
+      palette format, структура stock gradients), лицензии конкретных
+      наборов смотреть отдельно от формата.
+- [ ] **Symbols/vector assets** — Inkscape symbol libraries как донор
+      устройства библиотеки (как хранится, как каталогизируется), не
+      обязательно самих файлов.
+
+### 20.5. Организация — `VRAVIO Resources` и `.vrbundle`
+
+- [ ] Не называть всё это плоско «пресеты» — единая структура:
+      ```
+      RESOURCES
+      ├── Brushes (Presets, Tips, Textures)
+      ├── Vector (Markers, Patterns, Hatches, Symbols, Styles)
+      ├── Colors (Palettes, Gradients)
+      ├── Effects (Presets)
+      └── Templates
+      ```
+- [ ] **`.vrbundle`** — формат стороннего пакета ресурсов (`Kirill's
+      Ink Brushes.vrbundle`, `Architectural Hatches.vrbundle`), ставится
+      через Resource Manager (см. 20.6). Совпадает с идеей модульного
+      VRAVIO из §19/§23/§24 — не захламлять базовую программу тысячами
+      ресурсов сразу, дать нормальную экосистему наборов вместо этого.
+
+### 20.6. Resource Manager
+
+- [ ] `More Brushes/Patterns/... → Resource Manager` — установка/
+      удаление `.vrbundle`, просмотр установленного, без чего пункты
+      20.1–20.5 остаются просто файлами на диске, а не фичей.
+
+### 20.7. Иконки — источник Adobe Spectrum
+
+- [ ] Источник иконок/курсоров UI — [adobe/spectrum-css-workflow-icons](https://github.com/adobe/spectrum-css-workflow-icons),
+      **уже скачан на этой машине**: `D:\icons\spectrum-css-workflow-icons\icons\assets\svg`
+      (весь `D:\icons` стоит осмотреть на предмет другого уже
+      подготовленного материала). Сверить лицензию по
+      [COPYRIGHT](https://github.com/adobe/spectrum-css/blob/main/COPYRIGHT)
+      и [README](https://github.com/adobe/spectrum-css/blob/main/README.md)
+      прежде чем использовать в продукте, не только в референсе.
+- [ ] Для дизайн-логики (не только иконок) — [adobe/spectrum-css](https://github.com/adobe/spectrum-css)
+      (главный репозиторий самой дизайн-системы) и [adobe/react-spectrum](https://github.com/adobe/react-spectrum)
+      (компонентная логика, более applicable к тому, как VRAVIO уже
+      устроен на React). Дополнительно: [spectrum-web-components](https://github.com/adobe/spectrum-web-components),
+      [spectrum-design-data](https://github.com/adobe/spectrum-design-data),
+      главный сайт [spectrum.adobe.com](https://spectrum.adobe.com/).
+
+### 20.8. Импорт `.js`-иконок (React icon libraries)
+
+- [ ] Пользователь тащит `iconCamera.js` (типичный экспорт React-иконки,
+      `<path d="..."/>` внутри JSX) — VRAVIO определяет `JS Vector Asset
+      detected` и предлагает выбор: **Импортировать как Вектор** или
+      **как Исходный код**. При выборе «Вектор» — парсер JSX достаёт
+      `path.d`/`fill`/`stroke`/`strokeWidth`/`transform`/`viewBox` и
+      строит родные объекты Vector environment напрямую, без
+      промежуточного создания `.svg`-файла на диске.
+- [ ] **Если извлечь путь не удаётся** (не JSX-подобная структура,
+      динамическая генерация пути и т. п.) — явное уведомление
+      пользователю, а не тихий провал импорта (CLAUDE.md раздел 3: путь
+      отказа обязан быть видимым).
+- [ ] Итог — VRAVIO может открывать целые библиотеки React-иконок почти
+      так же, как Illustrator открывает SVG. Отдельная, не связанная с
+      остальным разделом фича, но полезная для дизайнеров интерфейсов
+      как аудитории VRAVIO.
+
+## 21. Photoshop-паритет жестов и модификаторов, 8 сентября 2026
+
+Владелец сверил документацию Photoshop с текущим main VRAVIO построчно.
+Итог: крупные shortcut-семьи (D/X, `[`/`]`, цифры opacity/flow, Caps
+Lock, Space-pan, Ctrl+T, layer stack shortcuts, Reselect) уже перенесены
+хорошо — но профессиональная «магия» вокруг thumbnail'ов, масок, кисти и
+временных модификаторов почти вся отсутствует. Ощущение опытного
+пользователя Photoshop сейчас — 6/10 не из-за нехватки крупных фич, а
+из-за примерно 20–30 маленьких контекстных жестов ниже.
+
+### 21.1. P0 — маски и thumbnail-жесты (самая большая дыра)
+
+- [ ] **`Ctrl`/`Mod`-клик по mask thumbnail → загрузить маску как
+      выделение.** Photoshop поддерживает 4 булевых режима:
+      `Mod+click` replace, `Mod+Shift+click` add, `Mod+Alt+click`
+      subtract, `Mod+Shift+Alt+click` intersect. Сейчас
+      `LayerMaskThumbnail`'s обычный клик просто делает маску текущей
+      для редактирования (§1.9 пункт 1's `editingMaskLayerId`) —
+      обработки `ctrlKey`/`altKey`/`shiftKey` там нет вообще.
+- [ ] **То же для thumbnail самого слоя** (`Mod`-клик → непрозрачные
+      пиксели слоя как выделение) — backend уже существует:
+      `Select Layer Content` реально вызывает `selectOpaquePixels()`
+      (`environments/raster/commands/definitions/select.ts`). Не
+      хватает только жеста на самом thumbnail — «почти бесплатное»
+      добавление поверх готовой функции.
+- [ ] **`Alt`-клик по mask thumbnail → solo grayscale view** (весь
+      холст показывает чёрно-белую маску вместо изображения, повторный
+      `Alt`-клик — обратно). Полезно проверять дырки/ореолы/грязь/края.
+- [ ] **`Shift`-клик по mask thumbnail → временно отключить маску**
+      (`mask.enabled` в модели уже есть и уже читается компоузером —
+      не хватает только UI-жеста, см. также §19.1's «Disable/Enable
+      маски — переключатель в UI», та же задача).
+- [ ] **`Alt+Shift`-клик по mask thumbnail → цветной overlay маски**
+      (классический rubylith, красным по скрытым областям) — логично
+      реализовать одним overlay renderer вместе с Quick Mask (§19.2/
+      §21.2).
+- [ ] **`Alt`+drag маски → скопировать на другой слой**, отличать от
+      обычного drag (уже реализовано, коммит `2c4d232` — обычный drag
+      переносит: `source.mask → target.mask; delete source.mask`).
+      Move Mask — готово, Copy Mask через `Alt` — нет, легко довести на
+      той же основе.
+- [ ] **`Alt`-клик по глазу слоя → isolate (solo) layer**, повторный —
+      вернуть предыдущее состояние видимости всех слоёв (не просто
+      «включить всё» — нужно помнить состояние ДО isolate).
+- [ ] **`Alt`-клик между слоями в панели → clipping mask** (жест, не
+      только команда) + **`Ctrl+Alt+G`** как хоткей на уже существующий
+      `layer.clipping = !layer.clipping` (`LayersPanel`). Функционал
+      обтравки уже есть (см. также §1.9 пункт 9 — тот же хоткей и жест
+      уже независимо запрошены владельцем, не дублировать реализацию).
+
+### 21.2. P0 — кисть, заливка, выделение
+
+- [ ] **`Alt` во время Brush → временная пипетка** (Eyedropper), пока
+      зажат — цвет, отпустил — снова Brush. Сейчас такого временного
+      переключателя инструмента в tool host нет.
+- [ ] **`Shift+[`/`Shift+]` → hardness кисти** (шаг обычно 25%), рядом
+      с уже готовым `[`/`]` для размера (VRAVIO меняет размер на ~10%
+      с ограничением min/max — этот паттерн оставить, hardness сделать
+      так же). Три главных параметра кисти обязаны крутиться без
+      панели: `size [ ]`, `hardness Shift+[ ]`, `opacity 0–9`.
+- [ ] **`Alt`+ПКМ-drag → размер/hardness мышью**: по горизонтали —
+      size, по вертикали — hardness (официальная Photoshop-документация
+      именно так это описывает). Особенно ценно для планшета.
+- [ ] **`/` → Lock Transparent Pixels.** `lockTransparent` уже
+      существует и реально участвует в `paintMask` (ограничивает кисть
+      текущей непрозрачностью слоя) — не хватает только хоткея.
+- [ ] **`Alt+Backspace`/`Mod+Backspace`/`Shift+Backspace` → Fill FG/
+      Fill BG/Fill dialog.** Особенно ценно в режиме редактирования
+      маски: `D` (чёрный/белый по умолчанию для маски, уже сделано) +
+      `Alt+Backspace` → залить маску текущим цветом одним движением.
+- [ ] Selection modifiers — единый контракт для ВСЕХ инструментов
+      выделения, без исключений: `normal → new`, `Shift → add`,
+      `Alt → subtract`, `Shift+Alt → intersect`. `ToolPointer` уже
+      получает `shiftKey`/`altKey`/`ctrlKey`/`metaKey` — фундамент есть,
+      нужно только не допускать расхождений между конкретными
+      marquee/lasso-подобными инструментами.
+
+### 21.3. P1 — заметно ускорят работу
+
+- [ ] **`Q` → Quick Mask** — `Selection.mask` становится редактируемым
+      overlay (красным), рисование кистью, `Q` обратно — превращается
+      в selection. Та же архитектура, что уже описана в §19.2/§19.7:
+      `selection.mask` уже тот же формат данных, что
+      `RasterLayerMask.pixels` — общий `PaintTarget`-пайплайн справится
+      без изменений.
+- [ ] **`Tab` → спрятать весь UI** (панели+toolbar), **`Shift+Tab`** —
+      спрятать только доки, оставить toolbar/меню. Дешёвая функция с
+      большим эффектом присутствия картинки.
+- [ ] **`Alt+[`/`Alt+]` → выбрать соседний слой** (навигация, не
+      перемещение самого слоя — важно отличать от уже существующих
+      `Mod+[`/`Mod+]`, которые двигают слой в стеке). `Select layer
+      above/below/top/bottom` — отдельные команды, которых сейчас нет.
+- [ ] **Стрелки/`Shift`+стрелки → nudge на 1/10 единиц**, единый
+      interaction protocol для перемещения слоя, transform, selection,
+      узлов вектора, направляющих — одинаково во всех средах.
+- [ ] **Временный `Ctrl`-toggle Auto Select для Move Tool** — если
+      Auto Select включён, `Ctrl` временно выключает и наоборот (та же
+      логика, что и остальные временные модификаторы этого раздела).
+      `pickLayerAt` и Auto Select уже существуют у Move Tool.
+- [ ] **Right-click на канвасе с Move Tool → список слоёв под
+      курсором** (проверить, есть ли уже такое поведение у
+      `raster-context-menus`, если нет — добавить).
+- [ ] **Double-click ИМЕНИ слоя → inline rename**, отдельно от
+      double-click по всей строке (сейчас открывает Layer Style —
+      слишком широкий жест; см. также §22.1's «Double-click имени →
+      inline rename»). Double-click по smart/adjustment thumbnail —
+      открыть их соответствующий редактор/Properties.
+- [ ] **Удерживать `~` → временное стирание той же кистью** (сохраняя
+      размер/tip/hardness/dynamics), отпустил — снова рисование.
+      Особенно полезно в масках.
+- [ ] **Двузначный numeric chord для opacity**: `4` затем быстро `5` →
+      `45%`, а не `40%` потом `50%` по отдельности (буфер на
+      300–500 мс). Мелочь, но приятная — `Shift`+цифры → flow уже
+      сделано правильно, opacity просто нужно чуть доработать.
+- [ ] **`Shift`-клик кистью → прямая линия от последней точки.**
+      `RasterWorkspace.tsx` уже хранит `lastStrokePoint` — хороший
+      фундамент, но убедиться, что ВСЕ brush-like инструменты
+      поддерживают shift-connect одинаково (единый уровень, не
+      per-tool).
+- [ ] **`Mod+0`/`Mod+1`** → Fit/100% (Fit viewport уже есть
+      автоматически, `Mod+1` — нет), опционально `Mod+2` → 200%.
+- [ ] **`Shift+`/`Shift-` → циклически менять blend mode активного
+      painting-инструмента**, если у Brush уже есть опция mode —
+      подключить почти бесплатно.
+
+### 21.4. P2 — профессиональная полировка
+
+- [ ] Modifier-aware New Layer button (`Alt`-клик → диалог параметров
+      сразу; `Ctrl`-клик → создать слой НИЖЕ текущего, не выше).
+- [ ] `Alt`+drag слоя на канвасе → быстрый клон слоя.
+- [ ] Transform modifier matrix — сверить полное соответствие
+      Photoshop: `Alt` от центра, `Shift` constrain/snap increments
+      при rotate, `Mod` distort, `Mod+Shift` skew, `Mod+Shift+Alt`
+      perspective (Ctrl+T и pending-transform commit/cancel уже есть,
+      сама матрица модификаторов — нет).
+- [ ] `F` → циклические Screen Modes (Standard/Full Screen with Menu/
+      Full Screen).
+- [ ] Brush preset cycling через `,`/`.`.
+- [ ] **Полноценный редактор горячих клавиш** (`Settings → Keyboard`,
+      поиск по команде, `Record shortcut`, конфликт-detection, Reset,
+      пресеты Photoshop/VRAVIO/Illustrator/custom). Фундамент уже
+      есть — `kernel.keymap.resolve(...)` центральный command/keymap
+      механизм — это доводится до пользовательского UI, не
+      переписывается с нуля. Особенно важно для проекта, объединяющего
+      Raster/Vector/Audio/Video под одной клавиатурой.
+
+### 21.5. Архитектурное решение — Input Map, не россыпь `onClick`
+
+Не реализовывать модификаторы точечно в JSX (`if (ctrl && shift && alt)
+else if (ctrl && shift) else if (...)` у каждого thumbnail отдельно —
+быстро превращается в помойку, тот же класс проблемы, что и `switch` на
+пятнадцать веток из CLAUDE.md раздела 6). Вместо этого:
+
+- [ ] Единый уровень **InteractionGesture**: `{ target: "layer-mask-
+      thumbnail", action: "click", modifiers: { mod, shift, alt } }`,
+      с mapping на команды (`mask.loadSelection`, `mask.toggleEnabled`,
+      `mask.soloView`, `mask.overlay` и т. д.) — тот же принцип, что
+      уже применён к клавиатуре через `kernel.keymap`, распространённый
+      на мышь/перо/панельные жесты.
+- [ ] Цель — не просто «Ctrl-клик работает», а **Input Map**
+      (Keyboard/Mouse/Pen/Modifiers/Wheel/Panel gestures в одном
+      реестре), который пользователь сможет переназначать так же, как
+      клавиатурные шорткаты — `Ctrl-click mask` или `Middle click mask`
+      или `Pen Button 2 + tap` становятся одной и той же командой.
+      Formulировка цели: **всё действие пользователя — команда, всё
+      сочетание ввода — биндинг.**
+
+## 22. UI/UX redesign — Photoshop-плотность интерфейса, 8 сентября 2026
+
+Главная формулировка задачи для программиста: **не копировать внешний
+вид Photoshop — перенести его информационную плотность и модель
+взаимодействия.** Панели показывают больше полезной информации на
+меньшей площади; свойства контекстные; специальные инструменты имеют
+специализированные контролы вместо универсальных слайдеров; связанные
+панели группируются вкладками; цвет — преимущественно семантический
+accent среды и состояния, не украшение. Короче: VRAVIO сейчас выглядит
+как современное приложение, должен начать ощущаться как профессиональный
+инструмент.
+
+### 22.1. P0
+
+- [ ] Убрать вторую строку `Normal · 100%` у обычных слоёв в панели
+      слоёв.
+- [ ] Уменьшить обычную высоту строки слоя до ~36–38 px (сейчас ~46+ px
+      именно из-за двух строк текста).
+- [ ] Перестроить header панели слоёв: `Filter → Blend+Opacity →
+      Locks+Fill`.
+- [ ] Добавить quick-иконки типа слоя (Pixel/Adjustment/Text/Shape/
+      Smart) прямо в строке.
+- [ ] Сделать выбранную (selected) строку нейтральной по цвету, accent
+      перенести на активный thumbnail, а не на всю строку.
+- [ ] Заменить emoji-цепочку (⛓ между thumbnail слоя и маски) на
+      настоящую SVG-иконку — заодно решает часть §1.9 пункта 8 (сделать
+      иконку связи маски заметнее и функциональнее), но это отдельная,
+      чисто визуальная правка радиуса/иконки, не поведения.
+- [ ] Double-click по ИМЕНИ слоя → inline rename; не открывать Layer
+      Style по клику на всю строку (совпадает с §21.3's тем же пунктом
+      — одна задача, не две).
+- [ ] Layer Effects — показывать раскрываемыми child rows под строкой
+      слоя, не только через отдельный диалог (перекликается с §1.9
+      пунктом 11 — тот же список применённых эффектов с иконкой глаза
+      на каждый).
+- [ ] Properties сделать selection-aware, включая отдельные Layer Mask
+      Properties при выбранной маске.
+- [ ] Полностью переделать Levels в histogram+handles widget вместо
+      трёх строк `label ─── [value]` на полпанели.
+- [ ] Настоящий RGB/R/G/B выбор канала в Levels, не фиктивный dropdown
+      только с одним пунктом RGB.
+
+### 22.2. P1
+
+- [ ] Raster workspace layout: Properties сверху, Layers/Channels/Paths
+      одной нижней tab-group (не отдельные плавающие панели).
+- [ ] Дополнительные панели — в collapsible icon dock, не занимают
+      место по умолчанию.
+- [ ] Отдельные дефолтные layouts для Raster/Vector/Audio/Video.
+- [ ] `Save Workspace`/`Reset Workspace`.
+- [ ] Добавить raster Channels panel и raster Paths panel (сами панели,
+      не только backend — см. также §19.3's Document-level Channels,
+      частично та же инфраструктура).
+- [ ] Реальные `Недавние` в New Document — сейчас это буквально первые
+      пять заводских пресетов (`category === "recent" ?
+      kindPresets.slice(0, 5)` в коде), не история пользователя.
+      Настоящий Recent — последние реально использованные параметры
+      документа, с дедупликацией.
+- [ ] `Saved` presets отдельно от `Recent` (Photoshop разделяет их) —
+      `Save preset`, именованные пресеты вроде `YouTube thumbnail`/
+      `A4 print`/`Logo 2000`.
+- [ ] **Clipboard preset** в New Document — если в буфере обмена есть
+      картинка, предложить `Clipboard 1920×1080` как готовый вариант
+      размера (`Ctrl+N` → `Enter` → документ нужного размера сразу).
+- [ ] Orientation — два icon-button, не текстовый dropdown.
+- [ ] Pixel Aspect/Color Profile и подобное — убрать в `▼ Дополнительные
+      параметры`, свёрнутые по умолчанию (95% пользователей их не
+      трогают; `Pixel Aspect` сейчас торчит прямо среди базовых raster-
+      параметров).
+- [ ] Убрать disabled/planned возможности из production UI — не
+      показывать то, что ничего не делает (CLAUDE.md раздел 3: галочка,
+      которая ничего не делает, хуже отсутствующей).
+- [ ] Active-state у выбранного Raster/Vector preset в New Document.
+
+### 22.3. P2
+
+- [ ] Compact/Normal/Large варианты высоты строки слоя.
+- [ ] Thumbnail Size + переключатель Layer Bounds/Document Bounds для
+      превью.
+- [ ] `≡` panel menu на каждой панели (Photoshop-принцип: не плодить
+      кнопки в самом интерфейсе панели — `Panel Options`, `Thumbnail
+      Size`, `Close`, `Close Tab Group`, `Collapse`, `Filter Options`,
+      `Color Labels` и т. п. уходят туда). Особенно важно для VRAVIO,
+      где количество функций будет только расти.
+- [ ] Floating panel groups.
+- [ ] Полноценный reorder/tab/stack панелей через Dockview (уже
+      используемая библиотека — довести её возможности до конца, не
+      использовать частично).
+- [ ] Уменьшить стандартный radius контролов с 6 до ~3–4 px, radius
+      панелей — с 6 до 0–3 px, radius диалогов — с 13 до 8–10 px, gap
+      панелей — с 9 до 3–6 px (см. таблицу размеров ниже).
+- [ ] Сократить использование environment-accent цвета до реально
+      активных состояний, не декоративного фона.
+
+### 22.4. Ориентировочная шкала размеров (не «священные пиксели»)
+
+| Элемент | Сейчас | Цель |
+|---|---|---|
+| body text | 13 px | 12–13 px |
+| secondary text | 10.5 px | 10–11 px |
+| normal control | ~27–30 px | 26–28 px |
+| compact control | — | 22–24 px |
+| normal layer row | ~46+ px (две строки) | 36–38 px |
+| compact layer row | — | 30–32 px |
+| toolbar icon | 16 px | 16 px |
+| icon hit area | ~28 px | 28–30 px |
+| control radius | 6 px | 3–4 px |
+| panel internal radius | 6 px | 0–3 px |
+| dialog radius | 13 px | 8–10 px |
+| panel gap | 9 px | 3–6 px |
+
+### 22.5. Общий принцип — меньше рамок, больше группировки
+
+VRAVIO сейчас склонен к `[ рамка вокруг каждого поля ]` (три отдельных
+бордера подряд под Levels); Photoshop чаще использует `label   value`
+логическими группами без визуальной рамки на каждый контрол. Пример —
+Levels: сейчас три строки `Вход: чёрная точка / Гамма / Вход: белая
+точка`, каждая — `label ─── [value]`, занимает полпанели; после
+редизайна — histogram с тремя draggable handle прямо под ним (чёрная
+точка/гамма/белая точка) — тот же функционал, компактнее, понятнее,
+визуально профессиональнее. Это не отдельная задача, а иллюстрация
+принципа §22.1's «переделать Levels».
+
+### 22.6. Масштаб последующей работы
+
+Если пройтись так же по всему UI VRAVIO — toolbar, верхняя Options Bar,
+контекстные меню, Color, History, Navigator, Text, Transform, Layer
+Style, Adjustments — получится backlog на 100–150 конкретных пунктов, с
+пометкой у каждого: «просто CSS» / «небольшая логика» / «нужна новая
+подсистема». Делать этот полный проход и разметку — отдельная будущая
+задача, ценная перед большим UI-рефактором, не откладывать в долгий
+ящик наравне с §23/§24 ниже.
+
+## 23. Spatial / 2.5D workspace — photobash и concept art, 8 сентября 2026
+
+Не «добавить 3D» — отдельный класс рабочего процесса: **2.5D / spatial
+compositing**, когда финальный результат остаётся обычной 2D-картинкой,
+но собирается внутри настоящего пространства с камерой, глубиной,
+перспективой, светом и тенями. Ниша между Photoshop (недостаточно
+пространственный) и Blender (избыточно трёхмерный для художника,
+которому нужен конкретный кадр, а не полноценная 3D-модель). Формула
+продукта: **не «VRAVIO умеет редактировать 3D», а «VRAVIO позволяет
+собирать обычное изображение в настоящем пространстве, чтобы
+перспектива, глубина, свет и расположение объектов перестали быть
+ручной угадайкой».**
+
+### 23.1. Аналоги и что из них брать
+
+- **[Mental Canvas](https://www.mentalcanvas.com/)** — ближе всего по
+      философии: сцена — бесконечные прозрачные 2D-холсты в
+      3D-пространстве, **view-centric**, не object-centric (не нужно
+      строить объект со всех сторон, только нужный кадр). Killer-идея
+      для заимствования: `Move in Depth` — двигаешь объект по Z,
+      система автоматически компенсирует масштаб/позицию так, что через
+      исходную камеру объект визуально остаётся на месте, просто
+      физически уезжает в глубину.
+- **Fusion/Nuke-подобные композиторы** — `ImagePlane3D` превращает 2D
+      картинку в плоскость внутри 3D-сцены, `Renderer3D` рендерит
+      обратно в 2D. VRAVIO не обязан копировать node-graph UI Fusion —
+      Photoshop-подобная модель слоёв сохраняется, идея 2D-плоскостей-
+      в-3D-сцене — нет.
+- **Clip Studio Paint** — 3D-камера **связана с perspective ruler**:
+      сменил камеру — направляющие перспективы на холсте
+      соответствуют ей автоматически. Прямой UX-референс для §23.3.
+- **Blender** — `Images as Planes` (картинка → текстурированная
+      плоскость с правильным aspect ratio), `Grease Pencil` (штрихи
+      прямо в 3D-пространстве). Референс идей, НЕ архитектуры — VRAVIO
+      специально не должен становиться маленьким Blender (топология,
+      UV, rigging, sculpting, node-материалы — вне скоупа, см. 23.9).
+
+### 23.2. Почему нынешний `kind: "3d"`-слой не подходит для этой цели
+
+Сейчас `renderScene3DLayerPixels()`: создать `THREE.Scene` → добавить
+один объект → поставить камеру → отрендерить → `readPixels` → записать
+в `RasterLayer.pixels` → **уничтожить renderer**. В коде прямо
+написано, почему так: `stored pixels` — единственное экранное
+представление 3D-layer, постоянного live WebGL canvas нет. Для «положить
+объект и покрутить» это нормально; для Spatial это первое, что придётся
+поменять — нужен **persistent** `THREE.Scene`/`WebGLRenderer` в режиме
+редактирования (60 FPS, не create-render-readPixels-dispose на каждое
+изменение), `readPixels` — только по завершении редактирования, для
+export, для обновления кэшированного raster-представления и для render
+passes (23.6).
+
+- [ ] Не расширять `Scene3DLayerData` бесконечно (одна модель на
+      камеру+много объектов+свет — быстро станет монстром). Ввести
+      новую сущность **`SpatialScene`**: `{ id, camera: SpatialCamera,
+      nodes: SpatialNode[], environment, renderSettings }`, где
+      `SpatialNode = MeshNode | ImageCardNode | VectorCardNode |
+      GroupNode | LightNode | GroundPlaneNode`, у каждого общий
+      `Transform3D { position, rotation, scale, pivot }`.
+- [ ] В `Layers` — Spatial Scene ведёт себя как специальная группа/слой
+      (`▾ 3D Space → Camera/Light/Image Card/Mesh/...`), не отдельная
+      страшная 3D-программа. На выходе — обычный RGBA
+      (`SpatialScene → render → pixels`), Raster compositor не обязан
+      знать внутреннюю кухню сцены.
+- [ ] Старые `kind: "3d"`-слои — миграция в `SpatialScene` с одним
+      `MeshNode`, не breaking change; существующие loaders (GLTF/GLB,
+      OBJ), revision-aware model cache и lighting primitives
+      переиспользуются как первые строительные блоки, не выбрасываются.
+
+### 23.3. Killer feature — 2D/Vector Card живьём связаны с Raster/Vector
+
+- [ ] **`ImageCardNode`**: `{ assetId, transform, opacity, blendMode,
+      billboard: none|camera|vertical, materialMode: unlit|lit,
+      castShadow, receiveShadow, doubleSided }` — в Three.js это
+      `PlaneGeometry + Texture`; концептуально то же, что Godot's
+      `Sprite3D` (2D-текстура как объект в 3D-мире с billboard-
+      поведением).
+- [ ] **Drag Raster layer → Spatial Scene** создаёт **связанную**
+      карточку (не разовый снимок): изменил слой в Raster → карточка
+      обновилась сама, через существующий asset-revision механизм
+      VRAVIO (тот же принцип обмена, что уже используется между
+      Raster/Vector).
+- [ ] **Double-click карточки → `Open in Raster`/`Open in Vector`**,
+      дорисовал/поправил путь → `Apply` → сцена обновилась. Это не
+      «есть 3D», а «Raster и Vector — редакторы содержимого объектов
+      пространственной композиции» — главная VRAVIO-специфичная идея
+      всего раздела.
+
+### 23.4. Перспектива и камера
+
+- [ ] Полноценная Camera: perspective/orthographic, focal length/FOV/
+      sensor size, lens-пресеты (18/24/35/50/85/105/135 mm), position/
+      rotation/Look At/roll, lens shift X/Y, near/far clip; несколько
+      именованных камер на документ + `Lock Camera` (отдельно
+      position/rotation/lens).
+- [ ] **Camera matching по фотографии** — импортировал фото, поставил
+      горизонт + vanishing points (1/2/3-point perspective), VRAVIO
+      вычисляет rotation/FOV/horizon/perspective directions камеры.
+      UX/математика-референс: [fSpy](https://github.com/mattiasgustavsson/fSpy) —
+      специализированное open-source приложение именно для camera
+      matching. **Лицензия GPL-3.0** — алгоритмы/UX смотреть свободно,
+      прямое копирование реализации требует отдельной проверки
+      совместимости лицензий, не переносить один-в-один бездумно.
+- [ ] **Perspective guides из камеры** (`VP1`/`VP2`/`VP3`/horizon на
+      обычном raster canvas) + **Perspective snapping** для кисти/линии
+      (режимы `Off/VP1/VP2/VP3/Auto nearest`) + **Perspective Line
+      Tool** — донор UX: Clip Studio Paint (23.1).
+- [ ] Perspective Grid (Ground/Wall X/Wall Y/custom plane, spacing/
+      subdivisions/color/opacity/snap) и **рабочие плоскости**
+      (`Set Working Plane`, создание из 3 точек или из выделения —
+      рисование/вставка/3D-объекты автоматически ложатся на неё).
+- [ ] Measure tool (указал две точки, задал реальную длину — сцена
+      получает масштаб), unit system (мм/см/м/дюймы/футы), `Add Human
+      Scale`/`1m cube` как быстрые референсы масштаба, `Eye Height`,
+      auto-ground из горизонта при camera match.
+
+### 23.5. Move in Depth и привязка к поверхности — главные killer features
+
+- [ ] **`Move in Depth`** (см. 23.1/Mental Canvas) — объект двигается
+      по Z, VRAVIO компенсирует scale/X/Y так, что через ТЕКУЩУЮ
+      камеру объект не смещается на экране. Даёт корректно работать:
+      пересечения, туман, DOF, свет, тени, параллакс, depth masks,
+      перспективу расположения других объектов.
+- [ ] `Pin to Screen Position`/`Pin size on screen` — похожие, более
+      узкие варианты той же идеи.
+- [ ] `Place on Surface`/`Drop to Ground` (raycast вниз, ставит объект
+      на поверхность) + `Align to Surface` (карточка поворачивается по
+      нормали) + `Project Image onto Surface`/Decal Tool (например
+      граффити на стену).
+- [ ] `Create Box from Perspective` (на фото выделил параллелепипед —
+      VRAVIO восстанавливает approximate 3D box) + быстрые blockout-
+      примитивы (Box/Wall/Plane/Cylinder/Stairs/Arch) — не полноценное
+      моделирование, черновая расстановка объёма.
+- [ ] `Raster silhouette → billboard`: выделил объект на фото →
+      `Create Spatial Card from Selection` — обрезка по bounds, alpha,
+      связанная карточка автоматически.
+
+### 23.6. Render passes → маски (уникальное преимущество VRAVIO)
+
+- [ ] Spatial renderer отдаёт не только Beauty RGBA, но и **Depth,
+      Normals, Object ID, Material ID, Shadow, AO, Emission** — и эти
+      passes доступны **внутри** VRAVIO, не только на экспорт.
+- [ ] **Depth → Mask** (`Mask Source: Scene Depth`, near/far/feather/
+      invert) — недеструктивная depth-of-field/fog маска, обновляется
+      если объекты/камера сдвинулись.
+- [ ] **`Ctrl`-клик по 3D-объекту → идеальное растровое выделение**
+      через Object ID pass; `Object ID → Mask`, `Group ID → mask` для
+      целых коллекций.
+- [ ] Normal-based masks (Facing Up/Facing Camera/Facing Light) —
+      полезно для снега/света/грязи/бликов; Shadow pass и AO pass как
+      отдельные источники масок для ручной доработки в Raster.
+
+### 23.7. Свет, атмосфера, materials — минимальный набор
+
+- [ ] Свет: Ambient/Directional (Sun)/Point/Spot/Area, с
+      Intensity/Exposure/Color/**Temperature** (K — фотографам понятнее
+      RGB), light gizmos прямо на канвасе.
+- [ ] Environment: HDRI (rotation/intensity/blur/visible), явно
+      отдельные тумблеры `Use HDRI for lighting` и `Show HDRI
+      background` (не одна настройка на оба); простые studio-пресеты
+      (Soft Studio/Hard Sun/Overcast/Night/Rim/Portrait).
+- [ ] **Shadow Catcher** — обязателен для фотобаша (невидимый пол,
+      видимая тень от 3D-объекта поверх исходного фото), с
+      opacity/softness/tint/multiply/contact strength; прозрачный
+      рендер сцены (`Render Background: Transparent`).
+- [ ] `Lit`/`Unlit` для Image Card + **Lighting influence slider**
+      (0–100%, не только on/off) + Cast/Receive Shadow для карточек;
+      SSAO/contact shadows для ощущения контакта.
+- [ ] Fog (Start/End/Density/Color) + Height Fog; Depth of Field
+      (Focus Distance/Aperture/Blur) с пипеткой `Pick Focus` (клик по
+      объекту → focus distance вычисляется).
+- [ ] Materials — только простые (Base Color/Roughness/Metalness/
+      Opacity/Emission/Normal map), без node-графа; плюс специальные
+      `Matte` (нейтральный для blockout), `Shadow Only` (для невидимых
+      catchers), `Holdout` (вырезает прозрачность), flat color IDs для
+      Object-ID pass.
+
+### 23.8. Viewport, сцена, производительность
+
+- [ ] Два режима: **Кадр** (обычный Photoshop-like 2D canvas поверх
+      сцены — кисть/маски/adjustments/transform/selection/guides/
+      perspective snapping работают как всегда) и **Пространство**
+      (свободный 3D-вид для расстановки). Camera View — главный,
+      Free/Top/Side/Perspective — вспомогательные (в противовес
+      Blender'овской модели «ты внутри мира» — VRAVIO держит в фокусе
+      «как будет выглядеть иллюстрация», не «где куб в мировых
+      координатах»). Опционально: picture-in-picture Camera Preview
+      внутри Space View, Split View позже.
+- [ ] Scene tree встроено в тот же `Layers`, не отдельный 3D Outliner
+      (снижает когнитивную нагрузку) — иконки по типу узла (Camera/
+      Light/Mesh/Image Card/Vector Card/Ground), contextual Properties
+      и contextual toolbar по типу выбранного узла.
+- [ ] Transform gizmo (move/rotate/scale, local/world/view, numeric
+      input, snapping) — Three.js уже поставляет готовый
+      `TransformControls`, не изобретать заново.
+- [ ] Persistent renderer (23.2), scene/texture/geometry cache,
+      revision-based asset updates (переиспользует уже существующую
+      сильную сторону VRAVIO — asset revisions), dirty scene graph,
+      render-pass caching, thumbnail caching.
+- [ ] Undo/Redo на каждое spatial-действие как один шаг — особенно
+      transform-transaction: 1000 pointermove во время drag gizmo не
+      должны создавать 1000 записей истории, только одну на
+      `pointerdown → interactive changes → pointerup`.
+- [ ] Non-destructive по умолчанию (card transform/perspective/mask/
+      lighting/depth не запекаются, пока явно не попросили `Rasterize
+      Scene`/`Render Selected`/`Render mask from selected`).
+- [ ] Resolution-independent сцена (документ 1920×1080 → 3840×2160, 3D
+      остаётся резким), proxy quality в viewport (25/50/100%), dynamic
+      resolution во время движения камеры, render region для
+      производительности.
+- [ ] Color management (sRGB textures vs linear rendering vs output
+      color space) и корректная обработка альфы (straight vs
+      premultiplied) — иначе PNG-карточки получат грязные ореолы;
+      anti-aliasing и texture filtering (nearest/linear/anisotropic).
+- [ ] Export: минимум PNG/JPEG/TIFF, EXR отдельно ценен для передачи
+      render passes; `Pack Project` (собирает textures/models/HDRI в
+      один архив, аналог Photoshop-style Smart Object embedding);
+      явная обработка missing assets (`Relink`/`Locate`/`Replace`, не
+      тихая потеря данных).
+
+### 23.9. Что НЕ делать в первой версии
+
+Явно вне скоупа: моделирование вершин, sculpting, UV unwrap, rigging,
+bones, сложный animation timeline, geometry nodes, процедурные
+материалы уровня Blender, полноценный mesh editor. Роль VRAVIO — «мне
+нужен настоящий 3D-мир, чтобы собрать изображение», не «мне нужно
+создать полноценный 3D-asset» — пусть Blender остаётся Blender'ом. Если
+что-то из этого списка когда-нибудь понадобится — отдельный
+Advanced/Plugin layer (см. §24.7 про доверенные расширения), не
+основной Spatial UI.
+
+### 23.10. Доноры кода
+
+| Донор | Что брать | Лицензия | Оценка |
+|---|---|---|---|
+| [Three.js](https://github.com/mrdoob/three.js) + [его Editor](https://github.com/mrdoob/three.js/tree/dev/editor) | viewport, raycast selection, cameras, scene graph, `TransformControls`, loaders — VRAVIO уже на этой версии (0.185.1) | MIT | ⭐⭐⭐⭐⭐ |
+| [Babylon.js Editor](https://github.com/BabylonJS/Editor) | архитектура полноценного 3D-редактора (Scene Tree/Inspector/Assets/Viewport/Properties), не сам движок | Apache 2.0 | ⭐⭐⭐⭐ |
+| [Godot](https://github.com/godotengine/godot) | `Sprite3D`, `SubViewport` (2D↔3D render target паттерн) — архитектурный донор, C++, не copy-paste | MIT | ⭐⭐⭐⭐ |
+| [fSpy](https://github.com/mattiasgustavsson/fSpy) | camera matching, vanishing points — UX/математика, TypeScript/Electron-era | GPL-3.0 (проверять перед прямым копированием) | ⭐⭐⭐⭐ |
+| [Natron OpenFX Misc — Card3D](https://github.com/NatronGitHub/openfx-misc) | 2.5D camera/card projection математика | GPL-2+ (проверять) | ⭐⭐⭐ |
+| Blender | `Images as Planes`, `Grease Pencil`, UX-идеи (не архитектура) | GPL | ⭐⭐⭐ |
+| [Open Brush](https://github.com/icosa-foundation/open-brush) | если позже понадобится рисование настоящих 3D-линий (не для MVP) | Apache 2.0 | ⭐⭐ |
+
+### 23.11. План по этапам
+
+| Этап | Что появляется |
+|---|---|
+| P0 фундамент | `SpatialScene`, несколько объектов, persistent Three viewport, camera, gizmo, scene tree |
+| P1 уже полезно | GLB/OBJ, primitives, lights, shadows, camera presets, free/camera view |
+| P2 photobash | Image Cards, drag Raster layer → Space, live asset updates, Move in Depth |
+| P3 перспектива | horizon, 2/3-point vanishing points, camera matching, perspective ruler |
+| P4 интеграция | shadow catcher, HDRI, fog, DOF |
+| P5 сила VRAVIO | Depth/Normal/Object-ID → masks/selections |
+| P6 | painting directly on 2D cards |
+| P7 | Vector Card с live-edit через Vector environment |
+| P8 | Video layer как movable card + animated camera |
+| потом | tracking, mesh texture painting, spatial strokes |
+
+**MVP (32 пункта из разделов выше)**, минимум для реального concept-art/
+photobash продукта: `SpatialScene`-слой; режимы Кадр/Пространство;
+persistent Three viewport; камера + focal length; perspective/
+orthographic; move/rotate/scale gizmo; scene tree; группы; Plane/Cube/
+Sphere; GLB/GLTF/OBJ; Image Cards; Raster layer → linked Image Card;
+double-click карточки → Edit in Raster; billboard; ground plane;
+directional+area light; тени; Shadow Catcher; Environment/HDRI; camera
+perspective guides; базовый camera matching; Move in Depth; Place on
+Surface; surface snapping; Depth pass; Object ID pass; Depth → Mask;
+Object → Selection; raster paint-слои поверх сцены; финальный
+прозрачный/полный рендер; Undo/Redo; render caching.
+
+### 23.12. Пять killer features (если сделаны хорошо — не «у нас тоже есть 3D»)
+
+1. **Move in Depth** — двигать 2D-картинку в пространстве без смещения
+   в финальном кадре (23.5).
+2. **Raster/Vector → живая 3D Card** — один объект в двух
+   представлениях, не повторный импорт PNG (23.3).
+3. **Camera → Perspective Assistant** — выставленная камера
+   автоматически управляет perspective grid, snapping, рисованием
+   (23.4).
+4. **3D passes → обычные VRAVIO маски** — Depth/Normals/Object-ID/
+   Shadow становятся нормальными источниками масок/выделений, не
+   отдельной подсистемой (23.6).
+5. **Camera-first workflow** — весь photobash без единого открытия
+   отдельной 3D-программы.
+
+## 24. VFX (частицы/огонь/дым/жидкость) и Plugin Architecture v2, 8 сентября 2026
+
+Огонь/дым/искры и жидкость — не один универсальный «particle system», а
+три разных движка с разной сложностью. Владелец также предложил сделать
+весь Spatial (§23) официальным **плагином**, а не частью ядра — что
+требует расширения нынешнего Plugin API до этого. Оба вопроса связаны:
+частицы/жидкость — хороший тест того, действительно ли Plugin API v2
+получился достаточно мощным (если их можно подключить без единого
+`if (fluid)` в Raster core — архитектура верна).
+
+### 24.1. GPU Particles — делать первыми (закрывает ~70% визуальных задач)
+
+- [ ] `Emitter { Shape, Spawn Rate, Lifetime, Velocity, Gravity,
+      Turbulence, Drag, Collision, Renderer: Sprite|Mesh|Trail|Ribbon }`
+      — из этого набора получаются: стилизованный огонь, дым, искры,
+      пепел, пыль, дождь, снег, туман клочьями, брызги, листья, мусор,
+      частицы разрушения, энергетические эффекты, muzzle flash, магия,
+      светлячки.
+- [ ] UI — не node editor сразу, а Properties + пресеты (`Preset: Fire`
+      с готовыми Emission/Lifetime/Speed/Gravity/Turbulence/size-curve/
+      opacity-curve/color-gradient и кнопкой `▶ Simulate`); Advanced
+      VFX Graph — позже, отдельным слоем сложности.
+- [ ] Доноры (Three.js/WebGPU, современные, той же экосистемы, что уже
+      использует VRAVIO): [webgpu-vfx](https://github.com/) — compute-
+      driven particles, soft particles, GPU sorting, готовые fire/
+      smoke/sparks пресеты; [Plume](https://github.com/) — идёт дальше
+      в сторону Niagara-подобной системы. (Оба — сверить точную ссылку
+      и лицензию репозитория перед использованием, названы владельцем
+      по памяти без URL — не копировать вслепую до проверки.)
+
+### 24.2. Volume Solver — настоящий объёмный дым/огонь
+
+- [ ] Voxel/grid solver: `3D GRID`, каждая ячейка — velocity/
+      temperature/fuel/smoke density; проходы `advection → buoyancy →
+      vorticity → pressure solve → combustion → density/temperature →
+      volume raymarch`. Даёт: дым, обтекающий объект, пожар, факел,
+      пар, взрывное облако, туман.
+- [ ] **Обязательная оптимизация**: preview-сетка 64³/96³, final —
+      128³/256³; `▶ Simulate`/`⏸`/scrub по времени/`Freeze` — нашёл
+      красивую форму пламени, заморозил кадр, не держать симуляцию
+      постоянно живой. Пользователь делает картинку, не CFD-
+      исследование.
+
+### 24.3. Liquid — SPH сначала, PIC/FLIP позже
+
+- [ ] Первый solver — SPH/PBF (проще, хорош для брызг и небольших
+      объёмов); позже PIC/FLIP (particles ↔ velocity grid, с
+      реконструкцией поверхности) для настоящей жидкости. Доноры —
+      MIT WebGPU-проекты с compute-shader реализацией SPH и PIC/FLIP
+      (сверить точный репозиторий и версию лицензии перед
+      использованием, как и в 24.1).
+- [ ] UI — обязательно простой, без «Pressure Solver Iterations/PIC
+      blending coefficient/kernel radius/CFL number» напоказ: `Liquid
+      { Preset: Water, Amount, Viscosity, Surface tension, Gravity,
+      Material, ☑ Foam, ☑ Spray, Quality: Preview }`, физика — в
+      Advanced. Пресеты: Water/Honey/Oil/Paint/Slime/Mercury/Lava.
+
+### 24.4. Взаимодействие VFX со Spatial Scene
+
+- [ ] Particle/fluid simulation должна видеть meshes, Image Cards (при
+      необходимости), ground, collision primitives, force fields —
+      т.е. интегрируется с §23's `SpatialScene`, не отдельный
+      изолированный слой.
+- [ ] Огонь должен реально освещать сцену — не каждая частица становится
+      `PointLight` (убьёт GPU), а emitter оценивается целиком
+      (average position/intensity/color temperature → 1–4 proxy
+      lights). Даёт заметный визуальный эффект (оранжевые блики на
+      соседних объектах) за небольшую цену.
+
+### 24.5. Текущее состояние Plugin API — аудит
+
+Прочитано `apps/web/src/plugins/` целиком (`host.ts`, `permissions.ts`,
+`plugin-worker.ts`, `registry.ts`, `types.ts`, `samples/`) — это не
+пустой задел, рабочий proof-of-concept, но узкий.
+
+**Что уже сделано правильно** (сохранить как есть):
+- Плагин выполняется в Worker, не в main thread — чужой код не может
+  подвесить UI/DOM/application state напрямую.
+- Versioned API: `PLUGIN_API_VERSION`, несовместимая версия отказывает
+  ДО запуска, не пытается молча выполниться.
+- Capability-based permissions: `read-document` реально решает, получит
+  ли плагин pixel buffer, `write-pixels` — примет ли host его
+  возвращённые пиксели.
+- Плагин не пишет в документ напрямую — возвращает RGBA-буфер, который
+  идёт через тот же `commitPixels()`, что и обычные инструменты, так
+  что locks/selection confinement/типы слоя/правила применяются
+  автоматически (то самое «единственная дверь» CLAUDE.md раздела 4,
+  уже соблюдённое здесь).
+
+**Ограничения нынешнего API**, из-за которых Spatial-плагин физически
+невозможен без изменений:
+- Контракт `PluginModule` — буквально `run({pixels, width, height,
+  options}) → pixels`. Годится для фильтров/adjustments/AI-effects,
+  не годится для сцены/viewport/persistent state.
+- Worker живёт **один запуск**: `spawn → run → terminate`, таймаут
+  15 секунд. Для 60fps Three.js viewport, живущего пока открыт документ,
+  это неприменимо в принципе, не «настроить таймаут побольше».
+- UI-контрибуции плагина (tools/panels/menus/layer types/overlays)
+  сейчас не существуют вообще — `manifest.commands?` объявлено, но
+  комментарий в коде прямо говорит, что поле пока не читается.
+- Установка плагинов — тоже задел: `registry.ts` сейчас содержит один
+  захардкоженный sample; `Manage Plugins…` в UI — disabled/no-op.
+- `network`/`filesystem` permissions объявлены в manifest, но реально
+  проверяются при выполнении только `read-document`/`write-pixels` —
+  permission model шире, чем реализованный mediation layer.
+
+### 24.6. Оценка
+
+Как фундамент безопасного raster-effect плагина — 8/10 (Worker,
+version refusal, permissions, буфер через host, commit через общие
+правила, timeout, автотерминация — всё сделано верно). Как
+универсальная plugin platform для VRAVIO в целом — 2–3/10 сейчас: нет
+установки, Plugin Manager, contributions, UI, tools, persistent state,
+custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
+нормально для текущей стадии — но именно сейчас, пока plugin-система
+маленькая (один sample, никто ещё не зависит от старого контракта) —
+лучший момент менять контракт, не после того, как появится сотня
+плагинов.
+
+### 24.7. Plugin Architecture v2 — задачи
+
+- [ ] Сохранить нынешний sandboxed pixel-plugin API целиком — он
+      отличен для маленьких плагинов (`Process Plugin`: `pixels in →
+      pixels out`, в Worker). Не заменять, эволюционировать рядом.
+- [ ] Добавить второй класс — **`Extension Plugin`** (`trustLevel:
+      sandboxed | trusted`): contributions + persistent services + UI,
+      не только pixel-in/pixel-out.
+- [ ] `manifest.version` отдельно от `apiVersion`; `dependencies`
+      между плагинами (например `VRAVIO VFX` зависит от `VRAVIO
+      Spatial`, `VRAVIO Fluids` — от `VFX`).
+- [ ] `activate()`/`deactivate()` lifecycle для persistent plugin
+      services — Spatial при открытии сцены создаёт renderer/GPU
+      resources/scene runtime и держит их до `deactivate()`/закрытия
+      документа (`dispose()`), не пересоздаёт на каждый вызов.
+- [ ] Декларативные **`contributes`**: `commands`, `tools`, `windows`,
+      `menus`, `layerTypes`, `assetTypes`, `importers`, `exporters`,
+      `overlays`, `renderPasses` — плагин ЗАЯВЛЯЕТ, что добавляет, host
+      не содержит знания о конкретных плагинах по имени (никаких
+      `if (layer.kind === "spatial")` в 40 местах Raster-кода — тот же
+      принцип единственной двери, применённый к расширяемости).
+- [ ] **Unknown Plugin Data** — обязательная страховка: документ с
+      данными от неустановленного плагина (например `Spatial Scene` в
+      файле без установленного `Spatial`-плагина) не теряет эти данные
+      при открытии/сохранении — показывает `⚠ Plugin "X" required
+      [Install]`, весь opaque payload сохраняется как есть.
+- [ ] Plugin-specific document state под собственным namespace
+      (`extensions: { "org.vravio.spatial": { schemaVersion, ... } }`)
+      с собственными migrations (`v1→v2→v3`), не общая как попало
+      структура документа.
+- [ ] Host-owned сервисы вместо прямого доступа плагина к системным
+      ресурсам: `ctx.gpu` (не `new WebGPUDevice()` самому — общий
+      memory budget, device-lost handling, единая диагностика,
+      WebGPU/WebGL fallback — используя уже существующий
+      `gpu-context.ts` в kernel), `ctx.assets.import(...)` (не прямая
+      работа с файловой системой — переиспользует уже существующий
+      revision-asset механизм VRAVIO), `ctx.fetch()`/`ctx.files.open()/
+      save()` — host решает, что разрешать, а не plugin обходит API
+      сам. Заодно закрывает разрыв из 24.5 (network/filesystem
+      permissions декларированы, но не enforced).
+- [ ] Команды плагина — обычные kernel-команды (`spatial.addCamera`,
+      `vfx.simulate` и т. п.), не отдельный plugin-specific механизм —
+      автоматически попадают в command palette/shortcuts/scripts/меню,
+      продолжая уже существующую каталожную архитектуру
+      (`docs/migration-plan.md`'s цель «новая команда/окно/плагин —
+      через определение, не через правку монолитного кода»).
+- [ ] Установка/управление: install/disable/remove/update плагинов,
+      официальный signing/trust для `trusted`-расширений, сборочные
+      профили могут идти с предустановленными official plugins (Full
+      VRAVIO — со Spatial предустановленным, Lite/Raster-only — без
+      него, пользователь может включить/выключить/удалить в любом
+      случае через `Plugins → Manage`).
+- [ ] Диагностика/изоляция сбоев/очистка памяти-GPU при отключении
+      плагина; per-environment enablement (плагин активен только в
+      Raster/только в Video и т. п.).
+
+### 24.8. Spatial как официальный Trusted Extension — итоговая модель
+
+- [ ] `org.vravio.spatial` — базовое: camera, image/vector cards,
+      meshes, lights, render passes (contributes: layer `spatial.scene`,
+      tools `spatial.select/move/camera`, windows `spatial.scene/
+      properties`, commands `spatial.addCube/addCamera/render`, assets
+      `model/gltf`/`hdri`).
+- [ ] `org.vravio.vfx` (зависит от `spatial`) — GPU particles, force
+      fields, trails (24.1).
+- [ ] `org.vravio.fluids` (зависит от `vfx`) — volumetric smoke/fire,
+      SPH/PBF, PIC/FLIP, meshing, foam (24.2–24.3) — отдельный
+      компонент, не всегда предустановлен (WebGPU-требовательный,
+      крупный runtime, нужен не каждому — Full VRAVIO комплектует
+      Spatial+VFX по умолчанию, Fluids — опциональный довесок
+      установщика).
+- [ ] Пользователю это выглядит одной функцией (`Spatial → 3D /
+      Particles / Fire & Smoke / Liquids`), под капотом — модульные
+      зависимые плагины. Core VRAVIO не знает, что такое
+      `liquid-domain` — если это разделение выдержано, Plugin API v2
+      действительно получился универсальным, не «Spatial зашит
+      специальным образом, остальные плагины — второго сорта».
