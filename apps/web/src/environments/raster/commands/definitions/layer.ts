@@ -126,6 +126,30 @@ const commands: readonly CommandDefinition[] = [
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void edit(activeDocumentId, "Stamp Visible (Отпечаток видимых)", (state) => Boolean(stampVisibleLayers(state))); },
   },
   {
+    id: "layer.toggleClippingMask",
+    label: { en: "Create/Release Clipping Mask", ru: "Создать/освободить обтравочную маску" },
+    category: CATEGORY_LAYER,
+    shortcut: "Mod+Alt+G",
+    surfaces: ["menu", "palette"],
+    // master-plan.md §1.9 item 9 (merged with item 14): Photoshop's own
+    // Ctrl+Alt+G, on top of the two direct gestures already covered
+    // elsewhere — the layer panel's own toggle button, and the Ctrl-click
+    // between two layer rows in DockLayout.tsx's LayersPanel, which now
+    // calls this same command instead of duplicating the toggle logic
+    // (the "единственная дверь" CLAUDE.md §4 asks for — one place decides
+    // what clipping a layer means, not two that could drift).
+    isEnabled: isRasterActive,
+    execute: ({ activeDocumentId }) => {
+      if (!activeDocumentId) return;
+      void edit(activeDocumentId, "Toggle Clipping Mask (Обтравочная маска)", (state) => {
+        const layer = state.layers.find((item) => item.id === state.activeLayerId);
+        if (!layer || layer.kind === "group") return false;
+        layer.clipping = !layer.clipping;
+        return true;
+      });
+    },
+  },
+  {
     id: "layer.group",
     label: { en: "Group Layers", ru: "Сгруппировать слои" },
     category: CATEGORY_LAYER,

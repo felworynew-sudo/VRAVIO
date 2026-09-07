@@ -71,6 +71,7 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "layer.sendBackward|Mod+[||Layer",
   "layer.sendToBack|Mod+Shift+[||Layer",
   "layer.stampVisible|Mod+Shift+Alt+E||Layer",
+  "layer.toggleClippingMask|Mod+Alt+G||Layer",
   "layer.ungroup|Mod+Shift+G||Layer",
   "layer.viaCut|Mod+Shift+J||Layer",
   "roundtrip.apply|Mod+Shift+Enter||File",

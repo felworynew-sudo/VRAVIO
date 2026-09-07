@@ -317,6 +317,16 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 /* Dragging a mask thumbnail (not a whole row) onto another layer's row. */
 .layer-mask-thumb { cursor: grab; }
 .layer-row[data-mask-drop-target] { outline: 2px dashed var(--accent, var(--focus)); outline-offset: -2px; }
+/* master-plan.md §1.9 items 9+14: Ctrl-hovering a row's bottom edge arms a
+   clipping-mask click against the layer below — the cursor itself is set
+   inline (style="cursor:url(...)"), not here, because the icon path needs
+   BASE_URL (see iconUrl's own comment) and a static stylesheet can't read
+   that; this is just the "which boundary" line, same shape as the
+   drag-reorder insertion line above. */
+.layer-row.clipping-armed::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px;
+  background: var(--accent, var(--focus)); pointer-events: none; z-index: 2;
+}
 
 /* The lock row, as Photoshop arranges it above the layer list. */
 .layer-locks { display:flex; align-items:center; gap:4px; padding:5px 8px; font-size:11px; color:var(--muted); }
