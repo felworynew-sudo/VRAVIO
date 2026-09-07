@@ -6,7 +6,7 @@ import { useShellStore } from "./store";
 import { useDocuments } from "./useDocuments";
 import { RasterWorkspace } from "./RasterWorkspace";
 import { VectorWorkspace } from "./VectorWorkspace";
-import { appendLayer, appendRasterGroup, compositeRasterDocument, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, createRasterLayerMaskFromSelection, isRasterDocumentState, rasterLayerDescendantIds, rasterLayerRows, setLayerPixels, dropPositionInRow, dropTargetForRow, placeLayer, toggleLayerLink, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerMask } from "@vravio/env-raster";
+import { appendLayer, appendRasterGroup, compositeRasterDocument, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, createRasterLayerMaskFromSelection, isRasterDocumentState, layerDocumentPixels, rasterLayerDescendantIds, rasterLayerRows, renderLayerEffects, setLayerPixels, dropPositionInRow, dropTargetForRow, placeLayer, toggleLayerLink, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerEffects, type RasterLayerMask } from "@vravio/env-raster";
 import { kernel } from "./kernel";
 import { EnvironmentIcon } from "./EnvironmentIcon";
 import { localized, text } from "./i18n";
@@ -216,6 +216,19 @@ function LayerMaskThumbnail({ mask, width, height, active, onActivate, onDragSta
   return <span className={`layer-mask-thumb${active ? " editing" : ""}`} title="Edit Layer Mask (Редактировать маску слоя)" onClick={(event) => { event.stopPropagation(); onActivate(); }} onPointerDown={onDragStart}><canvas ref={ref} width="28" height="28"/>{mask.linked && <i>⛓</i>}</span>;
 }
 
+/**
+ * master-plan.md §1.9 item 6's Copy/Paste Mask and Copy/Paste Layer Style —
+ * an in-memory clipboard, not the system one: this is structured internal
+ * state (a mask's own pixel buffer, an effects object), not text or an
+ * image a plugin outside this app could plausibly want. Module-level, not
+ * per-document, matching `select.ts`'s own `lastSelectionByDocument`
+ * pattern for the same kind of "remember this until the next paste" state —
+ * a real clipboard is global too, not scoped to whichever document you
+ * copied from.
+ */
+let copiedLayerMask: RasterLayerMask | null = null;
+let copiedLayerStyle: RasterLayerEffects | null = null;
+
 const layerEffectDefaults: RasterLayer["effects"] = {
   dropShadow: { enabled: false, color: "#000000", opacity: .55, offsetX: 8, offsetY: 8 }, innerShadow: { enabled: false, color: "#000000", opacity: .45, offsetX: 4, offsetY: 4 },
   outerGlow: { enabled: false, color: "#ffffff", opacity: .6, radius: 6 }, innerGlow: { enabled: false, color: "#ffffff", opacity: .5, radius: 5 }, bevel: { enabled: false, strength: .65 }, gradientOverlay: { enabled: false, from: "#8f5cff", to: "#56d8ff", opacity: .7, angle: 0 },
@@ -414,6 +427,15 @@ function LayersPanel() {
         { label: text(language, "Group Layers", "Сгруппировать слои"), onSelect: addGroup, separatorBefore: true },
         item("layer.ungroup"),
         { label: text(language, layer.linkGroup ? "Unlink Layers" : "Link Layers", layer.linkGroup ? "Отвязать слои" : "Связать слои"), onSelect: () => kernel.documents.update<RasterDocumentState>(active.id, (current) => { toggleLayerLink(current, selectedLayerIds.length > 1 ? selectedLayerIds : [layer.id]); }) },
+        // master-plan.md §1.9 item 6, dословно: Apply/Copy/Paste Mask,
+        // Copy/Paste/Apply Layer Style — six entries, one separator before
+        // the group since none of the items above touch a mask or style.
+        { label: text(language, "Apply Mask", "Применить маску"), onSelect: () => applyMask(layer), disabled: layer.kind === "group" || !layer.mask, separatorBefore: true },
+        { label: text(language, "Copy Mask", "Скопировать маску"), onSelect: () => copyMask(layer), disabled: layer.kind === "group" || !layer.mask },
+        { label: text(language, "Paste Mask", "Вставить маску"), onSelect: () => pasteMask(layer), disabled: layer.kind === "group" || !copiedLayerMask || copiedLayerMask.pixels.length !== state.width * state.height },
+        { label: text(language, "Copy Layer Style", "Скопировать стиль слоя"), onSelect: () => copyLayerStyle(layer), disabled: layer.kind === "group" },
+        { label: text(language, "Paste Layer Style", "Вставить стиль слоя"), onSelect: () => pasteLayerStyle(layer), disabled: layer.kind === "group" || !copiedLayerStyle },
+        { label: text(language, "Apply Layer Style", "Применить стиль слоя"), onSelect: () => applyLayerStyle(layer), disabled: layer.kind === "group" || !Object.values(layer.effects ?? {}).some((effect) => effect?.enabled) },
       ];
     };
     const clickLayer = (id: string, event: React.MouseEvent) => {
@@ -456,6 +478,60 @@ function LayersPanel() {
       if (targetId) setEditingMask(active.id, targetId);
     };
     const toggleClipping = () => void changeRasterDocument(active.id, "Toggle Clipping Mask (Обтравочная маска)", (current) => { const layer = current.layers.find((item) => item.id === current.activeLayerId); if (layer && layer.kind !== "group") { layer.clipping = !layer.clipping; return true; } return false; });
+
+    /**
+     * master-plan.md §19.1's P0 "Apply Mask" and §1.9 item 6's context-menu
+     * entry are the same command. Bakes the mask's coverage into the
+     * layer's own alpha (`alpha *= maskValue/255 * density` — the exact
+     * formula the compositor already uses, `render.ts`'s `maskAlpha`) and
+     * removes the mask. Layers are already always RGBA here, unlike
+     * Patchy's RGB-by-default model, so there's no separate "promote to
+     * RGBA first" step to port. Goes through `layerDocumentPixels` because
+     * `mask.pixels` is document-sized but `layer.pixels` is trimmed to the
+     * layer's own bounds (CLAUDE.md §1) — `setLayerPixels` re-trims the
+     * result afterward.
+     */
+    const applyMask = (layer: RasterLayer) => void changeRasterDocument(active.id, "Apply Layer Mask (Применить маску слоя)", (current) => {
+      const target = current.layers.find((item) => item.id === layer.id);
+      if (!target || target.kind === "group" || !target.mask) return false;
+      const mask = target.mask;
+      const pixels = layerDocumentPixels(target, current.width, current.height).slice();
+      for (let index = 0; index < mask.pixels.length; index += 1) {
+        const alpha = (mask.pixels[index]! / 255) * mask.density, offset = index * 4 + 3;
+        pixels[offset] = Math.round(pixels[offset]! * alpha);
+      }
+      setLayerPixels(target, pixels, current.width, current.height);
+      delete target.mask;
+      if (editingMaskLayerId === target.id) setEditingMask(active.id, null);
+      return true;
+    });
+    const copyMask = (layer: RasterLayer) => { if (layer.mask) copiedLayerMask = { ...layer.mask, pixels: layer.mask.pixels.slice() }; };
+    // Only sized masks that actually fit this document paste — a mask
+    // copied from a different, differently-sized document has no sensible
+    // meaning here, and silently truncating/padding its buffer would just
+    // draw garbage. Refuses quietly, the same way `beginMaskDrag` (§1.9
+    // item 5) refuses a drop onto a layer that already has a mask.
+    const pasteMask = (layer: RasterLayer) => { const source = copiedLayerMask; if (!source || source.pixels.length !== state.width * state.height) return; void changeRasterDocument(active.id, "Paste Layer Mask (Вставить маску слоя)", (current) => { const target = current.layers.find((item) => item.id === layer.id); if (!target || target.kind === "group") return false; target.mask = { ...source, pixels: source.pixels.slice() }; return true; }); };
+    const copyLayerStyle = (layer: RasterLayer) => { copiedLayerStyle = { ...layer.effects }; };
+    const pasteLayerStyle = (layer: RasterLayer) => { const source = copiedLayerStyle; if (!source) return; void changeRasterDocument(active.id, "Paste Layer Style (Вставить стиль слоя)", (current) => { const target = current.layers.find((item) => item.id === layer.id); if (!target || target.kind === "group") return false; target.effects = { ...source }; return true; }); };
+    /**
+     * "Apply Layer Style" bakes enabled effects into the layer's own
+     * pixels and clears `effects` — the same "flatten a live decoration
+     * into content" shape as `applyMask` just above, reusing the exact
+     * renderer the compositor itself calls for a layer with effects on
+     * (`renderLayerEffects`, `render.ts`'s own `wholeCanvas` path) rather
+     * than re-deriving drop-shadow/glow math a second time.
+     */
+    const applyLayerStyle = (layer: RasterLayer) => void changeRasterDocument(active.id, "Apply Layer Style (Применить стиль слоя)", (current) => {
+      const target = current.layers.find((item) => item.id === layer.id);
+      if (!target || target.kind === "group" || !Object.values(target.effects ?? {}).some((effect) => effect?.enabled)) return false;
+      const documentPixels = layerDocumentPixels(target, current.width, current.height);
+      const expanded: RasterLayer = { ...target, pixels: documentPixels, bounds: { x: 0, y: 0, width: current.width, height: current.height } };
+      const rendered = renderLayerEffects(expanded, current.width, current.height).slice();
+      setLayerPixels(target, rendered, current.width, current.height);
+      target.effects = {};
+      return true;
+    });
     /**
      * Dragging a row.
      *
