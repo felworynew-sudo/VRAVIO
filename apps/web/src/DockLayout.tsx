@@ -28,6 +28,7 @@ import { exportVectorDocumentToSvg } from "./vector-svg-export";
 import { useContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { luminanceHistogram } from "./raster-adjustments/histogram";
 import { changeRasterDocument } from "./commands";
+import { confirmModal } from "./modals/runtime";
 import { pickCommands } from "./commands/surface";
 import { importModelAsLayer, updateScene3DLayer } from "./scene3d-commands";
 import type { ReversibleOperation } from "@vravio/kernel";
@@ -322,6 +323,43 @@ function LayersPanel() {
     const open = () => { const current = activeDocumentId ? kernel.documents.get<RasterDocumentState>(activeDocumentId) : null; if (current && isRasterDocumentState(current.state)) setStyleLayerId(current.state.activeLayerId); };
     window.addEventListener("vravio-layer-style-open", open); return () => window.removeEventListener("vravio-layer-style-open", open);
   }, [activeDocumentId]);
+  // master-plan.md §1.9 item 1: clicking a mask thumbnail sets
+  // `editingMaskLayerId` (see `LayerMaskThumbnail`'s `onActivate` below), but
+  // nothing was listening for Delete/Backspace while it stayed set — the key
+  // that removes a *layer* (`layer.delete`) has no shortcut bound at all
+  // (confirmed against `catalogue.test.ts`'s snapshot), so pressing Delete
+  // with a mask "selected" this way did nothing whatsoever, not "delete the
+  // wrong thing". Scoped to only listen while a mask is actually being
+  // edited, so it can't steal Delete from anything else (a future
+  // delete-selection-contents binding on `layer.delete`, an `<input>`, etc.).
+  useEffect(() => {
+    if (!activeDocumentId || !editingMaskLayerId) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Delete" && event.key !== "Backspace") return;
+      const target = event.target as HTMLElement | null;
+      if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable) return;
+      event.preventDefault();
+      const maskLayerId = editingMaskLayerId, documentId = activeDocumentId;
+      void (async () => {
+        const confirmed = await confirmModal({
+          title: text(language, "Delete Layer Mask", "Удалить маску слоя"),
+          message: text(language, "Remove this layer's mask?", "Удалить маску этого слоя?"),
+          confirmLabel: text(language, "Delete", "Удалить"),
+          danger: true,
+        });
+        if (!confirmed) return;
+        void changeRasterDocument(documentId, "Delete Layer Mask (Удалить маску слоя)", (current) => {
+          const layer = current.layers.find((item) => item.id === maskLayerId);
+          if (!layer || layer.kind === "group" || !layer.mask) return false;
+          delete layer.mask;
+          return true;
+        });
+        setEditingMask(documentId, null);
+      })();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activeDocumentId, editingMaskLayerId, language, setEditingMask]);
   const active = documents.find((document) => document.id === activeDocumentId);
   const timed = active?.kind === "audio" || active?.kind === "video";
   if (active && isRasterDocumentState(active.state)) {
