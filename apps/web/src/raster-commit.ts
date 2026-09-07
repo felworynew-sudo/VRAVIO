@@ -8,7 +8,7 @@ import { createBufferRevisionOperation, type AssetId, type VravioDocument } from
 import { kernel } from "./kernel";
 import { diagnostic } from "./diagnostics";
 import { applyRasterRules } from "./environments/raster/rules/registry";
-import { cropPixels, fromBytes, putPixels, putRegionPixels, rgbaToMask, stateDeltaBytes, toBytes, withActiveLayerPixels, withLayerMaskPixels } from "./raster-pixel-buffers";
+import { cropPixels, fromBytes, putPixels, putRegionPixels, rgbaToMask, stateDeltaBytes, toBytes, withActiveLayerPixels, withLayerMaskPixels, withLayersPixels } from "./raster-pixel-buffers";
 import type { DocumentViewport } from "./store";
 
 /**
@@ -97,6 +97,20 @@ export function useRasterCommit(params: {
     const layer = activeRasterLayer(state);
     const direct = state.layers.length === 1 && layer.visible && layer.opacity === 1 && layer.blendMode === "normal";
     putPixels(canvas, direct ? pixels : compositeRasterDocument(withActiveLayerPixels(state, pixels)), state.width, state.height);
+  };
+
+  /**
+   * The multi-layer counterpart of `renderWorking`, for a linked-layer group
+   * drag: swaps every dragged layer's working buffer in at once and paints
+   * one composite. No region fast-path (unlike `renderWorkingRegion`) —
+   * a linked-group drag is a comparatively rare gesture, not the per-pixel
+   * brush hot path CLAUDE.md §5's region optimisation exists for.
+   */
+  const renderWorkingMultiple = (layers: readonly { layerId: string; pixels: Uint8ClampedArray }[]) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const updates = new Map(layers.map((entry) => [entry.layerId, entry.pixels] as const));
+    putPixels(canvas, compositeRasterDocument(withLayersPixels(state, updates)), state.width, state.height);
   };
 
   /**
@@ -266,5 +280,5 @@ export function useRasterCommit(params: {
     await history.execute({ label, memoryEstimate: (before?.mask.byteLength ?? 0) + (after?.mask.byteLength ?? 0), redo: () => assign(after), undo: () => assign(before) });
   };
 
-  return { renderWorking, renderWorkingRegion, renderSpotHealOverlay, commitPixels, commitDocumentState, commitSelection };
+  return { renderWorking, renderWorkingMultiple, renderWorkingRegion, renderSpotHealOverlay, commitPixels, commitDocumentState, commitSelection };
 }

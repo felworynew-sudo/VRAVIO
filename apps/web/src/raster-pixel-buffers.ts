@@ -73,6 +73,21 @@ export function withActiveLayerPixels(state: RasterDocumentState, pixels: Uint8C
   return { ...state, layers: state.layers.map((layer) => layer.id === state.activeLayerId ? { ...layer, pixels, bounds, width: state.width, height: state.height } : layer) };
 }
 
+/**
+ * The document with several layers each showing a canvas-sized working
+ * buffer — the multi-layer counterpart of {@link withActiveLayerPixels},
+ * for a linked-layer group drag where every dragged layer needs its own
+ * in-progress buffer swapped in for one composite, not just the active one.
+ */
+export function withLayersPixels(state: RasterDocumentState, updates: ReadonlyMap<string, Uint8ClampedArray>): RasterDocumentState {
+  if (updates.size === 0) return state;
+  const bounds = { x: 0, y: 0, width: state.width, height: state.height };
+  return { ...state, layers: state.layers.map((layer) => {
+    const pixels = updates.get(layer.id);
+    return pixels ? { ...layer, pixels, bounds, width: state.width, height: state.height } : layer;
+  }) };
+}
+
 export function maskToRgba(mask: Uint8ClampedArray): Uint8ClampedArray {
   const pixels = new Uint8ClampedArray(mask.length * 4);
   for (let index = 0; index < mask.length; index += 1) { const value = mask[index]!; const offset = index * 4; pixels[offset] = value; pixels[offset + 1] = value; pixels[offset + 2] = value; pixels[offset + 3] = 255; }

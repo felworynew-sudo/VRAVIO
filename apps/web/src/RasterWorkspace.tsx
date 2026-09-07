@@ -91,7 +91,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     [state.selection, activeLayerForMask?.pixels, activeLayerForMask?.lockTransparent, state.width, state.height],
   );
   const paintColor = editingMaskLayer ? (maskForegroundIsWhite ? "#ffffff" : "#000000") : foregroundColor;
-  const { renderWorking, renderWorkingRegion, renderSpotHealOverlay, commitPixels, commitDocumentState, commitSelection } = useRasterCommit({ document, state, viewport, canvasRef, canvasPixels });
+  const { renderWorking, renderWorkingMultiple, renderWorkingRegion, renderSpotHealOverlay, commitPixels, commitDocumentState, commitSelection } = useRasterCommit({ document, state, viewport, canvasRef, canvasPixels });
 
   // CapsLock toggles the precise (crosshair) cursor instead of the ring —
   // Photoshop's own shortcut. Space-bar navigation and its Photoshop zoom
@@ -159,6 +159,11 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   // legacy `gesture` ref, which stays exclusively for the not-yet-ported
   // tonal tools, so the two paths cannot interfere with each other.
   const previewFrameRef = useRef<{ frame: number | null; dirty: RasterRect | null; working: Uint8ClampedArray; target: "pixels" | "mask"; layerId: string } | null>(null);
+  // The same RAF-coalescing as previewFrameRef, kept as its own ref rather than folded into it:
+  // a linked-layer group drag (raster.move) previews several layers' buffers as one composite,
+  // a different shape of work than previewFrameRef's single {target,layerId,working} slot, and
+  // the two never fire in the same gesture.
+  const previewLayersFrameRef = useRef<{ frame: number | null; layers: readonly { layerId: string; pixels: Uint8ClampedArray }[] } | null>(null);
   // Backs ToolContext.scheduleWork: one RAF-coalesced "run the latest fn" queue, generic across
   // whichever tool is calling it — a transform resample today, potentially another tool's own
   // expensive per-frame recompute later.
@@ -236,6 +241,16 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
           // something this port introduces or should quietly diverge from.
           if (region && entry.target === "pixels") renderWorkingRegion(entry.working, region);
           else renderWorking(entry.working, entry.target, entry.layerId);
+        });
+      },
+      schedulePreviewLayers: (layers) => {
+        const current = previewLayersFrameRef.current;
+        if (current) { current.layers = layers; if (current.frame !== null) return; }
+        const entry = current ?? { frame: null, layers };
+        previewLayersFrameRef.current = entry;
+        entry.frame = requestAnimationFrame(() => {
+          entry.frame = null;
+          renderWorkingMultiple(entry.layers);
         });
       },
       commit: (before, after, label, target = paintTarget.kind, layerId = paintTarget.layerId, bounds = null) => commitPixels(before, after, label, target, layerId, bounds),

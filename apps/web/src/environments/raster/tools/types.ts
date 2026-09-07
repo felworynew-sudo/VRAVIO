@@ -132,6 +132,17 @@ export interface ToolContext<TState> {
   schedulePreview(pixels: Uint8ClampedArray, target: PaintTarget["kind"], layerId: string, dirty?: RasterRect | null): void;
 
   /**
+   * Same as {@link schedulePreview}, but for a drag that moves several
+   * layers' pixel buffers at once (linked layers dragged together with the
+   * Move tool) — one composite carrying every touched layer's working
+   * buffer, painted once per frame, rather than several single-layer calls
+   * racing to overwrite the same canvas. Not used by any single-layer tool;
+   * `schedulePreview` stays untouched for the paint-stroke hot path this
+   * would otherwise risk regressing (CLAUDE.md section 5).
+   */
+  schedulePreviewLayers(layers: readonly { readonly layerId: string; readonly pixels: Uint8ClampedArray }[]): void;
+
+  /**
    * Coalesces expensive per-frame *work* to once per animation frame — the
    * same problem `schedulePreview` solves for painting, but for a tool whose
    * `onPointerMove` itself has to recompute something costly (a transform's

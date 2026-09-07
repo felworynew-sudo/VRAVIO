@@ -38,6 +38,7 @@ interface Effects {
    * previews *something* sane on every point it processes, not how often
    * the real browser actually paints it. */
   readonly previews: { pixels: Uint8ClampedArray; target: string; layerId: string; dirty: unknown }[];
+  readonly layerPreviews: { readonly layerId: string; readonly pixels: Uint8ClampedArray }[][];
   readonly foreground: string[];
   readonly hiddenLayerPreviews: (string | null)[];
   readonly activeLayerSets: string[];
@@ -158,7 +159,7 @@ function drive(
 ): { effects: Effects; document: RasterDocumentState; untouched: RasterDocumentState } {
   const document = documentFixture();
   const untouched = documentFixture();
-  const effects: Effects = { commits: [], selectionCommits: [], documentCommits: [], foreground: [], hiddenLayerPreviews: [], activeLayerSets: [], viewportResets: 0, maskForegroundWhite: [], captured: [], stateHistory: [], previews: [], state: tool.createState(), lastStrokePoint: null, cloneSource: null, cloneOffset: null, spotHealPreviews: [], selectedLayers: [], selectedLayerSets: [] };
+  const effects: Effects = { commits: [], selectionCommits: [], documentCommits: [], foreground: [], hiddenLayerPreviews: [], activeLayerSets: [], viewportResets: 0, maskForegroundWhite: [], captured: [], stateHistory: [], previews: [], layerPreviews: [], state: tool.createState(), lastStrokePoint: null, cloneSource: null, cloneOffset: null, spotHealPreviews: [], selectedLayers: [], selectedLayerSets: [] };
 
   const context: ToolContext<unknown> = {
     documentId: "test-document",
@@ -190,6 +191,7 @@ function drive(
     commitSelection: async (before, after, label) => { effects.selectionCommits.push({ before, after, label }); },
     commitDocument: async (before, after, label, bounds = null) => { effects.documentCommits.push({ before, after, label, bounds }); },
     schedulePreview: (pixels, target, layerId, dirty) => { effects.previews.push({ pixels, target, layerId, dirty: dirty ?? null }); },
+    schedulePreviewLayers: (layers) => { effects.layerPreviews.push([...layers]); },
     previewWithLayerHidden: (layerId) => { effects.hiddenLayerPreviews.push(layerId); },
     setActiveLayer: (layerId) => { effects.activeLayerSets.push(layerId); },
     resetViewportToFit: () => { effects.viewportResets += 1; },

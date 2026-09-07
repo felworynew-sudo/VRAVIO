@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import {
-  cloneRasterState, layerAccepts, layerLockReason, layerOpaqueBounds, liftSelection, meshLayerPixels, meshSelection,
+  cloneRasterState, layerAccepts, layerLockReason, layerOpaqueBounds, liftSelection, linkedLayers, meshLayerPixels, meshSelection,
   pickLayerAt, quadLayerPixels, quadSelection, regularMesh, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection,
   scaleLayerPixels, scaleSelection, setLayerPixels, stampFloating, translateLayerPixels, translateSelection, unionRect, WARP_GRID,
   type FloatingPixels, type PixelSelection, type Point, type RasterDocumentState, type RasterRect, type RasterTextData,
@@ -49,12 +49,18 @@ export interface PendingTransform {
    * this Warp session sees — never a previous drag's already-warped result. */
   readonly mesh?: readonly Point[];
   readonly meshOrigin?: { readonly pixels: Uint8ClampedArray; readonly bounds: RasterRect };
+  /** Other layers in `layerId`'s link group, each carrying the same translate this drag applies
+   * to the primary layer — Photoshop moves a whole linked group together, not just the layer the
+   * pointer grabbed. Plain-translate only: entering Scale/Rotate/Skew/Warp on a linked layer
+   * transforms just the primary layer, matching Photoshop's own Free Transform (which does not
+   * extend to a layer's link partners either). */
+  readonly linked?: readonly { readonly layerId: string; readonly pixels: Uint8ClampedArray }[];
 }
 
 type QuadTransformMode = "skew" | "distort" | "perspective";
 
 type MoveDrag =
-  | { kind: "move"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean; fromOrigin?: boolean; float?: FloatingPixels }
+  | { kind: "move"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean; fromOrigin?: boolean; float?: FloatingPixels; linkedBase?: readonly { layerId: string; basePixels: Uint8ClampedArray }[] }
   | { kind: "scale"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; handleX: -1 | 0 | 1; handleY: -1 | 0 | 1; dx: number; dy: number; text?: PendingTextTransform }
   | { kind: "rotate"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; center: Point; startAngle: number; baseRotation: number; dx: number; dy: number; text?: PendingTextTransform }
   | { kind: "quad"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; baseCorners: readonly [Point, Point, Point, Point]; handleIndex: number; mode: QuadTransformMode }
@@ -203,6 +209,21 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
     bounds = wasThere && isThere ? unionRect(wasThere, isThere.x, isThere.y, isThere.x + isThere.width, isThere.y + isThere.height, 1) : wasThere ?? isThere;
     setLayerPixels(layer, pending.pixels, pending.before.width, pending.before.height);
   }
+  // A linked group's partners commit the same way as the primary layer — their own opaque
+  // bounds fold into the same dirty-rect union the history step and tile cache repaint from.
+  // Skipping this (writing pixels without extending `bounds`) would be CLAUDE.md's "single door"
+  // bug on a new axis: the screen would show every moved layer, but a partial redo/undo region
+  // would silently leave a partner's old position un-invalidated in the tile cache.
+  for (const entry of pending.linked ?? []) {
+    const partner = after.layers.find((item) => item.id === entry.layerId);
+    if (!partner) continue;
+    const sourcePartner = pending.before.layers.find((item) => item.id === entry.layerId);
+    const partnerWasThere = sourcePartner ? layerOpaqueBounds(materialise(sourcePartner, pending.before), pending.before.width, pending.before.height) : null;
+    const partnerIsThere = layerOpaqueBounds(entry.pixels, pending.before.width, pending.before.height);
+    const partnerBounds = partnerWasThere && partnerIsThere ? unionRect(partnerWasThere, partnerIsThere.x, partnerIsThere.y, partnerIsThere.x + partnerIsThere.width, partnerIsThere.y + partnerIsThere.height, 1) : partnerWasThere ?? partnerIsThere;
+    if (partnerBounds) bounds = bounds ? unionRect(bounds, partnerBounds.x, partnerBounds.y, partnerBounds.x + partnerBounds.width, partnerBounds.y + partnerBounds.height, 0) : partnerBounds;
+    setLayerPixels(partner, entry.pixels, pending.before.width, pending.before.height);
+  }
   after.selection = cloneSelection(pending.selection);
   if (nextActiveLayerId) after.activeLayerId = nextActiveLayerId;
   void context.commitDocument(pending.before, after, "Commit Transform (Применить трансформацию)", bounds);
@@ -253,6 +274,13 @@ function beginMoveDrag(context: ToolContext<MoveState>, pointer: ToolPointer, pe
     ? next?.float ?? liftSelection(origin ? materialise(origin, state) : materialise(layer, state), state.width, state.height, origin ? originSelection : effectiveSelection)
     : undefined;
   const before = next?.before ?? cloneRasterState(pending ? state : { ...state, activeLayerId: layer.id });
+  // A fresh drag on a linked layer moves its whole link group together (Photoshop: dragging one
+  // linked layer with the Move tool moves all of them) — each partner translates its own full
+  // buffer by the same delta, with no selection/float involved (the selection, if any, belongs to
+  // the primary layer the pointer actually grabbed). Continuing an existing pending transform
+  // does not re-derive this list; `linkedBase` already carries whatever the drag that opened it saw.
+  const linkPartners = !pending && layer.linkGroup ? linkedLayers(state, layer.id).filter((item) => item.id !== layer.id && layerAccepts(item, "move")) : [];
+  const linkedBase = linkPartners.length ? linkPartners.map((item) => ({ layerId: item.id, basePixels: materialise(item, state).slice() })) : undefined;
   context.setState({
     pending: next,
     drag: {
@@ -264,6 +292,7 @@ function beginMoveDrag(context: ToolContext<MoveState>, pointer: ToolPointer, pe
       ...(next?.text ? { text: next.text } : {}),
       ...(createdTextTransform ? { createdTextTransform: true } : {}),
       ...(origin ? { fromOrigin: true } : {}),
+      ...(linkedBase ? { linkedBase } : {}),
       ...(float ? { float } : {}),
     },
   });
@@ -331,8 +360,12 @@ function applyDragFrame(context: ToolContext<MoveState>, drag: MoveDrag): Pendin
   const touched = [was, now].filter((rect): rect is RasterRect => Boolean(rect));
   const dirty = touched.length ? touched.reduce<RasterRect | null>((accumulated, rect) => unionRect(accumulated, rect.x, rect.y, rect.x + rect.width, rect.y + rect.height, 1), null) : null;
   const moved = translateSelection(drag.baseSelection, state.width, state.height, shiftX, shiftY);
-  const pending: PendingTransform = { before: drag.before, layerId: drag.before.activeLayerId, dx, dy, pixels: working, selection: moved, rotation: drag.rotation, ...(drag.float ? { float: drag.float } : {}) };
-  context.schedulePreview(working, "pixels", pending.layerId, dirty);
+  // A linked partner has no selection of its own to restrict the drag to — the selection, if any,
+  // belongs to the layer the pointer actually grabbed — so it always translates its whole buffer.
+  const linked = drag.linkedBase?.map((entry) => ({ layerId: entry.layerId, pixels: translateLayerPixels(entry.basePixels, state.width, state.height, shiftX, shiftY, null) }));
+  const pending: PendingTransform = { before: drag.before, layerId: drag.before.activeLayerId, dx, dy, pixels: working, selection: moved, rotation: drag.rotation, ...(drag.float ? { float: drag.float } : {}), ...(linked ? { linked } : {}) };
+  if (linked?.length) context.schedulePreviewLayers([{ layerId: pending.layerId, pixels: working }, ...linked]);
+  else context.schedulePreview(working, "pixels", pending.layerId, dirty);
   return pending;
 }
 
