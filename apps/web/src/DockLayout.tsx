@@ -6,7 +6,7 @@ import { useShellStore } from "./store";
 import { useDocuments } from "./useDocuments";
 import { RasterWorkspace } from "./RasterWorkspace";
 import { VectorWorkspace } from "./VectorWorkspace";
-import { appendLayer, appendRasterGroup, compositeRasterDocument, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, isRasterDocumentState, rasterLayerDescendantIds, rasterLayerRows, setLayerPixels, dropPositionInRow, dropTargetForRow, placeLayer, toggleLayerLink, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerMask } from "@vravio/env-raster";
+import { appendLayer, appendRasterGroup, compositeRasterDocument, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, createRasterLayerMaskFromSelection, isRasterDocumentState, rasterLayerDescendantIds, rasterLayerRows, setLayerPixels, dropPositionInRow, dropTargetForRow, placeLayer, toggleLayerLink, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerMask } from "@vravio/env-raster";
 import { kernel } from "./kernel";
 import { EnvironmentIcon } from "./EnvironmentIcon";
 import { localized, text } from "./i18n";
@@ -27,7 +27,7 @@ import { validateIccProfile } from "./vector-color-wasm";
 import { exportVectorDocumentToSvg } from "./vector-svg-export";
 import { useContextMenu, type ContextMenuItem } from "./ContextMenu";
 import { luminanceHistogram } from "./raster-adjustments/histogram";
-import { changeRasterDocument } from "./commands";
+import { changeRasterDocument, changeRasterSelection } from "./commands";
 import { confirmModal } from "./modals/runtime";
 import { useCloseOnOutsideClick } from "./useCloseOnOutsideClick";
 import { pickCommands } from "./commands/surface";
@@ -425,7 +425,32 @@ function LayersPanel() {
     };
     const toggleVisible = (id: string) => kernel.documents.update<RasterDocumentState>(active.id, (current) => { const layer = current.layers.find((item) => item.id === id); if (layer) layer.visible = !layer.visible; });
     const toggleExpanded = (id: string) => kernel.documents.update<RasterDocumentState>(active.id, (current) => { const layer = current.layers.find((item) => item.id === id); if (layer?.kind === "group") layer.expanded = layer.expanded === false; });
-    const addMask = () => { let targetId: string | null = null; void changeRasterDocument(active.id, "Add Layer Mask (Добавить маску слоя)", (current) => { const layer = current.layers.find((item) => item.id === current.activeLayerId); if (layer && layer.kind !== "group" && !layer.mask) { layer.mask = createRasterLayerMask(current.width, current.height); targetId = layer.id; return true; } return false; }); if (targetId) setEditingMask(active.id, targetId); };
+    // master-plan.md §1.9 item 2: an active pixel selection becomes the new
+    // mask's shape (white inside, black outside) instead of just vanishing —
+    // Photoshop's own "Add Layer Mask with a selection active" behaviour.
+    // `document.selection` is cleared afterward: the shape now lives in the
+    // mask, and leaving the marching ants up over it would say two things at
+    // once about what's "selected".
+    const addMask = () => {
+      let targetId: string | null = null, consumedSelection = false;
+      // `changeRasterDocument`'s own history snapshot only carries
+      // `layers`/`activeLayerId` (see its comment: layer edits and selection
+      // edits are deliberately "the two ways" a raster document changes,
+      // each with its own undo mechanism) — setting `current.selection` here
+      // would silently vanish on commit, not persist. Clearing the selection
+      // is therefore a second, separate `changeRasterSelection` call below,
+      // after this one has read it into the new mask.
+      void changeRasterDocument(active.id, "Add Layer Mask (Добавить маску слоя)", (current) => {
+        const layer = current.layers.find((item) => item.id === current.activeLayerId);
+        if (!layer || layer.kind === "group" || layer.mask) return false;
+        layer.mask = current.selection ? createRasterLayerMaskFromSelection(current.selection) : createRasterLayerMask(current.width, current.height);
+        consumedSelection = Boolean(current.selection);
+        targetId = layer.id;
+        return true;
+      });
+      if (consumedSelection) void changeRasterSelection(active.id, "Add Layer Mask (Добавить маску слоя)", () => null);
+      if (targetId) setEditingMask(active.id, targetId);
+    };
     const toggleClipping = () => void changeRasterDocument(active.id, "Toggle Clipping Mask (Обтравочная маска)", (current) => { const layer = current.layers.find((item) => item.id === current.activeLayerId); if (layer && layer.kind !== "group") { layer.clipping = !layer.clipping; return true; } return false; });
     /**
      * Dragging a row.

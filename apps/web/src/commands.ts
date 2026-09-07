@@ -23,4 +23,4 @@ export function activeCommandContext(): CommandContext {
 
 /** Re-exported where it has always been imported from; the implementation now
  * lives beside the raster commands that share it (see its own comment). */
-export { changeRasterDocument } from "./environments/raster/commands/document-edits";
+export { changeRasterDocument, changeRasterSelection } from "./environments/raster/commands/document-edits";

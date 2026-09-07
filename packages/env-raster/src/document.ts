@@ -1,6 +1,6 @@
 import { builtInLuts } from "./lut";
 import { parseHexColor } from "./color";
-import type { RasterAdjustment, RasterDocumentOptions, RasterDocumentState, RasterLayer, RasterLayerMask } from "./types";
+import type { PixelSelection, RasterAdjustment, RasterDocumentOptions, RasterDocumentState, RasterLayer, RasterLayerMask } from "./types";
 
 export const makeLayerOrderKey = (index: number): string => Math.max(0, Math.floor(index)).toString(36).padStart(8, "0");
 
@@ -20,6 +20,19 @@ export function createRasterLayerMask(width: number, height: number, reveal = tr
   const pixels = new Uint8ClampedArray(width * height);
   if (reveal) pixels.fill(255);
   return { pixels, assetId: null, enabled: true, inverted: false, linked: true, density: 1, feather: 0 };
+}
+
+/**
+ * A layer mask that starts as the active pixel selection's shape — inside
+ * the selection paints white (reveals), outside stays black (hides), the
+ * same convention Photoshop uses for "Add Layer Mask" with a selection
+ * active. `PixelSelection.mask` and `RasterLayerMask.pixels` are already
+ * the identical shape (grayscale, one byte per document pixel), so this is
+ * a copy, not a conversion — `.slice()` so the new mask doesn't alias the
+ * selection's own buffer once the caller clears `document.selection`.
+ */
+export function createRasterLayerMaskFromSelection(selection: PixelSelection): RasterLayerMask {
+  return { pixels: selection.mask.slice(), assetId: null, enabled: true, inverted: false, linked: true, density: 1, feather: 0 };
 }
 
 export function defaultAdjustment(kind: RasterAdjustment["kind"]): RasterAdjustment {
