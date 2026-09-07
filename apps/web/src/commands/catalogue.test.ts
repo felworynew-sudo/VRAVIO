@@ -30,6 +30,7 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "edit.copy|Mod+C||Edit",
   "edit.cut|Mod+X||Edit",
   "edit.freeTransform|Mod+T||Edit",
+  "edit.pasteInPlace|Mod+Shift+V||Edit",
   "edit.paste|Mod+V||Edit",
   "edit.redo|Mod+Shift+Z||Edit",
   "edit.undo|Mod+Z||Edit",

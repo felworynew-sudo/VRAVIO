@@ -26,6 +26,35 @@ import { changeRasterDocument } from "../document-edits";
  * to do on a keystroke, and a new layer is both undoable and movable.
  */
 
+/**
+ * Copies a decoded `sourceWidth × sourceHeight` RGBA image onto a fresh
+ * `documentWidth × documentHeight` buffer at `(originX, originY)`, clipping
+ * whatever falls outside the document rather than wrapping or throwing.
+ *
+ * Exported (unlike the rest of this file's helpers) so the placement
+ * arithmetic — the part that actually differs between Paste and Paste in
+ * Place — has a test that doesn't need a real clipboard round-trip, which
+ * a browser will only grant to a genuine user gesture, not a script. See
+ * this file's own paste-in-place.test.ts.
+ */
+export function blitAtOrigin(source: Uint8ClampedArray | Uint8Array, sourceWidth: number, sourceHeight: number, documentWidth: number, documentHeight: number, originX: number, originY: number): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(documentWidth * documentHeight * 4);
+  for (let y = 0; y < sourceHeight; y += 1) {
+    const targetY = originY + y;
+    if (targetY < 0 || targetY >= documentHeight) continue;
+    for (let x = 0; x < sourceWidth; x += 1) {
+      const targetX = originX + x;
+      if (targetX < 0 || targetX >= documentWidth) continue;
+      const from = (y * sourceWidth + x) * 4, to = (targetY * documentWidth + targetX) * 4;
+      output[to] = source[from]!;
+      output[to + 1] = source[from + 1]!;
+      output[to + 2] = source[from + 2]!;
+      output[to + 3] = source[from + 3]!;
+    }
+  }
+  return output;
+}
+
 /** The selection's bounds, or the whole canvas when nothing is selected. */
 function copyRegion(state: RasterDocumentState) {
   const selection = state.selection;
@@ -67,16 +96,83 @@ function regionCanvas(state: RasterDocumentState): HTMLCanvasElement | null {
   return canvas;
 }
 
+/**
+ * master-plan.md §1.9 item 7: "paste in place" needs to know where a copy
+ * came from, but the system clipboard holds a plain PNG blob with no
+ * document-coordinate metadata once it leaves this function. Remembered
+ * here instead — the same module-level "last ... until the next one"
+ * pattern `select.ts`'s `lastSelectionByDocument` already uses for
+ * Reselect, not a per-document store entry, because a real clipboard
+ * isn't scoped to a document either.
+ */
+let lastCopyOrigin: { x: number; y: number } | null = null;
+
 async function copyToClipboard(state: RasterDocumentState): Promise<boolean> {
+  const region = copyRegion(state);
   const canvas = regionCanvas(state);
   if (!canvas) return false;
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
   if (!blob) return false;
   await kernel.platform.clipboard.writeImage(blob);
+  lastCopyOrigin = { x: region.x, y: region.y };
   return true;
 }
 
 const hasRaster = (activeDocumentId: string | null | undefined): RasterDocumentState | null => activeRasterState(activeDocumentId);
+
+/**
+ * The shared half of Paste and Paste in Place: read the clipboard, decode
+ * it, and land it in a new layer at `(originX, originY)` — top-left for a
+ * plain paste, the remembered copy position for paste-in-place. A new
+ * layer, never a write into the current one, for the same reason `edit.paste`
+ * already picked that shape (see this file's own top comment).
+ */
+async function pasteImageAt(activeDocumentId: string, document: { state: RasterDocumentState }, originX: number, originY: number, label: string): Promise<void> {
+  const clipboard = await kernel.platform.clipboard.readImage();
+  if (clipboard.kind === "denied") {
+    diagnostic("warn", "clipboard", "The browser refused permission to read the clipboard");
+    errorModal({
+      title: text(useShellStore.getState().language, "Cannot read the clipboard", "Нет доступа к буферу обмена"),
+      message: text(
+        useShellStore.getState().language,
+        "The browser refused permission to read the clipboard. Allow clipboard access for this page and try again.",
+        "Браузер не дал разрешение читать буфер обмена. Разрешите доступ к буферу для этой страницы и попробуйте снова.",
+      ),
+    });
+    return;
+  }
+  if (clipboard.kind === "empty") { diagnostic("info", "clipboard", "The clipboard holds no image"); return; }
+  const blob = clipboard.image;
+
+  const decoded = await decodeImportedImage(new File([blob], "clipboard.png", { type: blob.type || "image/png" }));
+  if (!decoded) { diagnostic("warn", "clipboard", "Could not decode the image on the clipboard"); return; }
+
+  const state = document.state;
+  const surface = window.document.createElement("canvas");
+  surface.width = decoded.width;
+  surface.height = decoded.height;
+  const context = surface.getContext("2d");
+  if (!context) { decoded.release(); return; }
+  context.drawImage(decoded.image, 0, 0);
+  const pasted = context.getImageData(0, 0, decoded.width, decoded.height).data;
+  decoded.release();
+
+  const canvasSized = blitAtOrigin(pasted, decoded.width, decoded.height, state.width, state.height, originX, originY);
+
+  const before = cloneRasterState(state);
+  const after = cloneRasterState(state);
+  const layer = createRasterLayer(after.width, after.height, `Pasted (Вставленное)`);
+  setLayerPixels(layer, canvasSized, after.width, after.height);
+  appendLayer(after, layer);
+  after.activeLayerId = layer.id;
+
+  const history = kernel.historyByDocument.get(activeDocumentId);
+  if (!history) return;
+  const assign = (snapshot: RasterDocumentState): void => {
+    kernel.documents.update<RasterDocumentState>(activeDocumentId, (current) => { Object.assign(current, cloneRasterState(snapshot)); });
+  };
+  await history.execute({ label, redo: () => assign(after), undo: () => assign(before) });
+}
 
 const commands: readonly CommandDefinition[] = [
   {
@@ -140,68 +236,35 @@ const commands: readonly CommandDefinition[] = [
     // Disabled where the browser cannot read images back at all, rather than
     // offered and then quietly doing nothing.
     isEnabled: (context) => kernel.platform.clipboard.canReadImages && isRasterActive(context),
+    // Placed at the top-left rather than centred: centring a paste that is
+    // larger than the canvas would put most of it off two edges instead of
+    // one, and "it appeared at the corner" is at least predictable.
     execute: async ({ activeDocumentId }) => {
       const document = kernel.documents.get<RasterDocumentState>(activeDocumentId ?? "");
       if (!activeDocumentId || !document || !isRasterDocumentState(document.state)) return;
-
-      const clipboard = await kernel.platform.clipboard.readImage();
-      if (clipboard.kind === "denied") {
-        // Worth saying out loud: the picture *is* on the clipboard, and doing
-        // nothing silently would send the user looking for a bug in the copy.
-        diagnostic("warn", "clipboard", "The browser refused permission to read the clipboard");
-        errorModal({
-          title: text(useShellStore.getState().language, "Cannot read the clipboard", "Нет доступа к буферу обмена"),
-          message: text(
-            useShellStore.getState().language,
-            "The browser refused permission to read the clipboard. Allow clipboard access for this page and try again.",
-            "Браузер не дал разрешение читать буфер обмена. Разрешите доступ к буферу для этой страницы и попробуйте снова.",
-          ),
-        });
-        return;
-      }
-      if (clipboard.kind === "empty") { diagnostic("info", "clipboard", "The clipboard holds no image"); return; }
-      const blob = clipboard.image;
-
-      const decoded = await decodeImportedImage(new File([blob], "clipboard.png", { type: blob.type || "image/png" }));
-      if (!decoded) { diagnostic("warn", "clipboard", "Could not decode the image on the clipboard"); return; }
-
-      const state = document.state;
-      const surface = window.document.createElement("canvas");
-      surface.width = decoded.width;
-      surface.height = decoded.height;
-      const context = surface.getContext("2d");
-      if (!context) { decoded.release(); return; }
-      context.drawImage(decoded.image, 0, 0);
-      const pasted = context.getImageData(0, 0, decoded.width, decoded.height).data;
-      decoded.release();
-
-      // Placed at the top-left rather than centred: centring a paste that is
-      // larger than the canvas would put most of it off two edges instead of
-      // one, and "it appeared at the corner" is at least predictable.
-      const canvasSized = new Uint8ClampedArray(state.width * state.height * 4);
-      for (let y = 0; y < Math.min(decoded.height, state.height); y += 1) {
-        for (let x = 0; x < Math.min(decoded.width, state.width); x += 1) {
-          const from = (y * decoded.width + x) * 4, to = (y * state.width + x) * 4;
-          canvasSized[to] = pasted[from]!;
-          canvasSized[to + 1] = pasted[from + 1]!;
-          canvasSized[to + 2] = pasted[from + 2]!;
-          canvasSized[to + 3] = pasted[from + 3]!;
-        }
-      }
-
-      const before = cloneRasterState(state);
-      const after = cloneRasterState(state);
-      const layer = createRasterLayer(after.width, after.height, `Pasted (Вставленное)`);
-      setLayerPixels(layer, canvasSized, after.width, after.height);
-      appendLayer(after, layer);
-      after.activeLayerId = layer.id;
-
-      const history = kernel.historyByDocument.get(activeDocumentId);
-      if (!history) return;
-      const assign = (snapshot: RasterDocumentState): void => {
-        kernel.documents.update<RasterDocumentState>(activeDocumentId, (current) => { Object.assign(current, cloneRasterState(snapshot)); });
-      };
-      await history.execute({ label: "Paste (Вставить)", redo: () => assign(after), undo: () => assign(before) });
+      await pasteImageAt(activeDocumentId, document, 0, 0, "Paste (Вставить)");
+    },
+  },
+  {
+    id: "edit.pasteInPlace",
+    label: { en: "Paste in Place", ru: "Вставить на то же место" },
+    category: CATEGORY_EDIT,
+    shortcut: "Mod+Shift+V",
+    surfaces: ["menu", "palette"],
+    isEnabled: (context) => kernel.platform.clipboard.canReadImages && isRasterActive(context),
+    // master-plan.md §1.9 item 7: lands the pasted image at the document
+    // coordinates it was last copied/cut FROM (lastCopyOrigin), not the
+    // canvas top-left plain Paste always uses. That memory only exists for
+    // a copy this session made from this app's own canvas — nothing else
+    // could have set it — so a clipboard image from anywhere else (another
+    // app, a fresh session) falls back to the exact same top-left placement
+    // as plain Paste, which is the only sane placement when there is no
+    // "same place" to speak of.
+    execute: async ({ activeDocumentId }) => {
+      const document = kernel.documents.get<RasterDocumentState>(activeDocumentId ?? "");
+      if (!activeDocumentId || !document || !isRasterDocumentState(document.state)) return;
+      const origin = lastCopyOrigin ?? { x: 0, y: 0 };
+      await pasteImageAt(activeDocumentId, document, origin.x, origin.y, "Paste in Place (Вставить на то же место)");
     },
   },
 ];
