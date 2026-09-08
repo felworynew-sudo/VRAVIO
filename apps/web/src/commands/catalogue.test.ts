@@ -122,7 +122,7 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "tool.vector.x|X|vector|Tools", // Shape Builder (vector.shape-builder) — Inkscape's own bare "X" shortcut for the same tool, no remap needed.
   "tool.vector.z|Z|vector|Tools", // the vector Zoom tool — same addition as vector.hand just above.
   "view.actual|Mod+1||View",
-  "view.commandPalette|Mod+F||Edit",
+  "view.commandPalette|Mod+K||Edit", // was Mod+F — collided with the browser's own find-in-page and didn't match the shell's own menu label ("Ctrl+K"), so the shortcut was silently unreachable either way; see edit.ts's own note.
   "view.fit|Mod+0||View",
   "view.resetRotation|||View",
   "view.theme|||View",

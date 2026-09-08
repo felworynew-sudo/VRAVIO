@@ -62,7 +62,10 @@ const invertCommand: CommandDefinition = {
   label: { en: "Invert", ru: "Инвертировать" },
   category: CATEGORY_IMAGE,
   shortcut: "Mod+I",
-  surfaces: ["menu", "palette"],
+  // `layer-context` added alongside the owner's own request: a layer's right-click menu should
+  // offer Invert directly, not only through Image ▸ Adjustments — the same reasoning already
+  // gave `layer.mergeDown`/`layer.mergeVisible`/`layer.ungroup` this surface.
+  surfaces: ["menu", "palette", "layer-context"],
   isEnabled: (context) => Boolean(invertMaskTarget(context.activeDocumentId)) || adjustmentEnabled(context),
   execute: ({ activeDocumentId }) => {
     const maskLayerId = invertMaskTarget(activeDocumentId);

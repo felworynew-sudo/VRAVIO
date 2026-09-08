@@ -87,6 +87,34 @@ describe("picking the layer under a click", () => {
     expect(pickLayerAt(state, 8, 8)?.id).toBe(under.id);
   });
 
+  it("skips a clipping layer where its base does not show through", () => {
+    const state = scene();
+    const under = add(state, "Under", (layer) => paint(layer, 4, 4, 12));
+    // A small clip base, opaque only in a 4x4 corner of the clipped layer's own painted area.
+    add(state, "Base", (layer) => paint(layer, 4, 4, 4));
+    add(state, "Clipped", (layer) => { paint(layer, 4, 4, 12); layer.clipping = true; });
+
+    // Inside the clip base's own opaque area: the clipped layer genuinely shows here.
+    expect(pickLayerAt(state, 5, 5)?.name).toBe("Clipped");
+    // Inside the clipped layer's own painted area, but past where the base is opaque: the
+    // canvas does not actually draw the clipped layer here, so picking it would grab something
+    // the user cannot see — must fall through to whatever is genuinely visible instead.
+    expect(pickLayerAt(state, 10, 10)?.id).toBe(under.id);
+  });
+
+  it("clipping to a masked base respects the base's own mask, not just its paint", () => {
+    const state = scene();
+    const under = add(state, "Under", (layer) => paint(layer, 4, 4, 12));
+    add(state, "Base", (layer) => {
+      paint(layer, 4, 4, 12);
+      layer.mask = createRasterLayerMask(W, H);
+      layer.mask.pixels.fill(0); // masked out everywhere, even though the base's own paint is opaque
+    });
+    add(state, "Clipped", (layer) => { paint(layer, 4, 4, 12); layer.clipping = true; });
+
+    expect(pickLayerAt(state, 8, 8)?.id).toBe(under.id);
+  });
+
   it("skips what is too faint to be worth grabbing", () => {
     const state = scene();
     const solid = add(state, "Solid", (layer) => paint(layer, 4, 4, 12));

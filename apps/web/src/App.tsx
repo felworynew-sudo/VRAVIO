@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
+import { maskToRgba, rgbaToMask } from "./raster-pixel-buffers";
 import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
 import { withBusyPainted } from "./busy";
 import { useShellStore, type Language } from "./store";
@@ -69,7 +70,13 @@ export function App() {
   const [renderBackend, setRenderBackend] = useState<RenderBackend | null>(kernel.gpu.active);
   const [exportOpen, setExportOpen] = useState(false);
   const [printOpen, setPrintOpen] = useState(false);
-  const [adjustmentDialog, setAdjustmentDialog] = useState<{ documentId: string; layerId: string; definitionId: RasterAdjustment["kind"]; initialValue: RasterAdjustment } | null>(null);
+  // `targetsMask`: a mask is a layer too (CLAUDE.md's own recurring theme) — an adjustment
+  // opened while a mask is being edited (`editingMaskLayerId`, the same state the color-swap
+  // shortcuts below already special-case) must land on that mask's own grayscale buffer, not
+  // silently fall through to the pixel layer underneath it. Captured once at open time, not
+  // re-read live, so switching which mask is being edited mid-dialog doesn't retarget an
+  // already-open preview.
+  const [adjustmentDialog, setAdjustmentDialog] = useState<{ documentId: string; layerId: string; targetsMask: boolean; definitionId: RasterAdjustment["kind"]; initialValue: RasterAdjustment } | null>(null);
   const [, setPanelRevision] = useState(0);
   const active = documents.find((document) => document.id === store.activeDocumentId) ?? null;
   const activeToolId = active ? store.activeToolByDocument[active.id] : undefined;
@@ -273,9 +280,17 @@ export function App() {
   const openImageAdjustment = (definition: RasterAdjustmentDefinition) => {
     if (!active || !isRasterDocumentState(active.state)) return;
     const state = active.state;
+    // A mask being edited takes the adjustment, not the pixel layer it belongs to — the same
+    // targeting `editingMaskLayerId` already gives the color-swap shortcuts and the brush.
+    if (editingMaskLayerId) {
+      const layer = state.layers.find((item) => item.id === editingMaskLayerId);
+      if (!layer?.mask) { diagnostic("warn", "adjustment.open", "No mask being edited", { layerId: editingMaskLayerId }); return; }
+      setAdjustmentDialog({ documentId: active.id, layerId: layer.id, targetsMask: true, definitionId: definition.id, initialValue: defaultAdjustment(definition.id) });
+      return;
+    }
     const layer = state.layers.find((item) => item.id === state.activeLayerId);
     if (!layer || layer.kind !== "pixel") { diagnostic("warn", "adjustment.open", "Direct adjustments require an editable pixel layer", { layerId: layer?.id, kind: layer?.kind }); return; }
-    setAdjustmentDialog({ documentId: active.id, layerId: layer.id, definitionId: definition.id, initialValue: defaultAdjustment(definition.id) });
+    setAdjustmentDialog({ documentId: active.id, layerId: layer.id, targetsMask: false, definitionId: definition.id, initialValue: defaultAdjustment(definition.id) });
   };
 
   const previewImageAdjustment = (value: RasterAdjustment | null) => {
@@ -283,6 +298,16 @@ export function App() {
     const document = kernel.documents.get<RasterDocumentState>(adjustmentDialog.documentId); if (!document || !isRasterDocumentState(document.state)) return;
     if (!value) { window.dispatchEvent(new CustomEvent("vravio-raster-preview", { detail: { documentId: document.id, pixels: null } })); return; }
     const target = document.state.layers.find((layer) => layer.id === adjustmentDialog.layerId); if (!target) return;
+    if (adjustmentDialog.targetsMask) {
+      if (!target.mask) return;
+      // A mask is single-channel grayscale, not RGBA — `maskToRgba` gives `adjustedPixels` (built
+      // for layer pixels) an R=G=B view to run the same adjustment math against, `rgbaToMask`
+      // collapses the result back to one channel per pixel.
+      const before = maskToRgba(target.mask.pixels), confined = adjustedPixels(before, value, document.state.selection);
+      const layers = document.state.layers.map((layer) => layer.id === target.id ? { ...layer, mask: { ...layer.mask!, pixels: rgbaToMask(confined) } } : layer);
+      window.dispatchEvent(new CustomEvent("vravio-raster-preview", { detail: { documentId: document.id, pixels: compositeRasterDocument({ ...document.state, layers }) } }));
+      return;
+    }
     const before = layerDocumentPixels(target, document.state.width, document.state.height), confined = adjustedPixels(before, value, document.state.selection);
     const layers = document.state.layers.map((layer) => layer.id === target.id ? { ...layer, pixels: layer.pixels.slice(), effects: structuredClone(layer.effects) } : layer);
     const previewState = { ...document.state, layers }; const previewLayer = layers.find((layer) => layer.id === target.id)!; setLayerPixels(previewLayer, confined, previewState.width, previewState.height);
@@ -292,10 +317,20 @@ export function App() {
   const applyImageAdjustment = (value: RasterAdjustment) => {
     if (!adjustmentDialog) return;
     const document = kernel.documents.get<RasterDocumentState>(adjustmentDialog.documentId); if (!document || !isRasterDocumentState(document.state)) return;
-    const target = document.state.layers.find((layer) => layer.id === adjustmentDialog.layerId); if (!target || target.kind !== "pixel") return;
+    const target = document.state.layers.find((layer) => layer.id === adjustmentDialog.layerId); if (!target) return;
+    const definition = rasterAdjustmentById.get(value.kind), history = kernel.historyByDocument.get(document.id);
+    if (adjustmentDialog.targetsMask) {
+      if (!target.mask) return;
+      const before = maskToRgba(target.mask.pixels), confined = adjustedPixels(before, value, document.state.selection);
+      const beforeMask = target.mask.pixels.slice(), afterMask = rgbaToMask(confined);
+      const assignMask = (pixels: Uint8ClampedArray) => { kernel.documents.update<RasterDocumentState>(document.id, (state) => { const layer = state.layers.find((item) => item.id === target.id); if (layer?.mask) layer.mask.pixels = pixels; }); };
+      if (history) void history.execute({ label: `Mask Adjustment: ${definition?.name.en ?? value.kind}`, memoryEstimate: beforeMask.byteLength + afterMask.byteLength, redo: () => assignMask(afterMask), undo: () => assignMask(beforeMask) }); else assignMask(afterMask);
+      previewImageAdjustment(null); setAdjustmentDialog(null);
+      return;
+    }
+    if (target.kind !== "pixel") return;
     const before = layerDocumentPixels(target, document.state.width, document.state.height).slice(), confined = adjustedPixels(before, value, document.state.selection);
     const assign = (pixels: Uint8ClampedArray) => { kernel.documents.update<RasterDocumentState>(document.id, (state) => { const layer = state.layers.find((item) => item.id === target.id); if (layer) setLayerPixels(layer, pixels, state.width, state.height); }); };
-    const definition = rasterAdjustmentById.get(value.kind), history = kernel.historyByDocument.get(document.id);
     if (history) void history.execute({ label: `Adjustment: ${definition?.name.en ?? value.kind}`, memoryEstimate: before.byteLength + confined.byteLength, redo: () => assign(confined), undo: () => assign(before) }); else assign(confined);
     previewImageAdjustment(null); setAdjustmentDialog(null);
   };

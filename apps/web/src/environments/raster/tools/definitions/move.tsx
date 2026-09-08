@@ -412,18 +412,29 @@ const move: RasterToolDefinition<MoveState> = {
         const xs = pending.mesh.map((anchor) => anchor.x), ys = pending.mesh.map((anchor) => anchor.y);
         if (point.x < Math.min(...xs) || point.x > Math.max(...xs) || point.y < Math.min(...ys) || point.y > Math.max(...ys)) { commitPending(context, pending); context.setState(empty); return; }
       } else {
-        const rotatePoint = { x: bounds.x + bounds.width / 2, y: bounds.y - 27 / context.viewport.zoom };
-        if (Math.hypot(point.x - rotatePoint.x, point.y - rotatePoint.y) <= tolerance) {
-          context.capturePointer(pointer.pointerId);
-          const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
-          context.setState({ pending, drag: { kind: "rotate", pointerId: pointer.pointerId, from: point, current: point, before: pending.before, basePixels: pending.text ? pending.pixels : pending.pixels.slice(), baseSelection: cloneSelection(pending.selection), sourceBounds: { ...bounds }, center, startAngle: Math.atan2(point.y - center.y, point.x - center.x), baseRotation: pending.rotation, dx: pending.dx, dy: pending.dy, ...(pending.text ? { text: pending.text } : {}) } });
-          return;
-        }
         const handles = [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]] as const;
         const handle = handles.find(([hx, hy]) => Math.hypot(point.x - (bounds.x + (hx + 1) * bounds.width / 2), point.y - (bounds.y + (hy + 1) * bounds.height / 2)) <= tolerance);
         if (handle) {
           context.capturePointer(pointer.pointerId);
           context.setState({ pending, drag: { kind: "scale", pointerId: pointer.pointerId, from: point, current: point, before: pending.before, basePixels: pending.text ? pending.pixels : pending.pixels.slice(), baseSelection: cloneSelection(pending.selection), sourceBounds: { ...bounds }, handleX: handle[0], handleY: handle[1], dx: pending.dx, dy: pending.dy, ...(pending.text ? { text: pending.text } : {}) } });
+          return;
+        }
+        // Photoshop's own convention (found by checking, per CLAUDE.md §1, rather than
+        // inventing a bespoke floating "rotation lever" — a dedicated stem+handle 27px above
+        // the frame, removed along with this comment's predecessor): a ring just *outside* each
+        // corner handle rotates, so the same corner serves both scale (grabbed exactly) and
+        // rotate (grabbed just past it) without a second widget competing for screen space.
+        // Corners only (`hx !== 0 && hy !== 0`) — edge midpoints stay scale-only, matching
+        // Photoshop's own Free Transform, which never rotates off an edge handle.
+        const rotateTolerance = tolerance * 2.2;
+        const rotateCorner = handles.filter(([hx, hy]) => hx !== 0 && hy !== 0).find(([hx, hy]) => {
+          const distance = Math.hypot(point.x - (bounds.x + (hx + 1) * bounds.width / 2), point.y - (bounds.y + (hy + 1) * bounds.height / 2));
+          return distance > tolerance && distance <= rotateTolerance;
+        });
+        if (rotateCorner) {
+          context.capturePointer(pointer.pointerId);
+          const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+          context.setState({ pending, drag: { kind: "rotate", pointerId: pointer.pointerId, from: point, current: point, before: pending.before, basePixels: pending.text ? pending.pixels : pending.pixels.slice(), baseSelection: cloneSelection(pending.selection), sourceBounds: { ...bounds }, center, startAngle: Math.atan2(point.y - center.y, point.x - center.x), baseRotation: pending.rotation, dx: pending.dx, dy: pending.dy, ...(pending.text ? { text: pending.text } : {}) } });
           return;
         }
         // Clicking away from the frame accepts the transform, the way it does in Photoshop.
@@ -567,8 +578,9 @@ const move: RasterToolDefinition<MoveState> = {
       {text && <canvas ref={textPreviewRef} className="text-transform-preview" style={{ left: text.targetBounds.x, top: text.targetBounds.y, width: text.targetBounds.width, height: text.targetBounds.height, transform: `rotate(${pending.rotation}deg)` }}/>}
       <svg className="transform-controls" viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
         <rect x={bounds.x} y={bounds.y} width={bounds.width} height={bounds.height}/>
-        <line className="transform-rotation-stem" x1={bounds.x + bounds.width / 2} y1={bounds.y} x2={bounds.x + bounds.width / 2} y2={bounds.y - 27 / zoom}/>
-        <circle className="transform-rotation-handle" cx={bounds.x + bounds.width / 2} cy={bounds.y - 27 / zoom} r={5 / zoom}/>
+        {/* No dedicated rotation lever: a corner handle now doubles as both scale (grabbed
+            exactly) and rotate (grabbed just outside it), the same convention Photoshop's own
+            Free Transform uses — see the pointerdown handler's own comment on this. */}
         {([[0, 0], [.5, 0], [1, 0], [0, .5], [1, .5], [0, 1], [.5, 1], [1, 1]] as [number, number][]).map(([x, y], index) => <rect className="transform-handle" key={index} x={bounds.x + bounds.width * x - 4 / zoom} y={bounds.y + bounds.height * y - 4 / zoom} width={8 / zoom} height={8 / zoom}/>)}
       </svg>
     </>;

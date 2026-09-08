@@ -44,7 +44,18 @@ const commands: readonly CommandDefinition[] = [
     id: "view.commandPalette",
     label: { en: "Search", ru: "Поиск" },
     category: CATEGORY_EDIT,
-    shortcut: "Mod+F",
+    // Was "Mod+F" — silently unusable, since every browser reserves Cmd/Ctrl+F for its own
+    // find-in-page and the shell's own menu label (App.tsx's Window menu, and the palette-button
+    // hint) had already drifted to advertise "Ctrl+K" instead — CLAUDE.md §4's "duplicate is two
+    // futures that will diverge", just for a shortcut string instead of a UI label. "Mod+K" is
+    // also a key chord Chrome/Edge reserve for the address bar, but — unlike truly OS-level ones
+    // (Cmd+T/Cmd+W/Cmd+N) — that default only wins when nothing on the page calls
+    // preventDefault() first; several popular web apps (Linear, GitHub, Slack) already bind their
+    // own command palette to Cmd/Ctrl+K successfully for exactly that reason, and this shell's
+    // own keydown handler (App.tsx) does call preventDefault() the moment `kernel.keymap.resolve`
+    // finds a match — so binding this command to the string the UI already promises fixes the
+    // bug instead of just relabeling around it.
+    shortcut: "Mod+K",
     surfaces: ["menu", "palette"],
     neverRecord: true,
     execute: () => useShellStore.getState().setPaletteOpen(true),

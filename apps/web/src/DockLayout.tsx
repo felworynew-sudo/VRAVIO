@@ -437,7 +437,7 @@ function LayersPanel() {
      * the last two are not commands at all yet.
      */
     const layerContextMenu = (layer: RasterLayer): ContextMenuItem[] => {
-      const fromCatalogue = pickCommands("layer-context", ["layer.duplicate", "layer.mergeDown", "layer.mergeVisible", "layer.ungroup"], { activeDocumentId: active.id }, language);
+      const fromCatalogue = pickCommands("layer-context", ["layer.duplicate", "layer.mergeDown", "layer.mergeVisible", "layer.ungroup", "image.adjustment.invert"], { activeDocumentId: active.id }, language);
       const byId = new Map(fromCatalogue.map((command) => [command.id, command]));
       const item = (id: string, extra?: Partial<ContextMenuItem>): ContextMenuItem => {
         const command = byId.get(id)!;
@@ -449,6 +449,11 @@ function LayersPanel() {
         { label: text(language, "Layer Style…", "Стиль слоя…"), onSelect: () => setStyleLayerId(layer.id), disabled: layer.kind === "group" },
         item("layer.mergeDown"),
         item("layer.mergeVisible"),
+        // Owner's own request: right-clicking a layer should offer Invert directly. The command
+        // itself is mask-aware (`image.adjustment.invert`'s own doc comment) — right-click already
+        // makes `layer` the active layer/mask target above (`onContextMenu`'s `selectLayer` call),
+        // so this inverts whichever of the layer's pixels or its mask was actually being edited.
+        item("image.adjustment.invert", { separatorBefore: true }),
         { label: text(language, "Group Layers", "Сгруппировать слои"), onSelect: addGroup, separatorBefore: true },
         item("layer.ungroup"),
         { label: text(language, layer.linkGroup ? "Unlink Layers" : "Link Layers", layer.linkGroup ? "Отвязать слои" : "Связать слои"), onSelect: () => kernel.documents.update<RasterDocumentState>(active.id, (current) => { toggleLayerLink(current, selectedLayerIds.length > 1 ? selectedLayerIds : [layer.id]); }) },

@@ -84,6 +84,16 @@ export interface PickLayerOptions {
  * pick — a group has no pixels of its own, and an adjustment covers the whole
  * canvas, so picking it would make everything under it unreachable.
  */
+/** A layer's own coverage at one pixel — alpha × its mask × its (inherited) opacity × fill
+ * opacity — the same formula `pickLayerAt` already used before it also had to ask "but is this
+ * layer even showing here, once clipping is accounted for". Factored out so both a clipped
+ * layer and the base it clips to are judged by the identical rule. */
+function ownCoverageAt(layer: RasterLayer, layers: RasterLayer[], column: number, row: number, index: number): number {
+  const mask = layer.mask?.enabled ? layer.mask : null;
+  const maskAlpha = mask ? (mask.pixels[index]! / 255) * mask.density : 1;
+  return (layerAlphaAt(layer, column, row) / 255) * maskAlpha * effectiveLayerOpacity(layer, layers) * (layer.fillOpacity ?? 1);
+}
+
 export function pickLayerAt(
   state: RasterDocumentState, x: number, y: number, options: PickLayerOptions = {},
 ): RasterLayer | null {
@@ -91,15 +101,36 @@ export function pickLayerAt(
   if (column < 0 || row < 0 || column >= state.width || row >= state.height) return null;
   const threshold = options.threshold ?? 0.5;
   const index = row * state.width + column;
+  // Bottom-to-top paint order — a clipped layer's base is the nearest earlier (lower) entry
+  // here sharing its parent, the same relationship `render.ts`'s own compositor walks to build
+  // its `clippingBaseByParent` accumulator; computed once per pick rather than per candidate
+  // layer, since more than one clipped layer here can share the same base.
+  const flat = flattenRasterLayers(state.layers);
 
-  for (const layer of [...flattenRasterLayers(state.layers)].reverse()) {
+  for (let flatIndex = flat.length - 1; flatIndex >= 0; flatIndex -= 1) {
+    const layer = flat[flatIndex]!;
     if (layer.kind === "group" || layer.kind === "adjustment" || layer.adjustment) continue;
     if (!isLayerEffectivelyVisible(layer, state.layers)) continue;
 
-    const mask = layer.mask?.enabled ? layer.mask : null;
-    const maskAlpha = mask ? (mask.pixels[index]! / 255) * mask.density : 1;
-    // Read where the layer actually lives; its buffer is sized to its bounds.
-    const coverage = (layerAlphaAt(layer, column, row) / 255) * maskAlpha * effectiveLayerOpacity(layer, state.layers) * (layer.fillOpacity ?? 1);
+    let coverage = ownCoverageAt(layer, state.layers, column, row, index);
+    // A clipping layer only actually shows where its base is opaque too (`render.ts`'s own
+    // `clippingBase`/`baseAlpha` for the real compositor) — a click inside the clipped layer's
+    // own bounds/mask, but outside where the base shows through, must fall through to whatever
+    // is genuinely visible there instead of picking a layer the canvas doesn't actually draw at
+    // that pixel. Found live: clicking a clipping-masked layer's fully-opaque own area still
+    // picked it even where the clip base beneath it was transparent, selecting a layer the user
+    // could not actually see.
+    if (layer.clipping && coverage > 0) {
+      let base: RasterLayer | undefined;
+      for (let baseIndex = flatIndex - 1; baseIndex >= 0; baseIndex -= 1) {
+        const candidate = flat[baseIndex]!;
+        if (candidate.parentId !== layer.parentId) continue;
+        if (candidate.clipping) continue; // clip bases are never themselves clipped
+        base = candidate;
+        break;
+      }
+      coverage = base ? Math.min(coverage, ownCoverageAt(base, state.layers, column, row, index)) : 0;
+    }
     if (coverage < threshold) continue;
 
     if (options.target !== "group") return layer;
