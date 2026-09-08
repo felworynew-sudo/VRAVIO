@@ -150,6 +150,51 @@ export function enterWarpTransformMode(pending: PendingTransform, bounds: Raster
 
 export type { QuadTransformMode };
 
+/** The 8 scale-handle positions on a transform frame, in the -1/0/1 grid `pendingBounds`'s
+ * rectangle is divided into — shared between `onPointerDown`'s hit-test and `cursorFor`'s hover
+ * preview so the two can never quietly disagree about where a handle actually is. */
+const SCALE_HANDLES = [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]] as const;
+
+function handleScreenPoint(bounds: RasterRect, hx: -1 | 0 | 1, hy: -1 | 0 | 1): Point {
+  return { x: bounds.x + (hx + 1) * bounds.width / 2, y: bounds.y + (hy + 1) * bounds.height / 2 };
+}
+
+function findScaleHandle(bounds: RasterRect, point: Point, tolerance: number): (typeof SCALE_HANDLES)[number] | undefined {
+  return SCALE_HANDLES.find(([hx, hy]) => Math.hypot(point.x - handleScreenPoint(bounds, hx, hy).x, point.y - handleScreenPoint(bounds, hx, hy).y) <= tolerance);
+}
+
+/** Corners only — edge midpoints stay scale-only, matching Photoshop's own Free Transform, which
+ * never rotates off an edge handle. See the pointerdown handler's own comment on why a ring just
+ * outside the handle (not a separate widget) is the rotate gesture at all. */
+function findRotateCorner(bounds: RasterRect, point: Point, tolerance: number, rotateTolerance: number): (typeof SCALE_HANDLES)[number] | undefined {
+  return SCALE_HANDLES.filter(([hx, hy]) => hx !== 0 && hy !== 0).find(([hx, hy]) => {
+    const distance = Math.hypot(point.x - handleScreenPoint(bounds, hx, hy).x, point.y - handleScreenPoint(bounds, hx, hy).y);
+    return distance > tolerance && distance <= rotateTolerance;
+  });
+}
+
+/** The resize cursor a scale handle's position implies — corners diagonal, edges axis-aligned.
+ * The frame itself never visually rotates (it's always the axis-aligned opaque bounding box of
+ * the already-rotated pixel content, see `pendingBounds`), so no rotation compensation is needed
+ * here the way a truly rotated frame's handles would. */
+function resizeCursorFor([hx, hy]: (typeof SCALE_HANDLES)[number]): string {
+  if (hx === 0) return "ns-resize";
+  if (hy === 0) return "ew-resize";
+  return hx === hy ? "nwse-resize" : "nesw-resize";
+}
+
+/** A small circular-arrow glyph (Material Design's own "refresh" icon, not invented here — see
+ * CLAUDE.md section 1) for the rotate zone just outside a corner handle, since CSS has no
+ * standard `cursor` keyword for "rotate". White fill with a dark outline, the same
+ * legible-on-any-background double-tone convention this project already uses for the brush ring
+ * and clone-source crosshair (raster-brush-cursor.tsx) — built through `encodeURIComponent`
+ * rather than hand-escaped, so quotes and `#` in the SVG can't quietly break the data URI. */
+const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
+  "<svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24'>" +
+  "<path d='M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z' fill='white' stroke='black' stroke-width='1.2'/>" +
+  "</svg>",
+)}") 10 10, alias`;
+
 /** Opens a pending transform on the active layer without any pointer gesture — what the Edit ▸
  * Free Transform (Ctrl+T) menu item needs, since it has no drag of its own to start one from.
  * A no-op if one is already open (matches the old menu command's own guard). */
@@ -412,8 +457,7 @@ const move: RasterToolDefinition<MoveState> = {
         const xs = pending.mesh.map((anchor) => anchor.x), ys = pending.mesh.map((anchor) => anchor.y);
         if (point.x < Math.min(...xs) || point.x > Math.max(...xs) || point.y < Math.min(...ys) || point.y > Math.max(...ys)) { commitPending(context, pending); context.setState(empty); return; }
       } else {
-        const handles = [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]] as const;
-        const handle = handles.find(([hx, hy]) => Math.hypot(point.x - (bounds.x + (hx + 1) * bounds.width / 2), point.y - (bounds.y + (hy + 1) * bounds.height / 2)) <= tolerance);
+        const handle = findScaleHandle(bounds, point, tolerance);
         if (handle) {
           context.capturePointer(pointer.pointerId);
           context.setState({ pending, drag: { kind: "scale", pointerId: pointer.pointerId, from: point, current: point, before: pending.before, basePixels: pending.text ? pending.pixels : pending.pixels.slice(), baseSelection: cloneSelection(pending.selection), sourceBounds: { ...bounds }, handleX: handle[0], handleY: handle[1], dx: pending.dx, dy: pending.dy, ...(pending.text ? { text: pending.text } : {}) } });
@@ -426,11 +470,7 @@ const move: RasterToolDefinition<MoveState> = {
         // rotate (grabbed just past it) without a second widget competing for screen space.
         // Corners only (`hx !== 0 && hy !== 0`) — edge midpoints stay scale-only, matching
         // Photoshop's own Free Transform, which never rotates off an edge handle.
-        const rotateTolerance = tolerance * 2.2;
-        const rotateCorner = handles.filter(([hx, hy]) => hx !== 0 && hy !== 0).find(([hx, hy]) => {
-          const distance = Math.hypot(point.x - (bounds.x + (hx + 1) * bounds.width / 2), point.y - (bounds.y + (hy + 1) * bounds.height / 2));
-          return distance > tolerance && distance <= rotateTolerance;
-        });
+        const rotateCorner = findRotateCorner(bounds, point, tolerance, tolerance * 2.2);
         if (rotateCorner) {
           context.capturePointer(pointer.pointerId);
           const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
@@ -508,6 +548,33 @@ const move: RasterToolDefinition<MoveState> = {
     }
     const pending = applyDragFrame(context, drag);
     context.setState({ pending: pending ?? context.state.pending, drag: null });
+  },
+
+  /** Hover feedback for a pending transform's frame — the same hit-test `onPointerDown` commits
+   * to, read-only. Without this a click's outcome (scale vs. rotate vs. drag-inside vs.
+   * accept-and-commit) was invisible until the click already happened, same complaint the owner
+   * raised about the corner rotate zone specifically once the dedicated lever widget was removed. */
+  cursorFor(context, pointer) {
+    const pending = context.state.pending;
+    if (!pending) return undefined;
+    const document = context.document;
+    const bounds = pendingBounds(pending, document.width, document.height);
+    if (!bounds) return undefined;
+    const tolerance = 11 / context.viewport.zoom;
+    const point = pointer.point;
+
+    if (pending.corners) {
+      const mode = String(context.options.transformMode ?? "distort") as QuadTransformMode;
+      return quadHandlePoints(pending.corners, mode).some((entry) => Math.hypot(point.x - entry.point.x, point.y - entry.point.y) <= tolerance) ? "pointer" : undefined;
+    }
+    if (pending.mesh) {
+      return pending.mesh.some((anchor) => Math.hypot(point.x - anchor.x, point.y - anchor.y) <= tolerance) ? "pointer" : undefined;
+    }
+    const handle = findScaleHandle(bounds, point, tolerance);
+    if (handle) return resizeCursorFor(handle);
+    if (findRotateCorner(bounds, point, tolerance, tolerance * 2.2)) return ROTATE_CURSOR;
+    if (point.x >= bounds.x && point.y >= bounds.y && point.x <= bounds.x + bounds.width && point.y <= bounds.y + bounds.height) return "move";
+    return undefined;
   },
 
   onDeactivate(context) {

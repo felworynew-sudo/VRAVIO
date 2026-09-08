@@ -46,6 +46,12 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const lastBrushPointRef = useRef<{ toolId: string; layerId: string; point: Point } | null>(null);
   const [brushPopup, setBrushPopup] = useState<{ left: number; top: number; detailed: boolean } | null>(null);
   const [preciseCursor, setPreciseCursor] = useState(false);
+  // A tool-provided cursor hint (`RasterToolDefinition.cursorFor`) — mirrors `VectorWorkspace`'s
+  // own `dynamicCursor`, added there first for `vector.pen`. `undefined` means "no hint right
+  // now", which the canvas's own inline `style` below simply omits, falling back to
+  // `styles.css`'s static `.raster-stage canvas{cursor:crosshair}` rule (or whichever
+  // `data-active-tool` rule already overrides it, e.g. the hand tool's `grab`).
+  const [dynamicCursor, setDynamicCursor] = useState<string | undefined>(undefined);
   const language = useShellStore((shell) => shell.language);
   const activeToolId = useShellStore((state) => state.activeToolByDocument[document.id]);
   const toolOptions = useShellStore((state) => state.toolOptions);
@@ -354,6 +360,10 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     if (previous === activeToolId || !previous) return;
     const leaving = rasterToolById.get(previous);
     leaving?.onDeactivate?.(toolContextFor(previous, null));
+    // A cursor hint from the tool being left must not linger on the one just switched to — it
+    // will set its own on the next pointer move, but there is a gap (right after switching,
+    // before the pointer moves again) that would otherwise still show the old tool's hint.
+    setDynamicCursor(undefined);
   });
 
   const handlePointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -400,24 +410,30 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
-    if (catalogueTool?.onPointerMove) {
-      const workspace = workspaceRef.current;
-      if (workspace) {
-        const rect = workspace.getBoundingClientRect();
-        const context = toolContextFor(catalogueTool.id, event.currentTarget);
-        // Coalesced samples, not just the one event React handed over: a
-        // fast stroke can move the pointer several pixels between the
-        // browser's own paint frames, and using only the latest sample is
-        // what RASTER-PAINT-002 already found leaves gaps in a fast stroke.
-        // The context is built once and reused across all of them — its
-        // closures do not depend on which sample is current, only `pointer`
-        // does, and toolContextFor is not free to call per sample.
-        for (const native of event.nativeEvent.getCoalescedEvents?.() ?? [event.nativeEvent]) {
-          catalogueTool.onPointerMove(context, toolPointerFromNative(native, workspace, rect));
-        }
+    if (!catalogueTool) return;
+    const workspace = workspaceRef.current;
+    if (!workspace) return;
+    const rect = workspace.getBoundingClientRect();
+    const context = toolContextFor(catalogueTool.id, event.currentTarget);
+    let lastPointer: ToolPointer | undefined;
+    if (catalogueTool.onPointerMove) {
+      // Coalesced samples, not just the one event React handed over: a
+      // fast stroke can move the pointer several pixels between the
+      // browser's own paint frames, and using only the latest sample is
+      // what RASTER-PAINT-002 already found leaves gaps in a fast stroke.
+      // The context is built once and reused across all of them — its
+      // closures do not depend on which sample is current, only `pointer`
+      // does, and toolContextFor is not free to call per sample.
+      for (const native of event.nativeEvent.getCoalescedEvents?.() ?? [event.nativeEvent]) {
+        lastPointer = toolPointerFromNative(native, workspace, rect);
+        catalogueTool.onPointerMove(context, lastPointer);
       }
-      return;
     }
+    // Cursor hint only needs the final position, not every coalesced sample — it is a hover
+    // preview of a hit-test, not a gesture that has to track the pointer's whole path. Always
+    // set, even to `undefined`, so switching to a tool without a hint (or moving off a handle)
+    // actually clears whatever the previous tool or hover position left behind.
+    setDynamicCursor(catalogueTool.cursorFor?.(context, lastPointer ?? toolPointerFromNative(event.nativeEvent, workspace, rect)));
   };
 
   const finishGesture = (event: React.PointerEvent<HTMLCanvasElement>) => {
@@ -462,7 +478,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
 
   return <div ref={workspaceRef} className="raster-workspace" data-active-tool={activeToolId} data-pixel-zoom={viewport.zoom >= 1 || undefined} data-space-held={spaceHeld || undefined} data-navigating={navigating || undefined} onPointerDownCapture={beginNavigation} onPointerMoveCapture={moveNavigation} onPointerUpCapture={endNavigation} onPointerCancelCapture={endNavigation} onWheel={handleWheel} onDragOver={(event) => { if ([...(event.dataTransfer?.items ?? [])].some((item) => item.kind === "file")) event.preventDefault(); }} onDrop={onDropModel}>
     <div className="raster-stage" style={stageStyle}>
-      <canvas ref={canvasRef} className={brushLike ? "brush-cursor-canvas" : ""} width={state.width} height={state.height} onPointerEnter={updateBrushCursor} onPointerLeave={onBrushCursorLeave} onPointerDown={handlePointerDown} onPointerMove={(event) => { updateBrushCursor(event); handlePointerMove(event); }} onPointerUp={finishGesture} onPointerCancel={finishGesture} onContextMenu={(event) => { if (selectionLike) { onSelectionContextMenu(event); return; } if (activeToolId === "raster.move" && (toolStates["raster.move"] as MoveState | undefined)?.pending) { onTransformContextMenu(event); return; } event.preventDefault(); if (!brushLike) return; const rect = workspaceRef.current?.getBoundingClientRect(); if (rect) setBrushPopup({ left: Math.min(event.clientX - rect.left, rect.width - 300), top: Math.min(event.clientY - rect.top, rect.height - 430), detailed: false }); }} />
+      <canvas ref={canvasRef} className={brushLike ? "brush-cursor-canvas" : ""} style={dynamicCursor ? { cursor: dynamicCursor } : undefined} width={state.width} height={state.height} onPointerEnter={updateBrushCursor} onPointerLeave={() => { onBrushCursorLeave(); setDynamicCursor(undefined); }} onPointerDown={handlePointerDown} onPointerMove={(event) => { updateBrushCursor(event); handlePointerMove(event); }} onPointerUp={finishGesture} onPointerCancel={finishGesture} onContextMenu={(event) => { if (selectionLike) { onSelectionContextMenu(event); return; } if (activeToolId === "raster.move" && (toolStates["raster.move"] as MoveState | undefined)?.pending) { onTransformContextMenu(event); return; } event.preventDefault(); if (!brushLike) return; const rect = workspaceRef.current?.getBoundingClientRect(); if (rect) setBrushPopup({ left: Math.min(event.clientX - rect.left, rect.width - 300), top: Math.min(event.clientY - rect.top, rect.height - 430), detailed: false }); }} />
       {/* Whatever the active catalogue tool draws over the canvas. */}
       {catalogueTool?.Overlay && <catalogueTool.Overlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>} context={toolContextFor(catalogueTool.id, canvasRef.current)}/>}
       {committedSelectionPath && <svg className="selection-overlay committed-selection" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><path className="selection-soft-edge" d={committedSelectionPath} /><path className="selection-hard-edge" d={committedSelectionPath} /></svg>}

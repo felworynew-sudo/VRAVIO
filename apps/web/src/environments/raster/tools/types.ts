@@ -356,6 +356,16 @@ export interface RasterToolDefinition<TState = unknown> {
   onGestureEnd?(context: ToolContext<TState>, pointer: ToolPointer): void;
 
   /**
+   * A CSS `cursor` value for the current hover position, or `undefined` to fall back to the
+   * tool's static default (`.raster-stage canvas{cursor:...}` in `styles.css`). Mirrors vector's
+   * own `cursorFor` (`environments/vector/tools/types.ts`), added there first for `vector.pen`'s
+   * several-different-outcomes-per-click gestures — ported here for `raster.move`'s transform
+   * frame, whose click outcome (scale a handle, rotate off a corner, drag inside, or accept and
+   * commit by clicking outside) was invisible before the click actually happened.
+   */
+  cursorFor?(context: ToolContext<TState>, pointer: ToolPointer): string | undefined;
+
+  /**
    * Called when the tool stops being the active one.
    *
    * Required of any tool that keeps state, because state is held per tool id
