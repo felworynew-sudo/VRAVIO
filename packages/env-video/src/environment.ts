@@ -85,7 +85,7 @@ export class VideoEnvironment implements Environment<VideoDocumentState> {
 
     const state = createVideoDocument({ frameRate: meta.frameRate, width: meta.width, height: meta.height });
     const track = state.tracks[0]!;
-    const clip = createVideoClip(assetId, meta.durationFrames, meta.durationFrames, meta.frameRate, { name: options.title ?? record.name });
+    const clip = createVideoClip(assetId, meta.durationFrames, meta.durationFrames, meta.frameRate, { name: options.title ?? record.name, sourceWidth: meta.width, sourceHeight: meta.height });
     track.clips.push(clip);
 
     const document = this.#documents.create("video", options.title ?? record.name, state, {
@@ -129,6 +129,8 @@ export class VideoEnvironment implements Environment<VideoDocumentState> {
       clip.assetId = newAssetId;
       clip.sourceFrameRate = meta.frameRate;
       clip.sourceDurationFrames = meta.durationFrames;
+      clip.sourceWidth = meta.width;
+      clip.sourceHeight = meta.height;
       clip.offsetFrames = Math.min(clip.offsetFrames, meta.durationFrames);
       clip.durationFrames = Math.min(clip.durationFrames, meta.durationFrames - clip.offsetFrames);
     });
@@ -147,7 +149,7 @@ export class VideoEnvironment implements Environment<VideoDocumentState> {
     const record = this.#assets.mustGet(assetId);
     const meta = requireVideoMeta(record);
     const track = createVideoTrack(trackKind, name ?? record.name);
-    track.clips.push(createVideoClip(assetId, meta.durationFrames, meta.durationFrames, meta.frameRate, { name: track.name }));
+    track.clips.push(createVideoClip(assetId, meta.durationFrames, meta.durationFrames, meta.frameRate, { name: track.name, sourceWidth: meta.width, sourceHeight: meta.height }));
     this.#documents.update<VideoDocumentState>(document.id, (state) => { state.tracks.push(track); });
     this.#documents.addAssetRef(document.id, assetId);
   }

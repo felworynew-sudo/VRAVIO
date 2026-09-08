@@ -194,12 +194,12 @@ export function setSelection(documentId: string, trackId: string | null, clipIds
  * (`videoImport.ts`, via `HTMLVideoElement`, the only place in this feature that needs the DOM —
  * `@vravio/env-video` itself stays DOM-free, see its `environment.ts` doc comment).
  */
-export async function addClipFromAsset(documentId: string, assetId: string, name: string, durationFrames: number, sourceFrameRate: number, trackKind: "video" | "audio", trackId?: string, startFrame = 0): Promise<void> {
+export async function addClipFromAsset(documentId: string, assetId: string, name: string, durationFrames: number, sourceFrameRate: number, trackKind: "video" | "audio", trackId?: string, startFrame = 0, sourceWidth = 0, sourceHeight = 0): Promise<void> {
   await changeVideoDocument(documentId, "Import Video (Импортировать видео)", (state) => {
     const track = trackId ? state.tracks.find((item) => item.id === trackId) : createVideoTrack(trackKind, name);
     if (!track) return false;
     if (!trackId) state.tracks.push(track);
-    track.clips.push(createVideoClip(assetId, durationFrames, durationFrames, sourceFrameRate, { name, startFrame }));
+    track.clips.push(createVideoClip(assetId, durationFrames, durationFrames, sourceFrameRate, { name, startFrame, sourceWidth, sourceHeight }));
     return true;
   });
   kernel.documents.addAssetRef(documentId, assetId as AssetId);

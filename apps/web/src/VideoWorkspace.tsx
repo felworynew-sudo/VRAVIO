@@ -195,7 +195,7 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
       const assetId = await kernel.assets.importAsset(file, { kind: isAudio ? "audio" : "video", mime: file.type || "video/mp4", name: file.name, ...(meta ? { meta: meta as unknown as Record<string, unknown> } : {}) });
       const durationFramesForClip = meta?.durationFrames ?? Math.round(frameRate * 5); // audio track: real duration deferred, see below
       const at = Math.round(timelineDurationFrames(kernel.documents.get<VideoDocumentState>(document.id)!.state));
-      await addClipFromAsset(document.id, assetId, file.name, durationFramesForClip, meta?.frameRate ?? frameRate, isAudio ? "audio" : "video", undefined, at);
+      await addClipFromAsset(document.id, assetId, file.name, durationFramesForClip, meta?.frameRate ?? frameRate, isAudio ? "audio" : "video", undefined, at, meta?.width ?? 0, meta?.height ?? 0);
     }
   };
 

@@ -137,3 +137,41 @@ export function rippleShift(clips: readonly VideoClip[], fromFrame: number, delt
   if (deltaFrames === 0) return clips.map((clip) => ({ ...clip }));
   return clips.map((clip) => clip.startFrame >= fromFrame ? { ...clip, startFrame: Math.max(0, clip.startFrame + deltaFrames) } : { ...clip });
 }
+
+/** The largest fraction one crop edge may take without leaving less than 1% of the source
+ * showing on that axis — the opposite edge's own crop already claims some of that axis. */
+function maxCropForEdge(opposite: number): number {
+  return Math.max(0, 0.99 - opposite);
+}
+
+/** Sets one crop edge on a shallow copy of `clip`, clamped to [0, 1] and against its opposite
+ * edge so the two together never crop away the entire source on that axis (`compositor-math.ts`'s
+ * `sourceRectFor` degenerates to a 1×1 rect rather than divide-by-zero if this were skipped, but
+ * a source cropped down to one pixel is not a usable edit — this is the door that keeps it from
+ * happening rather than relying on the renderer's own last-resort clamp). */
+export function applyCropEdge(clip: VideoClip, edge: "left" | "top" | "right" | "bottom", value: number): VideoClip {
+  const clamped01 = Math.max(0, Math.min(1, value));
+  switch (edge) {
+    case "left": return { ...clip, cropLeft: Math.min(clamped01, maxCropForEdge(clip.cropRight)) };
+    case "right": return { ...clip, cropRight: Math.min(clamped01, maxCropForEdge(clip.cropLeft)) };
+    case "top": return { ...clip, cropTop: Math.min(clamped01, maxCropForEdge(clip.cropBottom)) };
+    case "bottom": return { ...clip, cropBottom: Math.min(clamped01, maxCropForEdge(clip.cropTop)) };
+  }
+}
+
+/**
+ * Snaps `candidateFrame` to the nearest value in `targets` within `thresholdFrames`, or returns
+ * it unchanged if none is close enough — the same magnetism raster/vector already give the user
+ * (`store.ts`'s `snapSensitivity`, converted from screen pixels to frames by the caller, the only
+ * one who knows the current zoom) applied to clip edges instead of guide lines. Pure: which
+ * targets to offer (other clips' starts/ends on the same track, the playhead, …) is the caller's
+ * choice, not this function's.
+ */
+export function snapFrame(candidateFrame: number, targets: readonly number[], thresholdFrames: number): number {
+  let closest = candidateFrame, closestDistance = thresholdFrames;
+  for (const target of targets) {
+    const distance = Math.abs(target - candidateFrame);
+    if (distance <= closestDistance) { closest = target; closestDistance = distance; }
+  }
+  return closest;
+}

@@ -28,17 +28,41 @@ export interface VideoClip {
    * the project rate; different when a source needs retiming to play in sync (23.976 fps footage
    * cut into a 30 fps timeline, for instance). */
   sourceFrameRate: number;
+  /** The source's native pixel dimensions — needed by `compositor-math.ts`'s crop/fit
+   * calculation at render time without an async re-probe of the asset on every frame. Absent
+   * (both 0) for a clip on an `"audio"` track, which is never composited. */
+  sourceWidth: number;
+  sourceHeight: number;
   /** Linear gain multiplier for this clip's own embedded audio (if any), 1 = unity (0 dB). Has
    * no effect on a clip sitting on an `"audio"` track — that track's `volume` is what applies
    * there, the same split raster keeps between a layer's own opacity and a group's. */
   gain: number;
+  /** Pixel offset from this clip's default centered "fit inside the document" position — the
+   * OpenCut Classic checklist's own `position` (docs/master-plan.md §9.1). 0,0 is centered. */
+  x: number;
+  y: number;
+  /** Uniform multiplier on the default fit size, applied around the fitted rect's own center —
+   * 1 = the clip's cropped source fits the document exactly (`object-fit: contain`). */
+  scale: number;
+  /** 0 (invisible) .. 1 (opaque) — this clip's own contribution when composited over whatever
+   * is on the video tracks below it. */
+  opacity: number;
+  /** Fraction of the *source* frame cropped away from each edge, 0..1, cropLeft+cropRight < 1
+   * and cropTop+cropBottom < 1 enforced by `clip-operations.ts`'s `constrainCrop`. Applied
+   * before the fit-to-document calculation, so a crop changes what part of the source shows,
+   * not just how much of the document it covers. */
+  cropLeft: number;
+  cropTop: number;
+  cropRight: number;
+  cropBottom: number;
 }
 
 export interface VideoTrack {
   readonly id: string;
   name: string;
-  /** A `"video"` track composites its clips' frames (topmost non-hidden video track wins,
-   * matching `docs/master-plan.md`'s own compositing note — see `environment.ts`); an
+  /** A `"video"` track composites its clips' frames — every visible (`!hidden`) video track's
+   * current clip is alpha-blended in track order (later entries in `VideoDocumentState.tracks`
+   * draw on top, the same bottom-to-top convention raster layers use), not "topmost wins"; an
    * `"audio"` track only ever contributes sound, the same distinction Premiere/Resolve draw
    * between V and A tracks. */
   kind: "video" | "audio";

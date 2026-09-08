@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createVideoClip } from "./document";
-import { applyLeftTrim, applyRightTrim, canSplitAt, constrainBoundaryTrim, constrainClipDrag, rippleShift, splitClip } from "./clip-operations";
+import { applyCropEdge, applyLeftTrim, applyRightTrim, canSplitAt, constrainBoundaryTrim, constrainClipDrag, rippleShift, snapFrame, splitClip } from "./clip-operations";
 
 function clipAt(start: number, duration: number, offset = 0, sourceDuration = duration + 1000): ReturnType<typeof createVideoClip> {
   return createVideoClip("asset", duration, sourceDuration, 30, { startFrame: start, offsetFrames: offset });
@@ -174,5 +174,47 @@ describe("rippleShift", () => {
     const clip = clipAt(500, 500);
     const [shifted] = rippleShift([clip], 500, -300);
     expect(shifted!.startFrame).toBe(200);
+  });
+});
+
+describe("applyCropEdge", () => {
+  it("sets one edge, clamped to [0,1]", () => {
+    const clip = clipAt(0, 100);
+    expect(applyCropEdge(clip, "left", 0.3).cropLeft).toBe(0.3);
+    expect(applyCropEdge(clip, "left", -1).cropLeft).toBe(0);
+    expect(applyCropEdge(clip, "left", 2).cropLeft).toBeLessThanOrEqual(1);
+  });
+
+  it("clamps an edge against its opposite so the source is never fully cropped away", () => {
+    const clip = { ...clipAt(0, 100), cropRight: 0.8 };
+    // Asking for 0.9 on the left, with 0.8 already on the right, would leave -0.7 of the source —
+    // clamped so at least 1% remains instead.
+    const result = applyCropEdge(clip, "left", 0.9);
+    expect(result.cropLeft).toBeCloseTo(0.19, 5);
+  });
+
+  it("does not disturb the other three edges", () => {
+    const clip = { ...clipAt(0, 100), cropTop: 0.1, cropBottom: 0.2 };
+    const result = applyCropEdge(clip, "left", 0.3);
+    expect(result.cropTop).toBe(0.1);
+    expect(result.cropBottom).toBe(0.2);
+  });
+});
+
+describe("snapFrame", () => {
+  it("snaps to the nearest target within the threshold", () => {
+    expect(snapFrame(103, [0, 100, 500], 10)).toBe(100);
+  });
+
+  it("passes the candidate through unchanged when nothing is close enough", () => {
+    expect(snapFrame(250, [0, 100, 500], 10)).toBe(250);
+  });
+
+  it("picks the closer of two targets both within threshold", () => {
+    expect(snapFrame(97, [90, 100], 10)).toBe(100);
+  });
+
+  it("is exact at the threshold boundary itself", () => {
+    expect(snapFrame(110, [100], 10)).toBe(100);
   });
 });

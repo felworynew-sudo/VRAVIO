@@ -13,6 +13,8 @@ export interface CreateVideoClipOptions {
   readonly startFrame?: number;
   readonly offsetFrames?: number;
   readonly gain?: number;
+  readonly sourceWidth?: number;
+  readonly sourceHeight?: number;
 }
 
 export function createVideoClip(assetId: string, durationFrames: number, sourceDurationFrames: number, sourceFrameRate: number, options: CreateVideoClipOptions = {}): VideoClip {
@@ -25,7 +27,11 @@ export function createVideoClip(assetId: string, durationFrames: number, sourceD
     offsetFrames: Math.max(0, Math.floor(options.offsetFrames ?? 0)),
     sourceDurationFrames: Math.max(0, Math.floor(sourceDurationFrames)),
     sourceFrameRate,
+    sourceWidth: Math.max(0, Math.floor(options.sourceWidth ?? 0)),
+    sourceHeight: Math.max(0, Math.floor(options.sourceHeight ?? 0)),
     gain: options.gain ?? 1,
+    x: 0, y: 0, scale: 1, opacity: 1,
+    cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0,
   };
 }
 
@@ -53,6 +59,18 @@ export function migrateVideoDocumentState(state: VideoDocumentState): VideoDocum
   for (const track of state.tracks) {
     if (typeof track.hidden !== "boolean") track.hidden = false;
     if (typeof track.volume !== "number") track.volume = 1;
+    for (const clip of track.clips) {
+      if (typeof clip.x !== "number") clip.x = 0;
+      if (typeof clip.y !== "number") clip.y = 0;
+      if (typeof clip.scale !== "number") clip.scale = 1;
+      if (typeof clip.opacity !== "number") clip.opacity = 1;
+      if (typeof clip.cropLeft !== "number") clip.cropLeft = 0;
+      if (typeof clip.cropTop !== "number") clip.cropTop = 0;
+      if (typeof clip.cropRight !== "number") clip.cropRight = 0;
+      if (typeof clip.cropBottom !== "number") clip.cropBottom = 0;
+      if (typeof clip.sourceWidth !== "number") clip.sourceWidth = 0;
+      if (typeof clip.sourceHeight !== "number") clip.sourceHeight = 0;
+    }
   }
   return state;
 }
