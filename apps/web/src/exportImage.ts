@@ -1,6 +1,7 @@
 import { compositeRasterDocument, type RasterDocumentState } from "@vravio/env-raster";
+import { encodeGif } from "./gifEncode";
 
-export type ExportFormat = "png" | "jpeg" | "webp" | "avif" | "tiff" | "bmp" | "ico" | "pdf";
+export type ExportFormat = "png" | "jpeg" | "webp" | "avif" | "tiff" | "bmp" | "gif" | "ico" | "pdf";
 export type ExportColorMode = "rgba" | "rgb" | "grayscale" | "monochrome" | "indexed";
 export type ExportResampling = "nearest" | "bilinear" | "bicubic";
 
@@ -22,6 +23,7 @@ export const exportFormats: readonly ExportFormatInfo[] = [
   { format: "avif", label: "AVIF", mime: "image/avif", extension: "avif", lossy: true, alpha: true, notes: "Modern high compression" },
   { format: "tiff", label: "TIFF", mime: "image/tiff", extension: "tif", lossy: false, alpha: true, notes: "Uncompressed RGBA master" },
   { format: "bmp", label: "BMP", mime: "image/bmp", extension: "bmp", lossy: false, alpha: false, notes: "Uncompressed 24-bit RGB" },
+  { format: "gif", label: "GIF", mime: "image/gif", extension: "gif", lossy: false, alpha: true, notes: "256-color palette, 1-bit transparency" },
   { format: "ico", label: "ICO", mime: "image/x-icon", extension: "ico", lossy: false, alpha: true, notes: "PNG-compressed Windows icon" },
   { format: "pdf", label: "PDF", mime: "application/pdf", extension: "pdf", lossy: false, alpha: false, notes: "Single-page document" },
 ];
@@ -64,7 +66,7 @@ let supportedCache: Promise<ReadonlySet<ExportFormat>> | null = null;
 
 export function supportedExportFormats(): Promise<ReadonlySet<ExportFormat>> {
   supportedCache ??= (async () => {
-    const supported = new Set<ExportFormat>(["png", "tiff", "bmp", "ico", "pdf"]);
+    const supported = new Set<ExportFormat>(["png", "tiff", "bmp", "gif", "ico", "pdf"]);
     for (const info of exportFormats) {
       if (supported.has(info.format) || info.format === "pdf") continue;
       if (await canEncode(info.mime)) supported.add(info.format);
@@ -179,10 +181,11 @@ async function encodeIco(canvas: HTMLCanvasElement): Promise<Blob> {
   return new Blob([buffer], { type: "image/x-icon" });
 }
 
-async function encodeCanvas(canvas: HTMLCanvasElement, format: ExportFormat, quality: number): Promise<Blob> {
+async function encodeCanvas(canvas: HTMLCanvasElement, format: ExportFormat, quality: number, paletteColors = 256, dither = false): Promise<Blob> {
   const info = exportFormatInfo(format);
   if (format === "bmp") return encodeBmp(canvas);
   if (format === "tiff") return encodeTiff(canvas);
+  if (format === "gif") return encodeGif(canvas, paletteColors, dither);
   if (format === "ico") return encodeIco(canvas);
   if (format === "pdf") {
     const { jsPDF } = await import("jspdf");
@@ -209,10 +212,10 @@ export interface EncodeResult {
  * Lossless formats cannot trade quality for size, so they encode once and report
  * whether they overshot.
  */
-export async function encodeToTargetBytes(canvas: HTMLCanvasElement, format: ExportFormat, targetBytes: number, steps = 8): Promise<EncodeResult> {
+export async function encodeToTargetBytes(canvas: HTMLCanvasElement, format: ExportFormat, targetBytes: number, steps = 8, paletteColors = 256, dither = false): Promise<EncodeResult> {
   const info = exportFormatInfo(format);
   if (!info.lossy) {
-    const blob = await encodeCanvas(canvas, format, 1);
+    const blob = await encodeCanvas(canvas, format, 1, paletteColors, dither);
     return blob.size <= targetBytes ? { blob, quality: 1 } : { blob, quality: 1, targetMissed: true };
   }
   let low = 0.02, high = 1, best: Blob | null = null, bestQuality = low;
@@ -230,8 +233,8 @@ export async function encodeToTargetBytes(canvas: HTMLCanvasElement, format: Exp
 
 export async function encodeExport(state: RasterDocumentState, settings: ExportSettings, targetBytes?: number): Promise<EncodeResult> {
   const canvas = renderExportCanvas(state, settings);
-  if (targetBytes && targetBytes > 0) return encodeToTargetBytes(canvas, settings.format, targetBytes);
-  return { blob: await encodeCanvas(canvas, settings.format, settings.quality), quality: settings.quality };
+  if (targetBytes && targetBytes > 0) return encodeToTargetBytes(canvas, settings.format, targetBytes, 8, settings.paletteColors, settings.dither);
+  return { blob: await encodeCanvas(canvas, settings.format, settings.quality, settings.paletteColors, settings.dither), quality: settings.quality };
 }
 
 export function exportFileName(documentName: string, format: ExportFormat): string {

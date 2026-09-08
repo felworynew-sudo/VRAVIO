@@ -149,13 +149,13 @@ export function ExportDialog({ state, documentName, language, onCancel, onExport
             </select>
           </label>
 
-          {(settings.colorMode === "indexed" || settings.colorMode === "grayscale") && <label className="export-field export-slider">
+          {(settings.colorMode === "indexed" || settings.colorMode === "grayscale" || settings.format === "gif") && <label className="export-field export-slider">
             <span>{text(language, "Palette colours", "Цветов палитры")}</span>
             <input type="range" min={2} max={256} value={settings.paletteColors} onChange={(event) => set("paletteColors", event.target.valueAsNumber)} />
             <output>{settings.paletteColors}</output>
           </label>}
 
-          {(settings.colorMode === "monochrome" || settings.colorMode === "grayscale") && <label className="export-check">
+          {(settings.colorMode === "monochrome" || settings.colorMode === "grayscale" || settings.format === "gif") && <label className="export-check">
             <input type="checkbox" checked={settings.dither} onChange={(event) => set("dither", event.target.checked)} />
             <span>{text(language, "Floyd–Steinberg dithering", "Дизеринг Флойда—Стейнберга")}</span>
           </label>}
