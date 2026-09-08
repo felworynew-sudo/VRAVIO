@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { VravioDocument } from "@vravio/kernel";
 import {
   audioEffectCatalog, audioEffectDefaults, cloneAudioState, computeSpectrogram, decodeWav, generateMonoPeaks, heatMapColor,
-  isAudioDocumentState, mixdownAudioDocument, readPeak, timelineDurationSamples,
+  isAudioDocumentState, mixdownAudioDocument, readPeak, removeAutomationPoint, setAutomationPoint, timelineDurationSamples, volumeAt,
   type AudioClip, type AudioDocumentState, type AudioEffectId, type AudioTrack, type DecodedWav,
 } from "@vravio/env-audio";
 import type { AssetId } from "@vravio/kernel";
@@ -11,15 +11,17 @@ import { useShellStore } from "./store";
 import { text } from "./i18n";
 import { AudioPlaybackEngine } from "./audioPlayback";
 import {
-  addAudioTrack, addClipFromAsset, addTrackEffect, applyEffectToClip, changeAudioDocument, commitAudioDrag, deleteSelectedClips,
-  previewMoveClip, previewTrimClip, removeAudioTrack, removeTrackEffect, setClipFade, setClipGain, setSelection, setTrackEffectEnabled,
-  setTrackEffectParam, setTrackMuted, setTrackPan, setTrackSoloed, setTrackVolume, splitClipAt,
+  addAudioTrack, addClipFromAsset, addTrackEffect, applyEffectToClip, changeAudioDocument, clearTrackVolumeAutomation, commitAudioDrag,
+  deleteSelectedClips, previewMoveClip, previewTrimClip, removeAudioTrack, removeTrackEffect, removeTrackVolumeAutomationPoint,
+  setClipFade, setClipGain, setSelection, setTrackEffectEnabled, setTrackEffectParam, setTrackMuted, setTrackPan, setTrackSoloed,
+  setTrackVolume, setTrackVolumeAutomationPoint, splitClipAt,
 } from "./audio-commands";
 import { decodeAudioFileToWav, startMicrophoneRecording, type AudioRecorder } from "./audioImport";
 
 const TRACK_HEIGHT = 72;
 const TRIM_HANDLE_PX = 8;
 const DEFAULT_PIXELS_PER_SECOND = 100;
+const AUTOMATION_MAX_VOLUME = 1.5;
 
 /** Decoded audio, keyed by asset id — populated lazily as clips referencing that asset come
  * into view. Module-level (not component state): every AudioWorkspace instance for the same
@@ -145,6 +147,14 @@ interface DragState {
   appliedSamples: number;
 }
 
+interface AutomationDragState {
+  readonly trackId: string;
+  readonly pointId: string;
+  readonly before: AudioDocumentState;
+  readonly laneLeft: number;
+  readonly laneTop: number;
+}
+
 export function AudioWorkspace({ document }: { document: VravioDocument }) {
   const language = useShellStore((shell) => shell.language);
   const [pixelsPerSecond, setPixelsPerSecond] = useState(DEFAULT_PIXELS_PER_SECOND);
@@ -159,6 +169,8 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
   const [newTrackEffectId, setNewTrackEffectId] = useState<AudioEffectId>("eq");
   const [rippleMode, setRippleMode] = useState(false);
   const [viewMode, setViewMode] = useState<"waveform" | "spectrogram">("waveform");
+  const [automationMode, setAutomationMode] = useState(false);
+  const dragPointRef = useRef<AutomationDragState | null>(null);
   const engineRef = useRef<AudioPlaybackEngine | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -237,7 +249,52 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
     }
   };
 
+  const beginAutomationDrag = (event: React.PointerEvent, track: AudioTrack, pointId: string, laneRect: DOMRect) => {
+    event.stopPropagation();
+    (event.target as Element).setPointerCapture(event.pointerId);
+    const before = cloneAudioState(kernel.documents.get<AudioDocumentState>(document.id)!.state);
+    dragPointRef.current = { trackId: track.id, pointId, before, laneLeft: laneRect.left, laneTop: laneRect.top };
+  };
+
+  const onAutomationDragMove = (event: React.PointerEvent) => {
+    const drag = dragPointRef.current;
+    if (!drag) return;
+    const time = Math.max(0, Math.round((event.clientX - drag.laneLeft) / pxPerSample));
+    const value = Math.max(0, Math.min(AUTOMATION_MAX_VOLUME, (1 - (event.clientY - drag.laneTop) / TRACK_HEIGHT) * AUTOMATION_MAX_VOLUME));
+    kernel.documents.update<AudioDocumentState>(document.id, (state) => {
+      const track = state.tracks.find((item) => item.id === drag.trackId);
+      if (!track) return;
+      track.volumeAutomation = setAutomationPoint(removeAutomationPoint(track.volumeAutomation, drag.pointId), time, value, drag.pointId);
+    });
+  };
+
+  const onAutomationDragEnd = () => {
+    const drag = dragPointRef.current;
+    if (!drag) return;
+    dragPointRef.current = null;
+    commitAudioDrag(document.id, "Volume Automation (Автоматизация громкости)", drag.before);
+  };
+
+  const onLaneClick = (track: AudioTrack, event: React.MouseEvent<HTMLDivElement>) => {
+    if (!automationMode) { setSelection(document.id, null, []); return; }
+    const rect = event.currentTarget.getBoundingClientRect();
+    const time = Math.max(0, Math.round((event.clientX - rect.left) / pxPerSample));
+    const value = Math.max(0, Math.min(AUTOMATION_MAX_VOLUME, (1 - (event.clientY - rect.top) / TRACK_HEIGHT) * AUTOMATION_MAX_VOLUME));
+    setTrackVolumeAutomationPoint(document.id, track.id, crypto.randomUUID(), time, value);
+  };
+
   const onClipClick = (track: AudioTrack, clip: AudioClip, event: React.MouseEvent) => {
+    if (automationMode) {
+      // A clip covers nearly the whole lane height, so a click meant for the automation lane
+      // underneath it lands on the clip element instead — routed here rather than only ever
+      // reachable through the sliver of bare lane a clip doesn't cover.
+      const lane = event.currentTarget.closest(".audio-track-lane");
+      const rect = (lane ?? event.currentTarget).getBoundingClientRect();
+      const time = Math.max(0, Math.round((event.clientX - rect.left) / pxPerSample));
+      const value = Math.max(0, Math.min(AUTOMATION_MAX_VOLUME, (1 - (event.clientY - rect.top) / TRACK_HEIGHT) * AUTOMATION_MAX_VOLUME));
+      setTrackVolumeAutomationPoint(document.id, track.id, crypto.randomUUID(), time, value);
+      return;
+    }
     if (splitMode) {
       const rect = event.currentTarget.getBoundingClientRect();
       const clickedSample = clip.startSample + Math.round((event.clientX - rect.left) / pxPerSample);
@@ -307,6 +364,7 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
       <button onClick={() => setPixelsPerSecond((value) => Math.min(2000, value * 1.5))} title={text(language, "Zoom in", "Увеличить")}>+</button>
       <span className="audio-transport-sep" />
       <button className={viewMode === "spectrogram" ? "active" : ""} onClick={() => setViewMode((mode) => mode === "waveform" ? "spectrogram" : "waveform")} title={text(language, "Toggle spectrogram view", "Переключить вид спектрограммы")}>{text(language, "Spectrogram", "Спектрограмма")}</button>
+      <button className={automationMode ? "active" : ""} onClick={() => setAutomationMode((value) => !value)} title={text(language, "Volume automation: click a track lane to place a point, drag to move one", "Автоматизация громкости: клик по дорожке — новая точка, перетаскивание — сдвиг")}>{text(language, "Automation", "Автоматизация")}</button>
       <span className="audio-transport-sep" />
       <button onClick={() => addAudioTrack(document.id)}>{text(language, "+ Track", "+ Дорожка")}</button>
       <button onClick={() => fileInputRef.current?.click()}>{text(language, "Import…", "Импорт…")}</button>
@@ -378,6 +436,7 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
           </div>
           <label className="audio-track-slider"><span>{text(language, "Vol", "Гр")}</span><input type="range" min={0} max={1.5} step={0.01} value={track.volume} onChange={(event) => setTrackVolume(document.id, track.id, event.target.valueAsNumber)} /></label>
           <label className="audio-track-slider"><span>{text(language, "Pan", "Пан")}</span><input type="range" min={-1} max={1} step={0.01} value={track.pan} onChange={(event) => setTrackPan(document.id, track.id, event.target.valueAsNumber)} /></label>
+          {automationMode && track.volumeAutomation.length > 0 && <button onClick={() => clearTrackVolumeAutomation(document.id, track.id)}>{text(language, "Clear automation", "Очистить автоматизацию")}</button>}
         </div>)}
       </div>
 
@@ -386,9 +445,11 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
           {Array.from({ length: Math.ceil(timelineWidthPx / pixelsPerSecond) + 1 }, (_, second) => <span key={second} className="audio-ruler-tick" style={{ left: second * pixelsPerSecond }}>{formatTime(second)}</span>)}
           <div className="audio-playhead" style={{ left: playheadSample * pxPerSample }} />
         </div>
-        <div className="audio-tracks" style={{ width: timelineWidthPx }} onPointerMove={onDragMove} onPointerUp={onDragEnd}>
+        <div className="audio-tracks" style={{ width: timelineWidthPx }}
+          onPointerMove={(event) => { onDragMove(event); onAutomationDragMove(event); }}
+          onPointerUp={() => { onDragEnd(); onAutomationDragEnd(); }}>
           <div className="audio-playhead audio-playhead-body" style={{ left: playheadSample * pxPerSample }} />
-          {state.tracks.map((track) => <div key={track.id} className="audio-track-lane" style={{ height: TRACK_HEIGHT }} onClick={() => setSelection(document.id, null, [])}>
+          {state.tracks.map((track) => <div key={track.id} className={`audio-track-lane${automationMode ? " automation-mode" : ""}`} style={{ height: TRACK_HEIGHT }} onClick={(event) => onLaneClick(track, event)}>
             {track.clips.map((clip) => {
               const selected = state.selection?.trackId === track.id && state.selection.clipIds.includes(clip.id);
               const left = clip.startSample * pxPerSample, width = Math.max(4, clip.durationSamples * pxPerSample);
@@ -403,6 +464,15 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
                 <div className="audio-clip-trim audio-clip-trim-right" style={{ width: TRIM_HANDLE_PX }} onPointerDown={(event) => beginDrag(event, "trim-right", track, clip)} />
               </div>;
             })}
+            {track.volumeAutomation.length > 0 && <svg className="audio-automation-overlay" width={timelineWidthPx} height={TRACK_HEIGHT}>
+              <polyline
+                points={track.volumeAutomation.map((point) => `${point.time * pxPerSample},${TRACK_HEIGHT * (1 - point.value / AUTOMATION_MAX_VOLUME)}`).join(" ")}
+                fill="none" stroke="#ffe066" strokeWidth={1.5} />
+              {track.volumeAutomation.map((point) => <circle key={point.id} className="audio-automation-point"
+                cx={point.time * pxPerSample} cy={TRACK_HEIGHT * (1 - point.value / AUTOMATION_MAX_VOLUME)} r={4}
+                onPointerDown={(event) => beginAutomationDrag(event, track, point.id, (event.currentTarget.closest(".audio-track-lane") as HTMLElement).getBoundingClientRect())}
+                onDoubleClick={(event) => { event.stopPropagation(); removeTrackVolumeAutomationPoint(document.id, track.id, point.id); }} />)}
+            </svg>}
           </div>)}
         </div>
       </div>

@@ -1,7 +1,7 @@
 import type { AudioClip, AudioDocumentOptions, AudioDocumentState, AudioTrack, FadeType } from "./types";
 
 export function createAudioTrack(name = "Track 1 (Дорожка 1)"): AudioTrack {
-  return { id: crypto.randomUUID(), name, volume: 1, pan: 0, muted: false, soloed: false, locked: false, clips: [], effects: [] };
+  return { id: crypto.randomUUID(), name, volume: 1, pan: 0, muted: false, soloed: false, locked: false, clips: [], effects: [], volumeAutomation: [] };
 }
 
 export interface CreateAudioClipOptions {
@@ -53,7 +53,10 @@ export function isAudioDocumentState(value: unknown): value is AudioDocumentStat
  * persisted before a track carried its own effect stack restores with one added, rather than
  * failing `isAudioDocumentState` (and thus refusing to open) the moment a field is missing. */
 export function migrateAudioDocumentState(state: AudioDocumentState): AudioDocumentState {
-  for (const track of state.tracks) if (!Array.isArray(track.effects)) track.effects = [];
+  for (const track of state.tracks) {
+    if (!Array.isArray(track.effects)) track.effects = [];
+    if (!Array.isArray(track.volumeAutomation)) track.volumeAutomation = [];
+  }
   return state;
 }
 
@@ -66,7 +69,12 @@ export function migrateAudioDocumentState(state: AudioDocumentState): AudioDocum
 export function cloneAudioState(state: AudioDocumentState): AudioDocumentState {
   return {
     ...state,
-    tracks: state.tracks.map((track) => ({ ...track, clips: track.clips.map((clip) => ({ ...clip })), effects: track.effects.map((effect) => ({ ...effect, params: { ...effect.params } })) })),
+    tracks: state.tracks.map((track) => ({
+      ...track,
+      clips: track.clips.map((clip) => ({ ...clip })),
+      effects: track.effects.map((effect) => ({ ...effect, params: { ...effect.params } })),
+      volumeAutomation: track.volumeAutomation.map((point) => ({ ...point })),
+    })),
     selection: state.selection ? { trackId: state.selection.trackId, clipIds: [...state.selection.clipIds] } : null,
   };
 }

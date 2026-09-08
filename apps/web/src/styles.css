@@ -194,6 +194,10 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .audio-clip-trim-right{right:0}
 .audio-playhead{position:absolute;top:0;bottom:0;width:1px;background:var(--audio);pointer-events:none;z-index:3}
 .audio-playhead-body{position:absolute}
+.audio-track-lane.automation-mode{cursor:crosshair}
+.audio-automation-overlay{position:absolute;top:0;left:0;pointer-events:none;z-index:4}
+.audio-automation-point{fill:var(--audio);stroke:var(--bg);stroke-width:1;cursor:grab;pointer-events:auto}
+.audio-automation-point:hover{fill:var(--focus)}
 .shape-draft rect,.shape-draft ellipse,.shape-draft line{fill:color-mix(in srgb,var(--focus) 22%,transparent);stroke:var(--focus);stroke-width:1px;vector-effect:non-scaling-stroke}
 .shape-draft line{stroke-width:2px}
 .color-panel{display:flex;flex-direction:column;gap:9px}

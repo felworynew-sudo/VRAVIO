@@ -1,4 +1,4 @@
-import { generateCurve, timelineDurationSamples, type AudioDocumentState } from "@vravio/env-audio";
+import { generateCurve, timelineDurationSamples, volumeAt, type AudioDocumentState } from "@vravio/env-audio";
 import { buildLiveEffectChain } from "./audioEffects";
 
 /**
@@ -78,7 +78,18 @@ export class AudioPlaybackEngine {
     for (const track of state.tracks) {
       if (track.muted || (anySoloed && !track.soloed)) continue;
       const trackGain = this.context.createGain();
-      trackGain.gain.value = track.volume;
+      if (track.volumeAutomation.length > 0) {
+        // The curve's value exactly at the playback start position, then a ramp to every later
+        // breakpoint — resuming mid-curve (a seek, a pause/resume) starts from where the curve
+        // actually is, not from its first point.
+        trackGain.gain.setValueAtTime(volumeAt(track.volumeAutomation, fromSample, track.volume), now);
+        for (const point of track.volumeAutomation) {
+          if (point.time <= fromSample) continue;
+          trackGain.gain.linearRampToValueAtTime(point.value, now + (point.time - fromSample) / sampleRate);
+        }
+      } else {
+        trackGain.gain.value = track.volume;
+      }
       const panner = this.context.createStereoPanner();
       panner.pan.value = track.pan;
       trackGain.connect(panner);

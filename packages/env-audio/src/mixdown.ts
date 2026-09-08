@@ -1,5 +1,6 @@
 import { fadeGainAt } from "./fades";
 import { timelineDurationSamples } from "./document";
+import { volumeAt } from "./automation";
 import type { AudioDocumentState } from "./types";
 import type { DecodedWav } from "./wav";
 
@@ -60,7 +61,10 @@ export function mixdownAudioDocument(state: AudioDocumentState, lookup: AudioSou
         if (outIndex < 0 || outIndex >= outputLength) continue;
         const sourcePosition = clip.offsetSamples + i * sourceRatio;
         const fadeGain = fadeGainAt(i, clipDurationOut, Math.round(clip.fadeInSamples * scale), Math.round(clip.fadeOutSamples * scale), clip.fadeType);
-        const gain = clip.gain * fadeGain * track.volume;
+        // Automation points are stored in document-rate samples; outIndex is output-rate —
+        // dividing by `scale` converts back before reading the curve.
+        const trackVolume = volumeAt(track.volumeAutomation, outIndex / scale, track.volume);
+        const gain = clip.gain * fadeGain * trackVolume;
         if (gain === 0) continue;
 
         const sourceChannels = source.channelData.length;

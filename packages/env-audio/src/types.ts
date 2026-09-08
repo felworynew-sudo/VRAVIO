@@ -51,10 +51,23 @@ export interface AudioClip {
   fadeType: FadeType;
 }
 
+/** One breakpoint of a track's volume automation — `time` in samples at the document's sample
+ * rate, `value` a linear gain multiplier (1 = unity), same units as `AudioTrack.volume` itself
+ * so a point and the static fallback are directly comparable. */
+export interface AutomationPoint {
+  readonly id: string;
+  time: number;
+  value: number;
+}
+
 export interface AudioTrack {
   readonly id: string;
   name: string;
-  /** Linear volume multiplier, 1 = unity (0 dB). */
+  /** Linear volume multiplier, 1 = unity (0 dB) — the static value used when
+   * `volumeAutomation` is empty, and the held level before the first point/after the last one
+   * when it isn't (an automation lane replaces the fader over the *range it covers*, not
+   * forever — Tracktion Engine's own model, cited at the top of §9.2, keeps a track's static
+   * value meaningful even once it carries an automation lane, for exactly this reason). */
   volume: number;
   /** -1 (full left) .. 1 (full right), 0 = center. */
   pan: number;
@@ -63,6 +76,9 @@ export interface AudioTrack {
   locked: boolean;
   clips: AudioClip[];
   effects: AudioTrackEffect[];
+  /** Sorted by `time` ascending — every writer (`audio-commands.ts`) maintains that order so a
+   * reader never has to sort before walking the curve. */
+  volumeAutomation: AutomationPoint[];
 }
 
 export interface AudioSelection {

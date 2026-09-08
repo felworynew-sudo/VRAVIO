@@ -84,4 +84,16 @@ describe("mixdownAudioDocument", () => {
     const [output] = mixdownAudioDocument(state, () => constantSource(1, 50));
     expect(output![10]).toBeCloseTo(0.5, 2);
   });
+
+  it("applies track volume automation instead of the static volume when points exist", () => {
+    const state = createAudioDocument({ channels: 1 });
+    const track = state.tracks[0]!;
+    track.volume = 1; // would be a no-op multiplier if automation weren't read
+    track.volumeAutomation = [{ id: "a", time: 0, value: 0 }, { id: "b", time: 100, value: 1 }];
+    track.clips.push(createAudioClip("a", 100, 100, 48000));
+    const [output] = mixdownAudioDocument(state, () => constantSource(1, 100));
+    expect(output![0]).toBeCloseTo(0, 2); // ramp starts at 0
+    expect(output![99]).toBeGreaterThan(0.9); // ramp has nearly reached 1 by the end
+    expect(output![0]!).toBeLessThan(output![99]!); // genuinely ramping, not flat
+  });
 });

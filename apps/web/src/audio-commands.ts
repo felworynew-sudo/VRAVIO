@@ -1,7 +1,7 @@
 import {
   applyLeftTrim, applyRightTrim, audioEffectCatalog, audioEffectDefaults, canSplitAt, cloneAudioState, constrainBoundaryTrim,
-  constrainClipDrag, createAudioClip, createAudioTrack, decodeWav, encodeWav, rippleShift, splitClip,
-  type AudioDocumentState, type AudioEffectId, type FadeType,
+  constrainClipDrag, createAudioClip, createAudioTrack, decodeWav, encodeWav, removeAutomationPoint, rippleShift,
+  setAutomationPoint, splitClip, type AudioDocumentState, type AudioEffectId, type FadeType,
 } from "@vravio/env-audio";
 import type { AssetId } from "@vravio/kernel";
 import { kernel } from "./kernel";
@@ -327,6 +327,41 @@ export function reorderTrackEffect(documentId: string, trackId: string, effectIn
     if (index === -1 || target < 0 || target >= track.effects.length) return false;
     const [effect] = track.effects.splice(index, 1);
     track.effects.splice(target, 0, effect!);
+    return true;
+  });
+}
+
+// --- Track volume automation (docs/master-plan.md §9.2's Audacity-4 phase) -------------------
+
+/** Places (or moves an existing point at the same time to) a breakpoint on a track's volume
+ * curve. `pointId` names the point being edited — pass the same id across a drag gesture so
+ * moving one point updates it in place instead of leaving a trail of new ones; pass a fresh id
+ * for a genuinely new point. */
+export function setTrackVolumeAutomationPoint(documentId: string, trackId: string, pointId: string, time: number, value: number): void {
+  void changeAudioDocument(documentId, "Volume Automation (Автоматизация громкости)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    if (!track) return false;
+    track.volumeAutomation = removeAutomationPoint(track.volumeAutomation, pointId);
+    track.volumeAutomation = setAutomationPoint(track.volumeAutomation, time, Math.max(0, value), pointId);
+    return true;
+  });
+}
+
+export function removeTrackVolumeAutomationPoint(documentId: string, trackId: string, pointId: string): void {
+  void changeAudioDocument(documentId, "Remove Automation Point (Удалить точку автоматизации)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    if (!track) return false;
+    const before = track.volumeAutomation.length;
+    track.volumeAutomation = removeAutomationPoint(track.volumeAutomation, pointId);
+    return track.volumeAutomation.length !== before;
+  });
+}
+
+export function clearTrackVolumeAutomation(documentId: string, trackId: string): void {
+  void changeAudioDocument(documentId, "Clear Automation (Очистить автоматизацию)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    if (!track || track.volumeAutomation.length === 0) return false;
+    track.volumeAutomation = [];
     return true;
   });
 }
