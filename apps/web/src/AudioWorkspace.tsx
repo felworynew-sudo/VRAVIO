@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { VravioDocument } from "@vravio/kernel";
 import {
-  cloneAudioState, decodeWav, generateMonoPeaks, isAudioDocumentState, mixdownAudioDocument, readPeak, timelineDurationSamples,
-  type AudioClip, type AudioDocumentState, type AudioTrack, type DecodedWav,
+  audioEffectCatalog, audioEffectDefaults, cloneAudioState, decodeWav, generateMonoPeaks, isAudioDocumentState, mixdownAudioDocument,
+  readPeak, timelineDurationSamples, type AudioClip, type AudioDocumentState, type AudioEffectId, type AudioTrack, type DecodedWav,
 } from "@vravio/env-audio";
 import type { AssetId } from "@vravio/kernel";
 import { kernel } from "./kernel";
@@ -10,8 +10,9 @@ import { useShellStore } from "./store";
 import { text } from "./i18n";
 import { AudioPlaybackEngine } from "./audioPlayback";
 import {
-  addAudioTrack, addClipFromAsset, changeAudioDocument, commitAudioDrag, deleteSelectedClips, previewMoveClip, previewTrimClip,
-  removeAudioTrack, setClipFade, setClipGain, setSelection, setTrackMuted, setTrackPan, setTrackSoloed, setTrackVolume, splitClipAt,
+  addAudioTrack, addClipFromAsset, applyEffectToClip, changeAudioDocument, commitAudioDrag, deleteSelectedClips, previewMoveClip,
+  previewTrimClip, removeAudioTrack, setClipFade, setClipGain, setSelection, setTrackMuted, setTrackPan, setTrackSoloed, setTrackVolume,
+  splitClipAt,
 } from "./audio-commands";
 import { decodeAudioFileToWav, startMicrophoneRecording, type AudioRecorder } from "./audioImport";
 
@@ -95,6 +96,9 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [splitMode, setSplitMode] = useState(false);
   const [recorder, setRecorder] = useState<AudioRecorder | null>(null);
+  const [effectId, setEffectId] = useState<AudioEffectId>("normalize");
+  const [effectParams, setEffectParams] = useState<Record<string, number>>(() => audioEffectDefaults("normalize"));
+  const [applyingEffect, setApplyingEffect] = useState(false);
   const engineRef = useRef<AudioPlaybackEngine | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -253,6 +257,22 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
       <label><span>{text(language, "Gain", "Громкость")}</span><input type="range" min={0} max={2} step={0.01} value={selectedClip.gain} onChange={(event) => setClipGain(document.id, state.selection!.trackId, selectedClip.id, event.target.valueAsNumber)} /></label>
       <label><span>{text(language, "Fade In", "Фейд-ин")}</span><input type="number" min={0} step={0.05} value={+(selectedClip.fadeInSamples / sampleRate).toFixed(2)} onChange={(event) => setClipFade(document.id, state.selection!.trackId, selectedClip.id, "in", Math.max(0, event.target.valueAsNumber) * sampleRate)} />s</label>
       <label><span>{text(language, "Fade Out", "Фейд-аут")}</span><input type="number" min={0} step={0.05} value={+(selectedClip.fadeOutSamples / sampleRate).toFixed(2)} onChange={(event) => setClipFade(document.id, state.selection!.trackId, selectedClip.id, "out", Math.max(0, event.target.valueAsNumber) * sampleRate)} />s</label>
+      <span className="audio-transport-sep" />
+      <label><span>{text(language, "Effect", "Эффект")}</span>
+        <select value={effectId} onChange={(event) => { const id = event.target.value as AudioEffectId; setEffectId(id); setEffectParams(audioEffectDefaults(id)); }}>
+          {audioEffectCatalog.map((definition) => <option key={definition.id} value={definition.id}>{definition.name}</option>)}
+        </select>
+      </label>
+      {audioEffectCatalog.find((definition) => definition.id === effectId)?.parameters
+        .filter((parameter) => parameter.id !== "startSample" && parameter.id !== "endSample")
+        .map((parameter) => <label key={parameter.id}><span>{parameter.name}</span>
+          <input type="range" min={parameter.min} max={parameter.max} step={parameter.step} value={effectParams[parameter.id] ?? parameter.value}
+            onChange={(event) => setEffectParams((current) => ({ ...current, [parameter.id]: event.target.valueAsNumber }))} />
+        </label>)}
+      <button disabled={applyingEffect} onClick={() => {
+        setApplyingEffect(true);
+        void applyEffectToClip(document.id, state.selection!.trackId, selectedClip.id, effectId, effectParams).finally(() => setApplyingEffect(false));
+      }}>{applyingEffect ? text(language, "Applying…", "Применяется…") : text(language, "Apply", "Применить")}</button>
     </div>}
 
     <div className="audio-body">

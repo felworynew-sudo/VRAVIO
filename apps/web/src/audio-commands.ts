@@ -1,9 +1,10 @@
 import {
   applyLeftTrim, applyRightTrim, canSplitAt, cloneAudioState, constrainBoundaryTrim, constrainClipDrag,
-  createAudioClip, createAudioTrack, splitClip, type AudioDocumentState, type FadeType,
+  createAudioClip, createAudioTrack, decodeWav, encodeWav, splitClip, type AudioDocumentState, type AudioEffectId, type FadeType,
 } from "@vravio/env-audio";
 import type { AssetId } from "@vravio/kernel";
 import { kernel } from "./kernel";
+import { applyAudioEffect } from "./audioEffects";
 
 const MIN_CLIP_DURATION_SECONDS = 0.1;
 
@@ -200,6 +201,49 @@ export async function addClipFromAsset(documentId: string, assetId: string, name
     if (!track) return false;
     if (!trackId) state.tracks.push(track);
     track.clips.push(createAudioClip(assetId, durationSamples, durationSamples, sourceSampleRate, { name, startSample }));
+    return true;
+  });
+  kernel.documents.addAssetRef(documentId, assetId as AssetId);
+}
+
+/**
+ * Applies a destructive effect (`packages/env-audio`'s `audioEffectCatalog`) to a clip's
+ * audible window — the region actually heard, `[offsetSamples, offsetSamples + durationSamples
+ * worth of source samples)`, not the whole decoded source, the same "process the clip, not the
+ * file" scope Audacity/AudioMass apply an effect at. The processed audio becomes a brand-new
+ * WAV asset (never mutates the asset another clip might still reference) and the clip is
+ * repointed at it with `offsetSamples: 0` — the new asset *is* exactly the processed window,
+ * there is nothing before or after it to trim to.
+ *
+ * Asset creation happens before `changeAudioDocument` (which must stay synchronous — its
+ * `mutate` runs once against a plain draft, not an async generator), the same ordering
+ * `addClipFromAsset` already uses for `addAssetRef`.
+ */
+export async function applyEffectToClip(documentId: string, trackId: string, clipId: string, effectId: AudioEffectId, params: Record<string, number>): Promise<void> {
+  const document = kernel.documents.get<AudioDocumentState>(documentId);
+  const clip = document?.state.tracks.find((track) => track.id === trackId)?.clips.find((item) => item.id === clipId);
+  if (!document || !clip) return;
+
+  const bytes = await kernel.assets.read(clip.assetId as AssetId);
+  if (!bytes) return;
+  const decoded = decodeWav(bytes);
+  const sourceWindowLength = Math.round((clip.durationSamples * clip.sourceSampleRate) / document.state.sampleRate);
+  const windowChannels = decoded.channelData.map((channel) => channel.slice(clip.offsetSamples, clip.offsetSamples + sourceWindowLength));
+
+  const processed = await applyAudioEffect(windowChannels, clip.sourceSampleRate, effectId, params);
+  const processedLength = processed[0]?.length ?? 0;
+  const newTimelineDuration = Math.max(1, Math.round((processedLength * document.state.sampleRate) / clip.sourceSampleRate));
+
+  const wav = encodeWav(processed, clip.sourceSampleRate, 32);
+  const assetId = await kernel.assets.importAsset(wav, { kind: "audio", mime: "audio/wav", name: `${clip.name} (${effectId}).wav` });
+
+  await changeAudioDocument(documentId, `Effect: ${effectId}`, (state) => {
+    const target = state.tracks.find((item) => item.id === trackId)?.clips.find((item) => item.id === clipId);
+    if (!target) return false;
+    target.assetId = assetId;
+    target.offsetSamples = 0;
+    target.sourceDurationSamples = processedLength;
+    target.durationSamples = newTimelineDuration;
     return true;
   });
   kernel.documents.addAssetRef(documentId, assetId as AssetId);

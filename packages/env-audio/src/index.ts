@@ -4,5 +4,6 @@ export * from "./clip-operations";
 export * from "./fades";
 export * from "./peaks";
 export * from "./mixdown";
+export * from "./effects";
 export * from "./wav";
 export * from "./environment";
