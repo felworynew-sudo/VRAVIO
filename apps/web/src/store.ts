@@ -2,6 +2,7 @@ import { HistoryManager, type EnvironmentKind } from "@vravio/kernel";
 import { createRasterDocument } from "@vravio/env-raster";
 import { createArtboard, createVectorDocument } from "@vravio/env-vector";
 import { createAudioDocument } from "@vravio/env-audio";
+import { createVideoDocument } from "@vravio/env-video";
 import { create } from "zustand";
 import { kernel } from "./kernel";
 import { defaultTool, toolById } from "./tools";
@@ -190,7 +191,7 @@ export const useShellStore = create<ShellState>((set) => ({
         })()
       : kind === "audio"
       ? createAudioDocument({ sampleRate: options?.sampleRate ?? 48000, channels: options?.channels === 1 ? 1 : 2, bitDepth: (options?.audioBitDepth === 16 || options?.audioBitDepth === 32 ? options.audioBitDepth : 24) })
-      : { kind, schemaVersion: 1, ...(options ? { canvas: { width: options.width, height: options.height, resolution: options.resolution, resolutionUnit: options.resolutionUnit, artboards: options.artboards ?? false }, timeline: { frameRate: options.frameRate ?? 30, width: options.width, height: options.height } } : {}) };
+      : createVideoDocument({ frameRate: options?.frameRate ?? 30, ...(options?.width !== undefined ? { width: options.width } : {}), ...(options?.height !== undefined ? { height: options.height } : {}) });
     const document = kernel.documents.create(kind, options?.name?.trim() || names[kind], initialState);
     kernel.historyByDocument.set(document.id, createHistory(state.preferences.memoryBudgetMb));
     const tool = defaultTool(kind);

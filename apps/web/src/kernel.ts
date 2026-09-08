@@ -2,6 +2,7 @@ import { AssetStore, AutosaveManager, CommandRegistry, DocumentSnapshotStore, Do
 import { RasterEnvironment } from "@vravio/env-raster";
 import { isVectorDocumentState, reseedArtboardIdCounter, reseedPaletteIdCounter, reseedShapeIdCounters } from "@vravio/env-vector";
 import { AudioEnvironment } from "@vravio/env-audio";
+import { VideoEnvironment } from "@vravio/env-video";
 import { createWebPlatform } from "./webPlatform";
 import { VectorEnvironment } from "./vector-environment";
 
@@ -26,6 +27,7 @@ const environments = new EnvironmentRegistry();
 environments.register(new RasterEnvironment({ documents: documentsStore, assets }));
 environments.register(new VectorEnvironment({ documents: documentsStore, assets }));
 environments.register(new AudioEnvironment({ documents: documentsStore, assets }));
+environments.register(new VideoEnvironment({ documents: documentsStore, assets }));
 const roundtrip = new RoundTripManager({
   documents: documentsStore, assets, environments,
   historyFor: (id) => historyByDocument.get(id),

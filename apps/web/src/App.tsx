@@ -640,9 +640,10 @@ export function physicalShortcutKey(event: KeyboardEvent): string {
  * Comes from that environment's own `windows/` catalogue, so a new panel
  * appears here by existing rather than by being listed a second time. An
  * environment with no catalogue gets an empty list, which is the honest answer
- * for audio and video: `MediaWorkspace` is a self-contained editor (bin,
- * transport, clip inspector all built in) with nothing wired to the dockable
- * side panels, so there is genuinely nothing to offer — not raster's list.
+ * for audio and video: `AudioWorkspace`/`VideoWorkspace` are each a self-
+ * contained editor (bin, transport, clip inspector all built in) with nothing
+ * wired to the dockable side panels, so there is genuinely nothing to offer —
+ * not raster's list.
  */
 function windowMenuItems(kind: string | undefined, language: Language): readonly MainMenuItem[] {
   if (!kind) return [];

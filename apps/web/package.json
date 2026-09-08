@@ -16,6 +16,7 @@
     "@vravio/env-audio": "workspace:*",
     "@vravio/env-raster": "workspace:*",
     "@vravio/env-vector": "workspace:*",
+    "@vravio/env-video": "workspace:*",
     "@vravio/kernel": "workspace:*",
     "@vravio/vector-color": "workspace:*",
     "@vravio/vector-geometry": "workspace:*",

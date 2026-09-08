@@ -1,0 +1,128 @@
+import { describe, expect, it } from "vitest";
+import { cloneVideoState, createVideoClip, createVideoDocument, createVideoTrack, findClip, findTrack, isVideoDocumentState, migrateVideoDocumentState, timelineDurationFrames } from "./document";
+
+describe("createVideoDocument", () => {
+  it("starts with one empty video track and sane defaults", () => {
+    const state = createVideoDocument();
+    expect(state.kind).toBe("video");
+    expect(state.tracks).toHaveLength(1);
+    expect(state.tracks[0]!.kind).toBe("video");
+    expect(state.tracks[0]!.clips).toHaveLength(0);
+    expect(state.activeTrackId).toBe(state.tracks[0]!.id);
+    expect(state.frameRate).toBe(30);
+    expect(state.width).toBe(1920);
+    expect(state.height).toBe(1080);
+    expect(isVideoDocumentState(state)).toBe(true);
+  });
+
+  it("honors explicit frame rate/dimensions", () => {
+    const state = createVideoDocument({ frameRate: 24, width: 3840, height: 2160 });
+    expect(state.frameRate).toBe(24);
+    expect(state.width).toBe(3840);
+    expect(state.height).toBe(2160);
+  });
+});
+
+describe("isVideoDocumentState", () => {
+  it("rejects non-video and malformed values", () => {
+    expect(isVideoDocumentState(null)).toBe(false);
+    expect(isVideoDocumentState({ kind: "audio" })).toBe(false);
+    expect(isVideoDocumentState({ kind: "video", schemaVersion: 1 })).toBe(false); // no tracks/frameRate
+  });
+});
+
+describe("track and clip creation", () => {
+  it("creates tracks with unique ids and default mixer state", () => {
+    const a = createVideoTrack("video"), b = createVideoTrack("audio");
+    expect(a.id).not.toBe(b.id);
+    expect(a.kind).toBe("video");
+    expect(b.kind).toBe("audio");
+    expect(a.volume).toBe(1);
+    expect(a.muted).toBe(false);
+    expect(a.hidden).toBe(false);
+    expect(a.locked).toBe(false);
+  });
+
+  it("creates a clip referencing an asset with defaults", () => {
+    const clip = createVideoClip("asset-1", 1000, 5000, 30);
+    expect(clip.assetId).toBe("asset-1");
+    expect(clip.durationFrames).toBe(1000);
+    expect(clip.sourceDurationFrames).toBe(5000);
+    expect(clip.startFrame).toBe(0);
+    expect(clip.offsetFrames).toBe(0);
+    expect(clip.gain).toBe(1);
+    expect(clip.sourceFrameRate).toBe(30);
+  });
+});
+
+describe("findTrack / findClip", () => {
+  it("locates a track and clip by id", () => {
+    const state = createVideoDocument();
+    const track = state.tracks[0]!;
+    const clip = createVideoClip("asset-1", 100, 100, 30);
+    track.clips.push(clip);
+    expect(findTrack(state, track.id)).toBe(track);
+    expect(findClip(state, track.id, clip.id)).toBe(clip);
+    expect(findClip(state, track.id, "missing")).toBeUndefined();
+  });
+});
+
+describe("timelineDurationFrames", () => {
+  it("is the end of the latest clip across every track", () => {
+    const state = createVideoDocument();
+    const [trackA] = state.tracks;
+    const trackB = createVideoTrack("audio");
+    state.tracks.push(trackB);
+    trackA!.clips.push(createVideoClip("a", 1000, 1000, 30, { startFrame: 0 }));
+    trackB.clips.push(createVideoClip("b", 500, 500, 30, { startFrame: 2000 }));
+    expect(timelineDurationFrames(state)).toBe(2500);
+  });
+
+  it("is zero for an empty document", () => {
+    expect(timelineDurationFrames(createVideoDocument())).toBe(0);
+  });
+});
+
+describe("cloneVideoState", () => {
+  it("deep-copies tracks/clips/selection so mutating the clone leaves the original untouched", () => {
+    const state = createVideoDocument();
+    state.tracks[0]!.clips.push(createVideoClip("a", 100, 100, 30));
+    state.selection = { trackId: state.tracks[0]!.id, clipIds: [state.tracks[0]!.clips[0]!.id] };
+
+    const clone = cloneVideoState(state);
+    clone.tracks[0]!.clips[0]!.gain = 0.5;
+    clone.selection!.clipIds.push("extra");
+    clone.tracks.push(createVideoTrack("audio"));
+
+    expect(state.tracks[0]!.clips[0]!.gain).toBe(1);
+    expect(state.selection!.clipIds).toHaveLength(1);
+    expect(state.tracks).toHaveLength(1);
+  });
+});
+
+describe("migrateVideoDocumentState", () => {
+  it("adds hidden=false to a track restored from before it existed", () => {
+    const state = createVideoDocument();
+    delete (state.tracks[0] as { hidden?: unknown }).hidden;
+
+    migrateVideoDocumentState(state);
+
+    expect(state.tracks[0]!.hidden).toBe(false);
+  });
+
+  it("is idempotent — running it again on an already-migrated track changes nothing", () => {
+    const state = createVideoDocument();
+    state.tracks[0]!.hidden = true;
+    migrateVideoDocumentState(state);
+    expect(state.tracks[0]!.hidden).toBe(true);
+  });
+});
+
+describe("isVideoDocumentState migrates on the way in", () => {
+  it("recognizes and repairs a pre-hidden-field document as valid", () => {
+    const state = createVideoDocument();
+    delete (state.tracks[0] as { hidden?: unknown }).hidden;
+    expect(isVideoDocumentState(state)).toBe(true);
+    expect(state.tracks[0]!.hidden).toBe(false);
+  });
+});

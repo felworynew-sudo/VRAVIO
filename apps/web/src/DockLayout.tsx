@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import { DockviewReact, themeDark, type IDockviewHeaderActionsProps, type IDockviewPanelHeaderProps, type IDockviewPanelProps } from "dockview-react";
 import type { DockviewReadyEvent, SerializedDockview } from "dockview";
 import { environmentMeta } from "./environment";
@@ -7,6 +7,7 @@ import { useDocuments } from "./useDocuments";
 import { RasterWorkspace } from "./RasterWorkspace";
 import { VectorWorkspace } from "./VectorWorkspace";
 import { AudioWorkspace } from "./AudioWorkspace";
+import { VideoWorkspace } from "./VideoWorkspace";
 import { appendLayer, appendRasterGroup, compositeRasterDocument, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, createRasterLayerMaskFromSelection, isRasterDocumentState, layerDocumentPixels, rasterLayerDescendantIds, rasterLayerRows, renderLayerEffects, setLayerPixels, dropPositionInRow, dropTargetForRow, placeLayer, toggleLayerLink, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerEffects, type RasterLayerMask } from "@vravio/env-raster";
 import { kernel } from "./kernel";
 import { EnvironmentIcon } from "./EnvironmentIcon";
@@ -51,19 +52,17 @@ function mergeableEdit(label: string, undo: () => void, redo: () => void): Rever
 
 const LAYOUT_STORAGE_KEY = "vravio.workspace.default.v5";
 const EMPTY_LAYER_SELECTION: string[] = [];
-const MediaWorkspace = lazy(() => import("./MediaWorkspace").then((module) => ({ default: module.MediaWorkspace })));
 
 function ViewportPanel() {
   const documents = useDocuments();
   const activeDocumentId = useShellStore((state) => state.activeDocumentId);
-  const language = useShellStore((state) => state.language);
   const active = documents.find((document) => document.id === activeDocumentId) ?? null;
 
   if (!active) return null;
   if (active.kind === "raster") return <RasterWorkspace document={active} />;
   if (active.kind === "vector") return <VectorWorkspace document={active} />;
   if (active.kind === "audio") return <AudioWorkspace document={active} />;
-  return <Suspense fallback={<div className="media-empty">Loading media workspace… (Загрузка медиа-среды…)</div>}><MediaWorkspace kind={active.kind} language={language}/></Suspense>;
+  return <VideoWorkspace document={active} />;
 }
 
 function InspectorPanel({ params }: IDockviewPanelProps<{ kind?: string }>) {
