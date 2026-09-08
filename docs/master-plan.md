@@ -4520,3 +4520,665 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
       `liquid-domain` — если это разделение выдержано, Plugin API v2
       действительно получился универсальным, не «Spatial зашит
       специальным образом, остальные плагины — второго сорта».
+
+
+---
+
+## 25. Performance/Optimization Audit — против Patchy/GEGL/Krita/darktable/Paint.NET/Photoshop, 8 сентября 2026
+
+Владелец передал этот аудит стороннему прогону (не в этой сессии) — методология: прочитан текущий `main` (`render.ts`, `RasterTileCache`, `raster-commit.ts`, `raster-pixel-buffers.ts`, kernel `WorkerPool`/`AssetStore`/`OpfsStorageAdapter`, `glFilterBackend.ts`, `GPUContext`, оба `performance.bench.test.ts`), затем сверен с Patchy, GEGL/GIMP, Krita, darktable, Paint.NET и публичными материалами Adobe. Записано как задачи, не как готовый вывод — верифицировать заново перед реализацией каждого пункта (файлы могли измениться).
+
+### 25.1. Что уже сделано хорошо (не трогать без явной причины)
+
+Зафиксировано аудитом как правильные, уже работающие решения — приведено для контекста, не задачи:
+
+- Тайловый композитинг в `render.ts`: регион >512×512 режется на куски 256×256, слои, не пересекающие тайл, пропускаются (46 слоёв: 428 мс без тайлов → 38 мс с ними — уже задокументировано в CLAUDE.md раздел 5, аудит независимо это подтвердил).
+- `RasterTileCache` — mip-уровни 0…4, на малом zoom берётся каждый 2^mip пиксель вместо полного пересчёта.
+- Tile cache — бюджет 256 MB, tileSize 256px, вытеснение в порядке Map (LRU-подобное) по реальному размеру mip-тайла.
+- `DirtyRegion` — до 8 прямоугольников, дальше схлопывается в один bounding rect.
+- Слой хранится в собственных, не canvas-размерных границах (`setLayerPixels`) — 166 МБ → единицы МБ на 21 слое, уже задокументировано.
+- `renderWorkingRegion` — brush hot path красит только dirty rect, при одном обычном видимом слое (Normal/100%) вообще обходит layer compositor.
+- Navigator/thumbnail — `compositeRasterRegion(..., step=N)`, сразу считает под финальное разрешение превью, не полный composite.
+- История — revision-based (`previousRev`/`nextRev` в asset store), не before/after снапшоты; 20 stroke'ов при snapshot-модели стоили бы сотни МБ.
+- OPFS реально используется (`OpfsStorageAdapter`) с деградацией OPFS → IndexedDB → memory.
+- `WorkerPool` в kernel уже есть (4 воркера по умолчанию, `AbortSignal`-отмена, задуман под Web Workers в браузере и native/WASM клиенты в desktop) — **но raster compositor через него не работает** (см. 25.2, П0.1).
+
+### 25.2. Ключевое уточнение про GPU — не то, что подразумевает `GPUContext`
+
+`RenderBackend = "webgpu" | "webgl2" | "wasm-simd" | "wasm" | "cpu"` и `GPUContext` умеет выбирать/деградировать backend, но **не** создаёт `GPUDevice`, не держит textures, не запускает shaders и не композитит слои — это capability selector, не GPU raster engine.
+
+Отдельно, `apps/web/src/glFilterBackend.ts` — это уже настоящий GPU-путь (WebGL2 fragment shaders, ping/pong textures, кэш скомпилированных программ и текстур между изменениями слайдера), но только для некоторых фильтров, не для компоновки слоёв:
+
+| Подсистема | GPU сейчас |
+|---|---|
+| Layer compositor | ❌ CPU JS |
+| Blend modes | ❌ CPU JS |
+| Masks при композите | ❌ CPU JS |
+| Tile generation | ❌ CPU JS |
+| Некоторые фильтры | ✅ WebGL2 fragment shaders |
+| Filter ping-pong passes | ✅ GPU |
+| Filter result readback | ⚠️ `gl.readPixels()` — GPU→CPU каждый раз |
+| WebGPU compositor/compute | ❌ нет |
+
+Найдена конкретная неэффективность: `gl.readPixels()` после одного GPU-фильтра возвращает результат в CPU, и если следующий фильтр тоже GPU — происходит лишний CPU↔GPU роундтрип вместо того, чтобы держать цепочку на GPU дольше (как уже делает Paint.NET 5+).
+
+### 25.3. Конкретные пробелы, найденные при чтении кода (не общие рассуждения)
+
+- [ ] **25.3.1. Tile-композит внутри одного региона идёт последовательно.** `compositeInPieces()` делит на 256×256 куски, но обходит их обычным циклом на главном потоке — не параллелится через `WorkerPool`, хотя тайлы в большинстве случаев независимы. Проверить сигнатуру `compositeInPieces` в `render.ts` перед реализацией.
+- [ ] **25.3.2. `RasterTileCache.update()` умеет viewport-рендеринг, но не используется так.** API принимает `viewport: RasterRect` и умеет считать только тайлы, покрывающие видимую область — но `raster-commit.ts` вызывает его с `{x:0,y:0,width:state.width,height:state.height}`, то есть весь документ независимо от того, что реально видно на экране. На документе 10000×10000 при видимом окне 1500×900 это может быть кратная разница. Самый дешёвый крупный выигрыш после уже существующего тайлинга — проверить перед реализацией, не изменилось ли это.
+- [ ] **25.3.3. Invalidation тайлов масштабируется как changed×cached, а не O(changed).** `invalidate(rect)` для каждого затронутого тайла проходит по ВСЕМ ключам кэша и ищет `startsWith(col,row)` по всем mip-уровням. На больших кэшах/документах — потенциально бессмысленно дорого. Заменить на прямую адресацию по (col,row,mip) вместо префиксного поиска по всем ключам.
+- [ ] **25.3.4. Adjustment-слои и layer effects сразу инвалидируют весь композит.** `changedRenderRegion()` намеренно возвращает `null` (repaint всего), если изменился состав/порядок слоёв, участвует adjustment layer, или есть включённый layer effect — потому что adjustment читает backdrop, а effect может рисовать за пределами bounds. Причина корректна, но на реальном профессиональном документе (pixel layers + adjustments + shadows + glows) dirty-tracking быстро перестаёт помогать. У зрелых движков (GEGL) эффект/adjustment знает свой outset/halo/dependency rectangle, а не инвалидирует всё оптом.
+- [ ] **25.3.5. Render signatures пока сравнивают только верхнеуровневые поля** (buffer identity, mask identity/enabled, opacity, fill, blend, clipping, effects/adjustment объекты, hierarchy) — не полноценная система `render revision`/`dependency revision`/`effect bounds`/`cache revision`. Будет иметь значение при сложных масках, фильтрах, group compositing и будущих smart filters (см. §26.1).
+- [ ] **25.3.6. `renderWorkingMultiple()` (linked-layer drag, см. §1.9 п.10б этой сессии) делает полный document composite**, не dirty-rect путь — приемлемо для не-brush жестов сегодня, но Patchy показывает, что именно Move/Transform на тяжёлых документах особенно чувствителен к этому.
+- [ ] **25.3.7. `renderSpotHealOverlay()` гоняет весь canvas туда-обратно ради маленького оверлея.** Путь: `renderWorking(full)` → `ctx.getImageData(весь документ)` → правка маленького региона маски → `ctx.putImageData(весь документ)`. На 4K документе overlay 100×100 обходится как полный кадр. Заменить на `getImageData`/`putImageData` только по dirty-региону (тот же приём, что уже есть в `renderWorkingRegion`).
+- [ ] **25.3.8. Лишние полные копии буфера на пути в OPFS-хранилище** — `data.slice()` перед SHA-256, затем `value.slice().buffer` перед записью. На 100 МБ слое — 100 (source) + 100 (hash copy) + 100 (storage copy) МБ и GC pressure. Проверить, можно ли считать SHA-256 и писать в OPFS без промежуточных полных копий (потоково или на один и тот же буфер).
+- [ ] **25.3.9. OPFS-адаптер API — только целыми файлами**, нет `readRange()`/`writeRange()`/`mapTile()`/`streamRevision()`. Пока это blob-хранилище ревизий, не настоящий scratch backend растрового движка. Не делать сейчас (P1/P2 уровень), но держать в виду при проектировании tile-backed storage (§25.5).
+- [ ] **25.3.10. История экономит RAM, но не I/O.** Один destructive pixel edit коммитит **полную** revision слоя в OPFS, даже если реально изменилось 100×100 пикселей на слое 4000×4000. Лучше — dirty-tile/copy-on-write revision (см. §25.5, P1).
+
+### 25.4. Benchmark suite — что сейчас гарантируется и где слабое место
+
+Текущие пороги (`packages/env-raster/src/performance.bench.test.ts`, `packages/kernel/src/performance.bench.test.ts`) — проверить актуальные цифры перед использованием, могли измениться:
+
+- Композит 21 слой 1920×1080: ~27 мс измерено, порог 162 мс (27×6 — намеренный запас против шумной машины, см. CLAUDE.md).
+- Translate слоя (fast block-copy path): порог <5 мс.
+- Trim full-canvas edit → bounds: ~8 мс измерено, порог 48 мс.
+- Pixel memory: реальное уникальное хранение <30% от варианта «каждый слой canvas-размера».
+- Kernel autosave 21 слой, изменён один: <5 мс (`MemoryStorageAdapter`, НЕ измеряет реальную задержку OPFS/IndexedDB/диска — тест сам это оговаривает).
+
+**Пробел:** пороги ловят катастрофические регрессии, но не гарантируют интерактивность (162 мс на композит — уже заметный лаг, если бы это было реальной цифрой, а не намеренно щедрым порогом против шума). Нет gating-бенчмарков для: 4K/8K документов, 50–200 слоёв, масок, цепочек clipping, вложенных групп, множественных adjustments, layer styles/effects, live brush pointermove → видимые пиксели, p50/p95 задержки кадра, undo/redo через настоящий OPFS (не Memory), 100–500 состояний истории, холодного tile cache, накладных расходов инвалидации тайлов, pan/zoom, transform drag, пиковой памяти, GC pressure, цепочек GPU-фильтров с readback, WebGPU fallback.
+
+- [ ] **25.4.1.** Расширить `performance.bench.test.ts` до p50/p95 интерактивной задержки на реалистичных сценариях (не только регрессионный пол) — список сценариев выше.
+
+### 25.5. Приоритетный список — как передано аудитом
+
+```
+P0 — браузер, максимальная отдача (наибольший ROI без Tauri)
+├ 1. RasterTileCache.update() — реальный viewport, не весь документ (§25.3.2)
+├ 2. Параллельный tile-композит через WorkerPool (§25.3.1)
+├ 3. Interaction frame budget + adaptive preview quality (Patchy-style, §25.6)
+├ 4. Move/Transform base-cache + patch вместо full composite (§25.3.6)
+├ 5. Убрать full-canvas Spot Heal overlay path (§25.3.7)
+├ 6. Оптимизировать tile invalidation indexing (§25.3.3)
+└ 7. Расширить performance suite до p50/p95 (§25.4.1)
+
+P1 — архитектурный скачок
+├ Tile-backed layer storage вместо одного contiguous buffer (GEGL-style, §25.7)
+├ Tile-based/copy-on-write история (§25.3.10)
+├ OPFS tile scratch cache, не только blob-ревизии (§25.3.9)
+├ Dependency/outset модель для adjustment/effects (§25.3.4)
+├ Operation-aware halo/overlap tiling (darktable-style, §25.8)
+├ Memory budget manager
+└ Progressive/async document rendering
+
+P2 — GPU
+├ WebGPU compositor (не только фильтры)
+├ Персистентные GPU layer textures
+├ Masks/blend modes на GPU
+├ GPU adjustment graph
+├ Не делать readback между соседними GPU-операциями (§25.2)
+├ Async GPU readback только там, где CPU реально нужны пиксели
+└ CPU/WASM fallback как byte-correct эталон
+
+P3 — desktop (Tauri/Rust, недостижимо в браузере)
+├ Rust tile worker pool (rayon/std::thread, без Web Worker messaging overhead)
+├ mmap scratch store (нет аналога в браузере)
+├ native SIMD kernels (AVX2/AVX-512/NEON, шире чем WASM SIMD)
+├ wgpu desktop compositor (вне browser sandbox — D3D12/Metal/Vulkan)
+├ streamed image decode (TIFF/PSD/EXR без полной материализации в JS)
+└ native memory-pressure integration
+```
+
+### 25.6. Interactive quality governor — идея, которую стоит перенять у Patchy буквально
+
+Patchy не пытается честно рендерить всё во время жеста любой ценой — у него несколько уровней деградации превью с эскейп-хэтчем по времени:
+
+```
+cheap scene        → exact live composite
+expensive scene     → cached base + translated snapshot
+very expensive       → lower-resolution snapshot
+ridiculous            → outline only
+
+if live-preview frame > ~100 мс → следующий кадр переключается на proxy mode
+release (mouse-up) → всегда full quality
+```
+
+- [ ] **25.6.1.** Реализовать этот governor не только для Move (как у Patchy), а для Transform/Warp/layer drag/adjustment-слайдеров/фильтров/больших кистей — общий механизм, не точечный костыль под один инструмент. Целевой бюджет кадра ≈16–33 мс.
+- [ ] **25.6.2.** Patchy при zoom ≤50% создаёт downscaled копию документа для интерактивного Move (кратность падает на уровень: ×4/×16/×64), кэширует её между drag'ами, всегда считает точно на release. VRAVIO уже имеет mip-композит в `RasterTileCache` — идея частично реализована, но не применена системно к инструментам (только к самому zoom-рендерингу).
+
+### 25.7. Tile-backed pixel storage — идея от GEGL/Krita, для P1
+
+Сейчас у VRAVIO: `layer.pixels` — один смежный `Uint8ClampedArray`, обрезанный по границам слоя; тайлы существуют только как output-кэш композита, не как способ хранения самих пикселей. В GEGL (`GeglBuffer`) тайлы — это сама модель хранения: sparse storage, swap, tiled mipmaps, thread-safe доступ, внешние tile backends. Огромный слой (30000×30000) не обязан существовать как один allocation.
+
+- [ ] **25.7.1.** Спроектировать (не реализовывать сразу) tile-backed слой как долгосрочную альтернативу текущему contiguous-буферу: `RasterLayer.tiles: Map<"col,row", TileRef>`, где `TileRef` — либо буфер в памяти, либо ссылка в OPFS, с LRU поверх. Явно отметить: это ломающее архитектурное изменение всего слоя хранения — требует отдельного этапа миграции, не «между делом».
+
+### 25.8. Operation-aware halo/overlap tiling — идея от darktable, для P1/P2
+
+darktable-модули описывают свои требования к тайлингу: `factor` (сколько общей памяти нужно операции), `maxbuf` (макс. временный буфер), `overhead`, `overlap`/halo (сколько соседних пикселей нужно операции сверх границ тайла — например, Gaussian Blur с radius 20 не может честно обработать тайл без 20px запаса с каждой стороны), `align`. Раздельные CPU/OpenCL коэффициенты, и explicit решение «выгоден ли GPU для этой операции конкретного размера» (не всегда — на маленьком регионе накладные расходы upload/readback могут перевесить).
+
+- [ ] **25.8.1.** Когда в VRAVIO появятся операции, которым для тайла нужен контекст за его границами (Gaussian Blur и подобные уже есть, но пока считаются не по тайлам) — заложить generic halo-параметр на операцию, а не хардкодить отступ под каждый фильтр отдельно.
+
+### 25.9. Что подтверждено публичными источниками для Photoshop
+
+Adobe документирует: (1) многопоточный композитор — работа делится на части и считается параллельно CPU/GPU, заявлено ускорение композитинга ~100–250% в соответствующих случаях; (2) GPU-композитор ускоряет именно layer-операции (перемещение содержимого слоя, смена opacity, работа со сложными многослойными документами), не только косметику вроде pan/zoom; (3) многоуровневый image cache — до 8 cache levels и 4 размера cache tile, с явной рекомендацией Adobe: меньшие тайлы лучше для кистевых мазков, большие — для тяжёлых полноизображенческих операций, больше уровней — для огромных документов, меньше — для большого числа мелких слоёв (VRAVIO сейчас: один фиксированный размер тайла 256px везде — see §25.3, следующий шаг после текущего тайлинга); (4) история пропорциональна изменённой площади, не всему слою (см. §25.3.10 — у VRAVIO сейчас наоборот); (5) переход на scratch disk при нехватке RAM, Efficiency <100% как явный признак этого в UI.
+
+**Не подтверждено достаточно свежими официальными источниками** и не должно цитироваться как факт: точный внутренний алгоритм адаптивного разрешения при драге (условное «drag → resolution/4 → release → full») — это точно задокументировано у Patchy, Photoshop ведёт себя похоже в части интерактивных операций, но конкретный внутренний механизм Adobe публично не раскрыт настолько детально.
+
+### 25.10. Сводная оценка VRAVIO по подсистемам (аудитом, для ориентира — не наша метрика)
+
+| Подсистема | Оценка | Комментарий |
+|---|---|---|
+| Dirty tracking | 8/10 | уже хороший фундамент |
+| Layer bounds memory | 8.5/10 | очень правильное решение |
+| Live brush repaint | 8/10 | region path хороший |
+| Compositing algorithm (CPU) | 6.5/10 | хорошие микрооптимизации, но однопоточный |
+| Tile cache | 7/10 | mip + бюджет хорошие, viewport-путь недоиспользован (§25.3.2) |
+| GPU compositor | 2/10 | почти отсутствует |
+| GPU filters | 6/10 | настоящий WebGL2, но readback-ориентированный |
+| Multithreading | 3/10 | `WorkerPool` есть, compositor его не использует |
+| Huge-document memory | 4/10 | trimmed layers хорошо, но contiguous arrays и нет working scratch |
+| Undo RAM efficiency | 8/10 | revision-дизайн хороший |
+| Undo I/O efficiency | 4/10 | full-layer revision на каждый stroke |
+| Benchmarks | 5/10 | хорошие regression floors, слабое покрытие user-facing latency |
+
+### 25.11. Донор → что конкретно брать (сводка для быстрой навигации)
+
+- **Patchy** — adaptive preview degradation с time-budget эскейпом; exact-on-release; параллельные CPU strips/tiles; base-cache для Move/Transform; display-resolution document preview при малом zoom.
+- **GEGL/GIMP** — tile-backed pixel storage как модель хранения (не только кэш); ROI dependency graph; out-of-core swap; operation-level cache; thread-safe tile buffers.
+- **Krita** — memory/swap budgeting, настраиваемый пользователем; философия brush responsiveness; GPU-canvas (важный вывод: GPU-canvas ≠ обязательно GPU-компоновщик — даже частично-CPU painting engine выигрывает от GPU-презентации).
+- **darktable** — memory-aware тайлинг per-operation с halo/overlap; явный CPU/GPU scheduler, учитывающий доступную VRAM.
+- **Paint.NET** — персистентный GPU image/effect graph без readback между соседними GPU-узлами; GPU plugin API; float-обработка на GPU.
+- **Photoshop** — многопоточный + GPU композитор; workload-зависимые cache tile sizes/levels; scratch-архитектура; history, пропорциональная изменённой площади, а не всему слою.
+
+### 25.12. Концептуальный вывод аудита
+
+У VRAVIO уже реализован принцип «не считать то, что не изменилось» (dirty regions, tile cache, trimmed layer bounds). Следующий уровень зрелости — четыре смежных принципа, которые аудит явно называет как то, что отделяет VRAVIO от класса GEGL/Photoshop/darktable:
+
+1. Не хранить в RAM то, что не нужно прямо сейчас (tile-backed storage, scratch).
+2. Не считать в полном разрешении то, чего пользователь не видит (adaptive preview, viewport-only rendering).
+3. Не считать последовательно то, что можно считать параллельно (parallel tile compositor).
+4. Не возвращать данные с GPU на CPU, если следующая операция снова идёт на GPU (persistent GPU graph).
+
+Рекомендованный порядок реализации от аудита: ① параллельный tile-компоновщик → ② adaptive interactive preview → ③ tile-backed pixels/история → только потом ④ WebGPU-компоновщик (перенос нынешней contiguous/full-layer модели на GPU без решения архитектурных ограничений даст ускорение, но не снимет потолок).
+
+
+---
+
+## 26. Feature-parity аудит против Photoshop/Illustrator — полный проход, 8 сентября 2026
+
+Второй сторонний аудит (не в этой сессии, передан владельцем). Методология: сверка текущего `main` (tools.ts, requirements.md, master-plan.md) против деревьев справки Adobe Photoshop Desktop и Illustrator Desktop плюс точечные страницы по конкретным системам; доноры — прежде всего Patchy, Inkscape, Krita, GIMP/GEGL, Penpot, Scribus и специализированные библиотеки. **Важно: при конфликте с этим документом код имеет приоритет** — аудитор явно проверял против кода, а не только против более раннего текста master-plan.md (пример: Line/Shape Builder/Curvature/Artboard уже есть в `tools.ts`, хотя в более старом тексте плана могли числиться отсутствующими).
+
+Обозначения аудита: 🔴 нет вовсе. 🟠 есть фундамент/частичная реализация, но до Adobe-подобного рабочего состояния не хватает существенной части. Ссылка на open-source донора означает «смотреть архитектуру/поведение» — для GPL-доноров (Inkscape/GIMP/Krita/Scribus) это справочник поведения и алгоритмических идей, не copy-paste; Patchy (MIT) — единственный, откуда можно тянуть код впрямую, тот же принцип, что уже применяется во всём остальном документе.
+
+**Что аудит НЕ считает недостатком** (уже подтверждено в коде, не дублировать как задачи): Free Transform (skew/distort/perspective/warp), Liquify, базовый Brush/Pencil/Eraser/Blur/Smudge/Dodge/Burn, Remove Tool (MI-GAN/LaMa), Clone Stamp, Spot Healing, Patch, растровый текст (Point/Paragraph + dynamic/path режимы), растровые/векторные фигуры, selection replace/add/subtract/intersect, layer masks + рисование по ним, физический Invert mask, Density, Apply/Delete mask, clipping masks, linked layers, RAW decode через LibRaw, базовый layered PSD read, persistent 3D layer, raster↔vector round-trip, Vector Pen/Nodes/Curvature/Shape Builder/Rectangle/Line/Ellipse/Artboards/Symbols, базовые Boolean, SVG import/export.
+
+### 26.1. Слои и недеструктивность (Photoshop) — самая принципиальная дыра по мнению аудита
+
+`RasterLayer.kind === "smart"` уже предусмотрен в типе, но настоящего Smart Object workflow нет; полноценного live filter/effect graph тоже нет.
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🔴 Smart Objects | Вложить изображение/слои/вектор как объект, трансформировать без потери исходника, 2×клик открывает содержимое | [Smart Objects overview](https://helpx.adobe.com/photoshop/using/create-smart-objects.html) | Patchy |
+| 🔴 Embedded Smart Objects | Содержимое хранится внутри документа | Adobe Help | Patchy |
+| 🔴 Linked Smart Objects | Объект ссылается на внешний файл, обновление исходника обновляет экземпляры | Adobe Help | Patchy |
+| 🔴 Edit Contents | 2×клик открывает исходное содержимое, Save обновляет все экземпляры | Adobe Help | Patchy |
+| 🔴 Replace/Relink/Embed linked asset | Замена файла, восстановление потерянной ссылки, linked→embedded | Adobe Help | Penpot |
+| 🔴 Smart Filter stack | Фильтры остаются редактируемыми, переставляются/скрываются/удаляются | [Smart Filters](https://helpx.adobe.com/photoshop/using/smart-filters.html) | Patchy |
+| 🔴 Filter blending per-filter | opacity/blend mode у каждого Smart Filter отдельно | Adobe Help | Patchy |
+| 🔴 Smart Filter mask | Общая маска, ограничивающая весь стек фильтров | Adobe Help | Patchy |
+| 🔴 Per-filter masks | VRAVIO-план идёт даже дальше Photoshop — отдельная маска на каждый фильтр | — | GEGL |
+| 🔴 Non-destructive effect stack на обычном слое | Blur/Curves/Noise/Sharpen как узлы, не изменение пикселей | — | GEGL |
+| 🟠 Layer Effects как дочерние строки | Уже реализовано в этой сессии (§1.9 п.11) — fx-бейдж + раскрывающийся список с индивидуальным вкл/выкл | Adobe Help | Patchy |
+| 🔴 Styles/.asl | Сохраняемые наборы Layer Effects | Adobe Help | Patchy |
+| 🔴 Transform Mask | Неразрушающая трансформация отдельным узлом, без Smart Object-обёртки | — | Krita |
+| 🔴 Layer Comps | Сохранить несколько состояний видимости/позиции/оформления слоёв | Adobe Help | Krita Compositions Docker |
+| 🔴 Paths panel в Raster | Рабочие векторные пути внутри растровой среды, отдельно от Vector environment | Adobe Help | Patchy |
+| 🔴 Node graph для сложного композитинга | Image→Blur→Grade→Merge→Output, продвинутый уровень поверх Smart Filters | Smart Filters (ближайшая модель Adobe) | Natron |
+
+### 26.2. Маски и выделения
+
+База уже хорошая (8-bit raster mask, физический Invert, Density, Apply/Delete, selection-арифметика), но профессиональная оболочка заметно беднее: Feather не подключён к compositor'у (движок уже — п.1.9 не проверял), UI Disable отсутствует, нет Quick Mask/vector mask/saved channels/group masks.
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🔴 Quick Selection Tool | Кисть приблизительно указывает объект, граница цепляется за визуальные края | Adobe Help | Patchy |
+| 🔴 Object Selection Tool | Клик/рамка вокруг объекта → авто-сегментация | [Select Subject/Object Selection](https://helpx.adobe.com/photoshop/using/quick-selection-tool.html) | MobileSAM |
+| 🔴 Select Subject | Автоматически выделить главные объекты изображения | Adobe Help | MobileSAM |
+| 🔴 Select and Mask workspace | Отдельная среда для волос/шерсти/полупрозрачных краёв | Adobe Help | GIMP |
+| 🔴 Refine Edge/Refine Hair | Уточнение сложной границы по текстуре | Adobe Help | GIMP Foreground Select |
+| 🔴 Magnetic Lasso | Контур магнитится к контрастным границам | Adobe Help | GIMP Intelligent Scissors |
+| 🟠 Magic Wand pro options | Не хватает Contiguous/AA/развитого color-distance | Adobe Help | GIMP |
+| 🔴 Color Range selection | Выделение по цвету/оттенку с fuzziness и eyedropper add/subtract | Adobe Help | GIMP Select by Color |
+| 🔴 Quick Mask mode | Q: selection становится red paintable overlay и обратно | Adobe Help | Patchy |
+| 🔴 Saved Alpha Channels | Сохранить selection навсегда, загрузить обратно | Adobe Help | Patchy |
+| 🔴 Spot Channels | Отдельные печатные spot-каналы | Adobe Help | Patchy |
+| 🔴 Channels panel | RGB/Alpha/Spot по отдельности | Adobe Help | GIMP |
+| 🔴 Vector Mask как отдельная сущность | Маска хранится Bézier-путём, бесконечно редактируема | Adobe Help | Patchy |
+| 🔴 Raster + Vector mask одновременно | У слоя одновременно разные mask attachments | Adobe Help | Patchy |
+| 🔴 Group Masks | Маска на целую группу, корректно работает с Pass Through | Adobe Help | Patchy |
+| 🟠 Live Mask Feather | Поле есть (движок), compositor его не использует (проверить заново) | Adobe Help | GIMP/GEGL |
+| 🟠 Mask Link/Unlink semantics | Иконка/поле есть (§1.9 п.8 этой сессии), независимое движение маски не подтверждено отдельным тестом | Adobe Help | Patchy |
+| 🔴 Mask solo view | Alt-клик → весь canvas показывает маску grayscale | Adobe Help | Patchy |
+| 🔴 Mask overlay (красная полупрозрачная) | Поверх изображения, Quick Mask-стиль | Adobe Help | Patchy |
+| 🔴 Shift-click Disable Mask | Быстро сравнить с/без маски | Adobe Help | Patchy |
+| 🔴 Mod-click thumbnail → selection | Ctrl/Cmd-клик миниатюры слоя/маски грузит как selection | Adobe Help | GIMP |
+| 🔴 Add/Subtract/Intersect thumbnail-жесты | Shift/Alt на thumbnail для булевой арифметики selection | Adobe Help | GIMP |
+| 🔴 Alt-drag mask copy | Alt = копия маски на другой слой, без Alt = перенос | Adobe Help | Patchy |
+| 🔴 Procedural Masks | Luminosity/Color Range/Depth/Edges/Noise как живые параметрические маски | Adobe Help | GIMP plugin ecosystem |
+
+### 26.3. Brush Engine — большая дыра
+
+Текущий Brush: Size, Hardness, Spacing, Roundness, Angle, Opacity, Flow, Color, pressure→Size/Opacity. Photoshop Brush Engine на несколько этажей глубже — см. также §5 этого документа (Brush Engine), это дополняет, не дублирует.
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🔴 Shape Dynamics | Size/Angle/Roundness Jitter, Minimum Diameter, Control (pressure/tilt/fade/…) | [Brush dynamics](https://helpx.adobe.com/photoshop/using/brush-settings.html) | libmypaint |
+| 🔴 Scattering | Разброс отпечатков вокруг траектории, Count + jitter | Adobe Help | Patchy |
+| 🔴 Brush Texture | Pattern внутри мазка, depth/scale/per-tip texture | Adobe Help | Krita |
+| 🔴 Dual Brush | Пересечение двух tip'ов с разными dynamics | Adobe Help | Patchy |
+| 🔴 Color Dynamics | FG/BG jitter, Hue/Sat/Bright jitter, per-tip color | Adobe Help | Patchy |
+| 🔴 Transfer dynamics | Opacity/Flow Jitter с разным Control-source | Adobe Help | libmypaint |
+| 🔴 Brush Pose | Ручной override давления/tilt/rotation | Adobe Help | Krita |
+| 🔴 Wet Edges | Накопление пигмента по краям мокрого мазка | Adobe Help | Krita |
+| 🔴 Build-up/timed Airbrush | Краска копится, даже когда курсор стоит | Adobe Help | Patchy |
+| 🔴 Noise brush option | Зерно в полупрозрачных участках | Adobe Help | Krita |
+| 🔴 Advanced Smoothing | 0–100%, Pulled String, Catch-up, Catch-up on end, Adjust for Zoom | Adobe Help | libmypaint |
+| 🔴 Protect Texture | Общий texture scale между разными кистями | Adobe Help | Krita |
+| 🔴 Lock individual brush sections | Смена пресета не сбрасывает выбранную секцию | Adobe Help | Krita |
+| 🔴 Bristle Tip | Физическая щетина — длина/толщина/stiffness | Adobe Help | Krita |
+| 🔴 Erodible Tip | Мел/карандаш/уголь с изнашивающимся наконечником | Adobe Help | Krita |
+| 🔴 Mixer Brush | Wet/Load/Mix/Flow — настоящее смешивание краски | Adobe Help | Krita |
+| 🔴 Brushes panel | Папки/группы/поиск/recent/drag-drop | Adobe Help | Krita |
+| 🔴 Save full Brush Preset | tip+dynamics+tool options разом | Adobe Help | MyPaint brushes |
+| 🔴 Define Brush Preset from image | Выделение/картинка → grayscale brush tip | Adobe Help | GIMP |
+| 🔴 `.abr` import | Открывать существующие Photoshop-кисти с поведением | Adobe Help | **Patchy — ближайший донор, восстанавливает значительную часть descriptor/dynamics, не только thumbnail** |
+| 🔴 `.abr` export | Отдавать кисти обратно в Photoshop-экосистему | Adobe Help | Patchy |
+| 🔴 `.myb` совместимость | Экосистема MyPaint-кистей | — | libmypaint |
+
+**Приоритет аудита внутри этой категории:** `.abr` import + Shape Dynamics + Scattering + Smoothing + Preset Manager ставить очень высоко — это выше по социальной ценности, чем ещё десяток экзотических фильтров: художник, переходя в новую программу, первым делом проверяет, откроются ли его кисти.
+
+### 26.4. Растровые инструменты и ретушь
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🔴 Gradient Tool | Linear/radial/angle/reflected/diamond прямо по canvas | Adobe Help | GIMP — уже отмечено как дыра в §2.4 этого документа, не дублировать реализацию, только донора |
+| 🟠 Paint Bucket advanced | Pattern Fill, Mode, Contiguous, Sample All Layers, AA | Adobe Help | GIMP |
+| 🔴 Healing Brush | В отличие от Spot Healing — источник задаёт сам пользователь | Adobe Help | Patchy |
+| 🟠 Clone Source panel | До 5 источников, scale/rotate/flip/offset/overlay | Adobe Help | GIMP |
+| 🔴 Pattern Stamp | Рисовать выбранным pattern вместо sampled pixels | Adobe Help | GIMP Clone/Pattern |
+| 🔴 Content-Aware Move | Выделить объект, передвинуть, старое место восстановить автоматически | Adobe Help | Resynthesizer |
+| 🔴 Background Eraser | Стирает фон по sampled color, сохраняя границы объекта | Adobe Help | GIMP |
+| 🔴 Magic Eraser | Один клик удаляет области близкого цвета | Adobe Help | GIMP |
+| 🔴 Red Eye Tool | Быстрая правка красных зрачков | Adobe Help | GIMP |
+| 🔴 History Brush | Локально возвращает пиксели к состоянию History | Adobe Help | Krita (ближайшая архитектура) |
+| 🔴 Art History Brush | Художественная перерисовка из состояния History | Adobe Help | Krita brush engines |
+| 🔴 Sponge Tool как самостоятельный workflow | Локально +/- насыщенность | Adobe Help | GIMP |
+| 🟠 Blur/Sharpen Sample All Layers + dynamics | База tonal-кисти есть, профессиональных опций мало | Adobe Help | GIMP |
+| 🔴 Perspective Crop | Кадрирование четырёхугольником с исправлением перспективы | Adobe Help | GIMP Perspective+Crop |
+| 🟠 Нормальный Crop Options Bar | **Уже начато в этой сессии** — engine-часть (`cropRasterDocument`'s `deleteCroppedPixels`) готова, pending-rect UI с ручками/ratio/thirds ещё нет, см. §2.1 | Adobe Help | Patchy |
+| 🔴 Straighten in Crop | Провёл линию по горизонту → авто-выравнивание | Adobe Help | Patchy — `canvas_widget_crop.cpp`'s rotate-outside-box жест, уже читан в этой сессии |
+| 🟠 Non-destructive Crop | **Engine-часть готова** в этой сессии (`deleteCroppedPixels=false` default) — Delete Cropped Pixels toggle в UI ещё нет | Adobe Help | Krita |
+| 🔴 Content-Aware Crop expansion | Расширить canvas за фото, алгоритмически заполнить пустоту | Adobe Help | Resynthesizer |
+| 🔴 Puppet Warp | Pins+mesh для локальной деформации персонажей/объектов | Adobe Help | puppet-warp |
+| 🔴 Frame Tool | Контейнер, в который помещается/заменяется изображение с авто-обрезкой | Adobe Help | Penpot frames |
+| 🔴 Single Row/Column Marquee | Выделение строки/колонки ровно 1px | Adobe Help | GIMP |
+| 🔴 Color Sampler Tool | Несколько постоянных sampled points с числовыми значениями | Adobe Help | GIMP |
+| 🔴 Count Tool | Отмечать и считать объекты на изображении | Adobe Help | ImageJ |
+| 🔴 Slice/Slice Select | Разбивка изображения на экспортируемые web-слайсы | Adobe Help | GIMP |
+
+### 26.5. Illustrator — базовые недостающие инструменты
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🔴 Pencil/Freehand | Векторный path от руки с автосглаживанием | Adobe Help | Inkscape |
+| 🔴 Polygon Tool | Параметрический многоугольник с изменяемым числом сторон | Adobe Help | Inkscape |
+| 🔴 Star Tool | Параметрическая звезда (лучи, внутренний/внешний radius) | Adobe Help | Inkscape |
+| 🔴 Vector Gradient Tool | Градиент с on-canvas ручками | Adobe Help | Inkscape |
+| 🔴 Gradient Mesh | Многоузловая сетка цвета | Adobe Help | Inkscape |
+| 🔴 Vector Eyedropper | Взять цвет и appearance/style другого объекта | Adobe Help | Inkscape |
+| 🔴 Compound Path | Несколько subpaths как один объект с дырками, без boolean flatten | Adobe Help | Inkscape |
+| 🟠 Offset Path UI | Математика в движке уже есть, UI/команды нет | Adobe Help | Inkscape LPE Offset |
+| 🟠 Outline Stroke/Stroke to Path UI | Ядро есть, пользовательского workflow нет | Adobe Help | Inkscape |
+| 🔴 Join/Break/Close Path suite | Явные операции соединения/разрыва/закрытия контуров | Adobe Help | Inkscape |
+| 🔴 Knife Tool | Резать фигуры произвольной линией | Adobe Help | Inkscape |
+| 🔴 Scissors Tool | Разрывать path в anchor/segment | Adobe Help | Inkscape |
+| 🔴 Width Tool | Интерактивная переменная толщина stroke по длине | Adobe Help | Inkscape Power Stroke LPE |
+| 🔴 Corner Tool/per-node corners | Отдельно скруглить/срезать конкретный угол | Adobe Help | Inkscape Fillet/Chamfer LPE |
+| 🔴 Vector Eraser | Стирать части сразу нескольких paths кистевым жестом | Adobe Help | Inkscape |
+| 🔴 Blob Brush | Рисование заполненными векторными областями с объединением | Adobe Help | Inkscape Calligraphy |
+| 🔴 Vector distortion brushes | Warp/Twirl/Pucker/Bloat/Scallop/Crystallize/Wrinkle над вектором | Adobe Help | Inkscape Tweak architecture |
+
+### 26.6. Illustrator — live/non-destructive vector workflow (важнее количества инструментов)
+
+Сейчас VRAVIO boolean в основном одноразовый — исходники заменяются результатом. §4.6 этого документа уже помечает это направление как Vector v2; здесь — детальный список того, что туда входит.
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🔴 Live Boolean | Union/Subtract/Intersect остаётся группой живых исходников, Flatten — по команде | Adobe Help | Penpot non-destructive booleans |
+| 🔴 Live Offset | Offset редактируем после создания | Adobe Help | Inkscape Offset LPE |
+| 🔴 Live Corner | Скругления остаются effect-параметрами | Adobe Help | Inkscape Corners LPE |
+| 🔴 Radial/Grid/Mirror Repeat | Живые повторения с изменяемым оригиналом | Adobe Help | Inkscape Rotate Copies/Tiling |
+| 🔴 Blend | Автоматические промежуточные формы/цвета между объектами | Adobe Help | Inkscape LPE/Interpolate |
+| 🔴 Envelope Distort | Warp preset/mesh/top-object envelope, исходник сохраняется | Adobe Help | Inkscape Perspective/Envelope LPE |
+| 🔴 Bend | Согнуть объект вдоль управляющего path | Adobe Help | Inkscape Bend LPE |
+| 🔴 Pattern Along Path | Разложить/деформировать объект вдоль контура | Adobe Help | Inkscape Pattern Along Path |
+| 🔴 Tiled Clones/procedural tiling | Rows/columns, offset, scale, rotation, randomization, mirror | Adobe Help | Inkscape Tiling LPE |
+| 🔴 Generic Live Effect framework | Effect stack над path вместо отдельной сущности на каждую фичу | Adobe Help (Appearance/effects) | **Inkscape LPE source — рекомендуемый архитектурный фундамент** |
+| 🔴 Effect stacking | Bend→Roughen→Repeat→Offset, всё редактируемо | Adobe Help (Appearance panel) | Inkscape Live Path Effects |
+
+**Явная рекомендация аудита:** сделать Generic Live Effect framework фундаментом Vector v2 раньше остальных пунктов этого списка — один хороший LPE-граф потом закрывает Offset/Corner/Bend/Repeat/Pattern Along Path/Roughen и десятки будущих операций на одной архитектуре, а не как отдельные костыли каждый раз.
+
+### 26.7. Live Shapes и объектные удобства Illustrator
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🟠 Per-corner radius | Четыре независимых радиуса вместо одного числа на все углы | Adobe Help | Penpot data model (r1/r2/r3/r4) |
+| 🔴 Ellipse Arc/Pie controls | Start/End angle, pie/arc как свойства ellipse | Adobe Help | Inkscape |
+| 🟠 Numeric X/Y/W/H/rotation panel | Точная геометрия выделения через числа | Adobe Help | Penpot |
+| 🔴 Stroke alignment | Inside/Center/Outside | Adobe Help | Inkscape |
+| 🔴 Dash presets/advanced stroke | Dash/gap sequence, caps, joins, arrowheads/markers | Adobe Help | Inkscape markers/strokes |
+| 🔴 Custom Start/Middle/End markers | Стрелки и любые SVG markers на stroke | Adobe Help | Inkscape |
+| 🔴 Create marker from selected object | Свой arrowhead/marker из вектора | Adobe Help | Inkscape |
+| 🔴 Objects on Path | Раскладка объектов вдоль пути с живым перемещением | Adobe Help | Inkscape Pattern Along Path/clones |
+
+### 26.8. Appearance — недооценённая дыра относительно Illustrator
+
+Illustrator позволяет одному объекту иметь несколько fills, несколько strokes и несколько effects в одном appearance stack без дублирования объекта. У VRAVIO отдельной Appearance-системы не видно.
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🔴 Appearance Panel | Центральный stack визуальных атрибутов объекта | Adobe Help | Penpot |
+| 🔴 Multiple fills | Несколько независимых заливок на одном path | Adobe Help | Penpot |
+| 🔴 Multiple strokes | Напр. белая 8px + чёрная 2px на одном объекте | Adobe Help | Penpot |
+| 🔴 Effects per fill/stroke/object | Один blur только на fill, другой effect на весь объект | Adobe Help | Inkscape LPE architecture |
+| 🔴 Graphic Styles | Сохранить весь Appearance, применить одним кликом | Adobe Help | Penpot components/tokens |
+| 🔴 Graphic Style Libraries | Отдельные reusable библиотеки styles | Adobe Help | Penpot |
+| 🔴 Copy complete appearance (Eyedropper) | Перенос fill/stroke/effects/style между объектами | Adobe Help | Inkscape |
+
+### 26.9. Image Trace, Live Paint и «магические» Illustrator workflow
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🔴 Image Trace | Растр → редактируемые векторные paths | Adobe Help | Inkscape/Potrace |
+| 🔴 Image Trace presets | Logo/B&W/Photo/Color + пользовательские | Adobe Help | Inkscape Trace Bitmap |
+| 🔴 Live Trace → Expand workflow | Параметры меняются пока trace живой, Expand фиксирует paths | Adobe Help | Inkscape |
+| 🔴 Live Paint | Пересекающиеся paths → «раскраска» визуальных областей, даже не отдельных shapes | Adobe Help | Inkscape bounded fill (приблизительно) |
+| 🔴 Live Paint Selection | Выбирать конкретные faces/edges Live Paint group | Adobe Help | Inkscape |
+| 🔴 Perspective Grid | 1/2/3-point grid, horizon, VP, working plane, snap | Adobe Help | Inkscape grids (приближённо) |
+| 🔴 Рисование прямо на perspective plane | Новая фигура автоматически проецируется на выбранную плоскость | Adobe Help | Krita assistants (частичный аналог) |
+
+### 26.10. Symbols, patterns, reusable assets
+
+Symbols panel и symbol refs уже есть — здесь про глубину, не про отсутствие.
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🟠 Dynamic Symbols | Общий master + локальные изменения свойств instance | Adobe Help | Penpot Components |
+| 🟠 Instance overrides | Цвет/текст/части экземпляра без разрыва связи с master | Adobe Help | Penpot |
+| 🔴 9-slice scaling | Растягивать UI-symbol без искажения углов | Adobe Help | Penpot components |
+| 🔴 Symbol Libraries | Пользовательские reusable библиотеки | Adobe Help | Penpot libraries |
+| 🔴 Pattern creation/editing | Бесшовный pattern с live preview, сохранение swatch | Adobe Help | Inkscape |
+| 🔴 Pattern library | Сохранение/поиск/переиспользование паттернов | Adobe Help | Inkscape |
+| 🔴 Swatches panel/libraries | Сохраняемые process/global/spot цвета и группы | Adobe Help | Inkscape |
+| 🔴 Gradient preset library | Сохранять и переиспользовать градиенты | Adobe Help | Inkscape |
+
+### 26.11. Recolor Artwork и управление цветом (вектор)
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🔴 Recolor Artwork | Поменять всю палитру сложной иллюстрации как систему | Adobe Help | Inkscape color extensions (приближение) |
+| 🔴 Color harmony wheel | Связать цвета, двигать по harmony rule | Adobe Help | Krita color tools |
+| 🔴 Limit artwork to N colors | Автосведение иллюстрации к заданному числу красок | Adobe Help | GIMP Indexed conversion |
+| 🔴 Color Theme Picker | Снять палитру с другой картинки, перекрасить artwork | Adobe Help | Krita |
+| 🔴 Global colors | Изменил swatch — обновились все объекты с этим цветом | Adobe Help | Penpot design tokens |
+
+### 26.12. Текст и типографика — второй очень большой пласт
+
+Векторный Type Tool сейчас буквально имеет Color + Font Size. Растровый текст богаче, но единого профессионального Text Engine нет — прямое пересечение с §3 этого документа, здесь детализация недостающих полей.
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🟠 Unified Text Engine | Растр и вектор должны использовать одну модель текста/layout | Adobe Help | Scribus |
+| 🔴 Полный font browser | Семейство/style/поиск/preview/favorites/recent | Adobe Help | Scribus |
+| 🔴 Leading | Межстрочный интервал | Adobe Help | Scribus |
+| 🔴 Kerning | Расстояние конкретной пары символов | Adobe Help | Scribus |
+| 🔴 Tracking | Межбуквенное расстояние диапазона | Adobe Help | Scribus |
+| 🔴 Baseline Shift | Поднять/опустить символы относительно baseline | Adobe Help | Scribus |
+| 🔴 Horizontal/Vertical Scale | Независимое растяжение glyphs | Adobe Help | Scribus |
+| 🔴 Character rotation | Поворот отдельных символов | Adobe Help | Scribus |
+| 🔴 Text AA modes | None/Sharp/Crisp/Strong и т.п. | Adobe Help | FreeType/Pango via Scribus |
+| 🔴 Paragraph alignment suite | Left/Center/Right + варианты Justify | Adobe Help | Scribus |
+| 🔴 Indents | Left/right/first-line indent | Adobe Help | Scribus |
+| 🔴 Paragraph spacing | Space before/after | Adobe Help | Scribus |
+| 🔴 Hyphenation | Автопереносы с языковыми правилами | Adobe Help | Scribus |
+| 🔴 Variable Fonts axes | Weight/Width/Slant и произвольные axes | Adobe Help | Scribus |
+| 🔴 OpenType features | Ligatures, contextual alternates, swashes, fractions, stylistic sets | Adobe Help | Scribus |
+| 🔴 Glyphs panel | Просмотр/поиск/вставка glyphs и alternate glyphs | Adobe Help | Scribus |
+| 🔴 Character Styles | Сохраняемые стили символов | Adobe Help | Scribus styles |
+| 🔴 Paragraph Styles | Сохраняемые paragraph layouts | Adobe Help | Scribus styles |
+| 🟠 Vector Area Type | Настоящий текстовый frame с reflow | Adobe Help | Scribus |
+| 🟠 Vector Type on Path | В растре есть задел, в Vector tool options нет | Adobe Help | Inkscape |
+| 🔴 Move/Flip text on path | Интерактивные brackets начала/конца/центра | Adobe Help | Inkscape |
+| 🔴 Type on Path effects | Rainbow, Skew, 3D Ribbon, Stair Step, Gravity | Adobe Help | Inkscape |
+| 🔴 Vertical Type | Вертикальный point/area/path text | Adobe Help | Scribus |
+| 🔴 Text threading | Текст переливается между рамками | Adobe Help | Scribus linked text frames |
+| 🔴 Warp Text presets (полный набор) | Arc/Bulge/Flag/Wave/Fisheye и др. + Bend/H/V distortion | Adobe Help | **Patchy — все 15 Photoshop warp styles** |
+| 🔴 Missing Fonts workflow | Найти отсутствующие fonts, заменить по документу | Adobe Help | Scribus |
+| 🔴 Text → Outlines/Shape | Перевести текст в обычные paths | Adobe Help | Inkscape |
+
+### 26.13. CMYK, high bit depth, color management
+
+`bitDepth: 8|16|32` у документа уже есть как поле, но настоящего 16/32-bit storage/render pipeline нет; `requirements.md` прямо требует storage за пределами `Uint8ClampedArray`. Вектор уже получил `qcms` для части ICC/CMYK→sRGB (этап 14 vector-plan.md), растровая среда полного color management ещё не имеет.
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🔴 True 16-bit/channel raster | Реальные 16-bit буферы во всей цепочке paint/filter/composite/export | Adobe Help | Krita |
+| 🔴 True 32-bit float/HDR | Floating-point document pipeline | Adobe Help | GEGL |
+| 🔴 Raster CMYK editing | Документ реально живёт в CMYK, не просто конвертируется на входе | Adobe Help | Krita |
+| 🟠 Full ICC v2/v4 color management | Input/display/output/printer profiles, rendering intents | Adobe Help | LittleCMS |
+| 🔴 Soft Proof | Симуляция вида документа под конкретный printer/profile | Adobe Help | LittleCMS |
+| 🔴 Spot colors | Pantone-подобные именованные печатные краски | Adobe Help | Scribus |
+| 🔴 Overprint preview/settings | Проверка наложения печатных красок | Adobe Help | Scribus |
+| 🔴 Color Separations preview | Отдельно видеть C/M/Y/K/spot plates | Adobe Help | Scribus |
+| 🔴 Histogram panel | Live histogram + channels/statistics | Adobe Help | GIMP |
+
+### 26.14. RAW — декодирование есть, Camera Raw workflow ещё нет
+
+LibRaw-декодирование уже есть — не дыра сама по себе. Дыра — между «умею декодировать CR3» и полноценным Camera Raw (настройки хранятся отдельно, RAW можно перепроявить сколько угодно).
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🟠 Full RAW development workspace | WB, Exposure, Highlights/Shadows, tone curve, color, sharpening до открытия | Adobe Camera Raw | RawTherapee |
+| 🔴 Demosaic choices | Разные алгоритмы демозаики | Adobe Camera Raw | RawTherapee |
+| 🔴 Highlight recovery | Восстановление пересветов из RAW-каналов | Adobe Camera Raw | RawTherapee |
+| 🔴 Lens corrections | Профили distortion/vignetting/chromatic aberration | Adobe Camera Raw | RawTherapee |
+| 🔴 Non-destructive RAW settings/sidecar | Оригинал не меняется, настройки — отдельно | Adobe Camera Raw architecture | RawTherapee |
+
+### 26.15. PSD/PSB и совместимость файлов
+
+Текущий PSD-import уже читает базовые layers/bounds/opacity/visibility/blend/name, но `requirements.md` прямо исключает CMYK/indexed/ZIP channels, adjustment/text/vector layer data, и PSD write, судя по всему, пока не существует — большой migration-blocker.
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🟠 Advanced PSD read | Text, vector data, adjustments, продвинутые masks/effects/smart objects | Adobe Help | Patchy |
+| 🔴 PSD write | Сохранить документ в PSD с editable layers | Adobe Help | ag-psd |
+| 🔴 PSB read/write | Large Document Format для гигантских документов | Adobe Help | psd-tools |
+| 🔴 PSD Smart Object round-trip | Не flatten содержимое smart objects | Adobe Help | Patchy |
+| 🔴 PSD text round-trip | Текст editable после Photoshop → VRAVIO → Photoshop | Adobe Help | Patchy |
+| 🔴 PSD vector mask/path round-trip | Shapes/paths остаются настоящим vector data | Adobe Help | Patchy |
+| 🔴 PDF import/export профессионального уровня | Не bitmap-рендер, а vectors/text/profiles | Adobe Help | Inkscape |
+| 🔴 AI/EPS import | Открывать существующие Illustrator-ассеты | Adobe Help | Inkscape |
+| 🔴 DWG/DXF import/export | CAD exchange | Adobe Help | LibreCAD |
+| 🔴 EXR/HDR/high-bit-depth форматы | VFX/HDR pipeline | Adobe Help | OpenImageIO |
+| 🟠 Большая матрица raster-форматов | TIFF/AVIF/HEIF/JXL/JP2/TGA/DICOM/Cineon и т.д. — уже детально расписана в §7.1 этого документа | Adobe Help | OpenImageIO |
+
+### 26.16. Links, Package и передача проекта
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🔴 Links panel | Все внешние images/assets: путь, missing/outdated статус, relink | Adobe Help | Scribus |
+| 🔴 Linked vs Embedded assets | Не обязательно физически тащить каждый bitmap внутрь документа | Adobe Help | Scribus |
+| 🔴 Package/Collect for Output | Собрать документ + links + fonts/resources в одну папку | Adobe Help | Scribus |
+| 🔴 Missing asset badge/relink workflow | Явное визуальное состояние потерянного source | Adobe Help | Scribus |
+
+### 26.17. Automation — Illustrator (data-driven graphics)
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🔴 Actions (Illustrator) | Записать последовательность действий, проигрывать | Adobe Help | GIMP scripting |
+| 🔴 Variables panel | Привязать текст/image/visibility к variables | Adobe Help | Scribus scripting/DTP |
+| 🔴 Data Merge CSV/XML | Сотни бейджей/баннеров/карточек из одного template | Adobe Help | Scribus |
+| 🔴 Dataset preview/switching | Переключать записи таблицы прямо в template | Adobe Help | Scribus |
+| 🔴 Batch export datasets | Сгенерировать пачку файлов автоматически | Adobe Help | Scribus scripting |
+
+### 26.18. Automation — Photoshop
+
+Actions уже помечена как отсутствующая панель в §8.1 этого документа — здесь детализация.
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🔴 Actions panel | Запись/просмотр/редактирование последовательностей команд | Adobe Help | Patchy scripting/batch |
+| 🔴 Action groups + shortcuts | Папки Actions и быстрый вызов | Adobe Help | GIMP scripting |
+| 🔴 Batch Processor | Прогнать action по директории файлов | Adobe Help | ImageMagick |
+| 🔴 Image Processor | Массовый resize/convert/export | Adobe Help | ImageMagick |
+| 🔴 Droplets | Executable/drop-target с сохранённым action workflow | Adobe Help | ImageMagick |
+
+### 26.19. Панели, которых пока нет ни в одной среде
+
+Сверено с текущим реестром: Raster сейчас имеет Properties/Layers/History/Assets/Color/Navigator/Effects/Scripts (8), Vector — Properties/Layers/Artboards/Symbols/History/Color/Scripts (7) — то же самое, что уже зафиксировано в §8.1 этого документа. Список ниже — то же самое, повторено здесь для полноты второго аудита, не дублировать реализацию отдельно от §8.1.
+
+Actions, Adjustments panel (быстрые кнопки создания adjustment-слоёв, отдельно от уже существующего модуля коррекций), Brush Settings (§26.3), Brushes library, Channels, Character/Character Styles, Paragraph/Paragraph Styles, Clone Source (расширенный), Glyphs, Gradients (preset manager), Histogram, Layer Comps, Patterns, Shapes (Custom Shape library), Styles (layer/graphic style library), Swatches, Tool Presets, Measurement Log, Notes.
+
+### 26.20. Contextual Task Bar
+
+Уже подробно расписана в §11 этого документа (16 состояний, точные размеры, общая для 4 сред архитектура) — второй аудит подтверждает то же самое направление и явно называет её не декоративной: Adobe использует её как «следующий логичный шаг рядом с объектом» вместо навигации по пяти панелям. Здесь — только дополнительные пункты, которых не было в §11:
+
+- [ ] **26.20.1.** Contextual quick actions для векторных объектов конкретно (Image Trace/Embed/Mask и т.п., меняющиеся по типу объекта) — §11 в основном про растровый/AI-контекст, векторный контекст-бар нужно спроектировать отдельно (донор архитектуры — Penpot's contextual UI).
+
+### 26.21. Профессиональные Photoshop-жесты — 20–30 мелких contextual gestures
+
+Крупные shortcuts уже приличные, но не хватает мелкой «мышечной памяти». Дёшево в реализации, непропорционально сильно меняет ощущение программы.
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🔴 Alt при Brush → временный Eyedropper | Зажал Alt — взял цвет, отпустил — снова кисть | Adobe Help | Krita |
+| 🔴 Shift+[ / ] hardness | Быстро менять hardness без панели | Adobe Help | Krita |
+| 🔴 Alt+ПКМ-drag brush HUD | Горизонталь = Size, вертикаль = Hardness | Adobe Help | Krita |
+| 🔴 Hold ~ временный eraser | Та же кисть мгновенно = ластик без потери tip/dynamics | Adobe Help | Krita |
+| 🔴 Shift-click Brush → прямой сегмент | Последняя точка → новая точка прямой линией | Adobe Help | GIMP |
+| 🔴 Alt-click layer eye → Solo | Показать только один слой, восстановить прежнюю видимость | Adobe Help | Krita |
+| 🔴 Alt-click между слоями → clipping mask | **Уже реализовано этой сессией через Ctrl-hover (§1.9 п.9)** — иная комбинация клавиш по решению владельца, тот же жест по смыслу | Adobe Help | GIMP/Krita |
+| 🔴 Alt-drag layer → duplicate | Дублировать прямо canvas-жестом | Adobe Help | Krita |
+| 🔴 Alt+[ / ] layer navigation | Выбирать соседний слой клавиатурой | Adobe Help | Krita |
+| 🔴 1px/10px nudge | Стрелки — точное смещение, Shift+Arrow — крупный шаг | Adobe Help | Penpot |
+| 🔴 Temporary Auto Select modifier | Временно поменять поведение Move tool без чекбокса | Adobe Help | GIMP |
+| 🔴 Right-click canvas → layers under cursor | Список всех слоёв под точкой курсора | Adobe Help | Penpot |
+| 🔴 Double-click layer name → inline rename | Без лишних диалогов | Adobe Help | Krita |
+| 🔴 Mod+0 / Mod+1 | Fit canvas / 100% zoom | Adobe Help | GIMP |
+| 🔴 Tab / Shift+Tab UI hiding | Быстро убрать panels/tools | Adobe Help | Krita |
+| 🔴 F screen modes | Цикл Standard/Full Screen with Menu/Full Screen | Adobe Help | Krita |
+| 🔴 Brush preset cycling | , / . — предыдущая/следующая кисть | Adobe Help | Krita |
+| 🔴 Full transform modifier matrix | Alt=center, Shift=aspect, совместное поведение модификаторов | Adobe Help | Penpot |
+
+### 26.22. Docking и workspace management
+
+Уже помечено в §8.2 этого документа как требующее переработки — здесь конкретика по недостающим кускам.
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🟠 Настоящие floating panels | Вытащить panel из dock в отдельное окно | Adobe Help | Krita |
+| 🟠 Panel groups/tabs | Группировать несколько panels в одном stack | Adobe Help | Krita |
+| 🟠 Collapsed icon docks | Сворачивать panels до вертикальной полосы иконок | Adobe Help | Krita |
+| 🔴 Workspace presets | Essentials/Painting/Photography/custom saved workspace | Adobe Help | Krita workspaces |
+| 🔴 Reset Workspace | Быстро восстановить layout | Adobe Help | Krita |
+| 🔴 Full Shortcut Editor | Переназначить практически любую команду | Adobe Help | Krita |
+
+### 26.23. Illustrator специализированные инструменты (не P0, для полноты)
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🔴 Dimension Tool | Линейный/угловой/radius dimension с подписью размера | Adobe Help | LibreCAD dimensions |
+| 🔴 Measure Tool | Расстояние и площадь объектов | Adobe Help | LibreCAD |
+| 🔴 Graph Tools | Column/Bar/Line/Area/Scatter/Pie/Radar graphs из чисел | Adobe Help | LibreOffice Core |
+| 🔴 Print Tiling Tool | Область печати относительно artboards | Adobe Help | Scribus |
+| 🔴 Intertwine | Попеременно «над/под» без физического разрезания | Adobe Help | Inkscape (manual/LPE приближение) |
+
+### 26.24. Illustrator 3D & Materials
+
+VRAVIO уже имеет persistent 3D layer — это НЕ дыра "нет 3D". Разница — Illustrator применяет 3D как живой appearance/effect к обычному vector artwork, VRAVIO's 3D — отдельная парадигма (собственная 3D-среда, потенциально сильнее). Аудит не рекомендует копировать архитектуру Illustrator 3D один в один — нужен мост Vector Object → live 3D representation, не замена своей 3D-среды.
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🟠 Live vector Extrude | Векторная фигура остаётся вектором, регулируемая глубина | Adobe Help | Blender |
+| 🟠 Revolve | Профиль вращается вокруг оси | Adobe Help | Blender |
+| 🟠 Inflate/materials/lighting | Материал и свет как параметры vector effect | Adobe Help | Blender |
+| 🔴 Map artwork/materials на 3D | Привязка графики к поверхности | Adobe Help | Blender |
+
+### 26.25. AI-функции современной Adobe
+
+Аудит явно НЕ считает это обязательным ядром VRAVIO — рекомендует plugin/API abstraction, иначе свободный редактор превращается в загрузчик гигабайт моделей (P3, см. §26.27).
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🔴 Generative Fill | Добавление/замена содержимого prompt'ом внутри selection | Adobe Help | Krita AI Diffusion |
+| 🔴 Generative Expand | Расширить canvas, автоматически дорисовать окружение | Adobe Help | Krita AI Diffusion |
+| 🔴 Harmonize | Автоподгонка вставленного объекта по свету/цвету/теням — уже расписано отдельно в §13 этого документа | Adobe Help | Krita AI Diffusion (ближайший plugin framework) |
+| 🔴 Generative Upscale | AI upscale с восстановлением деталей | Adobe Help | Real-ESRGAN |
+| 🔴 Prompt to Edit | Изменение всей фотографии текстовой командой | Adobe Help | Krita AI Diffusion |
+| 🟠 Remove: Find Distractions | Самостоятельно найти wires/people/general distractions | Adobe Help | IOPaint |
+| 🔴 Generative Recolor | Prompt → новые палитры vector artwork | Adobe Help | Inkscape + внешний model plugin (ближайшая архитектура) |
+
+### 26.26. Content Credentials / provenance
+
+| Что | Описание | Adobe | Донор |
+|---|---|---|---|
+| 🔴 Content Credentials | Метаданные происхождения/изменений/AI-участия — низкий приоритет, уже отмечено как таковое в §8.1 | Adobe Help | c2pa-rs |
+
+### 26.27. Итоговая приоритизация — как передано аудитом
+
+```
+🔥 P0 — меняет класс программы
+├ Smart Object / linked asset architecture           (§26.1)
+├ Non-destructive filter/effect stack                (§26.1)
+├ Vector LPE/live-effect architecture                (§26.6 — фундамент Vector v2)
+├ Brush Engine + .abr                                (§26.3)
+├ Character/Paragraph/Text Engine                    (§26.12, §3)
+├ Quick Selection / Object Selection / Select & Mask  (§26.2)
+├ Quick Mask + Channels + Vector Masks                (§26.2)
+├ 16/32-bit raster                                    (§26.13)
+├ CMYK + ICC                                          (§26.13)
+├ PSD write + нормальный round-trip                   (§26.15)
+├ Gradient Tool в Raster и Vector                     (§26.4, §2.4)
+├ Appearance: multiple fills/strokes/effects           (§26.8)
+├ Image Trace                                         (§26.9)
+├ Live Boolean                                        (§26.6)
+└ Professional Crop                                   (§26.4, §2.1 — engine-часть уже начата этой сессией)
+
+🟠 P1 — программа начинает ощущаться зрелой
+Live Paint, Mesh Gradient, Width Tool, Compound Paths, Blend, Envelope,
+Recolor Artwork, полноценные Symbols, Actions, Clone Source, Brush
+libraries, Swatches, Graphic Styles, RAW development workspace,
+workspace presets, docking, Photoshop-жесты (§26.21).
+
+🟡 P2 — ширина Illustrator/Photoshop
+Perspective Grid, Graph Tool, Data Merge, Dimension Tool, Layer Comps,
+Pattern Stamp, History Brush, Red Eye, Print Tiling, DTP-подобные
+функции, Content Credentials.
+
+🧩 P3 — plugin/API-территория, не ядро
+Generative Fill, Harmonize, Generative Recolor, Prompt-to-Edit — не
+позволять этому определять архитектуру ядра (§26.25).
+```
+
+### 26.28. Главный концептуальный вывод второго аудита
+
+VRAVIO уже не страдает от отсутствия «базы Photoshop» — базовых инструментов неожиданно много (см. полный список того, что аудит НЕ считает дырой, в начале §26). Проблема — многие операции существуют как отдельные работающие инструменты, но вокруг них пока нет систем, которые делают Adobe зрелым рабочим окружением:
+
+```
+Растр:  Layer → editable source → masks → live effects →
+        reusable presets/styles → contextual UI → нормальный round-trip
+
+Вектор: Path → live operations/effects → Appearance →
+        reusable styles/symbols → typography → export
+```
+
+Явная рекомендация: не бросаться реализовывать Graph Tool/Red Eye/ещё двадцать мелких Adobe-инструментов — один хороший Live Effect/LPE framework (вектор) и Smart/linked content + GEGL-подобный effect graph + полноценная mask attachment model (растр) стоят больше, потому что после них десятки «фич Photoshop» добавляются не как отдельные костыли, а как новые узлы одной уже существующей системы. Отдельно: `.abr` + PSD interoperability + Photoshop-жесты — не самые технически красивые задачи, но именно они сильнее всего снижают социальную цену перехода (пользователь не переучивает руки, не теряет коллекцию кистей, не боится открыть клиентский PSD) — для открытого конкурента Adobe это местами важнее, чем быть технологически «умнее» Adobe в отдельных нишах.
