@@ -1,7 +1,7 @@
 import type { AudioClip, AudioDocumentOptions, AudioDocumentState, AudioTrack, FadeType } from "./types";
 
 export function createAudioTrack(name = "Track 1 (Дорожка 1)"): AudioTrack {
-  return { id: crypto.randomUUID(), name, volume: 1, pan: 0, muted: false, soloed: false, locked: false, clips: [] };
+  return { id: crypto.randomUUID(), name, volume: 1, pan: 0, muted: false, soloed: false, locked: false, clips: [], effects: [] };
 }
 
 export interface CreateAudioClipOptions {
@@ -44,7 +44,17 @@ export function createAudioDocument(options: AudioDocumentOptions = {}): AudioDo
 export function isAudioDocumentState(value: unknown): value is AudioDocumentState {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<AudioDocumentState>;
-  return candidate.kind === "audio" && candidate.schemaVersion === 1 && Array.isArray(candidate.tracks) && typeof candidate.sampleRate === "number";
+  if (candidate.kind !== "audio" || candidate.schemaVersion !== 1 || !Array.isArray(candidate.tracks) || typeof candidate.sampleRate !== "number") return false;
+  migrateAudioDocumentState(candidate as AudioDocumentState);
+  return true;
+}
+
+/** In-place and idempotent, same convention as `migrateRasterDocumentState` — a session
+ * persisted before a track carried its own effect stack restores with one added, rather than
+ * failing `isAudioDocumentState` (and thus refusing to open) the moment a field is missing. */
+export function migrateAudioDocumentState(state: AudioDocumentState): AudioDocumentState {
+  for (const track of state.tracks) if (!Array.isArray(track.effects)) track.effects = [];
+  return state;
 }
 
 /**
@@ -56,7 +66,7 @@ export function isAudioDocumentState(value: unknown): value is AudioDocumentStat
 export function cloneAudioState(state: AudioDocumentState): AudioDocumentState {
   return {
     ...state,
-    tracks: state.tracks.map((track) => ({ ...track, clips: track.clips.map((clip) => ({ ...clip })) })),
+    tracks: state.tracks.map((track) => ({ ...track, clips: track.clips.map((clip) => ({ ...clip })), effects: track.effects.map((effect) => ({ ...effect, params: { ...effect.params } })) })),
     selection: state.selection ? { trackId: state.selection.trackId, clipIds: [...state.selection.clipIds] } : null,
   };
 }

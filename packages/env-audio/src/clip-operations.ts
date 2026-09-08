@@ -116,3 +116,20 @@ export function applyLeftTrim(clip: AudioClip, delta: number): AudioClip {
 export function applyRightTrim(clip: AudioClip, delta: number): AudioClip {
   return { ...clip, durationSamples: clip.durationSamples + delta };
 }
+
+/**
+ * Ripple editing (Audacity's "Ripple Edit"): shifts every clip on `clips` that starts at or
+ * after `fromSample` by `deltaSamples` — negative to close a gap left by a delete/shrink,
+ * positive to open one for a grow. Clamped so no clip's `startSample` goes negative; a clip
+ * that starts exactly at `fromSample` is shifted too (it's the material that used to sit right
+ * after the edit point, which is the whole reason ripple mode exists — a clip landing exactly
+ * at the boundary should never be mistaken for "before the edit" and left behind).
+ *
+ * Pure — returns a new array; the caller decides which tracks' clip arrays to pass in (ripple
+ * can apply to just the edited track or, in "ripple all tracks" mode, every track in the
+ * document — `audio-commands.ts` makes that choice, not this function).
+ */
+export function rippleShift(clips: readonly AudioClip[], fromSample: number, deltaSamples: number): AudioClip[] {
+  if (deltaSamples === 0) return clips.map((clip) => ({ ...clip }));
+  return clips.map((clip) => clip.startSample >= fromSample ? { ...clip, startSample: Math.max(0, clip.startSample + deltaSamples) } : { ...clip });
+}

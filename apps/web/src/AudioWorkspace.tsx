@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { VravioDocument } from "@vravio/kernel";
 import {
-  audioEffectCatalog, audioEffectDefaults, cloneAudioState, decodeWav, generateMonoPeaks, isAudioDocumentState, mixdownAudioDocument,
-  readPeak, timelineDurationSamples, type AudioClip, type AudioDocumentState, type AudioEffectId, type AudioTrack, type DecodedWav,
+  audioEffectCatalog, audioEffectDefaults, cloneAudioState, computeSpectrogram, decodeWav, generateMonoPeaks, heatMapColor,
+  isAudioDocumentState, mixdownAudioDocument, readPeak, timelineDurationSamples,
+  type AudioClip, type AudioDocumentState, type AudioEffectId, type AudioTrack, type DecodedWav,
 } from "@vravio/env-audio";
 import type { AssetId } from "@vravio/kernel";
 import { kernel } from "./kernel";
@@ -10,9 +11,9 @@ import { useShellStore } from "./store";
 import { text } from "./i18n";
 import { AudioPlaybackEngine } from "./audioPlayback";
 import {
-  addAudioTrack, addClipFromAsset, applyEffectToClip, changeAudioDocument, commitAudioDrag, deleteSelectedClips, previewMoveClip,
-  previewTrimClip, removeAudioTrack, setClipFade, setClipGain, setSelection, setTrackMuted, setTrackPan, setTrackSoloed, setTrackVolume,
-  splitClipAt,
+  addAudioTrack, addClipFromAsset, addTrackEffect, applyEffectToClip, changeAudioDocument, commitAudioDrag, deleteSelectedClips,
+  previewMoveClip, previewTrimClip, removeAudioTrack, removeTrackEffect, setClipFade, setClipGain, setSelection, setTrackEffectEnabled,
+  setTrackEffectParam, setTrackMuted, setTrackPan, setTrackSoloed, setTrackVolume, splitClipAt,
 } from "./audio-commands";
 import { decodeAudioFileToWav, startMicrophoneRecording, type AudioRecorder } from "./audioImport";
 
@@ -80,6 +81,61 @@ function WaveformCanvas({ assetId, offsetSamples, durationSamples, sourceSampleR
   return <canvas ref={canvasRef} height={TRACK_HEIGHT - 8} style={{ width: `${widthPx}px`, height: `${TRACK_HEIGHT - 8}px`, display: "block" }} />;
 }
 
+/** The spectrogram alternative to `WaveformCanvas` — same clip-window slicing, but a
+ * frequency-over-time heat map (`computeSpectrogram`/`heatMapColor`) instead of an amplitude
+ * envelope. Recomputed only when the clip's audible window changes, not on every render. */
+function SpectrogramCanvas({ assetId, offsetSamples, durationSamples, sourceSampleRate, widthPx }: {
+  assetId: string; offsetSamples: number; durationSamples: number; sourceSampleRate: number; widthPx: number;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [decoded, setDecoded] = useState<DecodedWav | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void decodedAsset(assetId).then((result) => { if (!cancelled) setDecoded(result); }).catch(() => { if (!cancelled) setDecoded(null); });
+    return () => { cancelled = true; };
+  }, [assetId]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !decoded) return;
+    const context = canvas.getContext("2d");
+    if (!context) return;
+    const width = Math.max(1, Math.round(widthPx)), height = canvas.height;
+    canvas.width = width;
+    context.clearRect(0, 0, width, height);
+
+    const sourceOffset = Math.round(offsetSamples * (decoded.sampleRate / sourceSampleRate));
+    const sourceDuration = Math.max(1, Math.round(durationSamples * (decoded.sampleRate / sourceSampleRate)));
+    const mono = decoded.channelData[0]!.subarray(Math.max(0, sourceOffset), Math.min(decoded.channelData[0]!.length, sourceOffset + sourceDuration));
+    if (mono.length < 256) return; // too short for even the smallest useful FFT window
+
+    const fftSize = mono.length < 4096 ? 256 : 1024;
+    const { frames } = computeSpectrogram(Float32Array.from(mono), decoded.sampleRate, { fftSize, hopSize: Math.max(1, Math.floor(mono.length / Math.max(1, width))) });
+    if (frames.length === 0) return;
+
+    const image = context.createImageData(width, height);
+    const binsPerPixelRow = Math.max(1, Math.floor(frames[0]!.length / height));
+    for (let x = 0; x < width; x += 1) {
+      const frame = frames[Math.min(frames.length - 1, Math.floor((x / width) * frames.length))]!;
+      for (let y = 0; y < height; y += 1) {
+        // Low frequencies at the bottom, high at the top — the same orientation every
+        // spectrogram viewer (Audacity included) uses.
+        const bin = Math.min(frame.length - 1, Math.floor(((height - 1 - y) / height) * frame.length));
+        let db = -100;
+        for (let b = bin; b < Math.min(frame.length, bin + binsPerPixelRow); b += 1) db = Math.max(db, frame[b]!);
+        const normalized = (db + 100) / 100;
+        const [r, g, b] = heatMapColor(normalized);
+        const pixelIndex = (y * width + x) * 4;
+        image.data[pixelIndex] = r; image.data[pixelIndex + 1] = g; image.data[pixelIndex + 2] = b; image.data[pixelIndex + 3] = 255;
+      }
+    }
+    context.putImageData(image, 0, 0);
+  }, [decoded, offsetSamples, durationSamples, sourceSampleRate, widthPx]);
+
+  return <canvas ref={canvasRef} height={TRACK_HEIGHT - 8} style={{ width: `${widthPx}px`, height: `${TRACK_HEIGHT - 8}px`, display: "block" }} />;
+}
+
 interface DragState {
   readonly kind: "move" | "trim-left" | "trim-right";
   readonly trackId: string;
@@ -99,6 +155,10 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
   const [effectId, setEffectId] = useState<AudioEffectId>("normalize");
   const [effectParams, setEffectParams] = useState<Record<string, number>>(() => audioEffectDefaults("normalize"));
   const [applyingEffect, setApplyingEffect] = useState(false);
+  const [openFxTrackId, setOpenFxTrackId] = useState<string | null>(null);
+  const [newTrackEffectId, setNewTrackEffectId] = useState<AudioEffectId>("eq");
+  const [rippleMode, setRippleMode] = useState(false);
+  const [viewMode, setViewMode] = useState<"waveform" | "spectrogram">("waveform");
   const engineRef = useRef<AudioPlaybackEngine | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -241,16 +301,19 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
       <button onClick={stopToStart} title={text(language, "Stop", "Стоп")}>⏹</button>
       <span className="audio-time">{formatTime(playheadSample / sampleRate)} / {formatTime(durationSamples / sampleRate)}</span>
       <button className={splitMode ? "active" : ""} onClick={() => setSplitMode((value) => !value)} title={text(language, "Split tool", "Инструмент разреза")}>✂</button>
+      <button className={rippleMode ? "active" : ""} onClick={() => setRippleMode((value) => !value)} title={text(language, "Ripple delete: later clips shift to close the gap", "Удаление со сдвигом: следующие клипы сдвигаются, закрывая пробел")}>{text(language, "Ripple", "Сдвиг")}</button>
       <span className="audio-transport-sep" />
       <button onClick={() => setPixelsPerSecond((value) => Math.max(10, value / 1.5))} title={text(language, "Zoom out", "Уменьшить")}>−</button>
       <button onClick={() => setPixelsPerSecond((value) => Math.min(2000, value * 1.5))} title={text(language, "Zoom in", "Увеличить")}>+</button>
+      <span className="audio-transport-sep" />
+      <button className={viewMode === "spectrogram" ? "active" : ""} onClick={() => setViewMode((mode) => mode === "waveform" ? "spectrogram" : "waveform")} title={text(language, "Toggle spectrogram view", "Переключить вид спектрограммы")}>{text(language, "Spectrogram", "Спектрограмма")}</button>
       <span className="audio-transport-sep" />
       <button onClick={() => addAudioTrack(document.id)}>{text(language, "+ Track", "+ Дорожка")}</button>
       <button onClick={() => fileInputRef.current?.click()}>{text(language, "Import…", "Импорт…")}</button>
       <input ref={fileInputRef} type="file" accept="audio/*" multiple hidden onChange={(event) => { void importFiles(event.target.files); event.target.value = ""; }} />
       <button className={recorder ? "active" : ""} onClick={() => void toggleRecording()} title={text(language, "Record from microphone", "Запись с микрофона")}>⏺</button>
       <button onClick={() => void exportMixdown()}>{text(language, "Export WAV…", "Экспорт WAV…")}</button>
-      {state.selection && <button data-role="trash" onClick={() => deleteSelectedClips(document.id)}>{text(language, "Delete Clip", "Удалить клип")}</button>}
+      {state.selection && <button data-role="trash" onClick={() => deleteSelectedClips(document.id, rippleMode)}>{text(language, "Delete Clip", "Удалить клип")}</button>}
     </div>
 
     {selectedClip && state.selection && <div className="audio-clip-inspector">
@@ -275,6 +338,33 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
       }}>{applyingEffect ? text(language, "Applying…", "Применяется…") : text(language, "Apply", "Применить")}</button>
     </div>}
 
+    {openFxTrackId && (() => {
+      const track = state.tracks.find((item) => item.id === openFxTrackId);
+      if (!track) return null;
+      const realtimeEffects = audioEffectCatalog.filter((definition) => !definition.portable);
+      return <div className="audio-clip-inspector audio-track-fx-panel">
+        {track.effects.length === 0 && <span>{text(language, "No effects on this track yet", "На этой дорожке пока нет эффектов")}</span>}
+        {track.effects.map((effect) => {
+          const definition = audioEffectCatalog.find((item) => item.id === effect.effectId)!;
+          return <div key={effect.id} className="audio-track-fx-insert">
+            <label className="audio-fx-toggle"><input type="checkbox" checked={effect.enabled} onChange={(event) => setTrackEffectEnabled(document.id, track.id, effect.id, event.target.checked)} /><b>{definition.name}</b></label>
+            {definition.parameters.map((parameter) => <label key={parameter.id}><span>{parameter.name}</span>
+              <input type="range" min={parameter.min} max={parameter.max} step={parameter.step} value={effect.params[parameter.id] ?? parameter.value}
+                onChange={(event) => setTrackEffectParam(document.id, track.id, effect.id, parameter.id, event.target.valueAsNumber)} />
+            </label>)}
+            <button data-role="trash" onClick={() => removeTrackEffect(document.id, track.id, effect.id)}>{text(language, "Remove", "Удалить")}</button>
+          </div>;
+        })}
+        <span className="audio-transport-sep" />
+        <label><span>{text(language, "Add effect", "Добавить эффект")}</span>
+          <select value={newTrackEffectId} onChange={(event) => setNewTrackEffectId(event.target.value as AudioEffectId)}>
+            {realtimeEffects.map((definition) => <option key={definition.id} value={definition.id}>{definition.name}</option>)}
+          </select>
+        </label>
+        <button onClick={() => addTrackEffect(document.id, track.id, newTrackEffectId)}>{text(language, "Add", "Добавить")}</button>
+      </div>;
+    })()}
+
     <div className="audio-body">
       <div className="audio-track-headers">
         <div className="audio-ruler-spacer" />
@@ -283,6 +373,7 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
           <div className="audio-track-controls">
             <button className={track.muted ? "active" : ""} onClick={() => setTrackMuted(document.id, track.id, !track.muted)} title={text(language, "Mute", "Заглушить")}>M</button>
             <button className={track.soloed ? "active" : ""} onClick={() => setTrackSoloed(document.id, track.id, !track.soloed)} title={text(language, "Solo", "Соло")}>S</button>
+            <button className={openFxTrackId === track.id ? "active" : ""} onClick={() => setOpenFxTrackId((current) => current === track.id ? null : track.id)} title={text(language, "Effects", "Эффекты")}>FX{track.effects.length > 0 ? ` ${track.effects.length}` : ""}</button>
             <button disabled={state.tracks.length <= 1} onClick={() => removeAudioTrack(document.id, track.id)} title={text(language, "Delete track", "Удалить дорожку")}>×</button>
           </div>
           <label className="audio-track-slider"><span>{text(language, "Vol", "Гр")}</span><input type="range" min={0} max={1.5} step={0.01} value={track.volume} onChange={(event) => setTrackVolume(document.id, track.id, event.target.valueAsNumber)} /></label>
@@ -306,7 +397,9 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
                 onClick={(event) => onClipClick(track, clip, event)}>
                 <div className="audio-clip-trim audio-clip-trim-left" style={{ width: TRIM_HANDLE_PX }} onPointerDown={(event) => beginDrag(event, "trim-left", track, clip)} />
                 <span className="audio-clip-name">{clip.name}</span>
-                <WaveformCanvas assetId={clip.assetId} offsetSamples={clip.offsetSamples} durationSamples={clip.durationSamples} sourceSampleRate={clip.sourceSampleRate} widthPx={width} color={selected ? "#ffffff" : "#0068ff"} />
+                {viewMode === "spectrogram"
+                  ? <SpectrogramCanvas assetId={clip.assetId} offsetSamples={clip.offsetSamples} durationSamples={clip.durationSamples} sourceSampleRate={clip.sourceSampleRate} widthPx={width} />
+                  : <WaveformCanvas assetId={clip.assetId} offsetSamples={clip.offsetSamples} durationSamples={clip.durationSamples} sourceSampleRate={clip.sourceSampleRate} widthPx={width} color={selected ? "#ffffff" : "#0068ff"} />}
                 <div className="audio-clip-trim audio-clip-trim-right" style={{ width: TRIM_HANDLE_PX }} onPointerDown={(event) => beginDrag(event, "trim-right", track, clip)} />
               </div>;
             })}

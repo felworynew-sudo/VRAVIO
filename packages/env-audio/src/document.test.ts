@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cloneAudioState, createAudioClip, createAudioDocument, createAudioTrack, findClip, findTrack, isAudioDocumentState, timelineDurationSamples } from "./document";
+import { cloneAudioState, createAudioClip, createAudioDocument, createAudioTrack, findClip, findTrack, isAudioDocumentState, migrateAudioDocumentState, timelineDurationSamples } from "./document";
 
 describe("createAudioDocument", () => {
   it("starts with one empty track and sane defaults", () => {
@@ -94,5 +94,45 @@ describe("cloneAudioState", () => {
     expect(state.tracks[0]!.clips[0]!.gain).toBe(1);
     expect(state.selection!.clipIds).toHaveLength(1);
     expect(state.tracks).toHaveLength(1);
+  });
+
+  it("deep-copies each track's effect stack, including its params object", () => {
+    const state = createAudioDocument();
+    state.tracks[0]!.effects.push({ id: "fx-1", effectId: "eq", params: { lowGainDb: 3 }, enabled: true });
+
+    const clone = cloneAudioState(state);
+    clone.tracks[0]!.effects[0]!.params.lowGainDb = 99;
+    clone.tracks[0]!.effects[0]!.enabled = false;
+
+    expect(state.tracks[0]!.effects[0]!.params.lowGainDb).toBe(3);
+    expect(state.tracks[0]!.effects[0]!.enabled).toBe(true);
+  });
+});
+
+describe("migrateAudioDocumentState", () => {
+  it("adds an empty effects array to a track restored from before it existed", () => {
+    const state = createAudioDocument();
+    // Simulate a session persisted before AudioTrack carried `effects`.
+    delete (state.tracks[0] as { effects?: unknown }).effects;
+
+    migrateAudioDocumentState(state);
+
+    expect(state.tracks[0]!.effects).toEqual([]);
+  });
+
+  it("is idempotent — running it again on an already-migrated track changes nothing", () => {
+    const state = createAudioDocument();
+    state.tracks[0]!.effects.push({ id: "fx-1", effectId: "reverb", params: {}, enabled: true });
+    migrateAudioDocumentState(state);
+    expect(state.tracks[0]!.effects).toHaveLength(1);
+  });
+});
+
+describe("isAudioDocumentState migrates on the way in", () => {
+  it("recognizes and repairs a pre-effects-stack document as valid", () => {
+    const state = createAudioDocument();
+    delete (state.tracks[0] as { effects?: unknown }).effects;
+    expect(isAudioDocumentState(state)).toBe(true);
+    expect(state.tracks[0]!.effects).toEqual([]);
   });
 });

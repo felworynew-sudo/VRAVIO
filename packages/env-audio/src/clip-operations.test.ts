@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createAudioClip } from "./document";
-import { applyLeftTrim, applyRightTrim, canSplitAt, constrainBoundaryTrim, constrainClipDrag, splitClip } from "./clip-operations";
+import { applyLeftTrim, applyRightTrim, canSplitAt, constrainBoundaryTrim, constrainClipDrag, rippleShift, splitClip } from "./clip-operations";
 
 function clipAt(start: number, duration: number, offset = 0, sourceDuration = duration + 1000): ReturnType<typeof createAudioClip> {
   return createAudioClip("asset", duration, sourceDuration, 48000, { startSample: start, offsetSamples: offset });
@@ -127,5 +127,37 @@ describe("applyLeftTrim / applyRightTrim", () => {
     const trimmed = applyRightTrim(clip, -100);
     expect(trimmed.startSample).toBe(1000);
     expect(trimmed.durationSamples).toBe(400);
+  });
+});
+
+describe("rippleShift", () => {
+  it("shifts every clip at or after the edit point by the delta, closing a gap", () => {
+    const a = clipAt(0, 500), b = clipAt(500, 500), c = clipAt(1000, 500);
+    const [shiftedA, shiftedB, shiftedC] = rippleShift([a, b, c], 500, -300);
+    expect(shiftedA!.startSample).toBe(0); // before the edit point: untouched
+    expect(shiftedB!.startSample).toBe(200); // at the edit point: shifted
+    expect(shiftedC!.startSample).toBe(700); // after: shifted by the same delta
+  });
+
+  it("clamps a shift that would push a clip's start negative", () => {
+    const clip = clipAt(100, 500);
+    const [shifted] = rippleShift([clip], 0, -1000);
+    expect(shifted!.startSample).toBe(0);
+  });
+
+  it("is a no-op copy at delta 0, never aliasing the input clips", () => {
+    const clip = clipAt(500, 500);
+    const [shifted] = rippleShift([clip], 0, 0);
+    expect(shifted).not.toBe(clip);
+    expect(shifted!.startSample).toBe(500);
+  });
+
+  it("leaves clips entirely before the edit point untouched even when they extend past it", () => {
+    // A clip starting before fromSample is "before the edit" by this function's own contract
+    // (checked by startSample, not by whether the clip's span crosses the point) — overlap
+    // policy for a clip straddling the edit point is the caller's decision, not this one's.
+    const clip = clipAt(0, 1000);
+    const [shifted] = rippleShift([clip], 500, -300);
+    expect(shifted!.startSample).toBe(0);
   });
 });

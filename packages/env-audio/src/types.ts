@@ -6,7 +6,24 @@
  * of `===`.
  */
 
+import type { AudioEffectId } from "./effects";
+
 export type FadeType = "linear" | "exponential" | "sCurve" | "logarithmic";
+
+/**
+ * One insert in a track's realtime effect stack (docs/master-plan.md §9.2's Audacity-4 phase).
+ * `effectId` must name a `portable: false` catalog entry (eq/compressor/reverb/delay) — the
+ * other five effects are one-shot destructive transforms (normalize a buffer once, reverse it
+ * once), not something a listener could "ride" continuously the way a live compressor knob
+ * is; `audio-commands.ts`'s `addTrackEffect` is the one door that enforces this before a
+ * non-realtime effect id could ever land in this array.
+ */
+export interface AudioTrackEffect {
+  readonly id: string;
+  readonly effectId: AudioEffectId;
+  params: Record<string, number>;
+  enabled: boolean;
+}
 
 export interface AudioClip {
   readonly id: string;
@@ -45,6 +62,7 @@ export interface AudioTrack {
   soloed: boolean;
   locked: boolean;
   clips: AudioClip[];
+  effects: AudioTrackEffect[];
 }
 
 export interface AudioSelection {

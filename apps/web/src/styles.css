@@ -161,6 +161,10 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .audio-clip-inspector input[type=number]{width:56px;padding:2px 5px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface3);color:var(--text)}
 .audio-clip-inspector select{padding:2px 5px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface3);color:var(--text);max-width:220px}
 .audio-clip-inspector button{padding:4px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface3);color:var(--text);cursor:pointer}
+.audio-track-fx-panel{align-items:flex-start}
+.audio-track-fx-insert{display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface3)}
+.audio-fx-toggle{gap:6px}
+.audio-fx-toggle input{accent-color:var(--audio)}
 .audio-transport button{min-width:28px;height:27px;padding:0 8px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2);color:var(--text);cursor:pointer}
 .audio-transport button.active{background:color-mix(in srgb,var(--audio) 30%,var(--surface2));border-color:var(--audio)}
 .audio-transport button[data-role="trash"]{margin-left:auto}
@@ -173,7 +177,7 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .audio-track-name{width:100%;box-sizing:border-box;padding:3px 5px;border:1px solid transparent;border-radius:var(--radius-sm);background:transparent;color:var(--text);font-size:12px}
 .audio-track-name:hover,.audio-track-name:focus{border-color:var(--border);background:var(--surface2)}
 .audio-track-controls{display:flex;gap:3px}
-.audio-track-controls button{width:22px;height:20px;padding:0;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2);color:var(--muted);font-size:10px;cursor:pointer}
+.audio-track-controls button{min-width:22px;height:20px;padding:0 3px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2);color:var(--muted);font-size:9px;cursor:pointer}
 .audio-track-controls button.active{background:color-mix(in srgb,var(--audio) 35%,var(--surface2));color:var(--text);border-color:var(--audio)}
 .audio-track-slider{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:9px}
 .audio-track-slider input{flex:1;accent-color:var(--audio)}

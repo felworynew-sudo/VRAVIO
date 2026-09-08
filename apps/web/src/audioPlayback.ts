@@ -1,4 +1,5 @@
 import { generateCurve, timelineDurationSamples, type AudioDocumentState } from "@vravio/env-audio";
+import { buildLiveEffectChain } from "./audioEffects";
 
 /**
  * Real-time Web Audio playback for an `AudioDocumentState` — the browser half of the engine
@@ -82,6 +83,11 @@ export class AudioPlaybackEngine {
       panner.pan.value = track.pan;
       trackGain.connect(panner);
       panner.connect(this.#master);
+      // Inserts sit before the fader/pan, the same channel-strip order every mixer uses —
+      // an effect shapes the raw signal, volume/pan happen after.
+      const insertChain = buildLiveEffectChain(this.context, track.effects);
+      const clipDestination = insertChain ? insertChain.input : trackGain;
+      if (insertChain) insertChain.output.connect(trackGain);
 
       for (const clip of track.clips) {
         const clipEnd = clip.startSample + clip.durationSamples;
@@ -101,7 +107,7 @@ export class AudioPlaybackEngine {
         const clipGain = this.context.createGain();
         clipGain.gain.value = clip.gain;
         source.connect(clipGain);
-        clipGain.connect(trackGain);
+        clipGain.connect(clipDestination);
 
         // Fade automation only for the portion of the fade not already behind `fromSample` —
         // resuming mid-fade starts the curve from wherever it actually is, not from 0.

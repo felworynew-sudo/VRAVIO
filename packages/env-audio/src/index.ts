@@ -5,5 +5,6 @@ export * from "./fades";
 export * from "./peaks";
 export * from "./mixdown";
 export * from "./effects";
+export * from "./spectrogram";
 export * from "./wav";
 export * from "./environment";

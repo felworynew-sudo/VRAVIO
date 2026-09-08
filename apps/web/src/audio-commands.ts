@@ -1,6 +1,7 @@
 import {
-  applyLeftTrim, applyRightTrim, canSplitAt, cloneAudioState, constrainBoundaryTrim, constrainClipDrag,
-  createAudioClip, createAudioTrack, decodeWav, encodeWav, splitClip, type AudioDocumentState, type AudioEffectId, type FadeType,
+  applyLeftTrim, applyRightTrim, audioEffectCatalog, audioEffectDefaults, canSplitAt, cloneAudioState, constrainBoundaryTrim,
+  constrainClipDrag, createAudioClip, createAudioTrack, decodeWav, encodeWav, rippleShift, splitClip,
+  type AudioDocumentState, type AudioEffectId, type FadeType,
 } from "@vravio/env-audio";
 import type { AssetId } from "@vravio/kernel";
 import { kernel } from "./kernel";
@@ -95,13 +96,30 @@ export function splitClipAt(documentId: string, trackId: string, clipId: string,
   });
 }
 
-export function deleteSelectedClips(documentId: string): void {
-  void changeAudioDocument(documentId, "Delete Clip (Удалить клип)", (state) => {
+/**
+ * Deletes the selected clip(s). `ripple: true` closes the gap each deletion leaves by shifting
+ * every later clip on the same track left by the deleted clip's duration — Audacity's own
+ * "Ripple Delete" (docs/master-plan.md §9.2's Audacity-4 phase). Multiple selected clips are
+ * processed in timeline order so each deletion's gap closes before the next one is considered,
+ * the same as deleting them one at a time would.
+ */
+export function deleteSelectedClips(documentId: string, ripple = false): void {
+  void changeAudioDocument(documentId, ripple ? "Ripple Delete (Удалить со сдвигом)" : "Delete Clip (Удалить клип)", (state) => {
     if (!state.selection) return false;
     const track = state.tracks.find((item) => item.id === state.selection!.trackId);
     if (!track) return false;
     const before = track.clips.length;
-    track.clips = track.clips.filter((clip) => !state.selection!.clipIds.includes(clip.id));
+    const toDelete = track.clips.filter((clip) => state.selection!.clipIds.includes(clip.id)).sort((a, b) => a.startSample - b.startSample);
+    if (toDelete.length === 0) return false;
+
+    if (ripple) {
+      for (const clip of toDelete) {
+        const remaining = track.clips.filter((item) => item.id !== clip.id);
+        track.clips = rippleShift(remaining, clip.startSample + clip.durationSamples, -clip.durationSamples);
+      }
+    } else {
+      track.clips = track.clips.filter((clip) => !state.selection!.clipIds.includes(clip.id));
+    }
     state.selection = null;
     return track.clips.length !== before;
   });
@@ -247,4 +265,68 @@ export async function applyEffectToClip(documentId: string, trackId: string, cli
     return true;
   });
   kernel.documents.addAssetRef(documentId, assetId as AssetId);
+}
+
+// --- Realtime track effect stack (docs/master-plan.md §9.2's Audacity-4 phase) ---------------
+//
+// Only a `portable: false` catalog entry (eq/compressor/reverb/delay) can go on a track's live
+// stack — the other five are one-shot destructive transforms with no meaning as something a
+// listener rides continuously. This module is the one door: nothing else appends to
+// `track.effects`, so this is the only place that guard has to live.
+
+function isRealtimeEffect(effectId: AudioEffectId): boolean {
+  return audioEffectCatalog.find((definition) => definition.id === effectId)?.portable === false;
+}
+
+export function addTrackEffect(documentId: string, trackId: string, effectId: AudioEffectId): void {
+  if (!isRealtimeEffect(effectId)) return;
+  void changeAudioDocument(documentId, "Add Effect (Добавить эффект)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    if (!track) return false;
+    track.effects.push({ id: crypto.randomUUID(), effectId, params: audioEffectDefaults(effectId), enabled: true });
+    return true;
+  });
+}
+
+export function removeTrackEffect(documentId: string, trackId: string, effectInstanceId: string): void {
+  void changeAudioDocument(documentId, "Remove Effect (Удалить эффект)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    if (!track) return false;
+    const before = track.effects.length;
+    track.effects = track.effects.filter((effect) => effect.id !== effectInstanceId);
+    return track.effects.length !== before;
+  });
+}
+
+export function setTrackEffectEnabled(documentId: string, trackId: string, effectInstanceId: string, enabled: boolean): void {
+  void changeAudioDocument(documentId, enabled ? "Enable Effect (Включить эффект)" : "Disable Effect (Выключить эффект)", (state) => {
+    const effect = state.tracks.find((item) => item.id === trackId)?.effects.find((item) => item.id === effectInstanceId);
+    if (!effect) return false;
+    effect.enabled = enabled;
+    return true;
+  });
+}
+
+export function setTrackEffectParam(documentId: string, trackId: string, effectInstanceId: string, paramId: string, value: number): void {
+  void changeAudioDocument(documentId, "Effect Parameter (Параметр эффекта)", (state) => {
+    const effect = state.tracks.find((item) => item.id === trackId)?.effects.find((item) => item.id === effectInstanceId);
+    if (!effect) return false;
+    effect.params[paramId] = value;
+    return true;
+  });
+}
+
+/** Moves an effect earlier (`direction: -1`) or later (`+1`) in the track's insert order —
+ * order matters for a series chain (EQ before compression sounds different from after). */
+export function reorderTrackEffect(documentId: string, trackId: string, effectInstanceId: string, direction: -1 | 1): void {
+  void changeAudioDocument(documentId, "Reorder Effect (Переставить эффект)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    if (!track) return false;
+    const index = track.effects.findIndex((effect) => effect.id === effectInstanceId);
+    const target = index + direction;
+    if (index === -1 || target < 0 || target >= track.effects.length) return false;
+    const [effect] = track.effects.splice(index, 1);
+    track.effects.splice(target, 0, effect!);
+    return true;
+  });
 }

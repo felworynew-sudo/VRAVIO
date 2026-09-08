@@ -172,7 +172,7 @@ export function changeSpeed(channelData: readonly Float32Array[], params: Record
 
 // --- Pitch (resample + overlap-add time-stretch back to the original duration) ---------------
 
-function hannWindow(length: number): Float32Array {
+export function hannWindow(length: number): Float32Array {
   const window = new Float32Array(length);
   for (let i = 0; i < length; i += 1) window[i] = 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / Math.max(1, length - 1));
   return window;
