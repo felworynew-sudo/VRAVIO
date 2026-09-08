@@ -15,6 +15,7 @@ export interface CreateAudioClipOptions {
 }
 
 export function createAudioClip(assetId: string, durationSamples: number, sourceDurationSamples: number, sourceSampleRate: number, options: CreateAudioClipOptions = {}): AudioClip {
+  const clampedSourceDuration = Math.max(0, Math.floor(sourceDurationSamples));
   return {
     id: crypto.randomUUID(),
     name: options.name ?? "Clip (Клип)",
@@ -22,8 +23,10 @@ export function createAudioClip(assetId: string, durationSamples: number, source
     startSample: Math.max(0, Math.floor(options.startSample ?? 0)),
     durationSamples: Math.max(0, Math.floor(durationSamples)),
     offsetSamples: Math.max(0, Math.floor(options.offsetSamples ?? 0)),
-    sourceDurationSamples: Math.max(0, Math.floor(sourceDurationSamples)),
+    sourceDurationSamples: clampedSourceDuration,
     sourceSampleRate,
+    takes: [{ assetId, sourceDurationSamples: clampedSourceDuration, sourceSampleRate }],
+    activeTakeIndex: 0,
     gain: options.gain ?? 1,
     fadeInSamples: Math.max(0, Math.floor(options.fadeInSamples ?? 0)),
     fadeOutSamples: Math.max(0, Math.floor(options.fadeOutSamples ?? 0)),
@@ -56,6 +59,12 @@ export function migrateAudioDocumentState(state: AudioDocumentState): AudioDocum
   for (const track of state.tracks) {
     if (!Array.isArray(track.effects)) track.effects = [];
     if (!Array.isArray(track.volumeAutomation)) track.volumeAutomation = [];
+    for (const clip of track.clips) {
+      if (!Array.isArray(clip.takes) || clip.takes.length === 0) {
+        clip.takes = [{ assetId: clip.assetId, sourceDurationSamples: clip.sourceDurationSamples, sourceSampleRate: clip.sourceSampleRate }];
+      }
+      if (typeof clip.activeTakeIndex !== "number" || clip.activeTakeIndex < 0 || clip.activeTakeIndex >= clip.takes.length) clip.activeTakeIndex = 0;
+    }
   }
   return state;
 }
@@ -71,7 +80,7 @@ export function cloneAudioState(state: AudioDocumentState): AudioDocumentState {
     ...state,
     tracks: state.tracks.map((track) => ({
       ...track,
-      clips: track.clips.map((clip) => ({ ...clip })),
+      clips: track.clips.map((clip) => ({ ...clip, takes: clip.takes.map((take) => ({ ...take })) })),
       effects: track.effects.map((effect) => ({ ...effect, params: { ...effect.params } })),
       volumeAutomation: track.volumeAutomation.map((point) => ({ ...point })),
     })),

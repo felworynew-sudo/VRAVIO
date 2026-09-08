@@ -7,5 +7,6 @@ export * from "./mixdown";
 export * from "./effects";
 export * from "./spectrogram";
 export * from "./automation";
+export * from "./takes";
 export * from "./wav";
 export * from "./environment";

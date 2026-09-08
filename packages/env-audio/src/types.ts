@@ -25,11 +25,24 @@ export interface AudioTrackEffect {
   enabled: boolean;
 }
 
+/** One recorded alternative for a clip's audible content — Reaper/Logic's own "takes" model,
+ * kept minimal: each take is just an asset reference plus the two fields needed to bound a trim
+ * against it, the same triple `AudioClip` itself already carries for whichever take is active. */
+export interface AudioTake {
+  readonly assetId: string;
+  readonly sourceDurationSamples: number;
+  readonly sourceSampleRate: number;
+}
+
 export interface AudioClip {
   readonly id: string;
   name: string;
   /** Reference into the shared asset store — a clip never carries its own decoded audio here,
-   * the same "asset, not a copy" rule raster layers and vector image shapes follow. */
+   * the same "asset, not a copy" rule raster layers and vector image shapes follow. Always equal
+   * to `takes[activeTakeIndex].assetId` — kept as its own field (rather than derived on every
+   * read) because every existing consumer of a clip — playback, waveform rendering, export —
+   * already reads `assetId`/`sourceDurationSamples`/`sourceSampleRate` directly and none of them
+   * need to know takes exist at all. */
   assetId: string;
   /** Position on the timeline, in samples at the document's sample rate. */
   startSample: number;
@@ -39,11 +52,21 @@ export interface AudioClip {
    * at the *source's own* sample rate (see `sourceSampleRate`). */
   offsetSamples: number;
   /** Full length of the decoded source, in samples at the source's own sample rate — the
-   * right-edge trim bound (a clip cannot extend past what its source actually contains). */
+   * right-edge trim bound (a clip cannot extend past what its source actually contains). Mirrors
+   * `takes[activeTakeIndex].sourceDurationSamples`. */
   sourceDurationSamples: number;
   /** The decoded source's native sample rate. Equal to the document's sample rate for audio
-   * imported at the project rate; different when a source needs resampling to play in sync. */
+   * imported at the project rate; different when a source needs resampling to play in sync.
+   * Mirrors `takes[activeTakeIndex].sourceSampleRate`. */
   sourceSampleRate: number;
+  /** Every take recorded onto this clip's timeline position, oldest first — always at least one
+   * entry (the take `assetId` currently mirrors). Re-recording the same spot (`audio-
+   * commands.ts`'s `addClipFromAsset`/recording flow) appends rather than replacing, so nothing
+   * already captured is lost by punching in again. */
+  takes: readonly AudioTake[];
+  /** Which entry of `takes` this clip currently plays — `assetId`/`sourceDurationSamples`/
+   * `sourceSampleRate` are kept in sync with `takes[activeTakeIndex]` by every writer. */
+  activeTakeIndex: number;
   /** Linear gain multiplier, 1 = unity (0 dB). */
   gain: number;
   fadeInSamples: number;
