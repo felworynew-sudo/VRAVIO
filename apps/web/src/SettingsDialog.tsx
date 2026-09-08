@@ -7,6 +7,17 @@ import { isShortcutOverridden, rebindCommandShortcut, resetCommandShortcut } fro
 
 type SettingsPage = "interface" | "performance" | "convenience" | "guides" | "shortcuts";
 
+/**
+ * Every `confirmModal({ confirmKey: ... })` call that's worth surfacing here so a
+ * "Don't ask again" checked once can be found and reversed. Add one entry per new
+ * `confirmKey` a caller introduces — the single place this list has to grow, not a
+ * new Settings row hand-built per confirmation (`modals/runtime.ts`'s own doc
+ * comment on `confirmKey` covers the read/write side of the same design).
+ */
+const CONFIRMABLE_ACTIONS: readonly { key: string; label: { en: string; ru: string } }[] = [
+  { key: "delete-layer-mask", label: { en: "Deleting a layer mask", ru: "Удаление маски слоя" } },
+];
+
 const languages: readonly { value: Language; label: string }[] = [
   { value: "ru", label: "Русский" }, { value: "en", label: "English" }, { value: "uk", label: "Українська" },
   { value: "es", label: "Español" }, { value: "de", label: "Deutsch" }, { value: "ja", label: "日本語" }, { value: "zh", label: "中文" },
@@ -60,6 +71,8 @@ export function SettingsDialog() {
             <ToggleRow title={text(language, "Drag zoom", "Масштабирование перетаскиванием")} checked={store.preferences.dragZoom} onChange={(dragZoom) => store.updatePreferences({ dragZoom })} />
             <ToggleRow title={text(language, "Tooltips", "Всплывающие подсказки")} checked={store.preferences.showTooltips} onChange={(showTooltips) => store.updatePreferences({ showTooltips })} />
             <ToggleRow title={text(language, "Contextual task bar", "Контекстная панель действий")} checked={store.preferences.contextualBar} onChange={(contextualBar) => store.updatePreferences({ contextualBar })} />
+            <SettingsHeading title={text(language, "Confirmations", "Подтверждения")} description={text(language, "Ask before each of these — turned off after checking \"Don't ask again\" in the dialog, or turn it off directly here.", "Спрашивать перед каждым из этих действий — выключается после галочки «Больше не спрашивать» в диалоге, либо прямо здесь.")} />
+            {CONFIRMABLE_ACTIONS.map(({ key, label }) => <ToggleRow key={key} title={text(language, label.en, label.ru)} checked={store.preferences.confirmPreferences[key] !== false} onChange={(shouldAsk) => store.updatePreferences({ confirmPreferences: { ...store.preferences.confirmPreferences, [key]: shouldAsk } })} />)}
           </>}
           {page === "guides" && <>
             <SettingsHeading title={text(language, "Guides & Grid", "Направляющие и сетка")} description={text(language, "Snapping and visual guide defaults.", "Параметры привязки и отображения направляющих.")} />

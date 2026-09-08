@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useShellStore } from "../store";
 
 interface OpenModal {
   readonly key: number;
@@ -56,9 +57,31 @@ export function openModal(id: string, props: Record<string, unknown> = {}): () =
  * The shape callers actually want: `if (await confirmModal({...})) …`, instead
  * of splitting the operation across two callbacks and a piece of component
  * state holding what to do next.
+ *
+ * `confirmKey`, if given, is this confirmation's identity in `preferences.
+ * confirmPreferences` — pass one when the question is worth letting the user
+ * silence permanently (via the dialog's own "Don't ask again", or re-enable
+ * later from Settings). Omit it for a one-off question with no reason to
+ * remember an answer. When the user already said not to ask, this resolves
+ * `true` immediately without opening anything — the caller cannot tell the
+ * difference from a fresh "yes" click, which is the point.
+ *
+ * Deliberately just a free-form string, not tied to `EnvironmentKind` or any
+ * other closed catalogue — a plugin-provided environment (none exist yet;
+ * see master-plan.md §1.9 item 10г on why nothing here assumes one either)
+ * could call this with its own key today and get the same suppress/re-enable
+ * behavior for free, no core change needed.
+ *
+ * Named `confirmKey`, not `key`: `key` is a reserved React prop that gets
+ * stripped before a component ever sees it in its own `props`, and — the
+ * sharper trap — a plain object carrying a `key` field silently loses that
+ * field to React's element-identity machinery the moment it's spread onto
+ * JSX (`<Component {...thatObject} />`), not just when passed as an explicit
+ * `key=` attribute. `ModalHost.tsx` does exactly that spread for every modal.
  */
-export function confirmModal(props: { title: string; message: string; confirmLabel?: string; danger?: boolean }): Promise<boolean> {
+export function confirmModal(props: { title: string; message: string; confirmLabel?: string; danger?: boolean; confirmKey?: string }): Promise<boolean> {
   return new Promise((resolve) => {
+    if (props.confirmKey && useShellStore.getState().preferences.confirmPreferences[props.confirmKey] === false) { resolve(true); return; }
     const close = openModal("confirm", {
       ...props,
       onResolve: (confirmed: boolean) => { close(); resolve(confirmed); },

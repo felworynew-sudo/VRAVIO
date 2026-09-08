@@ -67,6 +67,15 @@ export interface ShellPreferences {
   vectorColor: string;
   audioColor: string;
   videoColor: string;
+  /**
+   * "Don't ask again" for a `confirmModal` call, keyed by that call's own `key`
+   * (e.g. `"delete-layer-mask"`) — `false` means skip asking and auto-confirm,
+   * absent/`true` means ask normally. One shared record, not a separate boolean
+   * threaded through each caller: every confirmation this project adds reads
+   * and writes the same place, and Settings can list and re-enable any of them
+   * from that one place too (master-plan.md §1.9 item 12's own reasoning).
+   */
+  confirmPreferences: Record<string, boolean>;
 }
 
 const detectedConcurrency = typeof navigator === "undefined" || !navigator.hardwareConcurrency ? 4 : navigator.hardwareConcurrency;
@@ -76,6 +85,7 @@ const defaultPreferences: ShellPreferences = {
   dragZoom: true, showTooltips: true, contextualBar: true, showPerformanceOverlay: false, snapToGuides: true, smartGuides: true, snapToGrid: false, snapGridSize: 20, snapSensitivity: 8, showRulers: false, showGuides: true,
   guideColor: "#00a8ff", canvasSurround: "#2b2f36", focusColor: "#84a8ff",
   rasterColor: "#a100ff", vectorColor: "#0068ff", audioColor: "#ffb600", videoColor: "#ff0000",
+  confirmPreferences: {},
 };
 
 function readPreference<T extends string>(key: string, values: readonly T[], fallback: T): T {

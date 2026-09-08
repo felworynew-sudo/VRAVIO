@@ -387,6 +387,7 @@ function LayersPanel() {
           message: text(language, "Remove this layer's mask?", "Удалить маску этого слоя?"),
           confirmLabel: text(language, "Delete", "Удалить"),
           danger: true,
+          confirmKey: "delete-layer-mask",
         });
         if (!confirmed) return;
         void changeRasterDocument(documentId, "Delete Layer Mask (Удалить маску слоя)", (current) => {
