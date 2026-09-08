@@ -34,8 +34,13 @@ export function SettingsDialog() {
             <SettingsHeading title={text(language, "Interface", "Интерфейс")} description={text(language, "Language, theme and semantic interface colors.", "Язык, тема и смысловые цвета интерфейса.")} />
             <SettingRow title={text(language, "Language", "Язык")} description={text(language, "Unsupported translations temporarily fall back to English.", "Непереведённые строки временно отображаются на английском.")}><select value={language} onChange={(event) => store.setLanguage(event.target.value as Language)}>{languages.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></SettingRow>
             <SettingRow title={text(language, "Color theme", "Цветовая тема")} description={text(language, "Applied immediately and saved locally.", "Применяется сразу и сохраняется локально.")}><select value={store.theme} onChange={(event) => store.setTheme(event.target.value as Theme)}><option value="dark">{text(language, "Dark", "Тёмная")}</option><option value="light">{text(language, "Light", "Светлая")}</option><option value="contrast">{text(language, "High contrast", "Контрастная")}</option></select></SettingRow>
+            <p className="settings-color-note">{text(
+              language,
+              "Every accented control — active toolbar buttons, checkboxes, sliders, drop outlines — takes its color from whichever environment's document is open (Raster/Vector/Audio/Video below). \"Focus\" is only the fallback used with no document open, at the Welcome screen.",
+              "Все акцентные элементы — активные кнопки инструментов, чекбоксы, ползунки, обводки при перетаскивании — берут цвет из среды открытого документа (Растр/Вектор/Аудио/Видео ниже). «Фокус» — только запасной цвет, когда документ не открыт, на экране приветствия.",
+            )}</p>
             <div className="settings-color-grid">
-              <ColorSetting label={text(language, "Focus", "Фокус")} value={store.preferences.focusColor} onChange={(focusColor) => store.updatePreferences({ focusColor })} />
+              <ColorSetting label={text(language, "Focus (no document open)", "Фокус (нет документа)")} value={store.preferences.focusColor} onChange={(focusColor) => store.updatePreferences({ focusColor })} />
               <ColorSetting label={text(language, "Canvas surround", "Фон вокруг холста")} value={store.preferences.canvasSurround} onChange={(canvasSurround) => store.updatePreferences({ canvasSurround })} />
               <ColorSetting label={text(language, "Raster", "Растр")} value={store.preferences.rasterColor} onChange={(rasterColor) => store.updatePreferences({ rasterColor })} />
               <ColorSetting label={text(language, "Vector", "Вектор")} value={store.preferences.vectorColor} onChange={(vectorColor) => store.updatePreferences({ vectorColor })} />

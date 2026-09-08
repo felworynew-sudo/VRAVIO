@@ -72,7 +72,17 @@ export function App() {
   const activeTool = toolById(activeToolId);
   const activeRawOrigin = active?.origin?.kind === "asset" && kernel.assets.get(active.origin.assetId)?.mime === "image/x-raw" ? active.origin : null;
   const commands = useMemo(() => kernel.commands.search(query), [query]);
-  const themeStyle = { "--focus": store.preferences.focusColor, "--raster": store.preferences.rasterColor, "--vector": store.preferences.vectorColor, "--audio": store.preferences.audioColor, "--video": store.preferences.videoColor, "--canvas-surround": store.preferences.canvasSurround, "--guide": store.preferences.guideColor } as CSSProperties;
+  // Every accent-colored control in the app (active toolbar buttons, checkboxes'
+  // native accent-color, sliders, outlines — anywhere styles.css reads var(--focus))
+  // is driven from this one variable, so tinting it to the active document's own
+  // environment color here is the one change that reaches all of them, rather than
+  // touching each of those rules individually. `environmentColorByKind` is the single
+  // place a future environment (if VRAVIO ever grows past the kernel's current fixed
+  // raster/vector/audio/video set) would need one more entry to pick up the same
+  // auto-tinting and its own row in Settings' color grid — not a speculative system
+  // built ahead of that need, just the one lookup this rule already goes through.
+  const environmentColorByKind: Record<EnvironmentKind, string> = { raster: store.preferences.rasterColor, vector: store.preferences.vectorColor, audio: store.preferences.audioColor, video: store.preferences.videoColor };
+  const themeStyle = { "--focus": active ? environmentColorByKind[active.kind] : store.preferences.focusColor, "--raster": store.preferences.rasterColor, "--vector": store.preferences.vectorColor, "--audio": store.preferences.audioColor, "--video": store.preferences.videoColor, "--canvas-surround": store.preferences.canvasSurround, "--guide": store.preferences.guideColor } as CSSProperties;
 
   const openDecodedRaster = (name: string, decoded: DecodedRaw): string => {
     store.openDocument("raster", { name, width: decoded.width, height: decoded.height, resolution: 72, resolutionUnit: "ppi", backgroundColor: null, pixelAspectRatio: 1 });
