@@ -342,7 +342,12 @@ export function removeTrackEffect(documentId: string, trackId: string, effectIns
     if (!track) return false;
     const before = track.effects.length;
     track.effects = track.effects.filter((effect) => effect.id !== effectInstanceId);
-    return track.effects.length !== before;
+    if (track.effects.length === before) return false;
+    // Nothing should be left automating a parameter of an effect that no longer exists —
+    // automation.ts's own note on what a generic automation system needs to decide.
+    const prefix = `${effectInstanceId}:`;
+    for (const key of Object.keys(track.effectAutomation)) if (key.startsWith(prefix)) delete track.effectAutomation[key];
+    return true;
   });
 }
 
@@ -472,4 +477,42 @@ export async function punchInRecording(documentId: string, trackId: string, from
   });
   if (applied) kernel.documents.addAssetRef(documentId, assetId as AssetId);
   return applied;
+}
+
+function effectAutomationKey(effectInstanceId: string, paramId: string): string { return `${effectInstanceId}:${paramId}`; }
+
+/** The effect-parameter counterpart to `setTrackVolumeAutomationPoint` — same "same id across a
+ * drag, fresh id for a new point" convention, just keyed to one effect instance's one parameter
+ * instead of the track's fixed volume curve. */
+export function setEffectParamAutomationPoint(documentId: string, trackId: string, effectInstanceId: string, paramId: string, pointId: string, time: number, value: number): void {
+  void changeAudioDocument(documentId, "Effect Automation (Автоматизация эффекта)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    if (!track) return false;
+    const key = effectAutomationKey(effectInstanceId, paramId);
+    const points = removeAutomationPoint(track.effectAutomation[key] ?? [], pointId);
+    track.effectAutomation[key] = setAutomationPoint(points, time, value, pointId);
+    return true;
+  });
+}
+
+export function removeEffectParamAutomationPoint(documentId: string, trackId: string, effectInstanceId: string, paramId: string, pointId: string): void {
+  void changeAudioDocument(documentId, "Remove Automation Point (Удалить точку автоматизации)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    const key = effectAutomationKey(effectInstanceId, paramId);
+    const points = track?.effectAutomation[key];
+    if (!track || !points || points.length === 0) return false;
+    const next = removeAutomationPoint(points, pointId);
+    if (next.length === 0) delete track.effectAutomation[key]; else track.effectAutomation[key] = next;
+    return next.length !== points.length;
+  });
+}
+
+export function clearEffectParamAutomation(documentId: string, trackId: string, effectInstanceId: string, paramId: string): void {
+  void changeAudioDocument(documentId, "Clear Automation (Очистить автоматизацию)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    const key = effectAutomationKey(effectInstanceId, paramId);
+    if (!track || !track.effectAutomation[key]) return false;
+    delete track.effectAutomation[key];
+    return true;
+  });
 }

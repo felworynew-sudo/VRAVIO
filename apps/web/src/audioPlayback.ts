@@ -1,5 +1,5 @@
-import { generateCurve, timelineDurationSamples, volumeAt, type AudioDocumentState } from "@vravio/env-audio";
-import { buildLiveEffectChain } from "./audioEffects";
+import { generateCurve, timelineDurationSamples, type AudioDocumentState } from "@vravio/env-audio";
+import { buildLiveEffectChain, scheduleParamRamp } from "./audioEffects";
 
 /**
  * Real-time Web Audio playback for an `AudioDocumentState` — the browser half of the engine
@@ -78,25 +78,14 @@ export class AudioPlaybackEngine {
     for (const track of state.tracks) {
       if (track.muted || (anySoloed && !track.soloed)) continue;
       const trackGain = this.context.createGain();
-      if (track.volumeAutomation.length > 0) {
-        // The curve's value exactly at the playback start position, then a ramp to every later
-        // breakpoint — resuming mid-curve (a seek, a pause/resume) starts from where the curve
-        // actually is, not from its first point.
-        trackGain.gain.setValueAtTime(volumeAt(track.volumeAutomation, fromSample, track.volume), now);
-        for (const point of track.volumeAutomation) {
-          if (point.time <= fromSample) continue;
-          trackGain.gain.linearRampToValueAtTime(point.value, now + (point.time - fromSample) / sampleRate);
-        }
-      } else {
-        trackGain.gain.value = track.volume;
-      }
+      scheduleParamRamp(trackGain.gain, track.volumeAutomation, track.volume, fromSample, sampleRate, now);
       const panner = this.context.createStereoPanner();
       panner.pan.value = track.pan;
       trackGain.connect(panner);
       panner.connect(this.#master);
       // Inserts sit before the fader/pan, the same channel-strip order every mixer uses —
       // an effect shapes the raw signal, volume/pan happen after.
-      const insertChain = buildLiveEffectChain(this.context, track.effects);
+      const insertChain = buildLiveEffectChain(this.context, track.effects, track.effectAutomation, { fromSample, sampleRate, now });
       const clipDestination = insertChain ? insertChain.input : trackGain;
       if (insertChain) insertChain.output.connect(trackGain);
 

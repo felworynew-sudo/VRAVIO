@@ -102,6 +102,16 @@ export interface AudioTrack {
   /** Sorted by `time` ascending — every writer (`audio-commands.ts`) maintains that order so a
    * reader never has to sort before walking the curve. */
   volumeAutomation: AutomationPoint[];
+  /**
+   * Per-effect-parameter automation, generalizing `volumeAutomation`'s own curve shape to an
+   * arbitrary control on an arbitrary effect instance — the extension `automation.ts`'s own doc
+   * comment named as needing "a way to name and address a parameter on an arbitrary effect
+   * instance" before it could exist. Keyed `${AudioTrackEffect.id}:${paramId}` (both halves
+   * needed: a track can carry more than one instance of the same effect). Curves for an effect
+   * that gets removed (`audio-commands.ts`'s `removeTrackEffect`) are deleted along with it —
+   * the answer `automation.ts` asked for to "what happens to a lane when the effect it targets
+   * is removed": nothing left pointing at an id that no longer exists. */
+  effectAutomation: Record<string, AutomationPoint[]>;
 }
 
 export interface AudioSelection {

@@ -1,7 +1,7 @@
 import type { AudioClip, AudioDocumentOptions, AudioDocumentState, AudioTrack, FadeType } from "./types";
 
 export function createAudioTrack(name = "Track 1 (Дорожка 1)"): AudioTrack {
-  return { id: crypto.randomUUID(), name, volume: 1, pan: 0, muted: false, soloed: false, locked: false, clips: [], effects: [], volumeAutomation: [] };
+  return { id: crypto.randomUUID(), name, volume: 1, pan: 0, muted: false, soloed: false, locked: false, clips: [], effects: [], volumeAutomation: [], effectAutomation: {} };
 }
 
 export interface CreateAudioClipOptions {
@@ -59,6 +59,7 @@ export function migrateAudioDocumentState(state: AudioDocumentState): AudioDocum
   for (const track of state.tracks) {
     if (!Array.isArray(track.effects)) track.effects = [];
     if (!Array.isArray(track.volumeAutomation)) track.volumeAutomation = [];
+    if (typeof track.effectAutomation !== "object" || track.effectAutomation === null) track.effectAutomation = {};
     for (const clip of track.clips) {
       if (!Array.isArray(clip.takes) || clip.takes.length === 0) {
         clip.takes = [{ assetId: clip.assetId, sourceDurationSamples: clip.sourceDurationSamples, sourceSampleRate: clip.sourceSampleRate }];
@@ -83,6 +84,7 @@ export function cloneAudioState(state: AudioDocumentState): AudioDocumentState {
       clips: track.clips.map((clip) => ({ ...clip, takes: clip.takes.map((take) => ({ ...take })) })),
       effects: track.effects.map((effect) => ({ ...effect, params: { ...effect.params } })),
       volumeAutomation: track.volumeAutomation.map((point) => ({ ...point })),
+      effectAutomation: Object.fromEntries(Object.entries(track.effectAutomation).map(([key, points]) => [key, points.map((point) => ({ ...point }))])),
     })),
     selection: state.selection ? { trackId: state.selection.trackId, clipIds: [...state.selection.clipIds] } : null,
   };

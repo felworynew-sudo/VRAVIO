@@ -1,11 +1,12 @@
 /**
- * Track volume automation — the "Automation" third of Tracktion Engine's own
- * `Edit -> Track -> Clip/Plugins/Automation` model (the architecture donor named at the top of
- * docs/master-plan.md §9.2). Deliberately scoped to one parameter (track volume) rather than a
- * generic per-effect-parameter automation system: a generic system needs a way to name and
- * address a parameter on an arbitrary effect instance, a UI to place a lane under any control,
- * and a decision about what happens to a lane when the effect it targets is removed — real
- * design work with no immediate caller, so not built ahead of one (CLAUDE.md section 3).
+ * Automation curves — the "Automation" third of Tracktion Engine's own `Edit -> Track ->
+ * Clip/Plugins/Automation` model (the architecture donor named at the top of docs/master-plan.md
+ * §9.2). The math here is deliberately parameter-agnostic (a curve is just `{time, value}`
+ * points over one number) — what a curve is attached to is `AudioTrack.volumeAutomation` (one
+ * fixed parameter, the first caller this ever had) or `AudioTrack.effectAutomation` (an
+ * arbitrary effect instance's own parameter, generalized once a real caller for it existed —
+ * `audio-commands.ts`'s `setEffectParamAutomationPoint`/`AudioWorkspace.tsx`'s automation lane
+ * UI — rather than built speculatively ahead of one, CLAUDE.md section 3).
  */
 import type { AutomationPoint } from "./types";
 

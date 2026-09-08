@@ -10,11 +10,13 @@ import { kernel } from "./kernel";
 import { useShellStore } from "./store";
 import { text } from "./i18n";
 import { AudioPlaybackEngine } from "./audioPlayback";
+import { AUTOMATABLE_EFFECT_PARAMS } from "./audioEffects";
 import {
-  addAudioTrack, addClipFromAsset, addTrackEffect, applyEffectToClip, changeAudioDocument, clearTrackVolumeAutomation, commitAudioDrag,
-  cycleClipTake, deleteSelectedClips, previewMoveClip, previewTrimClip, punchInRecording, removeAudioTrack, removeTrackEffect,
-  removeTrackVolumeAutomationPoint, setClipFade, setClipGain, setSelection, setTrackEffectEnabled, setTrackEffectParam, setTrackMuted,
-  setTrackPan, setTrackSoloed, setTrackVolume, setTrackVolumeAutomationPoint, splitClipAt,
+  addAudioTrack, addClipFromAsset, addTrackEffect, applyEffectToClip, changeAudioDocument, clearEffectParamAutomation,
+  clearTrackVolumeAutomation, commitAudioDrag, cycleClipTake, deleteSelectedClips, previewMoveClip, previewTrimClip, punchInRecording,
+  removeAudioTrack, removeEffectParamAutomationPoint, removeTrackEffect, removeTrackVolumeAutomationPoint, setClipFade,
+  setEffectParamAutomationPoint, setClipGain, setSelection, setTrackEffectEnabled, setTrackEffectParam, setTrackMuted, setTrackPan,
+  setTrackSoloed, setTrackVolume, setTrackVolumeAutomationPoint, splitClipAt,
 } from "./audio-commands";
 import { decodeAudioFileToWav, startMicrophoneRecording, type AudioRecorder } from "./audioImport";
 import { usePluginRuns } from "./plugins/usePluginRuns";
@@ -170,6 +172,7 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
   const [effectParams, setEffectParams] = useState<Record<string, number>>(() => audioEffectDefaults("normalize"));
   const [applyingEffect, setApplyingEffect] = useState(false);
   const [openFxTrackId, setOpenFxTrackId] = useState<string | null>(null);
+  const [automatingParam, setAutomatingParam] = useState<{ effectId: string; paramId: string } | null>(null);
   const [newTrackEffectId, setNewTrackEffectId] = useState<AudioEffectId>("eq");
   const [rippleMode, setRippleMode] = useState(false);
   const [viewMode, setViewMode] = useState<"waveform" | "spectrogram">("waveform");
@@ -442,10 +445,32 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
           const definition = audioEffectCatalog.find((item) => item.id === effect.effectId)!;
           return <div key={effect.id} className="audio-track-fx-insert">
             <label className="audio-fx-toggle"><input type="checkbox" checked={effect.enabled} onChange={(event) => setTrackEffectEnabled(document.id, track.id, effect.id, event.target.checked)} /><b>{definition.name}</b></label>
-            {definition.parameters.map((parameter) => <label key={parameter.id}><span>{parameter.name}</span>
-              <input type="range" min={parameter.min} max={parameter.max} step={parameter.step} value={effect.params[parameter.id] ?? parameter.value}
-                onChange={(event) => setTrackEffectParam(document.id, track.id, effect.id, parameter.id, event.target.valueAsNumber)} />
-            </label>)}
+            {definition.parameters.map((parameter) => {
+              const automatable = AUTOMATABLE_EFFECT_PARAMS[effect.effectId]?.includes(parameter.id) ?? false;
+              const automationKey = `${effect.id}:${parameter.id}`;
+              const points = track.effectAutomation[automationKey] ?? [];
+              const isAutomating = automatingParam?.effectId === effect.id && automatingParam?.paramId === parameter.id;
+              const currentValue = effect.params[parameter.id] ?? parameter.value;
+              return <div key={parameter.id} className="audio-fx-param">
+                <label><span>{parameter.name}</span>
+                  <input type="range" min={parameter.min} max={parameter.max} step={parameter.step} value={currentValue}
+                    onChange={(event) => setTrackEffectParam(document.id, track.id, effect.id, parameter.id, event.target.valueAsNumber)} />
+                  {automatable && <button className={isAutomating ? "active" : ""} onClick={() => setAutomatingParam(isAutomating ? null : { effectId: effect.id, paramId: parameter.id })} title={text(language, "Automate this parameter", "Автоматизировать параметр")}>~{points.length > 0 ? ` ${points.length}` : ""}</button>}
+                </label>
+                {isAutomating && <div className="audio-fx-automation-lane"
+                  onClick={(event) => {
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    const time = Math.max(0, Math.round(((event.clientX - rect.left) / rect.width) * durationSamples));
+                    setEffectParamAutomationPoint(document.id, track.id, effect.id, parameter.id, crypto.randomUUID(), time, currentValue);
+                  }}>
+                  {points.map((point) => <span key={point.id} className="audio-fx-automation-point" style={{ left: `${(point.time / durationSamples) * 100}%` }}
+                    onClick={(event) => event.stopPropagation()}
+                    onDoubleClick={(event) => { event.stopPropagation(); removeEffectParamAutomationPoint(document.id, track.id, effect.id, parameter.id, point.id); }}
+                    title={`${text(language, "t", "t")}=${formatTime(point.time / sampleRate)} ${text(language, "value", "значение")}=${point.value.toFixed(2)}`} />)}
+                  {points.length > 0 && <button className="audio-fx-automation-clear" onClick={(event) => { event.stopPropagation(); clearEffectParamAutomation(document.id, track.id, effect.id, parameter.id); }}>{text(language, "Clear", "Очистить")}</button>}
+                </div>}
+              </div>;
+            })}
             <button data-role="trash" onClick={() => removeTrackEffect(document.id, track.id, effect.id)}>{text(language, "Remove", "Удалить")}</button>
           </div>;
         })}

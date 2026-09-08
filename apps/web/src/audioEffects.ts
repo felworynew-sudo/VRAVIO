@@ -1,4 +1,15 @@
-import { applyPortableAudioEffect, type AudioEffectId, type AudioTrackEffect } from "@vravio/env-audio";
+import { applyPortableAudioEffect, volumeAt, type AudioEffectId, type AudioTrackEffect, type AutomationPoint } from "@vravio/env-audio";
+
+/** Which of each realtime effect's own parameters can carry an automation lane — the plain-data
+ * mirror of each builder's own `automatable` map below (`EffectChain`'s doc comment explains why
+ * `mix`/`decaySeconds` are absent), kept separate so `AudioWorkspace.tsx`'s effect panel can ask
+ * "does this parameter support automation" without instantiating a Web Audio graph just to find
+ * out. Reverb has no entry — nothing on it is automatable in this pass. */
+export const AUTOMATABLE_EFFECT_PARAMS: Readonly<Partial<Record<AudioEffectId, readonly string[]>>> = {
+  eq: ["lowGainDb", "midGainDb", "midFreqHz", "highGainDb"],
+  compressor: ["thresholdDb", "ratio", "attackMs", "releaseMs", "kneeDb"],
+  delay: ["delaySeconds", "feedback"],
+};
 
 /**
  * The four `audioEffectCatalog` effects `applyPortableAudioEffect` returns `null` for — ported
@@ -20,7 +31,19 @@ function paramOr(params: Record<string, number>, key: string, fallback: number):
   return Number.isFinite(value) ? value! : fallback;
 }
 
-export interface EffectChain { readonly input: AudioNode; readonly output: AudioNode }
+/** One automatable control surfaced by an effect's own node graph — `param` is the real Web
+ * Audio `AudioParam` a ramp gets scheduled onto (`audioPlayback.ts`'s `scheduleParamAutomation`),
+ * `scale` converts this catalog's own UI units into whatever unit that `AudioParam` natively
+ * uses (`attackMs`'s UI value in milliseconds needs `scale: 1/1000` to land on
+ * `DynamicsCompressorNode.attack`'s seconds). Only listed here when a parameter maps to exactly
+ * one real-time `AudioParam` — `mix` on delay/reverb couples two gain nodes in opposite
+ * directions and `decaySeconds` would need rebuilding the reverb's whole impulse buffer, neither
+ * of which a single ramp can express, so neither is automatable in this pass. */
+export interface EffectChain {
+  readonly input: AudioNode;
+  readonly output: AudioNode;
+  readonly automatable?: Readonly<Record<string, { readonly param: AudioParam; readonly scale: number }>>;
+}
 
 /** Three-band shelf/peak EQ — low-shelf, a peaking mid band, high-shelf, chained in series. A
  * smaller, fixed-band version of AudioMass's fully graphic parametric EQ (which lets a user
@@ -33,7 +56,10 @@ export function buildEqChain(context: BaseAudioContext, params: Record<string, n
   const mid = context.createBiquadFilter(); mid.type = "peaking"; mid.frequency.value = midFreqHz; mid.Q.value = 1; mid.gain.value = midGainDb;
   const high = context.createBiquadFilter(); high.type = "highshelf"; high.frequency.value = 4000; high.gain.value = highGainDb;
   low.connect(mid); mid.connect(high);
-  return { input: low, output: high };
+  return {
+    input: low, output: high,
+    automatable: { lowGainDb: { param: low.gain, scale: 1 }, midGainDb: { param: mid.gain, scale: 1 }, midFreqHz: { param: mid.frequency, scale: 1 }, highGainDb: { param: high.gain, scale: 1 } },
+  };
 }
 
 /** Ported from AudioMass's `Compressor` — a native `DynamicsCompressorNode`; unlike AudioMass
@@ -46,7 +72,14 @@ export function buildCompressorChain(context: BaseAudioContext, params: Record<s
   compressor.attack.value = paramOr(params, "attackMs", 3) / 1000;
   compressor.release.value = paramOr(params, "releaseMs", 250) / 1000;
   compressor.knee.value = paramOr(params, "kneeDb", 30);
-  return { input: compressor, output: compressor };
+  return {
+    input: compressor, output: compressor,
+    automatable: {
+      thresholdDb: { param: compressor.threshold, scale: 1 }, ratio: { param: compressor.ratio, scale: 1 },
+      attackMs: { param: compressor.attack, scale: 1 / 1000 }, releaseMs: { param: compressor.release, scale: 1 / 1000 },
+      kneeDb: { param: compressor.knee, scale: 1 },
+    },
+  };
 }
 
 /** Ported from AudioMass's `Delay` — input splits into a dry path and a delay+feedback loop,
@@ -66,7 +99,12 @@ export function buildDelayChain(context: BaseAudioContext, params: Record<string
   input.connect(dry); dry.connect(output);
   input.connect(delay); delay.connect(feedbackGain); feedbackGain.connect(delay);
   delay.connect(wet); wet.connect(output);
-  return { input, output };
+  return {
+    input, output,
+    // `mix` couples dry/wet in opposite directions, so it is not offered here — see EffectChain's
+    // own doc comment on why only single-AudioParam controls are automatable in this pass.
+    automatable: { delaySeconds: { param: delay.delayTime, scale: 1 }, feedback: { param: feedbackGain.gain, scale: 1 } },
+  };
 }
 
 /** Ported from AudioMass's `Reverb` — a synthesized exponential-decay white-noise impulse fed
@@ -129,17 +167,51 @@ export async function applyAudioEffect(channelData: readonly Float32Array[], sam
 }
 
 /**
+ * Schedules one `AudioParam` to follow an automation curve from `fromSample` onward — the same
+ * shape `AudioPlaybackEngine.play()` already hand-wrote for track volume, extracted here so
+ * effect-parameter automation (below) reuses it instead of a second copy of the same ramp math.
+ * `setValueAtTime` for the curve's value exactly at the resume point, then a
+ * `linearRampToValueAtTime` per later breakpoint — resuming mid-curve starts from where the
+ * curve actually is, not from its first point. Falls straight to `.value = staticValue` (no
+ * scheduling at all) when there is no curve, so an unautomated parameter costs nothing extra.
+ */
+export function scheduleParamRamp(param: AudioParam, points: readonly AutomationPoint[], staticValue: number, fromSample: number, sampleRate: number, now: number, scale = 1): void {
+  if (points.length === 0) { param.value = staticValue * scale; return; }
+  param.setValueAtTime(volumeAt(points, fromSample, staticValue) * scale, now);
+  for (const point of points) {
+    if (point.time <= fromSample) continue;
+    param.linearRampToValueAtTime(point.value * scale, now + (point.time - fromSample) / sampleRate);
+  }
+}
+
+/**
  * Chains every *enabled* track effect (in order) into one live insert — the realtime effect
  * stack, `docs/master-plan.md` §9.2's Audacity-4 phase. Only the four native effects can run
  * this way; a `portable: true` effect (normalize/reverse/speed/pitch/repair) is a one-shot
  * transform, not a continuous process a listener could "ride" in real time, so
  * `AudioTrackEffect`s pointing at one are skipped here (validated at the point they are added
  * to a track — see `audio-commands.ts`'s `addTrackEffect`).
+ *
+ * `automation` (optional) applies a per-parameter curve on top of each effect's static `params`
+ * — keyed `${effectInstanceId}:${paramId}`, read against each chain's own `automatable` map
+ * (`EffectChain`'s doc comment: only parameters that resolve to exactly one real `AudioParam`).
+ * Omitted entirely (or an id with no curve) leaves that parameter at its plain static value,
+ * exactly as before this feature existed — the same "an automation lane replaces the fader only
+ * where it has data" rule `AudioTrack.volumeAutomation` already follows.
  */
-export function buildLiveEffectChain(context: AudioContext, effects: readonly AudioTrackEffect[]): EffectChain | null {
+export function buildLiveEffectChain(context: AudioContext, effects: readonly AudioTrackEffect[], automation?: Readonly<Record<string, readonly AutomationPoint[]>>, timing?: { readonly fromSample: number; readonly sampleRate: number; readonly now: number }): EffectChain | null {
   const enabled = effects.filter((effect) => effect.enabled);
   if (enabled.length === 0) return null;
-  const chains = enabled.map((effect) => buildChain(context, effect.effectId, effect.params));
+  const chains = enabled.map((effect) => {
+    const chain = buildChain(context, effect.effectId, effect.params);
+    if (automation && timing && chain.automatable) {
+      for (const [paramId, target] of Object.entries(chain.automatable)) {
+        const points = automation[`${effect.id}:${paramId}`];
+        if (points && points.length > 0) scheduleParamRamp(target.param, points, effect.params[paramId] ?? 0, timing.fromSample, timing.sampleRate, timing.now, target.scale);
+      }
+    }
+    return chain;
+  });
   for (let i = 0; i < chains.length - 1; i += 1) chains[i]!.output.connect(chains[i + 1]!.input);
   return { input: chains[0]!.input, output: chains[chains.length - 1]!.output };
 }
