@@ -3,7 +3,7 @@ import {
   cloneRasterState, layerAccepts, layerLockReason, layerOpaqueBounds, liftSelection, linkedLayers, meshLayerPixels, meshSelection,
   pickLayerAt, quadLayerPixels, quadSelection, regularMesh, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection,
   scaleLayerPixels, scaleSelection, setLayerPixels, stampFloating, translateLayerPixels, translateSelection, unionRect, WARP_GRID,
-  type FloatingPixels, type PixelSelection, type Point, type RasterDocumentState, type RasterRect, type RasterTextData,
+  type FloatingPixels, type PixelSelection, type Point, type RasterDocumentState, type RasterLayer, type RasterRect, type RasterTextData,
 } from "@vravio/env-raster";
 import { diagnostic } from "../../../../diagnostics";
 import { identityTextTransform, multiplyTextTransform, renderTextLayerPixels, textBoundsTransform } from "../../../../textRender";
@@ -274,13 +274,22 @@ function beginMoveDrag(context: ToolContext<MoveState>, pointer: ToolPointer, pe
     ? next?.float ?? liftSelection(origin ? materialise(origin, state) : materialise(layer, state), state.width, state.height, origin ? originSelection : effectiveSelection)
     : undefined;
   const before = next?.before ?? cloneRasterState(pending ? state : { ...state, activeLayerId: layer.id });
-  // A fresh drag on a linked layer moves its whole link group together (Photoshop: dragging one
-  // linked layer with the Move tool moves all of them) — each partner translates its own full
-  // buffer by the same delta, with no selection/float involved (the selection, if any, belongs to
-  // the primary layer the pointer actually grabbed). Continuing an existing pending transform
-  // does not re-derive this list; `linkedBase` already carries whatever the drag that opened it saw.
-  const linkPartners = !pending && layer.linkGroup ? linkedLayers(state, layer.id).filter((item) => item.id !== layer.id && layerAccepts(item, "move")) : [];
-  const linkedBase = linkPartners.length ? linkPartners.map((item) => ({ layerId: item.id, basePixels: materialise(item, state).slice() })) : undefined;
+  // A fresh drag moves more than just the grabbed layer in two independent cases, matching two
+  // different donors: a persistent link group (Photoshop: dragging one linked layer moves all of
+  // them regardless of what's selected) and, separately, the current multi-selection — GIMP
+  // dropped persistent chain-links entirely and moves whichever layers are multi-selected
+  // (gimpmovetool.c's gimp_image_get_selected_drawables()) instead. VRAVIO keeps both: a fresh
+  // drag's partner set is the union of the two, each partner translating its own full buffer by
+  // the same delta, with no selection/float involved (the selection, if any, belongs to the
+  // primary layer the pointer actually grabbed). Continuing an existing pending transform does
+  // not re-derive this list; `linkedBase` already carries whatever the drag that opened it saw.
+  const linkPartners = !pending && layer.linkGroup ? linkedLayers(state, layer.id) : [];
+  const selectionPartners = !pending && context.selectedLayers.length > 1 && context.selectedLayers.includes(layer.id)
+    ? context.selectedLayers.map((id) => state.layers.find((item) => item.id === id)).filter((item): item is RasterLayer => Boolean(item))
+    : [];
+  const partnersById = new Map<string, RasterLayer>();
+  for (const item of [...linkPartners, ...selectionPartners]) if (item.id !== layer.id && layerAccepts(item, "move")) partnersById.set(item.id, item);
+  const linkedBase = partnersById.size ? Array.from(partnersById.values(), (item) => ({ layerId: item.id, basePixels: materialise(item, state).slice() })) : undefined;
   context.setState({
     pending: next,
     drag: {
@@ -441,8 +450,13 @@ const move: RasterToolDefinition<MoveState> = {
     if (wanted !== overridden) {
       const hit = pickLayerAt(state, point.x, point.y, { target: context.options.autoSelectTarget === "group" ? "group" : "layer" });
       if (hit && hit.id !== state.activeLayerId) {
+        // Grabbing a layer that is already part of a standing multi-selection keeps that whole
+        // selection — otherwise auto-select would collapse it down to the one layer the pointer
+        // happened to land on, and a multi-selected group could never be dragged together (the
+        // very thing GIMP's own Move tool does: it moves gimp_image_get_selected_drawables(), the
+        // current multi-selection, and clicking one of them does not first narrow it to one).
+        if (!context.selectedLayers.includes(hit.id)) context.setSelectedLayers(pointer.shiftKey ? [...context.selectedLayers.filter((id) => id !== hit.id), hit.id] : [hit.id]);
         context.setActiveLayer(hit.id);
-        context.setSelectedLayers(pointer.shiftKey ? [...context.selectedLayers.filter((id) => id !== hit.id), hit.id] : [hit.id]);
         layer = hit;
       }
     }
