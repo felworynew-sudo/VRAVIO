@@ -54,8 +54,16 @@ export function constrainClipDragOnTrack(clip: AudioClip, deltaSamples: number, 
  * source, bounded by 0).
  * RIGHT: `durationSamples += delta` — positive expands (bounded by the source's own length),
  * negative shrinks (bounded by `minDurationSamples`).
+ *
+ * `rippleFollowing` (right edge only): when true, the clamp against the next clip's
+ * `startSample` is skipped — the caller (`ripplePreviewTrimClip` in apps/web's
+ * `audio-commands.ts`) is about to shift every later clip on the track by this same delta, so
+ * there is no fixed boundary to stop at. Left-edge trim never ripples: its own end position
+ * (`startSample + durationSamples`) is unchanged by construction (start moves one way,
+ * duration the other, by the same delta), so there is nothing after it to shift — only the
+ * previous clip's boundary still applies, same as non-ripple mode.
  */
-export function constrainBoundaryTrim(clip: AudioClip, deltaSamples: number, boundary: "left" | "right", sortedClips: readonly AudioClip[], clipIndex: number, minDurationSamples: number): number {
+export function constrainBoundaryTrim(clip: AudioClip, deltaSamples: number, boundary: "left" | "right", sortedClips: readonly AudioClip[], clipIndex: number, minDurationSamples: number, rippleFollowing = false): number {
   let delta = deltaSamples;
 
   if (boundary === "left") {
@@ -69,7 +77,7 @@ export function constrainBoundaryTrim(clip: AudioClip, deltaSamples: number, bou
   } else {
     delta = Math.max(delta, minDurationSamples - clip.durationSamples);
     delta = Math.min(delta, clip.sourceDurationSamples - clip.offsetSamples - clip.durationSamples);
-    if (clipIndex < sortedClips.length - 1) {
+    if (!rippleFollowing && clipIndex < sortedClips.length - 1) {
       const next = sortedClips[clipIndex + 1]!;
       delta = Math.min(delta, next.startSample - clip.startSample - clip.durationSamples);
     }

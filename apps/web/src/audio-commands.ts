@@ -66,19 +66,34 @@ export function previewMoveClip(documentId: string, trackId: string, clipId: str
   return constrained;
 }
 
-export function previewTrimClip(documentId: string, trackId: string, clipId: string, boundary: "left" | "right", deltaSamples: number): number {
+/**
+ * `ripple: true` (right edge only — see `constrainBoundaryTrim`'s own note on why left-edge
+ * trim never ripples) lets the trim grow or shrink past where the next clip used to sit,
+ * shifting every clip that started at or after this clip's *original* end position by the
+ * same delta, so the gap this clip's edge just opened or closed is carried through instead of
+ * hitting a hard stop at the neighbor.
+ */
+export function previewTrimClip(documentId: string, trackId: string, clipId: string, boundary: "left" | "right", deltaSamples: number, ripple = false): number {
   const document = kernel.documents.get<AudioDocumentState>(documentId);
   if (!document) return 0;
   const sorted = sortedClipsOf(document.state, trackId);
   const index = sorted.findIndex((clip) => clip.id === clipId);
   if (index === -1) return 0;
-  const constrained = constrainBoundaryTrim(sorted[index]!, deltaSamples, boundary, sorted, index, minDurationSamples(document.state));
+  const rippleFollowing = ripple && boundary === "right";
+  const clip = sorted[index]!;
+  const originalEnd = clip.startSample + clip.durationSamples;
+  const constrained = constrainBoundaryTrim(clip, deltaSamples, boundary, sorted, index, minDurationSamples(document.state), rippleFollowing);
   if (constrained === 0) return 0;
   kernel.documents.update<AudioDocumentState>(documentId, (state) => {
     const track = state.tracks.find((item) => item.id === trackId);
     const clipIndex = track?.clips.findIndex((item) => item.id === clipId) ?? -1;
     if (!track || clipIndex === -1) return;
     track.clips[clipIndex] = boundary === "left" ? applyLeftTrim(track.clips[clipIndex]!, constrained) : applyRightTrim(track.clips[clipIndex]!, constrained);
+    if (rippleFollowing) {
+      const others = track.clips.filter((item) => item.id !== clipId);
+      const shifted = rippleShift(others, originalEnd, constrained);
+      track.clips = [track.clips[clipIndex]!, ...shifted];
+    }
   });
   return constrained;
 }

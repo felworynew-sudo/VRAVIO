@@ -71,6 +71,29 @@ describe("constrainBoundaryTrim", () => {
     const next = clipAt(700, 500);
     expect(constrainBoundaryTrim(clip, 400, "right", [clip, next], 0, minDuration)).toBe(200);
   });
+
+  it("rippleFollowing lets a right trim grow past the next clip's old start", () => {
+    const clip = clipAt(0, 500, 0, 10000);
+    const next = clipAt(700, 500);
+    expect(constrainBoundaryTrim(clip, 400, "right", [clip, next], 0, minDuration, true)).toBe(400);
+  });
+
+  it("rippleFollowing still bounds a right trim by the source's remaining length", () => {
+    const clip = clipAt(0, 500, 0, 600); // only 100 samples of source left past the clip's own end
+    const next = clipAt(700, 500);
+    expect(constrainBoundaryTrim(clip, 400, "right", [clip, next], 0, minDuration, true)).toBe(100);
+  });
+
+  it("rippleFollowing does nothing to a left trim — its own end position never moves", () => {
+    // Left trim shifts startSample and shrinks durationSamples by the same delta, so the
+    // clip's end (what ripple would shift everything after) is unchanged by construction.
+    // The previous clip's boundary still applies exactly as in non-ripple mode.
+    const clip = clipAt(1000, 500, 400);
+    const previous = clipAt(800, 100);
+    const withoutRipple = constrainBoundaryTrim(clip, -300, "left", [previous, clip], 1, minDuration, false);
+    const withRipple = constrainBoundaryTrim(clip, -300, "left", [previous, clip], 1, minDuration, true);
+    expect(withRipple).toBe(withoutRipple);
+  });
 });
 
 describe("canSplitAt / splitClip", () => {

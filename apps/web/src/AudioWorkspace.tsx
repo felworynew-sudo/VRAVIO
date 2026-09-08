@@ -237,7 +237,7 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
     if (deltaSamples === 0) return;
     const applied = drag.kind === "move"
       ? previewMoveClip(document.id, drag.trackId, drag.clipId, deltaSamples)
-      : previewTrimClip(document.id, drag.trackId, drag.clipId, drag.kind === "trim-left" ? "left" : "right", deltaSamples);
+      : previewTrimClip(document.id, drag.trackId, drag.clipId, drag.kind === "trim-left" ? "left" : "right", deltaSamples, rippleMode);
     drag.appliedSamples += applied;
   };
 
@@ -366,7 +366,7 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
       <button onClick={stopToStart} title={text(language, "Stop", "Стоп")}>⏹</button>
       <span className="audio-time">{formatTime(playheadSample / sampleRate)} / {formatTime(durationSamples / sampleRate)}</span>
       <button className={splitMode ? "active" : ""} onClick={() => setSplitMode((value) => !value)} title={text(language, "Split tool", "Инструмент разреза")}>✂</button>
-      <button className={rippleMode ? "active" : ""} onClick={() => setRippleMode((value) => !value)} title={text(language, "Ripple delete: later clips shift to close the gap", "Удаление со сдвигом: следующие клипы сдвигаются, закрывая пробел")}>{text(language, "Ripple", "Сдвиг")}</button>
+      <button className={rippleMode ? "active" : ""} onClick={() => setRippleMode((value) => !value)} title={text(language, "Ripple: deleting or right-edge-trimming a clip shifts later clips to close/open the gap", "Сдвиг: удаление или обрезка правого края клипа сдвигает следующие клипы, закрывая или открывая пробел")}>{text(language, "Ripple", "Сдвиг")}</button>
       <span className="audio-transport-sep" />
       <button onClick={() => setPixelsPerSecond((value) => Math.max(10, value / 1.5))} title={text(language, "Zoom out", "Уменьшить")}>−</button>
       <button onClick={() => setPixelsPerSecond((value) => Math.min(2000, value * 1.5))} title={text(language, "Zoom in", "Увеличить")}>+</button>
