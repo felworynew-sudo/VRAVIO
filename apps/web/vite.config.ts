@@ -17,6 +17,8 @@ export default defineConfig({
   optimizeDeps: {
     include: ["react", "react-dom", "dockview-react"],
   },
-  server: { port: 4173 },
+  // The preview harness assigns a free port via PORT when autoPort is on
+  // (.claude/launch.json) — falls back to 4173 for a plain `vite` run.
+  server: { port: process.env.PORT ? Number(process.env.PORT) : 4173 },
   build: { target: "es2022" },
 });

@@ -4,8 +4,9 @@
     {
       "name": "vravio-web",
       "runtimeExecutable": "D:/node.exe",
-      "runtimeArgs": ["node_modules/vite/bin/vite.js", "--port", "5300", "--strictPort"],
+      "runtimeArgs": ["node_modules/vite/bin/vite.js"],
       "port": 5300,
+      "autoPort": true,
       "cwd": "apps/web"
     }
   ]

@@ -393,13 +393,35 @@ describe("raster transform", () => {
     expect(rotateSelection(selection, 3, 3, bounds, 90)?.mask[2 * 3 + 1]).toBe(255);
   });
 
-  it("crops every layer and selection to the requested document rectangle", () => {
+  it("crops every layer and selection to the requested document rectangle when deleteCroppedPixels is true", () => {
     const document = createRasterDocument(4, 3, { backgroundColor: "#112233" });
     document.selection = createRectangleSelection(4, 3, 1, 1, 4, 3);
-    const cropped = cropRasterDocument(document, { x: 1, y: 1, width: 2, height: 2 });
+    const cropped = cropRasterDocument(document, { x: 1, y: 1, width: 2, height: 2 }, true);
     expect(cropped).toMatchObject({ width: 2, height: 2 });
     expect(cropped.layers[0]?.pixels).toHaveLength(16);
     expect(cropped.selection?.bounds).toEqual({ x: 0, y: 0, width: 2, height: 2 });
+  });
+
+  it("keeps a layer's own pixels and slides its bounds when deleteCroppedPixels is false (the default)", () => {
+    const document = createRasterDocument(4, 3, { backgroundColor: "#112233" });
+    const before = document.layers[0]!;
+    const beforePixelCount = before.pixels.length;
+    const cropped = cropRasterDocument(document, { x: 1, y: 1, width: 2, height: 2 });
+    expect(cropped).toMatchObject({ width: 2, height: 2 });
+    // The layer's own buffer is untouched — same length, only its position moved.
+    expect(cropped.layers[0]?.pixels).toHaveLength(beforePixelCount);
+    expect(cropped.layers[0]?.bounds).toEqual({ x: before.bounds.x - 1, y: before.bounds.y - 1, width: before.bounds.width, height: before.bounds.height });
+  });
+
+  it("crops a layer mask to the new canvas regardless of deleteCroppedPixels", () => {
+    const document = createRasterDocument(4, 3, { backgroundColor: "#112233" });
+    const layer = document.layers[0]!;
+    const mask = new Uint8ClampedArray(4 * 3);
+    mask[1 * 4 + 1] = 200; // (1,1) — inside the crop rect below, at local (0,0)
+    layer.mask = { pixels: mask, assetId: null, enabled: true, linked: true, density: 1, feather: 0 };
+    const cropped = cropRasterDocument(document, { x: 1, y: 1, width: 2, height: 2 });
+    expect(cropped.layers[0]?.mask?.pixels).toHaveLength(4);
+    expect(cropped.layers[0]?.mask?.pixels[0]).toBe(200);
   });
 });
 
