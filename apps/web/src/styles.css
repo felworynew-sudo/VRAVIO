@@ -233,6 +233,8 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .export-field>i{font-style:normal}
 .export-slider>output{min-width:26px;text-align:right;color:var(--text)}
 .export-check{display:flex;align-items:center;gap:8px;color:var(--text);font-size:11px}
+.export-margins{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;min-width:0}
+.export-margins input{width:100%;min-width:0;height:28px;padding:3px 4px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2);color:var(--text)}
 .appearance-panel{display:flex;flex-direction:column;gap:12px}
 .appearance-section{display:flex;flex-direction:column;gap:4px}
 .appearance-section-header{display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em}

@@ -28,6 +28,7 @@ import { rawExtensionOf, rawFileExtensions, type DecodedRaw } from "./rawDecode"
 import { CameraRawDialog } from "./CameraRawDialog";
 import { CameraRawFilterDialog } from "./CameraRawFilterDialog";
 import { ExportDialog } from "./ExportDialog";
+import { PrintDialog } from "./PrintDialog";
 import { decodeImportedImage } from "./imageImport";
 import { PerformanceOverlay } from "./PerformanceOverlay";
 import { renderTextLayerPixels } from "./textRender";
@@ -65,6 +66,7 @@ export function App() {
   const [cameraRawReopen, setCameraRawReopen] = useState<{ buffer: ArrayBuffer; name: string } | null>(null);
   const [renderBackend, setRenderBackend] = useState<RenderBackend | null>(kernel.gpu.active);
   const [exportOpen, setExportOpen] = useState(false);
+  const [printOpen, setPrintOpen] = useState(false);
   const [adjustmentDialog, setAdjustmentDialog] = useState<{ documentId: string; layerId: string; definitionId: RasterAdjustment["kind"]; initialValue: RasterAdjustment } | null>(null);
   const [, setPanelRevision] = useState(0);
   const active = documents.find((document) => document.id === store.activeDocumentId) ?? null;
@@ -367,6 +369,7 @@ export function App() {
     const save = () => void saveProject();
     const saveCopy = () => void saveProject(false);
     const openExport = () => setExportOpen(true);
+    const openPrint = () => setPrintOpen(true);
     const openFile = () => openImageRef.current?.click();
     const openLiquify = () => { if (active && isRasterDocumentState(active.state)) setLiquifyOpen(true); };
     const openAdjustment = (event: Event) => { const definition = rasterAdjustmentById.get((event as CustomEvent<{ kind: RasterAdjustment["kind"] }>).detail.kind); if (definition) openImageAdjustment(definition); };
@@ -376,6 +379,7 @@ export function App() {
     window.addEventListener("vravio-file-save-as", save);
     window.addEventListener("vravio-file-save-copy", saveCopy);
     window.addEventListener("vravio-file-export", openExport);
+    window.addEventListener("vravio-file-print", openPrint);
     window.addEventListener("vravio-file-open", openFile);
     window.addEventListener("vravio-liquify-open", openLiquify);
     window.addEventListener("vravio-adjustment-open", openAdjustment);
@@ -384,6 +388,7 @@ export function App() {
       window.removeEventListener("vravio-file-save-as", save);
       window.removeEventListener("vravio-file-save-copy", saveCopy);
       window.removeEventListener("vravio-file-export", openExport);
+      window.removeEventListener("vravio-file-print", openPrint);
       window.removeEventListener("vravio-file-open", openFile);
       window.removeEventListener("vravio-liquify-open", openLiquify);
       window.removeEventListener("vravio-adjustment-open", openAdjustment);
@@ -442,7 +447,7 @@ export function App() {
           ["Save a Copy… (Сохранить копию…)", "Ctrl+Alt+S", () => void saveProject(false), !active],
           ["Export… (Экспортировать…)", "Ctrl+Shift+E", () => setExportOpen(true), !active || !isRasterDocumentState(active.state)],
           ["Export as SVG… (Экспортировать в SVG…)", "", exportActiveVectorAsSvg, !active || !isVectorDocumentState(active.state)],
-          ["Print… (Печать…)", "Ctrl+P", () => window.print(), !active],
+          ["Print… (Печать…)", "Ctrl+P", () => setPrintOpen(true), !active || !isRasterDocumentState(active.state)],
           ["Settings… (Настройки…)", "", () => store.setSettingsOpen(true)],
           ["Close (Закрыть)", "Ctrl+W", () => active && store.closeDocument(active.id), !active],
         ]}/>
@@ -605,6 +610,7 @@ export function App() {
       onConfirm={(decoded) => { applyFilter(decoded.pixels, "Camera Raw"); setCameraRawReopen(null); }}
     />}
     {exportOpen && active && isRasterDocumentState(active.state) && <ExportDialog state={active.state} documentName={active.name} language={store.language} onCancel={() => setExportOpen(false)} onExport={async (blob, fileName) => { download(blob, fileName); setExportOpen(false); }}/>}
+    {printOpen && active && isRasterDocumentState(active.state) && <PrintDialog state={active.state} language={store.language} onCancel={() => setPrintOpen(false)}/>}
     {adjustmentDialog && (() => { const document = kernel.documents.get<RasterDocumentState>(adjustmentDialog.documentId), definition = rasterAdjustmentById.get(adjustmentDialog.definitionId), layer = document?.state.layers.find((item) => item.id === adjustmentDialog.layerId); if (!document || !definition || !layer) return null; return <AdjustmentDialog definition={definition} initialValue={adjustmentDialog.initialValue} language={store.language} histogram={luminanceHistogram(layerDocumentPixels(layer, document.state.width, document.state.height))} onPreview={previewImageAdjustment} onCancel={() => { previewImageAdjustment(null); setAdjustmentDialog(null); }} onApply={applyImageAdjustment}/>; })()}
   </div>;
 }

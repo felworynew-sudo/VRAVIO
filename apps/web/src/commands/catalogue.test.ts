@@ -41,6 +41,10 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "file.new.vector|||File",
   "file.new.video|||File",
   "file.open|Mod+O||File",
+  // Print used to be a bare `window.print()` wired straight into the menu item's onClick,
+  // with no command definition and no real keyboard binding — added alongside the actual
+  // print pipeline (docs/master-plan.md §7.2) so Ctrl+P works the same way Ctrl+Shift+E does.
+  "file.print|Mod+P||File",
   "file.saveAs|Mod+Shift+S||File",
   "file.saveCopy|Mod+Alt+S||File",
   "file.save|Mod+S||File",

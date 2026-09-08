@@ -68,6 +68,15 @@ const commands: readonly CommandDefinition[] = [
     execute: () => dispatch("vravio-file-export"),
   },
   {
+    id: "file.print",
+    label: { en: "Print…", ru: "Печать…" },
+    category: CATEGORY_FILE,
+    shortcut: "Mod+P",
+    surfaces: ["menu", "palette"],
+    isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster",
+    execute: () => dispatch("vravio-file-print"),
+  },
+  {
     id: "file.close",
     label: { en: "Close Document", ru: "Закрыть документ" },
     category: CATEGORY_FILE,
