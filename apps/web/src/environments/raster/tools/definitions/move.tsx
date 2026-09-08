@@ -173,14 +173,37 @@ function findRotateCorner(bounds: RasterRect, point: Point, tolerance: number, r
   });
 }
 
+/** A double-headed straight-arrow glyph, drawn once pointing east-west and rotated per direction
+ * — native `nwse-resize`/`ew-resize` etc. render as the OS's own generic diagonal-arrow cursor,
+ * which the owner found didn't read clearly next to the custom rotate glyph below; a matching
+ * hand-drawn arrow in the same white-fill/dark-outline tone reads as one coherent cursor family
+ * instead of "one custom icon plus whatever the OS happens to draw". `10 10` hotspot centers it
+ * the same way `ROTATE_CURSOR` does, so a handle's exact point is always under the same spot on
+ * the glyph regardless of which direction it points. The trailing native keyword after the comma
+ * is CSS's own fallback, used only if a browser somehow rejects the data URI entirely. */
+function buildArrowCursor(rotationDegrees: number, fallback: string): string {
+  const path = "M4 12h16M4 12l5-5M4 12l5 5M20 12l-5-5M20 12l5 5";
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24'>` +
+    `<g transform='rotate(${rotationDegrees} 12 12)'>` +
+    `<path d='${path}' fill='none' stroke='white' stroke-width='4.2' stroke-linecap='round' stroke-linejoin='round'/>` +
+    `<path d='${path}' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/>` +
+    `</g></svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 10 10, ${fallback}`;
+}
+
+const ARROW_CURSOR_EW = buildArrowCursor(0, "ew-resize");
+const ARROW_CURSOR_NS = buildArrowCursor(90, "ns-resize");
+const ARROW_CURSOR_NWSE = buildArrowCursor(45, "nwse-resize");
+const ARROW_CURSOR_NESW = buildArrowCursor(135, "nesw-resize");
+
 /** The resize cursor a scale handle's position implies — corners diagonal, edges axis-aligned.
  * The frame itself never visually rotates (it's always the axis-aligned opaque bounding box of
  * the already-rotated pixel content, see `pendingBounds`), so no rotation compensation is needed
  * here the way a truly rotated frame's handles would. */
-function resizeCursorFor([hx, hy]: (typeof SCALE_HANDLES)[number]): string {
-  if (hx === 0) return "ns-resize";
-  if (hy === 0) return "ew-resize";
-  return hx === hy ? "nwse-resize" : "nesw-resize";
+function resizeCursorFor([hx, hy]: readonly [-1 | 0 | 1, -1 | 0 | 1]): string {
+  if (hx === 0) return ARROW_CURSOR_NS;
+  if (hy === 0) return ARROW_CURSOR_EW;
+  return hx === hy ? ARROW_CURSOR_NWSE : ARROW_CURSOR_NESW;
 }
 
 /** A small circular-arrow glyph (Material Design's own "refresh" icon, not invented here — see
@@ -553,8 +576,21 @@ const move: RasterToolDefinition<MoveState> = {
   /** Hover feedback for a pending transform's frame — the same hit-test `onPointerDown` commits
    * to, read-only. Without this a click's outcome (scale vs. rotate vs. drag-inside vs.
    * accept-and-commit) was invisible until the click already happened, same complaint the owner
-   * raised about the corner rotate zone specifically once the dedicated lever widget was removed. */
+   * raised about the corner rotate zone specifically once the dedicated lever widget was removed.
+   *
+   * A drag already in progress locks the cursor to whatever it started as, instead of re-running
+   * the hover hit-test against the live pointer position: found live, rotating a shape past where
+   * a scale handle used to sit (before the drag moved the frame's own on-screen position) flipped
+   * the cursor to a resize arrow mid-rotate, even though the drag itself kept rotating correctly
+   * — the cursor and the gesture actually running had silently come apart. */
   cursorFor(context, pointer) {
+    const drag = context.state.drag;
+    if (drag) {
+      if (drag.kind === "rotate") return ROTATE_CURSOR;
+      if (drag.kind === "scale") return resizeCursorFor([drag.handleX, drag.handleY]);
+      if (drag.kind === "move") return "move";
+      return "pointer";
+    }
     const pending = context.state.pending;
     if (!pending) return undefined;
     const document = context.document;
