@@ -29,6 +29,7 @@ import { CameraRawDialog } from "./CameraRawDialog";
 import { CameraRawFilterDialog } from "./CameraRawFilterDialog";
 import { ExportDialog } from "./ExportDialog";
 import { PrintDialog } from "./PrintDialog";
+import { ContextualBar } from "./ContextualBar";
 import { decodeImportedImage } from "./imageImport";
 import { PerformanceOverlay } from "./PerformanceOverlay";
 import { renderTextLayerPixels } from "./textRender";
@@ -567,6 +568,7 @@ export function App() {
 
     <main className="workspace">
       {active ? <DockLayout /> : <WelcomeScreen language={store.language} requestNewDocument={store.requestNewDocument} />}
+      {active && <ContextualBar documentId={active.id} state={active.state} language={store.language} visible={store.preferences.contextualBar} />}
     </main>
     <footer className="status-bar"><span>{active ? resolveLabel(environmentMeta[active.kind].label, store.language) : text(store.language, "Ready", "Готово")}</span><span>{active ? `${Math.round((store.viewports[active.id]?.zoom ?? 1) * 100)}% · ` : ""}sRGB · {renderBackend ?? "detecting"}</span></footer>
     {store.preferences.showPerformanceOverlay && <PerformanceOverlay documentId={active?.id ?? null} />}
