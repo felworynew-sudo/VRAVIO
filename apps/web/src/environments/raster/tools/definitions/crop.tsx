@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { cloneRasterState, cropRasterDocument, layerAccepts, type Point, type RasterRect } from "@vravio/env-raster";
 import type { RasterToolDefinition, ToolContext } from "../types";
 
@@ -102,6 +102,23 @@ function applyHandleDrag(start: RasterRect, handle: HandleId, point: Point, rati
   return { x: Math.min(left, right), y: Math.min(top, bottom), width: Math.max(1, Math.abs(right - left)), height: Math.max(1, Math.abs(bottom - top)) };
 }
 
+/** The one rect-for-this-frame computation, shared between the RAF-coalesced live preview
+ * (onPointerMove) and the final, synchronous frame (onGestureEnd) — the same split
+ * move.tsx's own `applyDragFrame` uses, for the same reason (its own comment on
+ * `scheduleWork`): a fast pointer-up can land before the last scheduled RAF runs, so
+ * gesture end has to compute the true final rect itself rather than trust whatever
+ * pending already happens to hold. */
+function rectForDrag(drag: CropDrag, point: Point, width: number, height: number, ratio: number | undefined): RasterRect {
+  if (drag.kind === "out") return clampToCanvas(rectFromDragOut(drag.anchor, point, ratio), width, height);
+  if (drag.kind === "move") {
+    const dx = point.x - drag.startPoint.x, dy = point.y - drag.startPoint.y;
+    const x = Math.max(0, Math.min(drag.startRect.x + dx, width - drag.startRect.width));
+    const y = Math.max(0, Math.min(drag.startRect.y + dy, height - drag.startRect.height));
+    return { x, y, width: drag.startRect.width, height: drag.startRect.height };
+  }
+  return clampToCanvas(applyHandleDrag(drag.startRect, drag.handle, point, ratio), width, height);
+}
+
 function commitCrop(context: ToolContext<CropState>, pending: PendingCrop): void {
   const before = cloneRasterState(context.document);
   const deleteCroppedPixels = Boolean(context.options.deleteCroppedPixels);
@@ -150,29 +167,28 @@ const crop: RasterToolDefinition<CropState> = {
     if (!drag || drag.pointerId !== pointer.pointerId) return;
     const { width, height } = context.document;
     const ratio = ratioFor(String(context.options.ratio ?? "unconstrained"), width, height);
-
-    if (drag.kind === "out") {
-      const rect = clampToCanvas(rectFromDragOut(drag.anchor, pointer.point, ratio), width, height);
-      context.setState({ pending: { rect }, drag });
-      return;
-    }
-    if (drag.kind === "move") {
-      const dx = pointer.point.x - drag.startPoint.x, dy = pointer.point.y - drag.startPoint.y;
-      const x = Math.max(0, Math.min(drag.startRect.x + dx, width - drag.startRect.width));
-      const y = Math.max(0, Math.min(drag.startRect.y + dy, height - drag.startRect.height));
-      context.setState({ pending: { rect: { x, y, width: drag.startRect.width, height: drag.startRect.height } }, drag });
-      return;
-    }
-    // "handle"
-    const resized = clampToCanvas(applyHandleDrag(drag.startRect, drag.handle, pointer.point, ratio), width, height);
-    context.setState({ pending: { rect: resized }, drag });
+    // Native pointermove can fire well above the display's own frame rate — computing and
+    // committing a new React state on every single one of them (a full RasterWorkspace +
+    // Overlay re-render, plus this component's own keydown-listener effect re-subscribing,
+    // see the Overlay's own comment) is the kind of per-event work CLAUDE.md's brush-hot-path
+    // lesson already covers, even though the rect math itself is cheap: `scheduleWork` runs
+    // only the most recently scheduled closure once per animation frame, dropping the rest,
+    // matching move.tsx's identical use of it for its own (heavier) per-frame resample.
+    const point = pointer.point;
+    context.scheduleWork(() => {
+      context.setState({ pending: { rect: rectForDrag(drag, point, width, height, ratio) }, drag });
+    });
   },
 
   onGestureEnd(context, pointer) {
     const drag = context.state.drag;
     if (!drag || drag.pointerId !== pointer.pointerId) { context.setState({ pending: context.state.pending, drag: null }); return; }
-    const pending = context.state.pending;
-    if (drag.kind === "out" && (!pending || pending.rect.width < 2 || pending.rect.height < 2)) { context.setState(empty); return; }
+    const { width, height } = context.document;
+    const ratio = ratioFor(String(context.options.ratio ?? "unconstrained"), width, height);
+    // Synchronous, not the scheduled frame above: a fast pointer-up can land before the last
+    // scheduleWork callback runs, and the release position is the one the user actually meant.
+    const pending: PendingCrop = { rect: rectForDrag(drag, pointer.point, width, height, ratio) };
+    if (drag.kind === "out" && (pending.rect.width < 2 || pending.rect.height < 2)) { context.setState(empty); return; }
     context.setState({ pending, drag: null });
   },
 
@@ -183,17 +199,27 @@ const crop: RasterToolDefinition<CropState> = {
 
   Overlay({ state, document, context }) {
     const pending = state.pending;
+    // `pending`/`context` are fresh objects on every frame of a drag (the rect itself is
+    // changing, and `context` is rebuilt by the host on every render regardless) — reading
+    // them through a ref rather than closing over them directly means the listener below only
+    // has to be torn down and rebuilt when a crop session actually starts or ends, not on every
+    // one of the ~60 rect updates a one-second drag produces.
+    const latest = useRef({ pending, context });
+    latest.current = { pending, context };
     // Same pair every settled-but-uncommitted edit in this project offers (move.tsx's Free
     // Transform, the raster mask/selection tools): Enter commits, Escape discards.
     useEffect(() => {
       if (!pending) return;
       const onKeyDown = (event: KeyboardEvent) => {
-        if (event.key === "Enter") { event.preventDefault(); commitCrop(context, pending); context.setState(empty); }
-        else if (event.key === "Escape") { event.preventDefault(); context.setState(empty); }
+        const current = latest.current;
+        if (!current.pending) return;
+        if (event.key === "Enter") { event.preventDefault(); commitCrop(current.context, current.pending); current.context.setState(empty); }
+        else if (event.key === "Escape") { event.preventDefault(); current.context.setState(empty); }
       };
       window.addEventListener("keydown", onKeyDown, true);
       return () => window.removeEventListener("keydown", onKeyDown, true);
-    }, [pending, context]);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [Boolean(pending)]);
 
     if (!pending) return null;
     const { rect } = pending;
