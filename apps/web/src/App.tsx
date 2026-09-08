@@ -8,7 +8,8 @@ import { DockLayout } from "./DockLayout";
 import { environmentMeta } from "./environment";
 import { toolById, toolsFor, type ToolDefinition, type ToolOption } from "./tools";
 import { smartCropRatios } from "./environments/raster/commands/definitions/smart-crop";
-import { plugins } from "./plugins/registry";
+import { pluginsFor } from "./plugins/registry";
+import { PLUGIN_RUN_EVENT } from "./plugins/usePluginRuns";
 import { readToolbarLayout, TOOLBAR_CHANGED_EVENT } from "./toolbar/layout";
 import { useDocuments } from "./useDocuments";
 import { activeCommandContext, ensureCommandsRegistered } from "./commands";
@@ -504,14 +505,18 @@ export function App() {
         ]}/>}
         {active?.kind === "raster" && <Menu label="Filter (Фильтр)" language={store.language} open={openMenu === "filter"} onToggle={() => setOpenMenu(openMenu === "filter" ? null : "filter")} items={[["Filter Gallery… (Галерея фильтров…)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Camera Raw Filter… (Фильтр Camera Raw…)", "", () => setCameraRawFilterOpen(true), !active || !isRasterDocumentState(active.state)], ["Reprocess Original RAW… (Переобработать исходный RAW…)", "", () => void openCameraRawReprocess(), !activeRawOrigin], ["Liquify… (Пластика…)", "Ctrl+Shift+X", () => setLiquifyOpen(true), !active || !isRasterDocumentState(active.state)], ["Blur Gallery (Галерея размытия)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Sharpen (Усиление резкости)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Noise (Шум)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Stylize (Стилизация)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"]]}/>}
         <Menu label="Plugins (Плагины)" language={store.language} open={openMenu === "plugins"} onToggle={() => setOpenMenu(openMenu === "plugins" ? null : "plugins")} items={[
-          // Every registered plugin, run through the raster workspace so its
-          // result goes in by the same door a tool's does (see the plugin
-          // effect in RasterWorkspace.tsx).
-          ...plugins.map((entry) => [
+          // The active environment's plugins, and only those: `pluginsFor`
+          // answers from each plugin's own manifest, and returns nothing at all
+          // for an environment with no plugin surface. Nothing here lists
+          // environments or switches on them — an environment that cannot host
+          // plugins simply has none to show, rather than showing some greyed
+          // out (there is nothing there to enable). Each one runs through its
+          // own environment's door via `usePluginRuns`.
+          ...pluginsFor(active?.kind).map((entry) => [
             resolveLabel(entry.manifest.label, store.language),
             "",
-            () => window.dispatchEvent(new CustomEvent("vravio-plugin-run", { detail: { pluginId: entry.manifest.id } })),
-            !active || !isRasterDocumentState(active.state),
+            () => window.dispatchEvent(new CustomEvent(PLUGIN_RUN_EVENT, { detail: { pluginId: entry.manifest.id } })),
+            false,
           ] as MainMenuItem),
           ["Manage Plugins… (Управление плагинами…)", "", () => {}, true],
         ]}/>

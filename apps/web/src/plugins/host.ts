@@ -1,26 +1,29 @@
 import { grants, refusalFor, refusalMessage } from "./permissions";
-import type { PluginManifest, PluginMessage } from "./types";
+import type { PluginManifest, PluginMessage, PluginPayload } from "./types";
 
 /**
  * Runs a plugin and hands back what it produced.
  *
  * The permission checks live here, on the trusted side. Doing them in the
  * worker would be asking the untrusted code whether it is allowed — so
- * `read-document` decides whether pixels are ever *sent*, and `write-pixels`
- * decides whether anything that comes back is *believed*. A plugin without
- * `read-document` does not receive a buffer it could exfiltrate; a plugin
- * without `write-pixels` can return whatever it likes and none of it reaches
- * the document.
+ * `read-document` decides whether the payload is ever *sent*, and
+ * `write-document` decides whether anything that comes back is *believed*. A
+ * plugin without `read-document` does not receive a payload it could
+ * exfiltrate; a plugin without `write-document` can return whatever it likes
+ * and none of it reaches the document.
  *
- * What comes back is a buffer, not an edit. Turning it into a `PixelEdit` and
- * putting it through `commitPixels` is the caller's job, and that is the point
- * of section 4.7's "обмен — сообщениями по той же схеме `PixelEdit`": a plugin
- * is subject to the rules engine (selection, locks, layer kind) for free,
- * because it reaches the document through the same single door every tool
- * does, and there is no plugin-shaped hole beside it.
+ * What comes back is a payload, not an edit — and this file never looks inside
+ * it. Judging whether a returned payload is usable belongs to the environment
+ * that knows what its own payload means (`PluginSurface.accept`), and turning
+ * it into an edit belongs to that environment's single door
+ * (`PluginSurface.commit`). That is what keeps section 4.7's "обмен —
+ * сообщениями по той же схеме `PixelEdit`" true for every environment at once:
+ * a plugin reaches a document through the same door its tools do, and there is
+ * no plugin-shaped hole beside it — in any environment, because this half has
+ * no idea which one it is serving.
  */
 export interface PluginRunOutcome {
-  readonly pixels: Uint8ClampedArray | null;
+  readonly payload: PluginPayload | null;
   readonly error: string | null;
 }
 
@@ -33,6 +36,15 @@ export interface PluginWorkerLike {
   onerror: ((event: unknown) => void) | null;
 }
 
+export interface RunPluginOptions {
+  /** What the plugin operates on — sent only with `read-document`. */
+  readonly payload: PluginPayload;
+  readonly options?: Readonly<Record<string, string | number | boolean>>;
+  /** Environments this build can host plugins in; a manifest naming another is
+   * refused before a worker exists. */
+  readonly hostableEnvironments?: readonly string[];
+}
+
 /**
  * One worker per run, terminated afterwards.
  *
@@ -43,46 +55,39 @@ export interface PluginWorkerLike {
  */
 export async function runPlugin(
   manifest: PluginManifest,
-  input: { pixels: Uint8ClampedArray; width: number; height: number; options?: Readonly<Record<string, string | number | boolean>> },
+  input: RunPluginOptions,
   spawn: () => PluginWorkerLike,
 ): Promise<PluginRunOutcome> {
-  const refusal = refusalFor(manifest);
-  if (refusal) return { pixels: null, error: refusalMessage(refusal) };
+  const refusal = refusalFor(manifest, input.hostableEnvironments);
+  if (refusal) return { payload: null, error: refusalMessage(refusal) };
 
   const worker = spawn();
   try {
     return await new Promise<PluginRunOutcome>((resolve) => {
-      const timer = setTimeout(() => resolve({ pixels: null, error: `did not answer within ${TIMEOUT_MS / 1000}s` }), TIMEOUT_MS);
+      const timer = setTimeout(() => resolve({ payload: null, error: `did not answer within ${TIMEOUT_MS / 1000}s` }), TIMEOUT_MS);
       const finish = (outcome: PluginRunOutcome) => { clearTimeout(timer); resolve(outcome); };
 
       worker.onmessage = (event) => {
         const message = event.data;
-        if (message.type === "error") { finish({ pixels: null, error: message.message }); return; }
-        if (!message.pixels) { finish({ pixels: null, error: null }); return; }
-        // The returned buffer is only believed with `write-pixels`. Without it
-        // the run still happened — a plugin may legitimately only read — but
+        if (message.type === "error") { finish({ payload: null, error: message.message }); return; }
+        if (!message.payload) { finish({ payload: null, error: null }); return; }
+        // The returned payload is only believed with `write-document`. Without
+        // it the run still happened — a plugin may legitimately only read — but
         // nothing it sends back becomes an edit.
-        if (!grants(manifest, "write-pixels")) { finish({ pixels: null, error: null }); return; }
-        const pixels = new Uint8ClampedArray(message.pixels);
-        // A buffer of the wrong size would be written into the layer as
-        // garbage, or throw far from here. The plugin was told the dimensions;
-        // returning something else is a plugin bug, and it is caught here
-        // rather than trusted.
-        if (pixels.length !== input.width * input.height * 4) {
-          finish({ pixels: null, error: `returned ${pixels.length} bytes, expected ${input.width * input.height * 4}` });
-          return;
-        }
-        finish({ pixels, error: null });
+        if (!grants(manifest, "write-document")) { finish({ payload: null, error: null }); return; }
+        finish({ payload: message.payload, error: null });
       };
-      worker.onerror = (event) => finish({ pixels: null, error: event instanceof ErrorEvent ? event.message : "worker failed" });
+      worker.onerror = (event) => finish({ payload: null, error: event instanceof ErrorEvent ? event.message : "worker failed" });
 
-      // Pixels are sent only with `read-document`. This is the half of the
+      // The payload is sent only with `read-document`. This is the half of the
       // permission that actually protects anything: a plugin that never
-      // receives the picture cannot send it anywhere, whatever else it does.
-      const send = grants(manifest, "read-document") ? input.pixels.slice().buffer : undefined;
+      // receives the document cannot send it anywhere, whatever else it does.
+      const permitted = grants(manifest, "read-document");
+      const buffer = permitted && input.payload.buffer ? input.payload.buffer.slice(0) : null;
+      const payload = permitted ? { kind: input.payload.kind, meta: input.payload.meta, buffer } : undefined;
       worker.postMessage(
-        { type: "run", requestId: 1, entry: manifest.entry, width: input.width, height: input.height, options: input.options ?? {}, ...(send ? { pixels: send } : {}) },
-        send ? [send] : [],
+        { type: "run", requestId: 1, entry: manifest.entry, options: input.options ?? {}, ...(payload ? { payload } : {}) },
+        buffer ? [buffer] : [],
       );
     });
   } finally {

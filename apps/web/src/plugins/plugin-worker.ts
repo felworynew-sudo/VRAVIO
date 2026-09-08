@@ -9,15 +9,16 @@ import type { PluginModule, PluginRunRequest } from "./types";
  * matters most — a plugin on the main thread could read the document, the
  * asset store, `localStorage` and every credential the page holds, whatever
  * its manifest claimed to want. Here it has none of that: no `document`, no
- * `window`, and only the pixels the host chose to send.
+ * `window`, and only the payload the host chose to send.
  *
  * The host still checks permissions on both sides of the wire. This side
  * cannot be trusted to police itself — it is the untrusted part — so the
  * checks that matter live in `host.ts`; the worker simply never receives what
- * it was not granted.
+ * it was not granted. Nothing here knows which environment sent the payload
+ * either: it forwards what arrived and returns what came back.
  */
 interface PluginWorkerScope {
-  onmessage: ((event: MessageEvent<PluginRunRequest & { readonly entry?: string }>) => void) | null;
+  onmessage: ((event: MessageEvent<PluginRunRequest>) => void) | null;
   postMessage(message: unknown, transfer?: Transferable[]): void;
 }
 
@@ -43,12 +44,13 @@ scope.onmessage = async (event) => {
     const plugin = await load(request.entry);
     if (typeof plugin.run !== "function") throw new Error("Plugin does not export run()");
 
-    const pixels = request.pixels ? new Uint8ClampedArray(request.pixels) : null;
-    const result = await plugin.run({ pixels, width: request.width, height: request.height, options: request.options });
+    const result = await plugin.run({ payload: request.payload ?? null, options: request.options });
 
     if (!result) { scope.postMessage({ type: "result", requestId: request.requestId }); return; }
-    const buffer = result.buffer instanceof ArrayBuffer ? result.buffer : result.slice().buffer;
-    scope.postMessage({ type: "result", requestId: request.requestId, pixels: buffer, width: request.width, height: request.height }, [buffer]);
+    scope.postMessage(
+      { type: "result", requestId: request.requestId, payload: result },
+      result.buffer ? [result.buffer] : [],
+    );
   } catch (error) {
     // A plugin that throws is reported, not swallowed: the host turns this
     // into a message naming the plugin, which is the only way the user can

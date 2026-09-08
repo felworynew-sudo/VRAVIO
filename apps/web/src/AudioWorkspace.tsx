@@ -17,6 +17,8 @@ import {
   setTrackVolume, setTrackVolumeAutomationPoint, splitClipAt,
 } from "./audio-commands";
 import { decodeAudioFileToWav, startMicrophoneRecording, type AudioRecorder } from "./audioImport";
+import { usePluginRuns } from "./plugins/usePluginRuns";
+import type { AudioPluginDoor } from "./environments/audio/plugins/surface";
 
 const TRACK_HEIGHT = 72;
 const TRIM_HANDLE_PX = 8;
@@ -351,6 +353,12 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
 
   const timelineWidthPx = Math.max(400, Math.round((durationSamples / sampleRate) * pixelsPerSecond) + 100);
   const selectedClip = state.selection ? state.tracks.find((track) => track.id === state.selection!.trackId)?.clips.find((clip) => state.selection!.clipIds.includes(clip.id)) : undefined;
+
+  // Everything audio contributes to running a plugin: which clip it is about.
+  // Reading that clip's audible window and writing the result back are
+  // `environments/audio/plugins/surface.ts`, through the same `replaceClipAudio`
+  // a destructive effect uses — so a plugin is not a second way into a clip.
+  usePluginRuns("audio", state, { documentId: document.id, trackId: state.selection?.trackId ?? "", clipId: selectedClip?.id ?? "" } satisfies AudioPluginDoor);
 
   return <div className="audio-workspace">
     <div className="audio-transport">

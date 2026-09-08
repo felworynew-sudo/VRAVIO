@@ -237,25 +237,51 @@ export async function addClipFromAsset(documentId: string, assetId: string, name
  * `mutate` runs once against a plain draft, not an async generator), the same ordering
  * `addClipFromAsset` already uses for `addAssetRef`.
  */
-export async function applyEffectToClip(documentId: string, trackId: string, clipId: string, effectId: AudioEffectId, params: Record<string, number>): Promise<void> {
+export interface ClipAudioWindow {
+  readonly channels: Float32Array[];
+  readonly sampleRate: number;
+  readonly clipName: string;
+}
+
+/** Decodes the audible window of a clip — the region actually heard, not the
+ * whole source file. The read half of every destructive clip operation
+ * (effects, and a plugin through `environments/audio/plugins/surface.ts`), so
+ * there is one definition of "what a clip's audio is" rather than one per
+ * caller. */
+export async function readClipAudioWindow(documentId: string, trackId: string, clipId: string): Promise<ClipAudioWindow | null> {
   const document = kernel.documents.get<AudioDocumentState>(documentId);
   const clip = document?.state.tracks.find((track) => track.id === trackId)?.clips.find((item) => item.id === clipId);
-  if (!document || !clip) return;
+  if (!document || !clip) return null;
 
   const bytes = await kernel.assets.read(clip.assetId as AssetId);
-  if (!bytes) return;
+  if (!bytes) return null;
   const decoded = decodeWav(bytes);
   const sourceWindowLength = Math.round((clip.durationSamples * clip.sourceSampleRate) / document.state.sampleRate);
-  const windowChannels = decoded.channelData.map((channel) => channel.slice(clip.offsetSamples, clip.offsetSamples + sourceWindowLength));
+  return {
+    channels: decoded.channelData.map((channel) => channel.slice(clip.offsetSamples, clip.offsetSamples + sourceWindowLength)),
+    sampleRate: clip.sourceSampleRate,
+    clipName: clip.name,
+  };
+}
 
-  const processed = await applyAudioEffect(windowChannels, clip.sourceSampleRate, effectId, params);
-  const processedLength = processed[0]?.length ?? 0;
-  const newTimelineDuration = Math.max(1, Math.round((processedLength * document.state.sampleRate) / clip.sourceSampleRate));
+/**
+ * Writes processed audio back into a clip: a brand-new WAV asset (never
+ * mutating one another clip might still reference) with the clip repointed at
+ * it, `offsetSamples: 0` — the new asset *is* exactly the processed window, so
+ * there is nothing before or after it to trim to. The write half shared by
+ * effects and plugins; audio's single door, in the sense
+ * `RasterWorkspace.tsx`'s `commitPixels` is raster's.
+ */
+export async function replaceClipAudio(documentId: string, trackId: string, clipId: string, channels: readonly Float32Array[], sampleRate: number, label: string): Promise<void> {
+  const document = kernel.documents.get<AudioDocumentState>(documentId);
+  if (!document) return;
+  const processedLength = channels[0]?.length ?? 0;
+  const newTimelineDuration = Math.max(1, Math.round((processedLength * document.state.sampleRate) / sampleRate));
 
-  const wav = encodeWav(processed, clip.sourceSampleRate, 32);
-  const assetId = await kernel.assets.importAsset(wav, { kind: "audio", mime: "audio/wav", name: `${clip.name} (${effectId}).wav` });
+  const wav = encodeWav(channels, sampleRate, 32);
+  const assetId = await kernel.assets.importAsset(wav, { kind: "audio", mime: "audio/wav", name: `${label}.wav` });
 
-  await changeAudioDocument(documentId, `Effect: ${effectId}`, (state) => {
+  await changeAudioDocument(documentId, label, (state) => {
     const target = state.tracks.find((item) => item.id === trackId)?.clips.find((item) => item.id === clipId);
     if (!target) return false;
     target.assetId = assetId;
@@ -265,6 +291,13 @@ export async function applyEffectToClip(documentId: string, trackId: string, cli
     return true;
   });
   kernel.documents.addAssetRef(documentId, assetId as AssetId);
+}
+
+export async function applyEffectToClip(documentId: string, trackId: string, clipId: string, effectId: AudioEffectId, params: Record<string, number>): Promise<void> {
+  const window = await readClipAudioWindow(documentId, trackId, clipId);
+  if (!window) return;
+  const processed = await applyAudioEffect(window.channels, window.sampleRate, effectId, params);
+  await replaceClipAudio(documentId, trackId, clipId, processed, window.sampleRate, `${window.clipName} (${effectId})`);
 }
 
 // --- Realtime track effect stack (docs/master-plan.md §9.2's Audacity-4 phase) ---------------
