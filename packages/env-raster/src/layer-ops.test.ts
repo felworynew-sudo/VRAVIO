@@ -311,6 +311,58 @@ describe("reordering", () => {
     expect(placeLayer(state, outer.id, outer.id, 0)).toBe(false);
     expect(placeLayer(state, outer.id, inner.id, 0)).toBe(false);
   });
+
+  // Photoshop's own documented rule for dragging layers in and out of a clipping mask
+  // group: drag the base away and every layer clipped to it releases automatically; drag
+  // one clipped layer away and only that layer releases, its group-mates stay put.
+  describe("clipping masks release when a reorder breaks them", () => {
+    const clipStack = () => {
+      const state = doc();
+      const base = add(state, "Base");
+      const member1 = add(state, "Member1", (layer) => { layer.clipping = true; });
+      const member2 = add(state, "Member2", (layer) => { layer.clipping = true; });
+      return { state, base, member1, member2 };
+    };
+
+    it("releases every clipped layer when the base is dragged away", () => {
+      const { state, base, member1, member2 } = clipStack();
+      // Ascending (bottom-to-top) order starts [Base, Member1, Member2]; index 3 drops Base
+      // at the very top, above both members.
+      expect(placeLayer(state, base.id, null, 3)).toBe(true);
+      expect(names(state)).toEqual(["Base", "Member2", "Member1"]);
+      expect(member1.clipping).toBe(false);
+      expect(member2.clipping).toBe(false);
+    });
+
+    it("releases only the dragged member, leaving the rest of the group clipped", () => {
+      const { state, base, member1, member2 } = clipStack();
+      // Drop Member1 below Base (index 0) — Photoshop's own documented way to pull one layer
+      // out of a clipping group without disturbing the rest. Member2 ends up directly on
+      // Base, still validly clipped, since Member1 is no longer between them.
+      expect(placeLayer(state, member1.id, null, 0)).toBe(true);
+      expect(names(state)).toEqual(["Member2", "Base", "Member1"]);
+      expect(member1.clipping).toBe(false);
+      expect(member2.clipping).toBe(true);
+      expect(base.clipping).toBe(false);
+    });
+
+    it("keeps the group clipped when reordering does not break the run", () => {
+      const { state, member1, member2 } = clipStack();
+      // Swap the two members' internal order — both stay directly (or chained) on Base.
+      moveLayerInStack(state, member1.id, "up");
+      expect(member1.clipping).toBe(true);
+      expect(member2.clipping).toBe(true);
+    });
+
+    it("releases a clip member moved down past its base via moveLayerInStack", () => {
+      const state = doc();
+      add(state, "Base");
+      const member = add(state, "Member", (layer) => { layer.clipping = true; });
+
+      moveLayerInStack(state, member.id, "down");
+      expect(member.clipping).toBe(false);
+    });
+  });
 });
 
 describe("layer via copy and cut", () => {

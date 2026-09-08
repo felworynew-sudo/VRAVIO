@@ -15,6 +15,70 @@ function reorderSiblings(ordered: readonly RasterLayer[]): void {
 const find = (state: RasterDocumentState, id: string): RasterLayer | undefined => state.layers.find((layer) => layer.id === id);
 
 /**
+ * The clipping-mask siblings stacked directly on `layerId` — the contiguous run of
+ * `clipping: true` layers immediately above it, the same chain `render.ts`'s
+ * `clippingBaseByParent` bookkeeping treats as one group sharing `layerId` as its base.
+ * Only meaningful when `layerId` itself is not a clipping layer (a clipping layer cannot
+ * be a base — `render.ts` never reads it as one).
+ */
+const clipMembersAbove = (state: RasterDocumentState, layerId: string): string[] => {
+  const layer = find(state, layerId);
+  if (!layer) return [];
+  const siblings = siblingsOf(state, layer.parentId ?? null);
+  const at = siblings.findIndex((item) => item.id === layerId);
+  const members: string[] = [];
+  for (let index = at + 1; index < siblings.length; index += 1) {
+    const above = siblings[index]!;
+    if (!above.clipping) break;
+    members.push(above.id);
+  }
+  return members;
+};
+
+/**
+ * Whether `layerId`, at its *current* position, still sits on a valid clipping base — a
+ * non-clipping sibling reached by walking down through any other `clipping: true`
+ * siblings, exactly the chain `render.ts` resolves a clipping layer's base through.
+ */
+const hasValidClipBase = (state: RasterDocumentState, layerId: string): boolean => {
+  const layer = find(state, layerId);
+  if (!layer) return false;
+  const siblings = siblingsOf(state, layer.parentId ?? null);
+  const at = siblings.findIndex((item) => item.id === layerId);
+  for (let index = at - 1; index >= 0; index -= 1) if (!siblings[index]!.clipping) return true;
+  return false;
+};
+
+/**
+ * Snapshot to take **before** a reorder, so {@link releaseBrokenClipping} can tell who was
+ * depending on `layerId`'s old position.
+ */
+const clipDependents = (state: RasterDocumentState, layerId: string): { wasClipping: boolean; membersOfOldBase: string[] } => {
+  const layer = find(state, layerId);
+  return { wasClipping: layer?.clipping === true, membersOfOldBase: layer && !layer.clipping ? clipMembersAbove(state, layerId) : [] };
+};
+
+/**
+ * Releases clipping masks a reorder just broke — Photoshop's own documented rule for
+ * dragging layers into and out of a clipping mask group: drag the base layer away and
+ * every layer that was clipped to it releases automatically (its `clipping` flag clears);
+ * drag a single clipped layer away and only that layer releases, its former group-mates
+ * stay clipped to the base they still sit on. Takes the {@link clipDependents} snapshot
+ * from *before* the reorder, then re-checks each candidate's *new* position to see whether
+ * the old relationship survived the move — a base merely re-indexed within the same run of
+ * members it already had keeps them clipped, so this cannot fire on a no-op reorder.
+ */
+function releaseBrokenClipping(state: RasterDocumentState, layerId: string, before: { wasClipping: boolean; membersOfOldBase: string[] }): void {
+  // Every candidate's validity is judged against the same still-all-clipped snapshot, then
+  // applied together — checking and clearing one at a time would let an earlier release
+  // change what a later candidate walks through (clearing Member1 turns it into an
+  // accidental non-clipping "base" for Member2, wrongly keeping Member2 clipped).
+  const toRelease = before.membersOfOldBase.filter((id) => !hasValidClipBase(state, id));
+  for (const id of toRelease) { const member = find(state, id); if (member) member.clipping = false; }
+  if (before.wasClipping && !hasValidClipBase(state, layerId)) { const layer = find(state, layerId); if (layer) layer.clipping = false; }
+}
+
+/**
  * Copies a layer, its mask and its style, and puts the copy directly above it.
  *
  * Photoshop's Duplicate Layer. The pixels are copied rather than shared: the
@@ -250,8 +314,10 @@ export function moveLayerInStack(state: RasterDocumentState, layerId: string, mo
   const target = move === "up" ? at + 1 : move === "down" ? at - 1 : move === "top" ? peers.length - 1 : 0;
   if (target === at || target < 0 || target >= peers.length) return false;
 
+  const before = clipDependents(state, layerId);
   const rest = peers.filter((item) => item.id !== layerId);
   reorderSiblings([...rest.slice(0, target), layer, ...rest.slice(target)]);
+  releaseBrokenClipping(state, layerId, before);
   return true;
 }
 
@@ -271,8 +337,10 @@ export function placeLayer(state: RasterDocumentState, layerId: string, parentId
   const shifted = wasAt >= 0 && wasAt < index ? index - 1 : index;
   const at = Math.max(0, Math.min(shifted, peers.length));
 
+  const clipBefore = clipDependents(state, layerId);
   layer.parentId = parentId;
   reorderSiblings([...peers.slice(0, at), layer, ...peers.slice(at)]);
+  releaseBrokenClipping(state, layerId, clipBefore);
   return true;
 }
 
