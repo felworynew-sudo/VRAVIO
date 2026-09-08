@@ -110,6 +110,23 @@ class WebClipboard implements ClipboardPort {
   }
 }
 
+/**
+ * Reads Settings' "Worker threads" straight from storage rather than importing `store.ts`'s
+ * preferences — `store.ts` already imports `kernel.ts`, which imports this module, so importing
+ * the store back here would be circular. `createWebPlatform` runs once at module load, before
+ * any store subscriber could react to a later change, so the value has to be read this way or
+ * not at all: this was the actual bug (the setting was read by nothing, anywhere, ever).
+ */
+export function storedWorkerCount(): number | undefined {
+  if (typeof localStorage === "undefined") return undefined;
+  try {
+    const value = (JSON.parse(localStorage.getItem("vravio.preferences") ?? "{}") as { workerCount?: unknown }).workerCount;
+    return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.round(value) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function createWebPlatform(gpu: GPUContext, models: ModelStore): Platform {
   const capabilities: PlatformCapabilities = {
     persistentFileHandles: Boolean(browserWindow.showOpenFilePicker && browserWindow.showSaveFilePicker),
@@ -119,6 +136,7 @@ export function createWebPlatform(gpu: GPUContext, models: ModelStore): Platform
     nativeFfmpeg: false,
     nativeThreads: false,
   };
-  const ml: MLPort = createOnnxRuntime({ gpu, models });
+  const workerCount = storedWorkerCount();
+  const ml: MLPort = createOnnxRuntime({ gpu, models, ...(workerCount !== undefined ? { workerCount } : {}) });
   return { kind: "web", fs: new WebFileSystem(), codecs: new WebCodecs(), fonts: new WebFonts(), clipboard: new WebClipboard(), ml, gpu, capabilities };
 }
