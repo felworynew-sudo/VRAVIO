@@ -358,6 +358,14 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .layer-color-label[data-color="grey"]   { background:#6b7280; }
 
 .layer-badge { margin-left:auto; padding-right:6px; font-size:13px; font-style:normal; opacity:.9; flex:none; }
+.layer-fx-group { display:flex; align-items:center; gap:2px; margin-left:auto; flex:none; }
+.layer-fx-badge { padding:1px 5px; border:1px solid var(--border); border-radius:3px; background:transparent; color:var(--muted); font-size:9px; font-weight:700; line-height:1.4; }
+.layer-fx-badge.active { border-color:var(--focus); color:var(--focus); opacity:.7; }
+.layer-fx-disclosure { padding:0 2px; color:var(--muted); font-size:10px; }
+.layer-fx-row { padding-left:22px; border-left:1px solid var(--border); margin-left:9px; background:var(--surface); }
+.layer-fx-row-content { display:flex; align-items:center; gap:9px; min-width:0; padding:7px 6px; }
+.layer-fx-row .layer-row-text { color:var(--muted); font-size:11px; }
+.layer-fx-row button:first-child img { opacity:.85; }
 .layer-link-badge { display:block; width:15px; height:15px; padding-right:0; margin-right:6px; background:var(--muted); -webkit-mask:var(--link-badge-mask) center/contain no-repeat; mask:var(--link-badge-mask) center/contain no-repeat; }
 /* master-plan.md §1.9: clipping mask reuses the Ctrl-hover cursor icon
    (owner's own instruction) as a small indent+arrow before the thumbnail,
