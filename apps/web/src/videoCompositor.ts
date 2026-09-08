@@ -6,7 +6,7 @@ import { kernel } from "./kernel";
  * and back doesn't re-read bytes it already fetched; revoked only when the whole tab closes. */
 const assetUrlCache = new Map<string, Promise<string>>();
 
-function assetUrl(assetId: string): Promise<string> {
+export function assetUrl(assetId: string): Promise<string> {
   let cached = assetUrlCache.get(assetId);
   if (!cached) {
     cached = kernel.assets.read(assetId as AssetId).then((bytes) => {
@@ -19,13 +19,13 @@ function assetUrl(assetId: string): Promise<string> {
   return cached;
 }
 
-interface ActiveHit { readonly track: VideoTrack; readonly clip: VideoClip; }
+export interface ActiveHit { readonly track: VideoTrack; readonly clip: VideoClip; }
 
 /** Every video-kind clip covering `frame`, one per non-hidden video track, in track order
  * (index 0 first) — the compositor draws them in this order, so a later entry in
  * `VideoDocumentState.tracks` paints over an earlier one, the same bottom-to-top convention
  * raster layers use (`VideoTrack`'s own doc comment). */
-function visualHitsAt(tracks: readonly VideoTrack[], frame: number): ActiveHit[] {
+export function visualHitsAt(tracks: readonly VideoTrack[], frame: number): ActiveHit[] {
   const hits: ActiveHit[] = [];
   for (const track of tracks) {
     if (track.kind !== "video" || track.hidden) continue;
@@ -38,7 +38,7 @@ function visualHitsAt(tracks: readonly VideoTrack[], frame: number): ActiveHit[]
 /** Every clip (video or audio track, visual or not) covering `frame` on a track that is not
  * muted — what should actually be making sound this instant. A video track's own clip
  * contributes its embedded audio unless that track is muted, same as an `"audio"` track's clip. */
-function audioHitsAt(tracks: readonly VideoTrack[], frame: number): ActiveHit[] {
+export function audioHitsAt(tracks: readonly VideoTrack[], frame: number): ActiveHit[] {
   const hits: ActiveHit[] = [];
   for (const track of tracks) {
     if (track.muted) continue;

@@ -12,6 +12,7 @@ import {
 } from "./video-commands";
 import { probeVideoMetadata } from "./videoImport";
 import { VideoCompositor } from "./videoCompositor";
+import { exportVideoDocument } from "./videoExport";
 
 const TRACK_HEIGHT = 56;
 const TRIM_HANDLE_PX = 8;
@@ -52,6 +53,7 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
   const [splitMode, setSplitMode] = useState(false);
   const [rippleMode, setRippleMode] = useState(false);
   const [snapMode, setSnapMode] = useState(true);
+  const [exportProgress, setExportProgress] = useState<{ frame: number; durationFrames: number } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const compositorRef = useRef<VideoCompositor | null>(null);
   const dragRef = useRef<DragState | null>(null);
@@ -174,6 +176,20 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
     }
   };
 
+  const exportVideo = async () => {
+    if (exportProgress) return;
+    stopPlayback();
+    setExportProgress({ frame: 0, durationFrames });
+    try {
+      const current = kernel.documents.get<VideoDocumentState>(document.id)!.state;
+      const blob = await exportVideoDocument(current, (progress) => setExportProgress(progress));
+      const name = `${document.name.replace(/\.[^.]+$/, "").trim() || "export"}.webm`;
+      await kernel.platform.fs.saveFile({ name, mime: blob.type || "video/webm", data: blob });
+    } finally {
+      setExportProgress(null);
+    }
+  };
+
   const timelineWidthPx = Math.max(400, Math.round((durationFrames / frameRate) * pixelsPerSecond) + 100);
   const selectedTrack = state.selection ? state.tracks.find((track) => track.id === state.selection!.trackId) : undefined;
   const selectedClip = selectedTrack && state.selection!.clipIds.length === 1 ? selectedTrack.clips.find((clip) => clip.id === state.selection!.clipIds[0]) : undefined;
@@ -194,6 +210,9 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
       <button onClick={() => addVideoTrack(document.id, "audio")}>{text(language, "+ Audio Track", "+ Аудиодорожка")}</button>
       <button onClick={() => fileInputRef.current?.click()}>{text(language, "Import…", "Импорт…")}</button>
       <input ref={fileInputRef} type="file" accept="video/*,audio/*" multiple hidden onChange={(event) => { void importFiles(event.target.files); event.target.value = ""; }} />
+      <button disabled={!!exportProgress} onClick={() => void exportVideo()} title={text(language, "Export renders the timeline in real time (capture, not an instant offline encode) — takes as long as the video itself", "Экспорт рендерит таймлайн в реальном времени (захват, а не мгновенный офлайн-рендер) — займёт столько же, сколько сам ролик")}>
+        {exportProgress ? `${text(language, "Exporting…", "Экспорт…")} ${Math.round((exportProgress.frame / exportProgress.durationFrames) * 100)}%` : text(language, "Export…", "Экспорт…")}
+      </button>
       {state.selection && <button data-role="trash" onClick={() => deleteSelectedClips(document.id, rippleMode)}>{text(language, "Delete Clip", "Удалить клип")}</button>}
     </div>
 
