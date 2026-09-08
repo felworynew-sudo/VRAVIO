@@ -1,0 +1,74 @@
+/**
+ * Positions and lengths are in samples at the document's own `sampleRate`, not seconds —
+ * the same reasoning waveform-playlist's engine gives for its own `AudioClip`: sample counts
+ * are exact integers, seconds accumulate floating-point drift over a long edit session and
+ * make "does this clip start exactly where the last one ended" an epsilon comparison instead
+ * of `===`.
+ */
+
+export type FadeType = "linear" | "exponential" | "sCurve" | "logarithmic";
+
+export interface AudioClip {
+  readonly id: string;
+  name: string;
+  /** Reference into the shared asset store — a clip never carries its own decoded audio here,
+   * the same "asset, not a copy" rule raster layers and vector image shapes follow. */
+  assetId: string;
+  /** Position on the timeline, in samples at the document's sample rate. */
+  startSample: number;
+  /** Length on the timeline, in samples at the document's sample rate. */
+  durationSamples: number;
+  /** Trim-in: how far into the decoded source this clip's audible region begins, in samples
+   * at the *source's own* sample rate (see `sourceSampleRate`). */
+  offsetSamples: number;
+  /** Full length of the decoded source, in samples at the source's own sample rate — the
+   * right-edge trim bound (a clip cannot extend past what its source actually contains). */
+  sourceDurationSamples: number;
+  /** The decoded source's native sample rate. Equal to the document's sample rate for audio
+   * imported at the project rate; different when a source needs resampling to play in sync. */
+  sourceSampleRate: number;
+  /** Linear gain multiplier, 1 = unity (0 dB). */
+  gain: number;
+  fadeInSamples: number;
+  fadeOutSamples: number;
+  fadeType: FadeType;
+}
+
+export interface AudioTrack {
+  readonly id: string;
+  name: string;
+  /** Linear volume multiplier, 1 = unity (0 dB). */
+  volume: number;
+  /** -1 (full left) .. 1 (full right), 0 = center. */
+  pan: number;
+  muted: boolean;
+  soloed: boolean;
+  locked: boolean;
+  clips: AudioClip[];
+}
+
+export interface AudioSelection {
+  readonly trackId: string;
+  readonly clipIds: readonly string[];
+}
+
+export interface AudioDocumentState {
+  kind: "audio";
+  schemaVersion: 1;
+  sampleRate: number;
+  channels: 1 | 2;
+  bitDepth: 16 | 24 | 32;
+  tracks: AudioTrack[];
+  activeTrackId: string;
+  selection: AudioSelection | null;
+  masterVolume: number;
+  loopStart: number;
+  loopEnd: number;
+  loopEnabled: boolean;
+}
+
+export interface AudioDocumentOptions {
+  sampleRate?: number;
+  channels?: 1 | 2;
+  bitDepth?: 16 | 24 | 32;
+}
