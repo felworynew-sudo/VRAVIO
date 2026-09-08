@@ -1,5 +1,5 @@
 import {
-  applyLeftTrim, applyRightTrim, canSplitAt, cloneVideoState, constrainBoundaryTrim, constrainClipDrag,
+  applyCropEdge, applyLeftTrim, applyRightTrim, canSplitAt, cloneVideoState, constrainBoundaryTrim, constrainClipDrag,
   createVideoClip, createVideoTrack, rippleShift, splitClip, type VideoDocumentState,
 } from "@vravio/env-video";
 import type { AssetId } from "@vravio/kernel";
@@ -203,4 +203,29 @@ export async function addClipFromAsset(documentId: string, assetId: string, name
     return true;
   });
   kernel.documents.addAssetRef(documentId, assetId as AssetId);
+}
+
+/** Position/scale/opacity — the OpenCut Classic checklist's `transform` item
+ * (docs/master-plan.md §9.1). `patch` is applied over the clip's current values, so a caller
+ * changing just one field (a single slider) doesn't need to read the others first. */
+export function setClipTransform(documentId: string, trackId: string, clipId: string, patch: Partial<Pick<VideoDocumentState["tracks"][number]["clips"][number], "x" | "y" | "scale" | "opacity">>): void {
+  void changeVideoDocument(documentId, "Transform Clip (Трансформировать клип)", (state) => {
+    const clip = state.tracks.find((item) => item.id === trackId)?.clips.find((item) => item.id === clipId);
+    if (!clip) return false;
+    if (patch.x !== undefined) clip.x = patch.x;
+    if (patch.y !== undefined) clip.y = patch.y;
+    if (patch.scale !== undefined) clip.scale = Math.max(0.05, patch.scale);
+    if (patch.opacity !== undefined) clip.opacity = Math.max(0, Math.min(1, patch.opacity));
+    return true;
+  });
+}
+
+export function setClipCrop(documentId: string, trackId: string, clipId: string, edge: "left" | "top" | "right" | "bottom", value: number): void {
+  void changeVideoDocument(documentId, "Crop Clip (Обрезать кадр)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    const clipIndex = track?.clips.findIndex((item) => item.id === clipId) ?? -1;
+    if (!track || clipIndex === -1) return false;
+    track.clips[clipIndex] = applyCropEdge(track.clips[clipIndex]!, edge, value);
+    return true;
+  });
 }

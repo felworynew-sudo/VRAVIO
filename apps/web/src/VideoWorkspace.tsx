@@ -1,55 +1,38 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AssetId, VravioDocument } from "@vravio/kernel";
-import { isVideoDocumentState, timelineDurationFrames, type VideoClip, type VideoDocumentState, type VideoTrack } from "@vravio/env-video";
+import type { VravioDocument } from "@vravio/kernel";
+import {
+  applyCropEdge, isVideoDocumentState, snapFrame, timelineDurationFrames, type VideoClip, type VideoDocumentState, type VideoTrack,
+} from "@vravio/env-video";
 import { kernel } from "./kernel";
 import { useShellStore } from "./store";
 import { text } from "./i18n";
 import {
   addClipFromAsset, addVideoTrack, changeVideoDocument, commitVideoDrag, deleteSelectedClips, previewMoveClip, previewTrimClip,
-  removeVideoTrack, setSelection, setTrackHidden, setTrackLocked, setTrackMuted, setTrackVolume, splitClipAt,
+  removeVideoTrack, setClipCrop, setClipTransform, setSelection, setTrackHidden, setTrackLocked, setTrackMuted, setTrackVolume, splitClipAt,
 } from "./video-commands";
 import { probeVideoMetadata } from "./videoImport";
+import { VideoCompositor } from "./videoCompositor";
 
 const TRACK_HEIGHT = 56;
 const TRIM_HANDLE_PX = 8;
 const DEFAULT_PIXELS_PER_SECOND = 80;
-
-/** Blob URLs for video assets, keyed by asset id — same lazy-populate-once shape as
- * `AudioWorkspace.tsx`'s own `decodedAssetCache`, holding a URL instead of decoded PCM (a video
- * container isn't decoded by this codebase at all; the browser's own `<video>` element does
- * that, see `environment.ts`'s doc comment on why this package stays DOM-free). Module-level so
- * a document switch away and back doesn't re-read bytes it already fetched; revoked only when
- * the whole tab closes, the same trade-off audio's cache makes for decoded buffers. */
-const videoAssetUrlCache = new Map<string, Promise<string>>();
-
-function videoAssetUrl(assetId: string): Promise<string> {
-  let cached = videoAssetUrlCache.get(assetId);
-  if (!cached) {
-    cached = kernel.assets.read(assetId as AssetId).then((bytes) => {
-      if (!bytes) throw new Error(`Asset ${assetId} has no bytes`);
-      const mime = kernel.assets.get(assetId as AssetId)?.mime || "video/mp4";
-      return URL.createObjectURL(new Blob([bytes.buffer as ArrayBuffer], { type: mime }));
-    });
-    videoAssetUrlCache.set(assetId, cached);
-  }
-  return cached;
-}
+const SNAP_THRESHOLD_PX = 8;
 
 function formatTime(seconds: number): string {
   const minutes = Math.floor(seconds / 60), rest = seconds - minutes * 60;
   return `${minutes}:${rest.toFixed(2).padStart(5, "0")}`;
 }
 
-/** The video-kind clip, if any, covering `frame` — first match in track order (tracks earlier in
- * the array composite under later ones is a later feature; for this pass exactly one clip is
- * ever previewed at a time, so "first that covers the playhead" is the whole rule). */
-function clipUnderPlayhead(tracks: readonly VideoTrack[], frame: number): { track: VideoTrack; clip: VideoClip } | null {
-  for (const track of tracks) {
-    if (track.kind !== "video" || track.hidden) continue;
-    const clip = track.clips.find((item) => frame >= item.startFrame && frame < item.startFrame + item.durationFrames);
-    if (clip) return { track, clip };
+/** Every clip-edge frame on `tracks` except those belonging to `excludeClipId` — the candidate
+ * set `snapFrame` magnetizes a drag toward (docs/master-plan.md §9.1's `snapping` checklist
+ * item). Includes 0 and the playhead itself so a drag can also land exactly on either. */
+function snapTargets(tracks: readonly VideoTrack[], excludeClipId: string, playheadFrame: number): number[] {
+  const targets = [0, playheadFrame];
+  for (const track of tracks) for (const clip of track.clips) {
+    if (clip.id === excludeClipId) continue;
+    targets.push(clip.startFrame, clip.startFrame + clip.durationFrames);
   }
-  return null;
+  return targets;
 }
 
 interface DragState {
@@ -68,69 +51,47 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [splitMode, setSplitMode] = useState(false);
   const [rippleMode, setRippleMode] = useState(false);
-  const videoRef = useRef<HTMLVideoElement>(null);
+  const [snapMode, setSnapMode] = useState(true);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const compositorRef = useRef<VideoCompositor | null>(null);
   const dragRef = useRef<DragState | null>(null);
-  const rafRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const playingClipIdRef = useRef<string | null>(null);
 
   if (!isVideoDocumentState(document.state)) return <div className="workspace-error">Invalid video document state</div>;
   const state = document.state;
   const frameRate = state.frameRate;
   const durationFrames = Math.max(frameRate * 5, timelineDurationFrames(state));
-  const pxPerFrame = pixelsPerSecond / frameRate / 1;
+  const pxPerFrame = pixelsPerSecond / frameRate;
+  const snapThresholdFrames = Math.max(1, Math.round(SNAP_THRESHOLD_PX / pxPerFrame));
+
+  const compositor = () => (compositorRef.current ??= new VideoCompositor());
+  useEffect(() => { if (canvasRef.current) compositor().attachCanvas(canvasRef.current); }, []);
+  useEffect(() => () => { compositorRef.current?.dispose(); compositorRef.current = null; }, [document.id]);
 
   const stopPlayback = useCallback(() => {
-    videoRef.current?.pause();
-    playingClipIdRef.current = null;
+    compositorRef.current?.pause();
     setIsPlaying(false);
-    if (rafRef.current !== null) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
   }, []);
 
-  // Seeks the single preview <video> element to whatever clip covers `frame`, paused — this is
-  // what makes scrubbing show a real picture. Deliberately does not attempt to composite more
-  // than one video track (docs/master-plan.md §9.1: v0.1 is the timeline model — move/trim/
-  // split/playhead — not yet the compositing pipeline multi-track overlay needs).
-  const showFrame = useCallback((frame: number) => {
-    const hit = clipUnderPlayhead(state.tracks, frame);
-    const video = videoRef.current;
-    if (!video) return;
-    if (!hit) { video.removeAttribute("src"); playingClipIdRef.current = null; return; }
-    const seekTo = (hit.clip.offsetFrames + (frame - hit.clip.startFrame)) / hit.clip.sourceFrameRate;
-    void videoAssetUrl(hit.clip.assetId).then((url) => {
-      if (video.src !== url) video.src = url;
-      video.currentTime = seekTo;
-    }).catch(() => {});
-  }, [state.tracks]);
+  // Paints the composited frame under the playhead, paused — every visible video track's
+  // current clip, alpha-blended per `compositor-math.ts` (`VideoCompositor.renderFrame`), not
+  // just the topmost one.
+  // `document.state` is mutated in place (`kernel.documents.update`, docs/master-plan.md's own
+  // documented convention) — its reference never changes, so `document.revision` (a plain number
+  // bumped on every mutation) is the dependency that actually tells this effect something
+  // changed, the same trap `ToolContext.state` already caught elsewhere in this codebase
+  // (CLAUDE.md §2: "a snapshot on the moment of construction, not a live value").
+  useEffect(() => { if (!isPlaying) compositor().renderFrame(state, playheadFrame); }, [playheadFrame, isPlaying, document.revision]);
 
-  useEffect(() => { if (!isPlaying) showFrame(playheadFrame); }, [playheadFrame, isPlaying, showFrame]);
-  useEffect(() => () => { if (rafRef.current !== null) cancelAnimationFrame(rafRef.current); }, []);
-
-  // Plays exactly the clip under the playhead at the moment Play was pressed, stopping at its
-  // own end rather than seeking across the boundary into whatever clip comes next — seamless
-  // multi-clip/multi-track real-time playback is a follow-up (docs/master-plan.md §9.1), the
-  // same scope line audio's own v0.1 phase drew before later phases added realtime effects.
+  // Plays every track's active clip in real time, compositing continuously — a real master
+  // clock (`VideoCompositor`'s own wall-clock timer), not any single clip's playback rate. Stops
+  // automatically once the playhead passes the last clip on the timeline.
   const startPlayback = useCallback(() => {
-    const hit = clipUnderPlayhead(state.tracks, playheadFrame);
-    const video = videoRef.current;
-    if (!hit || !video) return;
-    playingClipIdRef.current = hit.clip.id;
-    const clipEndFrame = hit.clip.startFrame + hit.clip.durationFrames;
-    void videoAssetUrl(hit.clip.assetId).then(async (url) => {
-      if (video.src !== url) video.src = url;
-      video.currentTime = (hit.clip.offsetFrames + (playheadFrame - hit.clip.startFrame)) / hit.clip.sourceFrameRate;
-      await video.play();
-      setIsPlaying(true);
-      const tick = () => {
-        if (playingClipIdRef.current !== hit.clip.id) return;
-        const currentFrame = hit.clip.startFrame + Math.round((video.currentTime - hit.clip.offsetFrames / hit.clip.sourceFrameRate) * frameRate);
-        if (video.paused || currentFrame >= clipEndFrame) { stopPlayback(); setPlayheadFrame(Math.min(clipEndFrame, currentFrame)); return; }
-        setPlayheadFrame(currentFrame);
-        rafRef.current = requestAnimationFrame(tick);
-      };
-      rafRef.current = requestAnimationFrame(tick);
-    }).catch(() => {});
-  }, [state.tracks, playheadFrame, frameRate, stopPlayback]);
+    compositor().onFrame((frame) => setPlayheadFrame(frame));
+    compositor().onEnded(() => { setIsPlaying(false); setPlayheadFrame(0); });
+    compositor().play(state, playheadFrame);
+    setIsPlaying(true);
+  }, [state, playheadFrame]);
 
   const togglePlay = () => { if (isPlaying) stopPlayback(); else startPlayback(); };
   const stopToStart = () => { stopPlayback(); setPlayheadFrame(0); };
@@ -160,7 +121,21 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
     const drag = dragRef.current;
     if (!drag) return;
     const deltaPx = event.clientX - drag.startClientX;
-    const deltaFrames = Math.round(deltaPx / pxPerFrame) - drag.appliedFrames;
+    let deltaFrames = Math.round(deltaPx / pxPerFrame) - drag.appliedFrames;
+    if (deltaFrames === 0) return;
+
+    if (snapMode) {
+      const live = kernel.documents.get<VideoDocumentState>(document.id)!.state as VideoDocumentState;
+      const liveClip = live.tracks.find((item) => item.id === drag.trackId)?.clips.find((item) => item.id === drag.clipId);
+      if (liveClip) {
+        const targets = snapTargets(live.tracks, drag.clipId, playheadFrame);
+        const edgeFrame = drag.kind === "move" ? liveClip.startFrame
+          : drag.kind === "trim-left" ? liveClip.startFrame
+          : liveClip.startFrame + liveClip.durationFrames;
+        const snapped = snapFrame(edgeFrame + deltaFrames, targets, snapThresholdFrames);
+        deltaFrames = snapped - edgeFrame;
+      }
+    }
     if (deltaFrames === 0) return;
     const applied = drag.kind === "move"
       ? previewMoveClip(document.id, drag.trackId, drag.clipId, deltaFrames)
@@ -200,6 +175,8 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
   };
 
   const timelineWidthPx = Math.max(400, Math.round((durationFrames / frameRate) * pixelsPerSecond) + 100);
+  const selectedTrack = state.selection ? state.tracks.find((track) => track.id === state.selection!.trackId) : undefined;
+  const selectedClip = selectedTrack && state.selection!.clipIds.length === 1 ? selectedTrack.clips.find((clip) => clip.id === state.selection!.clipIds[0]) : undefined;
 
   return <div className="video-workspace">
     <div className="video-transport">
@@ -208,6 +185,7 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
       <span className="video-time">{formatTime(playheadFrame / frameRate)} / {formatTime(durationFrames / frameRate)}</span>
       <button className={splitMode ? "active" : ""} onClick={() => setSplitMode((value) => !value)} title={text(language, "Split tool", "Инструмент разреза")}>✂</button>
       <button className={rippleMode ? "active" : ""} onClick={() => setRippleMode((value) => !value)} title={text(language, "Ripple: deleting or right-edge-trimming a clip shifts later clips to close/open the gap", "Сдвиг: удаление или обрезка правого края клипа сдвигает следующие клипы, закрывая или открывая пробел")}>{text(language, "Ripple", "Сдвиг")}</button>
+      <button className={snapMode ? "active" : ""} onClick={() => setSnapMode((value) => !value)} title={text(language, "Snap clip edges to other clips, the playhead and frame 0", "Привязка краёв клипа к другим клипам, плейхеду и нулевому кадру")}>{text(language, "Snap", "Прилипание")}</button>
       <span className="video-transport-sep" />
       <button onClick={() => setPixelsPerSecond((value) => Math.max(5, value / 1.5))} title={text(language, "Zoom out", "Уменьшить")}>−</button>
       <button onClick={() => setPixelsPerSecond((value) => Math.min(1000, value * 1.5))} title={text(language, "Zoom in", "Увеличить")}>+</button>
@@ -219,8 +197,21 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
       {state.selection && <button data-role="trash" onClick={() => deleteSelectedClips(document.id, rippleMode)}>{text(language, "Delete Clip", "Удалить клип")}</button>}
     </div>
 
+    {selectedClip && selectedTrack?.kind === "video" && <div className="video-clip-inspector">
+      <label><span>{text(language, "X", "X")}</span><input type="number" step={1} value={Math.round(selectedClip.x)} onChange={(event) => setClipTransform(document.id, selectedTrack.id, selectedClip.id, { x: event.target.valueAsNumber || 0 })} /></label>
+      <label><span>{text(language, "Y", "Y")}</span><input type="number" step={1} value={Math.round(selectedClip.y)} onChange={(event) => setClipTransform(document.id, selectedTrack.id, selectedClip.id, { y: event.target.valueAsNumber || 0 })} /></label>
+      <label><span>{text(language, "Scale", "Масштаб")}</span><input type="range" min={0.05} max={3} step={0.01} value={selectedClip.scale} onChange={(event) => setClipTransform(document.id, selectedTrack.id, selectedClip.id, { scale: event.target.valueAsNumber })} /></label>
+      <label><span>{text(language, "Opacity", "Прозрачность")}</span><input type="range" min={0} max={1} step={0.01} value={selectedClip.opacity} onChange={(event) => setClipTransform(document.id, selectedTrack.id, selectedClip.id, { opacity: event.target.valueAsNumber })} /></label>
+      <span className="video-transport-sep" />
+      <label><span>{text(language, "Crop L", "Кроп Л")}</span><input type="range" min={0} max={0.9} step={0.01} value={selectedClip.cropLeft} onChange={(event) => setClipCrop(document.id, selectedTrack.id, selectedClip.id, "left", event.target.valueAsNumber)} /></label>
+      <label><span>{text(language, "Crop T", "Кроп В")}</span><input type="range" min={0} max={0.9} step={0.01} value={selectedClip.cropTop} onChange={(event) => setClipCrop(document.id, selectedTrack.id, selectedClip.id, "top", event.target.valueAsNumber)} /></label>
+      <label><span>{text(language, "Crop R", "Кроп П")}</span><input type="range" min={0} max={0.9} step={0.01} value={selectedClip.cropRight} onChange={(event) => setClipCrop(document.id, selectedTrack.id, selectedClip.id, "right", event.target.valueAsNumber)} /></label>
+      <label><span>{text(language, "Crop B", "Кроп Н")}</span><input type="range" min={0} max={0.9} step={0.01} value={selectedClip.cropBottom} onChange={(event) => setClipCrop(document.id, selectedTrack.id, selectedClip.id, "bottom", event.target.valueAsNumber)} /></label>
+      <button onClick={() => setClipTransform(document.id, selectedTrack.id, selectedClip.id, { x: 0, y: 0, scale: 1, opacity: 1 })}>{text(language, "Reset transform", "Сбросить трансформацию")}</button>
+    </div>}
+
     <div className="video-body">
-      <div className="video-preview"><video ref={videoRef} muted playsInline /></div>
+      <div className="video-preview"><canvas ref={canvasRef} width={state.width} height={state.height} /></div>
 
       <div className="video-track-headers">
         <div className="video-ruler-spacer" />
