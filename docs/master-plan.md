@@ -2907,30 +2907,138 @@ audio engine playback/capture/mixing, кроссплатформенный).
 Первый практический этап (v0.1), из чек-листа waveform-playlist —
 прямая цитата:
 
-- [ ] waveform
-- [ ] tracks
-- [ ] clips
-- [ ] move
-- [ ] trim
-- [ ] split
-- [ ] overlap
-- [ ] fades
-- [ ] crossfade
-- [ ] gain
-- [ ] pan
-- [ ] mono/stereo
-- [ ] mute
-- [ ] solo
-- [ ] zoom
-- [ ] playhead
-- [ ] recording
-- [ ] mixdown
-- [ ] WAV export
+- [x] waveform
+- [x] tracks
+- [x] clips
+- [x] move
+- [x] trim
+- [x] split
+- [x] overlap
+- [x] fades
+- [x] crossfade
+- [x] gain
+- [x] pan
+- [x] mono/stereo
+- [x] mute
+- [x] solo
+- [x] zoom
+- [x] playhead
+- [x] recording
+- [x] mixdown
+- [x] WAV export
+
+**Сделано (8 сентября 2026), с нуля — до этого «аудио» не существовало
+вообще.** `MediaWorkspace.tsx` держал собственное несвязанное локальное
+состояние (`useState`/`useRef`, ни разу не касавшееся
+`kernel.documents`), `openDocument("audio", ...)` собирал нетипизированный
+объект, который никто не читал, а `kernel.environments.get("audio")`
+бросил бы исключение — окружение не было зарегистрировано вовсе.
+Полный разбор текущего состояния сделан агентом-разведчиком перед
+началом работы (см. коммиты ниже за детали) — самое неожиданное:
+`packages/kernel/src/types.ts`'s `ParentTarget` уже заранее содержал
+`"audio-clip"`/`"time-range"` варианты, то есть round-trip-архитектура
+кернела уже была спроектирована с расчётом на настоящую аудио-среду,
+просто её никто не реализовывал.
+
+Донор — **waveform-playlist** (склонирован в scratchpad этой сессии,
+`packages/dawcore`/`packages/engine`/`packages/core` прочитаны построчно):
+- `packages/engine/src/PlaylistEngine.ts` и
+  `operations/clipOperations.ts` — модель move/trim/split с constraint-
+  математикой (никаких пересечений клипов на одной дорожке, минимальная
+  длительность, границы source-длительности) — перенесена почти без
+  изменений в `packages/env-audio/src/clip-operations.ts`, с одним
+  архитектурным отличием: donor держит собственный undo/redo стек
+  внутри `PlaylistEngine`, VRAVIO — нет, у VRAVIO уже есть
+  `kernel.historyByDocument`/`HistoryManager`, единая дверь для undo во
+  всех средах (раздел 4 CLAUDE.md) — второй стек был бы второй дверью.
+- `packages/core/src/fades.ts` — линейная/экспоненциальная/S-образная/
+  логарифмическая кривая фейда — перенесена в
+  `packages/env-audio/src/fades.ts` как чистые генераторы кривых;
+  часть, применяющая кривую к живому `AudioParam` (donor's
+  `applyFadeIn`/`applyFadeOut`), осталась в `apps/web/src/audioPlayback.ts`
+  — то же разделение слоёв, что между `env-raster`'s чистой пиксельной
+  математикой и `RasterWorkspace.tsx`'s canvas-рендером (раздел 5
+  CLAUDE.md: движок — чистые функции, браузерные API — в приложении).
+- `packages/core/src/utils/peaksGenerator.ts` — min/max-пары на
+  пиксельную колонку — перенесена в `packages/env-audio/src/peaks.ts`.
+
+Архитектура (новый пакет `packages/env-audio`, зеркалит
+`packages/env-raster`'s конвенции): `AudioDocumentState → AudioTrack →
+AudioClip`, позиции в сэмплах (не секундах — то же обоснование, что у
+donor: секунды копят ошибку округления на длинной сессии, а сэмплы —
+точные целые числа), клип ссылается на аудио-ассет по id, а не хранит
+свои байты (то же правило «ассет, а не копия», что у растрового слоя).
+Аудио-ассет — обычный **WAV**-файл (`packages/env-audio/src/wav.ts`,
+собственный кодек чтения/записи): не изобретён свой бинарный контейнер,
+как у растра (`.vraster`) — у аудио уже есть готовый, лишённый потерь,
+самоописывающий формат, который умеет прочитать кто угодно, поэтому
+именно он и стал внутренним форматом хранения. Любой импортируемый
+файл (MP3/OGG/что угодно, что понимает `AudioContext.decodeAudioData`
+браузера) декодируется один раз на границе импорта и переписывается в
+WAV — `apps/web/src/audioImport.ts`, то же место в архитектуре, что у
+`decodeImportedImage` для картинок.
+
+`AudioEnvironment` (`packages/env-audio/src/environment.ts`) реализует
+интерфейс `Environment<AudioDocumentState>` кернела (зеркалит
+`RasterEnvironment`) и зарегистрирован в `apps/web/src/kernel.ts` —
+`kernel.environments.get("audio")` теперь работает, а не бросает.
+`store.ts`'s `openDocument("audio", ...)` строит настоящий
+`AudioDocumentState` через `createAudioDocument` вместо старого
+объекта-пустышки.
+
+Воспроизведение — `apps/web/src/audioPlayback.ts`, чистый Web Audio
+API-граф (ничего похожего не было в кодовой базе вообще — ни одного
+`AudioContext` до этой сессии): `AudioBufferSourceNode` на клип →
+per-clip `GainNode` (фейды через `setValueCurveAtTime`) → track
+`GainNode`(volume) → `StereoPannerNode`(pan) → master → destination.
+Mute/solo — та же семантика, что в любом DAW: соло заглушает все
+остальные дорожки, а не добавляется к ним.
+
+UI — новый `apps/web/src/AudioWorkspace.tsx`, подключён в
+`DockLayout.tsx` только для `kind === "audio"` (video продолжает
+получать старый `MediaWorkspace.tsx` — задача явно ограничена аудио).
+Транспорт (play/pause/stop, время, split-режим, zoom, +дорожка,
+импорт, запись с микрофона, экспорт WAV), заголовки дорожек (имя,
+mute/solo/удалить, volume/pan-слайдеры), таймлайн с линейкой и
+плейхедом, клипы с реальным waveform-рендером (канвас, пики строятся
+из декодированного WAV на лету, кешируются по assetId), драг для
+перемещения и обрезки краёв (`pointerdown`/`pointermove`/`pointerup`,
+один шаг истории на жест — тот же паттерн, что у векторного
+перетаскивания фигур), инструмент разреза (клик по клипу в
+split-режиме), панель свойств выбранного клипа (gain/fade in/fade out).
+
+Запись — `apps/web/src/audioImport.ts`'s `startMicrophoneRecording`:
+`getUserMedia`+`MediaRecorder`, результат прогоняется через тот же
+decode-to-WAV путь, что обычный импорт файла (запись — это импорт,
+источником которого случайно оказался микрофон, не отдельный код).
+Разрешение микрофона — единственный native-диалог в этой функции,
+который *должен* появляться (запрос доступа, а не артефакт реализации
+— в отличие от `showSaveFilePicker`, который `kernel.platform.fs.saveFile`
+вызывает и который специально не тестировался живьём в этом заходе по
+прямой просьбе владельца, ожидающего в это время подтверждений).
+
+Проверено: `packages/env-audio` — 65 тестов (типы документа, clip-
+operations — move/trim/split constraint-математика, fades, peaks, WAV
+кодек round-trip на 16/24/32 бит, mixdown — размещение клипа на
+таймлайне, gain/volume/mute/solo/fade-конверты/pan/masterVolume,
+AudioEnvironment — create/extract/export/relink/describe). Живая
+проверка в браузере (реальный WAV-файл 440 Гц синус, свежая вкладка):
+импорт создаёт клип с настоящим waveform (не заглушку), воспроизведение
+реально двигает плейхед и корректно останавливается на конце клипа,
+драг клипа меняет `startSample` и отменяется по Ctrl+Z (один шаг
+истории), инструмент разреза делит клип на два с суммой длительностей
+равной исходной, mute/solo дают ожидаемый `state`, zoom показывает
+реальную форму волны вместо сплошного пятна на большом отдалении,
+прямой вызов `mixdownAudioDocument` на живом документе даёт корректный
+ненулевой, некликующий сигнал с правильным panning (equal-power law).
+`tsc --noEmit` по всем пяти пакетам и `vitest run` (94 файла / 1289
+тестов) — зелёные.
 
 Затем из AudioMass: normalize, reverse, EQ, compressor, reverb, delay,
 pitch, speed, repair. Затем из Audacity 4: realtime effect stack, plugin
 architecture, advanced recording, ripple editing, spectrogram,
-automation.
+automation. — не начато в этом заходе, следующий этап по плану
+самого документа.
 
 ### 9.3. Прямая рекомендация порядка работы (обе среды)
 

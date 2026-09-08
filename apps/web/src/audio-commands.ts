@@ -1,0 +1,206 @@
+import {
+  applyLeftTrim, applyRightTrim, canSplitAt, cloneAudioState, constrainBoundaryTrim, constrainClipDrag,
+  createAudioClip, createAudioTrack, splitClip, type AudioDocumentState, type FadeType,
+} from "@vravio/env-audio";
+import type { AssetId } from "@vravio/kernel";
+import { kernel } from "./kernel";
+
+const MIN_CLIP_DURATION_SECONDS = 0.1;
+
+function minDurationSamples(state: AudioDocumentState): number {
+  return Math.max(1, Math.floor(MIN_CLIP_DURATION_SECONDS * state.sampleRate));
+}
+
+function assignAudioState(documentId: string, snapshot: AudioDocumentState): void {
+  kernel.documents.update<AudioDocumentState>(documentId, (state) => { Object.assign(state, cloneAudioState(snapshot)); });
+}
+
+/**
+ * The audio equivalent of `changeVectorDocument`/`changeRasterDocument` — snapshot, mutate a
+ * draft, diff, one history step. `mutate` returns `false` for a no-op (nothing found, a
+ * constrained delta of 0) so a click that changes nothing doesn't leave a phantom undo entry.
+ */
+export async function changeAudioDocument(documentId: string, label: string, mutate: (state: AudioDocumentState) => boolean): Promise<void> {
+  const document = kernel.documents.get<AudioDocumentState>(documentId);
+  const history = kernel.historyByDocument.get(documentId);
+  if (!document || !history) return;
+  const before = cloneAudioState(document.state);
+  const working = cloneAudioState(document.state);
+  if (!mutate(working)) return;
+  const after = cloneAudioState(working);
+  await history.execute({ label, memoryEstimate: 0, redo: () => assignAudioState(documentId, after), undo: () => assignAudioState(documentId, before) });
+}
+
+/** Records one history step for a drag already applied live via `kernel.documents.update` on
+ * every pointermove — `before` must be captured at pointerdown, ahead of any of those writes. */
+export function commitAudioDrag(documentId: string, label: string, before: AudioDocumentState): void {
+  const document = kernel.documents.get<AudioDocumentState>(documentId);
+  const history = kernel.historyByDocument.get(documentId);
+  if (!document || !history) return;
+  const after = cloneAudioState(document.state);
+  void history.record({ label, redo: () => assignAudioState(documentId, after), undo: () => assignAudioState(documentId, before) });
+}
+
+function sortedClipsOf(state: AudioDocumentState, trackId: string) {
+  const track = state.tracks.find((item) => item.id === trackId);
+  return track ? [...track.clips].sort((a, b) => a.startSample - b.startSample) : [];
+}
+
+/** Live drag preview — called on every pointermove, writes straight to the document so the
+ * clip visibly follows the pointer; the caller commits one history step at pointerup via
+ * `commitAudioDrag`. Returns the delta actually applied (0 if fully constrained). */
+export function previewMoveClip(documentId: string, trackId: string, clipId: string, deltaSamples: number): number {
+  const document = kernel.documents.get<AudioDocumentState>(documentId);
+  if (!document) return 0;
+  const sorted = sortedClipsOf(document.state, trackId);
+  const index = sorted.findIndex((clip) => clip.id === clipId);
+  if (index === -1) return 0;
+  const constrained = constrainClipDrag(sorted[index]!, deltaSamples, sorted, index);
+  if (constrained === 0) return 0;
+  kernel.documents.update<AudioDocumentState>(documentId, (state) => {
+    const clip = state.tracks.find((item) => item.id === trackId)?.clips.find((item) => item.id === clipId);
+    if (clip) clip.startSample += constrained;
+  });
+  return constrained;
+}
+
+export function previewTrimClip(documentId: string, trackId: string, clipId: string, boundary: "left" | "right", deltaSamples: number): number {
+  const document = kernel.documents.get<AudioDocumentState>(documentId);
+  if (!document) return 0;
+  const sorted = sortedClipsOf(document.state, trackId);
+  const index = sorted.findIndex((clip) => clip.id === clipId);
+  if (index === -1) return 0;
+  const constrained = constrainBoundaryTrim(sorted[index]!, deltaSamples, boundary, sorted, index, minDurationSamples(document.state));
+  if (constrained === 0) return 0;
+  kernel.documents.update<AudioDocumentState>(documentId, (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    const clipIndex = track?.clips.findIndex((item) => item.id === clipId) ?? -1;
+    if (!track || clipIndex === -1) return;
+    track.clips[clipIndex] = boundary === "left" ? applyLeftTrim(track.clips[clipIndex]!, constrained) : applyRightTrim(track.clips[clipIndex]!, constrained);
+  });
+  return constrained;
+}
+
+export function splitClipAt(documentId: string, trackId: string, clipId: string, atSample: number): void {
+  void changeAudioDocument(documentId, "Split Clip (Разрезать клип)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    const clipIndex = track?.clips.findIndex((item) => item.id === clipId) ?? -1;
+    if (!track || clipIndex === -1) return false;
+    const clip = track.clips[clipIndex]!;
+    if (!canSplitAt(clip, atSample, minDurationSamples(state))) return false;
+    const { left, right } = splitClip(clip, atSample);
+    track.clips.splice(clipIndex, 1, left, right);
+    return true;
+  });
+}
+
+export function deleteSelectedClips(documentId: string): void {
+  void changeAudioDocument(documentId, "Delete Clip (Удалить клип)", (state) => {
+    if (!state.selection) return false;
+    const track = state.tracks.find((item) => item.id === state.selection!.trackId);
+    if (!track) return false;
+    const before = track.clips.length;
+    track.clips = track.clips.filter((clip) => !state.selection!.clipIds.includes(clip.id));
+    state.selection = null;
+    return track.clips.length !== before;
+  });
+}
+
+export function setClipGain(documentId: string, trackId: string, clipId: string, gain: number): void {
+  void changeAudioDocument(documentId, "Clip Gain (Громкость клипа)", (state) => {
+    const clip = state.tracks.find((item) => item.id === trackId)?.clips.find((item) => item.id === clipId);
+    if (!clip) return false;
+    clip.gain = Math.max(0, gain);
+    return true;
+  });
+}
+
+export function setClipFade(documentId: string, trackId: string, clipId: string, edge: "in" | "out", samples: number, fadeType?: FadeType): void {
+  void changeAudioDocument(documentId, edge === "in" ? "Fade In (Плавное появление)" : "Fade Out (Плавное затухание)", (state) => {
+    const clip = state.tracks.find((item) => item.id === trackId)?.clips.find((item) => item.id === clipId);
+    if (!clip) return false;
+    const clamped = Math.max(0, Math.min(clip.durationSamples, Math.floor(samples)));
+    if (edge === "in") clip.fadeInSamples = clamped; else clip.fadeOutSamples = clamped;
+    if (fadeType) clip.fadeType = fadeType;
+    return true;
+  });
+}
+
+export function setTrackVolume(documentId: string, trackId: string, volume: number): void {
+  void changeAudioDocument(documentId, "Track Volume (Громкость дорожки)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    if (!track) return false;
+    track.volume = Math.max(0, volume);
+    return true;
+  });
+}
+
+export function setTrackPan(documentId: string, trackId: string, pan: number): void {
+  void changeAudioDocument(documentId, "Track Pan (Панорама дорожки)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    if (!track) return false;
+    track.pan = Math.max(-1, Math.min(1, pan));
+    return true;
+  });
+}
+
+export function setTrackMuted(documentId: string, trackId: string, muted: boolean): void {
+  void changeAudioDocument(documentId, muted ? "Mute Track (Заглушить дорожку)" : "Unmute Track (Включить дорожку)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    if (!track) return false;
+    track.muted = muted;
+    return true;
+  });
+}
+
+export function setTrackSoloed(documentId: string, trackId: string, soloed: boolean): void {
+  void changeAudioDocument(documentId, soloed ? "Solo Track (Соло дорожки)" : "Unsolo Track (Снять соло)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    if (!track) return false;
+    track.soloed = soloed;
+    return true;
+  });
+}
+
+export function setTrackLocked(documentId: string, trackId: string, locked: boolean): void {
+  void changeAudioDocument(documentId, locked ? "Lock Track (Заблокировать дорожку)" : "Unlock Track (Разблокировать дорожку)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    if (!track) return false;
+    track.locked = locked;
+    return true;
+  });
+}
+
+export function addAudioTrack(documentId: string, name?: string): void {
+  void changeAudioDocument(documentId, "New Track (Новая дорожка)", (state) => { state.tracks.push(createAudioTrack(name)); return true; });
+}
+
+export function removeAudioTrack(documentId: string, trackId: string): void {
+  void changeAudioDocument(documentId, "Delete Track (Удалить дорожку)", (state) => {
+    if (state.tracks.length <= 1) return false; // always leave at least one track
+    const before = state.tracks.length;
+    state.tracks = state.tracks.filter((track) => track.id !== trackId);
+    if (state.activeTrackId === trackId) state.activeTrackId = state.tracks[0]!.id;
+    return state.tracks.length !== before;
+  });
+}
+
+export function setSelection(documentId: string, trackId: string | null, clipIds: readonly string[]): void {
+  kernel.documents.update<AudioDocumentState>(documentId, (state) => {
+    state.selection = trackId && clipIds.length ? { trackId, clipIds } : null;
+  });
+}
+
+/** Places a decoded-and-encoded WAV asset as a new clip at `startSample` on `trackId` (a new
+ * track if none is given) — the import path's document-side half; decoding the user's file and
+ * encoding it to WAV happens in `audioImport.ts`, upstream of this call. */
+export async function addClipFromAsset(documentId: string, assetId: string, name: string, durationSamples: number, sourceSampleRate: number, trackId?: string, startSample = 0): Promise<void> {
+  await changeAudioDocument(documentId, "Import Audio (Импортировать аудио)", (state) => {
+    const track = trackId ? state.tracks.find((item) => item.id === trackId) : createAudioTrack(name);
+    if (!track) return false;
+    if (!trackId) state.tracks.push(track);
+    track.clips.push(createAudioClip(assetId, durationSamples, durationSamples, sourceSampleRate, { name, startSample }));
+    return true;
+  });
+  kernel.documents.addAssetRef(documentId, assetId as AssetId);
+}

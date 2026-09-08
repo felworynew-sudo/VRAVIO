@@ -6,6 +6,7 @@ import { useShellStore } from "./store";
 import { useDocuments } from "./useDocuments";
 import { RasterWorkspace } from "./RasterWorkspace";
 import { VectorWorkspace } from "./VectorWorkspace";
+import { AudioWorkspace } from "./AudioWorkspace";
 import { appendLayer, appendRasterGroup, compositeRasterDocument, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, createRasterLayerMaskFromSelection, isRasterDocumentState, layerDocumentPixels, rasterLayerDescendantIds, rasterLayerRows, renderLayerEffects, setLayerPixels, dropPositionInRow, dropTargetForRow, placeLayer, toggleLayerLink, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerEffects, type RasterLayerMask } from "@vravio/env-raster";
 import { kernel } from "./kernel";
 import { EnvironmentIcon } from "./EnvironmentIcon";
@@ -61,6 +62,7 @@ function ViewportPanel() {
   if (!active) return null;
   if (active.kind === "raster") return <RasterWorkspace document={active} />;
   if (active.kind === "vector") return <VectorWorkspace document={active} />;
+  if (active.kind === "audio") return <AudioWorkspace document={active} />;
   return <Suspense fallback={<div className="media-empty">Loading media workspace… (Загрузка медиа-среды…)</div>}><MediaWorkspace kind={active.kind} language={language}/></Suspense>;
 }
 
