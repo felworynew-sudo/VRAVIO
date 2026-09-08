@@ -1,7 +1,7 @@
 import {
-  applyLeftTrim, applyRightTrim, audioEffectCatalog, audioEffectDefaults, canSplitAt, cloneAudioState, constrainBoundaryTrim,
-  constrainClipDrag, createAudioClip, createAudioTrack, decodeWav, encodeWav, removeAutomationPoint, rippleShift,
-  setAutomationPoint, splitClip, type AudioDocumentState, type AudioEffectId, type FadeType,
+  addTake, applyLeftTrim, applyRightTrim, audioEffectCatalog, audioEffectDefaults, canPunchIn, canSplitAt, cloneAudioState,
+  constrainBoundaryTrim, constrainClipDrag, createAudioClip, createAudioTrack, cycleTake, decodeWav, encodeWav, punchInClip,
+  removeAutomationPoint, rippleShift, setAutomationPoint, splitClip, type AudioDocumentState, type AudioEffectId, type FadeType,
 } from "@vravio/env-audio";
 import type { AssetId } from "@vravio/kernel";
 import { kernel } from "./kernel";
@@ -412,4 +412,64 @@ export function clearTrackVolumeAutomation(documentId: string, trackId: string):
     track.volumeAutomation = [];
     return true;
   });
+}
+
+/**
+ * Records a fresh WAV asset as a new take on an existing clip, rather than a separate clip next
+ * to it — what re-recording the same spot ("Retake") does, as opposed to `addClipFromAsset`'s
+ * plain "record into empty space" path. The new take becomes active immediately.
+ */
+export async function addTakeToClip(documentId: string, trackId: string, clipId: string, assetId: string, sourceDurationSamples: number, sourceSampleRate: number): Promise<void> {
+  await changeAudioDocument(documentId, "New Take (Новый дубль)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    const clip = track?.clips.find((item) => item.id === clipId);
+    if (!track || !clip) return false;
+    Object.assign(clip, addTake(clip, { assetId, sourceDurationSamples, sourceSampleRate }));
+    return true;
+  });
+  kernel.documents.addAssetRef(documentId, assetId as AssetId);
+}
+
+/** Cycles the selected clip's active take forward (`direction: 1`) or backward (`-1`), wrapping. */
+export function cycleClipTake(documentId: string, trackId: string, clipId: string, direction: 1 | -1): void {
+  void changeAudioDocument(documentId, "Switch Take (Сменить дубль)", (state) => {
+    const clip = state.tracks.find((item) => item.id === trackId)?.clips.find((item) => item.id === clipId);
+    if (!clip || clip.takes.length <= 1) return false;
+    Object.assign(clip, cycleTake(clip, direction));
+    return true;
+  });
+}
+
+/**
+ * Punches a freshly recorded WAV into `[fromSample, toSample)` of whichever clip on `trackId`
+ * fully contains that range — splits it into up to three pieces (`punchInClip`, `@vravio/env-
+ * audio`), replacing only the targeted span. Silently does nothing if no single clip covers the
+ * whole punch range (a punch spanning two clips, or landing in a gap, isn't attempted — the
+ * caller's own recording UI is responsible for only offering Punch where it applies).
+ *
+ * When the punch range is the covering clip's *entire* own span, this is really a whole-clip
+ * retake rather than a partial punch — routed through `addTake` instead of `punchInClip` so the
+ * clip keeps its identity and every take recorded onto it earlier, rather than `punchInClip`
+ * building a brand-new clip object that would start a fresh, one-take history.
+ */
+export async function punchInRecording(documentId: string, trackId: string, fromSample: number, toSample: number, assetId: string, sourceDurationSamples: number, sourceSampleRate: number): Promise<boolean> {
+  let applied = false;
+  await changeAudioDocument(documentId, "Punch In (Punch-in запись)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    if (!track) return false;
+    const clipIndex = track.clips.findIndex((item) => canPunchIn(item, fromSample, toSample));
+    if (clipIndex === -1) return false;
+    const clip = track.clips[clipIndex]!;
+    if (fromSample === clip.startSample && toSample === clip.startSample + clip.durationSamples) {
+      track.clips[clipIndex] = addTake(clip, { assetId, sourceDurationSamples, sourceSampleRate });
+    } else {
+      const { before, punched, after } = punchInClip(clip, fromSample, toSample, { assetId, sourceDurationSamples, sourceSampleRate });
+      const replacement = [before, punched, after].filter((item) => item !== null);
+      track.clips.splice(clipIndex, 1, ...replacement);
+    }
+    applied = true;
+    return true;
+  });
+  if (applied) kernel.documents.addAssetRef(documentId, assetId as AssetId);
+  return applied;
 }

@@ -12,9 +12,9 @@ import { text } from "./i18n";
 import { AudioPlaybackEngine } from "./audioPlayback";
 import {
   addAudioTrack, addClipFromAsset, addTrackEffect, applyEffectToClip, changeAudioDocument, clearTrackVolumeAutomation, commitAudioDrag,
-  deleteSelectedClips, previewMoveClip, previewTrimClip, removeAudioTrack, removeTrackEffect, removeTrackVolumeAutomationPoint,
-  setClipFade, setClipGain, setSelection, setTrackEffectEnabled, setTrackEffectParam, setTrackMuted, setTrackPan, setTrackSoloed,
-  setTrackVolume, setTrackVolumeAutomationPoint, splitClipAt,
+  cycleClipTake, deleteSelectedClips, previewMoveClip, previewTrimClip, punchInRecording, removeAudioTrack, removeTrackEffect,
+  removeTrackVolumeAutomationPoint, setClipFade, setClipGain, setSelection, setTrackEffectEnabled, setTrackEffectParam, setTrackMuted,
+  setTrackPan, setTrackSoloed, setTrackVolume, setTrackVolumeAutomationPoint, splitClipAt,
 } from "./audio-commands";
 import { decodeAudioFileToWav, startMicrophoneRecording, type AudioRecorder } from "./audioImport";
 import { usePluginRuns } from "./plugins/usePluginRuns";
@@ -164,6 +164,8 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [splitMode, setSplitMode] = useState(false);
   const [recorder, setRecorder] = useState<AudioRecorder | null>(null);
+  const [punchMode, setPunchMode] = useState(false);
+  const recordStartSampleRef = useRef(0);
   const [effectId, setEffectId] = useState<AudioEffectId>("normalize");
   const [effectParams, setEffectParams] = useState<Record<string, number>>(() => audioEffectDefaults("normalize"));
   const [applyingEffect, setApplyingEffect] = useState(false);
@@ -321,13 +323,33 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
     }
   };
 
+  /**
+   * `punchMode` on: the stopped recording re-records `[recordStartSampleRef, playheadSample)` of
+   * whichever clip on the current selection's track fully contains that span —
+   * `punchInRecording` (docs/master-plan.md §9.2's "advanced recording") splits/replaces just
+   * that range (or, spanning a clip's entire own window, adds it as a new take rather than a
+   * fresh clip — see that function's own doc comment). Falls back to a plain new clip if nothing
+   * covers the punched range, so a recording is never silently lost because Punch didn't apply.
+   */
   const toggleRecording = async () => {
     if (recorder) {
       const wav = await recorder.stop();
       setRecorder(null);
-      if (wav) await addWavAsNewClip(wav, `Recording (Запись) ${new Date().toLocaleTimeString()}`, playheadSample);
+      if (!wav) return;
+      const punchTrackId = state.selection?.trackId;
+      if (punchMode && punchTrackId) {
+        const decoded = decodeWav(wav);
+        const assetId = await kernel.assets.importAsset(wav, { kind: "audio", mime: "audio/wav", name: `Take (Дубль) ${new Date().toLocaleTimeString()}` });
+        const applied = await punchInRecording(document.id, punchTrackId, recordStartSampleRef.current, playheadSample, assetId, decoded.channelData[0]?.length ?? 0, decoded.sampleRate);
+        if (applied) return;
+        kernel.documents.addAssetRef(document.id, assetId as AssetId);
+        await addClipFromAsset(document.id, assetId, `Take (Дубль) ${new Date().toLocaleTimeString()}`, decoded.channelData[0]?.length ?? 0, decoded.sampleRate, undefined, recordStartSampleRef.current);
+        return;
+      }
+      await addWavAsNewClip(wav, `Recording (Запись) ${new Date().toLocaleTimeString()}`, playheadSample);
       return;
     }
+    recordStartSampleRef.current = playheadSample;
     try { setRecorder(await startMicrophoneRecording()); }
     catch { /* permission denied or no microphone — nothing to record */ }
   };
@@ -378,11 +400,17 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
       <button onClick={() => fileInputRef.current?.click()}>{text(language, "Import…", "Импорт…")}</button>
       <input ref={fileInputRef} type="file" accept="audio/*" multiple hidden onChange={(event) => { void importFiles(event.target.files); event.target.value = ""; }} />
       <button className={recorder ? "active" : ""} onClick={() => void toggleRecording()} title={text(language, "Record from microphone", "Запись с микрофона")}>⏺</button>
+      <button className={punchMode ? "active" : ""} onClick={() => setPunchMode((value) => !value)} title={text(language, "Punch in: recording replaces only the selected clip's span between where recording started and the playhead, as a new take", "Punch-in: запись заменяет только участок выбранного клипа между началом записи и плейхедом, как новый дубль")}>{text(language, "Punch", "Punch")}</button>
       <button onClick={() => void exportMixdown()}>{text(language, "Export WAV…", "Экспорт WAV…")}</button>
       {state.selection && <button data-role="trash" onClick={() => deleteSelectedClips(document.id, rippleMode)}>{text(language, "Delete Clip", "Удалить клип")}</button>}
     </div>
 
     {selectedClip && state.selection && <div className="audio-clip-inspector">
+      {selectedClip.takes.length > 1 && <label><span>{text(language, "Take", "Дубль")}</span>
+        <button onClick={() => cycleClipTake(document.id, state.selection!.trackId, selectedClip.id, -1)}>◀</button>
+        <span>{selectedClip.activeTakeIndex + 1}/{selectedClip.takes.length}</span>
+        <button onClick={() => cycleClipTake(document.id, state.selection!.trackId, selectedClip.id, 1)}>▶</button>
+      </label>}
       <label><span>{text(language, "Gain", "Громкость")}</span><input type="range" min={0} max={2} step={0.01} value={selectedClip.gain} onChange={(event) => setClipGain(document.id, state.selection!.trackId, selectedClip.id, event.target.valueAsNumber)} /></label>
       <label><span>{text(language, "Fade In", "Фейд-ин")}</span><input type="number" min={0} step={0.05} value={+(selectedClip.fadeInSamples / sampleRate).toFixed(2)} onChange={(event) => setClipFade(document.id, state.selection!.trackId, selectedClip.id, "in", Math.max(0, event.target.valueAsNumber) * sampleRate)} />s</label>
       <label><span>{text(language, "Fade Out", "Фейд-аут")}</span><input type="number" min={0} step={0.05} value={+(selectedClip.fadeOutSamples / sampleRate).toFixed(2)} onChange={(event) => setClipFade(document.id, state.selection!.trackId, selectedClip.id, "out", Math.max(0, event.target.valueAsNumber) * sampleRate)} />s</label>
