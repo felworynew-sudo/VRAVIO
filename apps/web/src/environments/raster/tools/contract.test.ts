@@ -262,6 +262,14 @@ const fullGesture = (context: ToolContext<unknown>, tool: RasterToolDefinition<u
   tool.onPointerMove?.(context, pointerAt(28, 10));
   tool.onPointerMove?.(context, pointerAt(32, 24));
   tool.onGestureEnd?.(context, pointerAt(32, 24));
+  // raster.crop is a pending session, not a one-drag commit (docs/master-plan.md
+  // §2.1): the drag above only lays out an adjustable rect. Real usage commits it
+  // with Enter or a click outside the frame; Enter lives in the Overlay component's
+  // own keydown listener, unreachable from this headless harness, so the click-
+  // outside path (handled in onPointerDown, same as every other tool hook here) is
+  // what actually exercises deleteCroppedPixels — otherwise every option this tool
+  // has would look inert, since none of them are read until commit.
+  if (tool.id === "raster.crop") { tool.onPointerDown?.(context, pointerAt(60, 44)); tool.onGestureEnd?.(context, pointerAt(60, 44)); }
 };
 
 /** Compares two documents by the only thing a tool could have changed. */

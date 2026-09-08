@@ -53,6 +53,7 @@ const ALLOWED: readonly { readonly match: string; readonly reason: string }[] = 
   { match: "eyedropper-loupe", reason: "canvas overlay over artwork" },
   { match: "eyedropper-chip", reason: "canvas overlay over artwork" },
   { match: "transform-", reason: "canvas handles drawn over artwork" },
+  { match: "crop-", reason: "canvas overlay over artwork — same convention as transform- handles" },
   { match: "guide-overlay", reason: "canvas overlay over artwork" },
   { match: "patch-source-path", reason: "canvas overlay over artwork" },
   { match: "text-frame-draft", reason: "canvas overlay over artwork" },

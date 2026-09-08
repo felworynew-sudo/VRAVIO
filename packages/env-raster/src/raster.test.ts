@@ -402,15 +402,35 @@ describe("raster transform", () => {
     expect(cropped.selection?.bounds).toEqual({ x: 0, y: 0, width: 2, height: 2 });
   });
 
-  it("keeps a layer's own pixels and slides its bounds when deleteCroppedPixels is false (the default)", () => {
+  it("keeps a layer's own pixels untouched when the shift never goes negative (deleteCroppedPixels false, the default)", () => {
+    const document = createRasterDocument(6, 6, { backgroundColor: "#112233" });
+    const layer = document.layers[0]!;
+    layer.bounds = { x: 2, y: 2, width: 2, height: 2 };
+    layer.pixels = new Uint8ClampedArray(2 * 2 * 4).fill(200);
+    layer.width = 2; layer.height = 2;
+    const beforePixels = layer.pixels;
+    const cropped = cropRasterDocument(document, { x: 1, y: 1, width: 4, height: 4 });
+    expect(cropped).toMatchObject({ width: 4, height: 4 });
+    // Entirely inside the crop, shifted by (-1,-1) — bounds.x/y stay >= 0, so the
+    // buffer itself is never touched, only its position.
+    expect(cropped.layers[0]?.pixels).toBe(beforePixels);
+    expect(cropped.layers[0]?.bounds).toEqual({ x: 1, y: 1, width: 2, height: 2 });
+  });
+
+  it("drops the part of a layer that would land at a negative bounds.x/y when deleteCroppedPixels is false", () => {
+    // A full-canvas layer's bounds.x/y is always 0 — shifting by (-left,-top) for any
+    // crop with left>0 or top>0 would go negative, which nothing else in this codebase
+    // can represent (layerDocumentPixels indexes bounds.x/y directly into the
+    // destination buffer — see slideLayerBounds's own comment). This reproduces the
+    // exact crash ("offset is out of bounds") a live crop-then-Enter hit before the fix.
     const document = createRasterDocument(4, 3, { backgroundColor: "#112233" });
-    const before = document.layers[0]!;
-    const beforePixelCount = before.pixels.length;
     const cropped = cropRasterDocument(document, { x: 1, y: 1, width: 2, height: 2 });
     expect(cropped).toMatchObject({ width: 2, height: 2 });
-    // The layer's own buffer is untouched — same length, only its position moved.
-    expect(cropped.layers[0]?.pixels).toHaveLength(beforePixelCount);
-    expect(cropped.layers[0]?.bounds).toEqual({ x: before.bounds.x - 1, y: before.bounds.y - 1, width: before.bounds.width, height: before.bounds.height });
+    const layer = cropped.layers[0]!;
+    expect(layer.bounds.x).toBeGreaterThanOrEqual(0);
+    expect(layer.bounds.y).toBeGreaterThanOrEqual(0);
+    // The surviving buffer's own reported size always matches its pixel array.
+    expect(layer.pixels).toHaveLength(layer.bounds.width * layer.bounds.height * 4);
   });
 
   it("crops a layer mask to the new canvas regardless of deleteCroppedPixels", () => {

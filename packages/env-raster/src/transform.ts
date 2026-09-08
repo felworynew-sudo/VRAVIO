@@ -265,16 +265,55 @@ function cropChannel(pixels: Uint8ClampedArray, sourceWidth: number, left: numbe
 }
 
 /**
+ * Slides a layer's own buffer into the new canvas's coordinate space without
+ * touching its pixels, for the `deleteCroppedPixels: false` path below —
+ * *except* on whichever of the left/top edges the shift would carry past
+ * zero. Every other bounds-producing path in this codebase (`trimToContent`,
+ * which `setLayerPixels`/every ordinary layer edit goes through) derives
+ * `bounds` from a full canvas-sized buffer, so a negative `bounds.x`/`y` has
+ * never been a representable state anywhere else — `layerDocumentPixels`
+ * indexes `(documentY * documentWidth + bounds.x) * 4` directly into the
+ * destination array, and a negative `bounds.x` makes that a negative offset,
+ * which throws ("offset is out of bounds") the moment anything tries to
+ * composite the layer. Found by driving this live, not by reasoning about
+ * the invariant in the abstract: crop-then-Enter on an ordinary full-canvas
+ * layer crashed the whole app the first time this shipped with unclamped
+ * `x - left`/`y - top`.
+ *
+ * So a layer's content that falls into the cropped-away region on the
+ * left/top is genuinely lost (this codebase has no way to remember "pixels
+ * that used to be off-canvas to the left/top" — a real, smaller gap than
+ * Photoshop's own Non-destructive Crop, tracked in docs/master-plan.md
+ * §2.1). Content overhanging the new canvas's right/bottom edge is fully
+ * preserved: `bounds.x >= 0` with `bounds.width` extending past
+ * `documentWidth - bounds.x` is already the ordinary, already-supported
+ * case `layerDocumentPixels` clips to what's visible without touching the
+ * stored buffer.
+ */
+function slideLayerBounds<T extends { bounds: RasterRect; width: number; height: number; pixels: Uint8ClampedArray }>(layer: T, left: number, top: number): Pick<T, "bounds" | "width" | "height" | "pixels"> {
+  const shiftedX = layer.bounds.x - left, shiftedY = layer.bounds.y - top;
+  const dropLeft = Math.max(0, -shiftedX), dropTop = Math.max(0, -shiftedY);
+  if (dropLeft === 0 && dropTop === 0) return { bounds: { ...layer.bounds, x: shiftedX, y: shiftedY }, width: layer.width, height: layer.height, pixels: layer.pixels };
+  const width = layer.bounds.width - dropLeft, height = layer.bounds.height - dropTop;
+  if (width <= 0 || height <= 0) return { bounds: { x: 0, y: 0, width: 1, height: 1 }, width: 1, height: 1, pixels: new Uint8ClampedArray(4) };
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    const from = ((y + dropTop) * layer.bounds.width + dropLeft) * 4;
+    pixels.set(layer.pixels.subarray(from, from + width * 4), y * width * 4);
+  }
+  return { bounds: { x: Math.max(0, shiftedX), y: Math.max(0, shiftedY), width, height }, width, height, pixels };
+}
+
+/**
  * `deleteCroppedPixels` (Photoshop's own name for the option, default
  * `false` to match Photoshop's own default): `true` trims every layer's own
  * pixel buffer to the crop rectangle, discarding anything outside it —
- * `false` keeps each layer's full buffer intact, only sliding its `bounds`
- * into the new, smaller canvas's coordinate space, so content that fell
- * outside the crop is still there (and still exported in a PSD-round-trip
- * sense) if the canvas is grown back later. A layer mask has no bounds of
- * its own to slide — see {@link cropChannel}'s comment — so it is always
- * physically cropped either way; only a layer's own `pixels`/`bounds`
- * follow the toggle.
+ * `false` keeps as much of each layer's own buffer intact as `bounds`' own
+ * never-negative invariant allows (see {@link slideLayerBounds}), so content
+ * overhanging the crop is still there if the canvas is grown back later. A
+ * layer mask has no bounds of its own to slide — see {@link cropChannel}'s
+ * comment — so it is always physically cropped either way; only a layer's
+ * own `pixels`/`bounds` follow the toggle.
  */
 export function cropRasterDocument(state: RasterDocumentState, crop: RasterRect, deleteCroppedPixels = false): RasterDocumentState {
   const left = Math.max(0, Math.min(state.width - 1, Math.floor(crop.x))), top = Math.max(0, Math.min(state.height - 1, Math.floor(crop.y)));
@@ -282,7 +321,7 @@ export function cropRasterDocument(state: RasterDocumentState, crop: RasterRect,
   const width = right - left, height = bottom - top;
   const layers = state.layers.map((layer) => {
     const maskPatch = layer.mask ? { mask: { ...layer.mask, pixels: cropChannel(layer.mask.pixels, state.width, left, top, width, height) } } : {};
-    if (!deleteCroppedPixels) return { ...layer, ...maskPatch, bounds: { ...layer.bounds, x: layer.bounds.x - left, y: layer.bounds.y - top } };
+    if (!deleteCroppedPixels) return { ...layer, ...maskPatch, ...slideLayerBounds(layer, left, top) };
     // Read in canvas space: a layer is stored at the size of its content, so
     // its own buffer cannot be indexed by the document's stride.
     const canvas = layerDocumentPixels(layer, state.width, state.height);

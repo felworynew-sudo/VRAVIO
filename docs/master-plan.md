@@ -1193,21 +1193,58 @@ Claude Code и является приоритетным источником и
 └──────────────────────────────────────────────────────────────  ✕   ✓ ─┘
 ```
 
-- [ ] Ratio dropdown: Unconstrained, Original Ratio, 1:1, 4:5, 5:7, 2:3,
-      16:9, W×H×Resolution, New Crop Preset…
-- [ ] Overlays: Thirds, Grid, Diagonal, Triangle, Golden Ratio, Golden
-      Spiral
-- [ ] Delete Cropped Pixels toggle, Allow Canvas Extension, Content-Aware
-      / AI Expand
-- [ ] Straighten (провести линию для выравнивания горизонта)
-- [ ] Донор №1 — Patchy (MIT): рамка, resize/move, поворот для
-      выравнивания, presets соотношений, расширение canvas.
+- [x] **Pending-сессия с ручками + Ratio + Delete Cropped Pixels —
+      сделано 8 сентября 2026.** Инструмент переписан с однократного
+      drag-and-commit на pending-сессию по образцу Patchy (донор №1,
+      его `src/ui/canvas_widget_crop.cpp` прочитан целиком): drag
+      создаёт прямоугольник, 8 ручек + перенос изнутри его
+      корректируют, затемнение (shield) снаружи, сетка на трети при
+      достаточном размере, Enter/клик снаружи коммитит, Escape
+      отменяет — тот же паттерн pending/commit, что уже был у
+      `raster.move`'s Free Transform. Ratio dropdown (Unconstrained,
+      Original, 1:1, 4:5, 5:7, 2:3, 16:9) — блокирует и угловые, и
+      боковые ручки, как у Patchy. `Delete Cropped Pixels` — булев
+      тоггл, по умолчанию **выключен** (Photoshop's собственный
+      дефолт): выключено — слой сохраняет буфер целиком, сдвигая
+      только `bounds` в координаты нового холста; включено — обрезает
+      каждый слой физически, как раньше.
+      **Найден и починен реальный краш** при реализации
+      non-destructive пути: сдвиг `bounds.x/y` в отрицательные
+      координаты (когда точка обрезки проходит через слой) ломал
+      `layerDocumentPixels` (`RangeError: offset is out of bounds`) —
+      нигде больше в движке отрицательные bounds не встречаются
+      (`trimToContent`, через которую проходит любая обычная правка,
+      всегда считает bounds из холст-размерного буфера). Исправлено:
+      контент, попадающий в обрезанную зону слева/сверху, теперь
+      физически урезается (не может быть представлен иначе — честное,
+      меньшее, чем у Photoshop, ограничение архитектуры, а не
+      компромисс по недосмотру), контент, нависающий справа/снизу за
+      новый холст, сохраняется полностью нетронутым.
+      Маска слоя тоже была не связана с bounds отдельно — обрезалась
+      всегда физически, независимо от тоггла.
+      Проверено: 3 новых теста в `raster.test.ts` (destructive/
+      non-destructive/mask-crop), полный `tsc --noEmit` + `vitest run`
+      (84/1204) зелёные, живая проверка в браузере — недеструктивный
+      кроп 1920×1080→1125×674 (пережил перезагрузку страницы),
+      деструктивный кроп ПОВЕРХ уже-нависающего слоя
+      1125×674→528×315 (тот самый сценарий, что вызвал крашь при
+      первой попытке) — оба чисто, без ошибок в консоли.
+      **Ещё не сделано** (следующий проход): Overlays помимо Thirds
+      (Grid/Diagonal/Triangle/Golden Ratio/Golden Spiral), W×H×Resolution
+      числовые поля, Straighten (поворот рамки для выравнивания
+      горизонта — Patchy делает это драгом за пределами рамки,
+      найдено и прочитано в `update_crop_rotate_drag`, не
+      реализовано), Allow Canvas Extension / Content-Aware Expand
+      (рамка не может выйти за пределы исходного холста — см. выше,
+      требует поддержки отрицательных/расширенных bounds по всему
+      движку, не только в кропе), New Crop Preset.
       Донор №2 — GIMP: Fixed Aspect Ratio/Width/Height/Size, Position,
       Expand from Center, Allow Growing, затемнение области с opacity,
       guides (Center Lines/Thirds/Fifths/Golden Sections/Diagonal), Auto
-      Shrink, работа по merged layers.
+      Shrink, работа по merged layers — не реализовано.
       Донор №3 — Krita: точные X/Y/W/H, блокировка aspect ratio,
-      центрирование, кадрирование Image/Canvas/Layer/Frame отдельно.
+      центрирование, кадрирование Image/Canvas/Layer/Frame отдельно —
+      не реализовано.
 
 ### 2.2. Одиночный клик фигурным инструментом → окно параметров
 
