@@ -193,17 +193,52 @@ function buildArrowCursor(rotationDegrees: number, fallback: string): string {
 
 const ARROW_CURSOR_EW = buildArrowCursor(0, "ew-resize");
 const ARROW_CURSOR_NS = buildArrowCursor(90, "ns-resize");
-const ARROW_CURSOR_NWSE = buildArrowCursor(45, "nwse-resize");
-const ARROW_CURSOR_NESW = buildArrowCursor(135, "nesw-resize");
 
-/** The resize cursor a scale handle's position implies — corners diagonal, edges axis-aligned.
- * The frame itself never visually rotates (it's always the axis-aligned opaque bounding box of
- * the already-rotated pixel content, see `pendingBounds`), so no rotation compensation is needed
- * here the way a truly rotated frame's handles would. */
+/**
+ * A corner's own resize cursor — a bent right-angle glyph tracing the frame's own two edges at
+ * that corner (the same shape a corner *handle* already reads as, `┘`-like), with an arrowhead on
+ * each of its two outward tips, rather than one straight diagonal line punched through the point.
+ * The owner asked for this specifically after the straight `nwse`/`nesw` glyph shipped: "imagine
+ * ┘ with arrows on both ends" — a bent double-arrow, not a native OS diagonal. Unlike the straight
+ * version, a corner's bend is not 180°-symmetric (TL's bracket opens down-right, BR's opens
+ * up-left), so this needs a distinct glyph per corner rather than one shared between opposite
+ * corners the way `nwse-resize`/`nesw-resize` are. `signX`/`signY` are which way each arm points
+ * — outward from the frame, the direction dragging that corner actually grows it. */
+function buildCornerArrowCursor(signX: -1 | 1, signY: -1 | 1, fallback: string): string {
+  const vx = 12, vy = 12, armLength = 8, headLength = 4, headSpread = 3.5;
+  const horizontalTip = { x: vx + signX * armLength, y: vy };
+  const verticalTip = { x: vx, y: vy + signY * armLength };
+  const path = [
+    `M${vx} ${vy}L${horizontalTip.x} ${horizontalTip.y}`,
+    `M${horizontalTip.x} ${horizontalTip.y}L${horizontalTip.x - signX * headLength} ${horizontalTip.y - headSpread}`,
+    `M${horizontalTip.x} ${horizontalTip.y}L${horizontalTip.x - signX * headLength} ${horizontalTip.y + headSpread}`,
+    `M${vx} ${vy}L${verticalTip.x} ${verticalTip.y}`,
+    `M${verticalTip.x} ${verticalTip.y}L${verticalTip.x - headSpread} ${verticalTip.y - signY * headLength}`,
+    `M${verticalTip.x} ${verticalTip.y}L${verticalTip.x + headSpread} ${verticalTip.y - signY * headLength}`,
+  ].join("");
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24'>` +
+    `<path d='${path}' fill='none' stroke='white' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/>` +
+    `<path d='${path}' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/>` +
+    `</svg>`;
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 10 10, ${fallback}`;
+}
+
+const CORNER_CURSOR_TL = buildCornerArrowCursor(-1, -1, "nwse-resize");
+const CORNER_CURSOR_TR = buildCornerArrowCursor(1, -1, "nesw-resize");
+const CORNER_CURSOR_BL = buildCornerArrowCursor(-1, 1, "nesw-resize");
+const CORNER_CURSOR_BR = buildCornerArrowCursor(1, 1, "nwse-resize");
+
+/** The resize cursor a scale handle's position implies — a bent corner glyph on a corner, a
+ * straight one along an edge. The frame itself never visually rotates (it's always the
+ * axis-aligned opaque bounding box of the already-rotated pixel content, see `pendingBounds`), so
+ * no rotation compensation is needed here the way a truly rotated frame's handles would. */
 function resizeCursorFor([hx, hy]: readonly [-1 | 0 | 1, -1 | 0 | 1]): string {
   if (hx === 0) return ARROW_CURSOR_NS;
   if (hy === 0) return ARROW_CURSOR_EW;
-  return hx === hy ? ARROW_CURSOR_NWSE : ARROW_CURSOR_NESW;
+  if (hx === -1 && hy === -1) return CORNER_CURSOR_TL;
+  if (hx === 1 && hy === -1) return CORNER_CURSOR_TR;
+  if (hx === -1 && hy === 1) return CORNER_CURSOR_BL;
+  return CORNER_CURSOR_BR;
 }
 
 /** A small circular-arrow glyph (Material Design's own "refresh" icon, not invented here — see
