@@ -55,6 +55,9 @@ function artboardAt(document: VectorDocumentState, x: number, y: number) {
   return null;
 }
 
+/** Under this many screen pixels a press-and-release is a click, not a drag. */
+const CLICK_SLOP = 4;
+
 const artboardTool: VectorToolDefinition<ArtboardToolState> = {
   id: "vector.artboard",
   createState: () => empty,
@@ -143,7 +146,16 @@ const artboardTool: VectorToolDefinition<ArtboardToolState> = {
     // zero-sized artboard behind — the owner's request, and the more useful
     // half of the gesture: dragging is how a layout is found, typing is how a
     // known size (1920x1080, A4) is specified.
-    if (drag.mode === "create" && Math.abs(pointer.point.x - drag.start.x) < 2 && Math.abs(pointer.point.y - drag.start.y) < 2) {
+    //
+    // Measured in *screen* pixels, because that is where the hand is. The same
+    // test in document units read 2 units at any zoom, which at a fit-to-window
+    // 18% is a third of a screen pixel: every ordinary click counted as a drag
+    // and committed the 0x0 placeholder instead of asking. Four screen pixels is
+    // the threshold raster's own Type tool uses for the same click-or-drag
+    // question.
+    const zoom = context.viewport.zoom;
+    const dragged = Math.hypot(pointer.point.x - drag.start.x, pointer.point.y - drag.start.y) * zoom;
+    if (drag.mode === "create" && dragged < CLICK_SLOP) {
       void artboardSizeModal({ width: 1920, height: 1080 }).then((size) => {
         void context.changeDocument("Create Artboard (Создать монтажную область)", (draft) => {
           const artboard = draft.artboards.find((item) => item.id === drag.artboardId);

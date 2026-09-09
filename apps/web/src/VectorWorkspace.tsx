@@ -399,10 +399,32 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
     documentId: document.id, workspaceRef, viewport, activeToolId, toolOptions, documentWidth: state.width, documentHeight: state.height,
   });
 
+  // What a fit needs to see, read at fit time rather than through the effect's dependencies.
+  // The effect must not re-run when the document changes — see its own comment below.
+  const fitInputsRef = useRef({ artboards: state.artboards, activeArtboardId: state.activeArtboardId, width: state.width, height: state.height, canvasBounds });
+  fitInputsRef.current = { artboards: state.artboards, activeArtboardId: state.activeArtboardId, width: state.width, height: state.height, canvasBounds };
+
+  /**
+   * "Fit in window" follows the *window*, not the document.
+   *
+   * It used to re-run on every change to `state.artboards`, and that is a gesture-breaking
+   * loop rather than a nicety: the Artboard tool creates its artboard on pointer-down and
+   * sizes it as the pointer moves, so the first frame of a new artboard re-fitted the view,
+   * moved the canvas out from under the pointer, and the pointer-up then landed outside the
+   * `<svg>` — so `onGestureEnd` never ran, nothing was committed, and the artboard stayed
+   * the 0x0 placeholder the press had created. Worse, fitting *to* that 0x0 placeholder
+   * divides by its width: zoom came out infinite and clamped to 6400%, which is exactly what
+   * a plain click with the Artboard tool did on screen.
+   *
+   * Illustrator does not re-zoom when an artboard is drawn, added or resized either — Fit is
+   * about the window. So the fit runs on mount, on a window/panel resize (the ResizeObserver),
+   * and on a document or mode switch, and never because the artwork changed underneath it.
+   */
   useEffect(() => {
     const workspace = workspaceRef.current;
     if (!workspace || viewport.mode !== "fit") return;
     const fit = () => {
+      const { artboards, activeArtboardId, width, height, canvasBounds: bounds } = fitInputsRef.current;
       const rect = workspace.getBoundingClientRect();
       // Stage 15: "fit" shows the active artboard (Illustrator's own
       // default), or the first one if none is active, or the document's
@@ -410,14 +432,17 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
       // never the raw canvas bounds, which include a margin and every
       // artboard and would otherwise zoom out further than any single
       // page a user actually wants to see filling the window.
-      const fitTarget = state.artboards.find((artboard) => artboard.id === state.activeArtboardId) ?? state.artboards[0] ?? { x: 0, y: 0, width: state.width, height: state.height };
+      const documentArea = { x: 0, y: 0, width, height };
+      const candidate = artboards.find((artboard) => artboard.id === activeArtboardId) ?? artboards[0] ?? documentArea;
+      // An artboard mid-creation has no size yet, and fitting to it would divide by zero.
+      const fitTarget = candidate.width > 0 && candidate.height > 0 ? candidate : documentArea;
       const zoom = clampZoom(Math.min(Math.max(1, rect.width - 80) / fitTarget.width, Math.max(1, rect.height - 80) / fitTarget.height));
       // `panX`/`panY` centre the stage's own box (the full canvas bounds)
       // on the workspace by default — an extra screen-pixel offset re-centres
       // on the fit target instead, since it is not generally the canvas
       // bounds' own centre once a second artboard or off-canvas shape exists.
       const targetCenterX = fitTarget.x + fitTarget.width / 2, targetCenterY = fitTarget.y + fitTarget.height / 2;
-      const canvasCenterX = canvasBounds.x + canvasBounds.width / 2, canvasCenterY = canvasBounds.y + canvasBounds.height / 2;
+      const canvasCenterX = bounds.x + bounds.width / 2, canvasCenterY = bounds.y + bounds.height / 2;
       const panX = -(targetCenterX - canvasCenterX) * zoom, panY = -(targetCenterY - canvasCenterY) * zoom;
       const current = useShellStore.getState().viewports[document.id] ?? defaultViewport;
       if (Math.abs(current.zoom - zoom) > 0.0001 || Math.abs(current.panX - panX) > 0.0001 || Math.abs(current.panY - panY) > 0.0001) setViewport(document.id, { zoom, panX, panY });
@@ -426,7 +451,7 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
     const observer = new ResizeObserver(fit);
     observer.observe(workspace);
     return () => observer.disconnect();
-  }, [document.id, setViewport, state.width, state.height, state.artboards, state.activeArtboardId, canvasBounds, viewport.mode]);
+  }, [document.id, setViewport, viewport.mode]);
 
   const catalogueTool = activeToolId ? vectorToolById.get(activeToolId) : undefined;
 
@@ -501,9 +526,29 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
     shiftKey: event.shiftKey, altKey: event.altKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey, button: event.button, detail: event.detail,
   });
 
+  /**
+   * The canvas bounds a gesture in progress is being measured against.
+   *
+   * `canvasBounds` is the union of the artwork plus a margin, so it *grows as the gesture
+   * draws* — and it is also the `<svg>`'s viewBox, which means the same screen point maps to a
+   * different document point once it has grown. The Artboard tool hits this on its very first
+   * frame: it creates the artboard on pointer-down, the bounds jump to include it, and by
+   * pointer-up the identical screen position reads as a document point hundreds of units away.
+   * The tool then sees a press and a release far apart, takes them for a drag rather than a
+   * click, and commits the 0x0 placeholder instead of asking for a size — the owner's "простой
+   * клик в сторону вызывает окошко" doing nothing at all, live.
+   *
+   * So a gesture keeps the frame it started in, exactly as raster's transforms resample from a
+   * `meshOrigin`/`quadOrigin` captured once rather than from the picture the same drag is
+   * changing (CLAUDE.md §2). Null between gestures, so hover still reads the live bounds.
+   */
+  const gestureBoundsRef = useRef<typeof canvasBounds | null>(null);
+  const frameBounds = () => gestureBoundsRef.current ?? canvasBounds;
+
   const onPointerDown = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (event.button !== 0 || !catalogueTool) return; // right-click opens the context menu instead, left-click only draws
     const workspace = workspaceRef.current; if (!workspace) return;
+    gestureBoundsRef.current = canvasBounds;
     const point = toDocumentPoint(event, workspace, viewport, canvasBounds);
     catalogueTool.onPointerDown?.(toolContextFor(catalogueTool.id), toolPointerFrom(event, point));
   };
@@ -511,7 +556,7 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   const onPointerMove = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (!catalogueTool) return;
     const workspace = workspaceRef.current; if (!workspace) return;
-    const point = toDocumentPoint(event, workspace, viewport, canvasBounds);
+    const point = toDocumentPoint(event, workspace, viewport, frameBounds());
     const pointer = toolPointerFrom(event, point);
     catalogueTool.onPointerMove?.(toolContextFor(catalogueTool.id), pointer);
     setDynamicCursor(catalogueTool.cursorFor?.(toolContextFor(catalogueTool.id), pointer));
@@ -520,7 +565,8 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   const onPointerUp = (event: ReactPointerEvent<SVGSVGElement>) => {
     if (!catalogueTool) return;
     const workspace = workspaceRef.current; if (!workspace) return;
-    const point = toDocumentPoint(event, workspace, viewport, canvasBounds);
+    const point = toDocumentPoint(event, workspace, viewport, frameBounds());
+    gestureBoundsRef.current = null;
     catalogueTool.onGestureEnd?.(toolContextFor(catalogueTool.id), toolPointerFrom(event, point));
   };
 
