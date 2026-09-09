@@ -118,6 +118,7 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
    lengths come from the JSX, divided by the zoom; nothing here may set them, or
    it would win over the attribute and put the scaling back. */
 .marching-ants g{fill:none}
+.selection-glow{stroke:rgb(255 255 255 / .55);fill:none}
 .marching-ants-dark{stroke:rgb(18 20 24)}
 .marching-ants-light{stroke:rgb(248 250 253);animation:marching-ants 960ms linear infinite}
 @keyframes marching-ants{to{stroke-dashoffset:calc(var(--ant-period) * -1)}}

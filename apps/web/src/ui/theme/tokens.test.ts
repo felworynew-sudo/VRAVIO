@@ -50,6 +50,7 @@ const ALLOWED: readonly { readonly match: string; readonly reason: string }[] = 
   // Replaces the selection-hard-edge/selection-soft-edge pair, which no longer
   // exists: an entry naming a class nothing renders excuses nothing.
   { match: "marching-ants", reason: "marching ants: the fixed black/white pair Photoshop and Patchy both draw, picked to read over any artwork rather than over a theme" },
+  { match: "selection-glow", reason: "the optional glow inside a selection: white over artwork, for the same reason the ants are" },
   { match: "liquify-brush-cursor", reason: "canvas overlay over artwork" },
   { match: "eyedropper-loupe", reason: "canvas overlay over artwork" },
   { match: "eyedropper-chip", reason: "canvas overlay over artwork" },
