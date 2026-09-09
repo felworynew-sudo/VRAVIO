@@ -107,7 +107,7 @@ export function cloneStrokeSegment(
   const step = Math.max(0.5, size * Math.max(0.01, spacing));
   if (!(distance > 0)) return carry;
   // Carried across pointer samples, exactly as the brush does — see
-  // `drawQuadraticStrokeSegment`, which owns the explanation. This used to run
+  // `accumulateStrokeSegment`, which owns the explanation. This used to run
   // `for (step = 0; step <= steps)` with `steps` forced to at least one, so every pointer sample
   // stamped at its own start *and* end however close together they were: the stamp did far more
   // work than its spacing asked for, and re-stamped the same spot on every sample.

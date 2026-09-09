@@ -46,8 +46,9 @@ describe("adjustments", () => {
     }
   });
 });
-import { appendLayer, appendRasterGroup, applyRasterFilter, blurDab, combineSelections, DirtyRegion, RasterTileCache, TileCompositor, extractTile, findSmartCrop, planTiles, saliencyMap, builtInLuts, formatCubeLut, generateLut, identityLut, parseCubeLut, sampleColorLookup, expandRectForFilter, filterPassCount, filterSpecById, filterSpecs, hasGpuFilter, clampRegionToDocument, compositeRasterDocument, compositeRasterRegion, compositeRasterThumbnail, createAdjustmentLayer, createContiguousColorSelection, createEllipseSelection, createPolygonSelection, createRasterDocument, createRasterLayer, createRectangleSelection, cropRasterDocument, drawDab, drawShape, drawQuadraticStrokeSegment, floodFill, invertPixelSelection, isRasterDocumentState, parseHexColor, patchFromSelection, rasterLayerDescendantIds, rasterLayerRows, renderLayerEffects, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectAllPixels, selectOpaquePixels, selectionOutlinePath, smudgeStrokeSegment, translateLayerPixels, translateSelection } from "./index";
+import { appendLayer, appendRasterGroup, applyRasterFilter, blurDab, combineSelections, DirtyRegion, RasterTileCache, TileCompositor, extractTile, findSmartCrop, planTiles, saliencyMap, builtInLuts, formatCubeLut, generateLut, identityLut, parseCubeLut, sampleColorLookup, expandRectForFilter, filterPassCount, filterSpecById, filterSpecs, hasGpuFilter, clampRegionToDocument, compositeRasterDocument, compositeRasterRegion, compositeRasterThumbnail, createAdjustmentLayer, createContiguousColorSelection, createEllipseSelection, createPolygonSelection, createRasterDocument, createRasterLayer, createRectangleSelection, cropRasterDocument, accumulateDab, accumulateStrokeSegment, compositeCoverage, drawShape, floodFill, invertPixelSelection, isRasterDocumentState, parseHexColor, patchFromSelection, rasterLayerDescendantIds, rasterLayerRows, renderLayerEffects, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectAllPixels, selectOpaquePixels, selectionOutlinePath, smudgeStrokeSegment, translateLayerPixels, translateSelection } from "./index";
 import { createLiquifyState, liquifyWarp, renderLiquify } from "./liquify";
+import type { RgbaColor } from "./types";
 
 describe("liquify", () => {
   it("moves visible pixels with the forward-warp gesture like Patchy's inverse field", () => {
@@ -101,37 +102,51 @@ describe("raster document", () => {
 });
 
 describe("paint", () => {
+  /**
+   * Lays a stroke's coverage onto the picture, which is the only way a dab reaches pixels: the
+   * tool accumulates its dabs into a mask and composites the band that changed, once per frame.
+   */
+  const lay = (coverage: Uint8ClampedArray, width: number, height: number, color: RgbaColor, base?: Uint8ClampedArray, erase = false): Uint8ClampedArray => {
+    const before = base ?? new Uint8ClampedArray(width * height * 4);
+    const output = before.slice();
+    compositeCoverage(output, before, coverage, width, height, { x: 0, y: 0, width, height }, color, erase);
+    return output;
+  };
+
   it("draws and erases through the same mask pipeline", () => {
-    const pixels = new Uint8ClampedArray(5 * 5 * 4);
-    drawDab(pixels, 5, 5, { x: 2.5, y: 2.5 }, 3, parseHexColor("#ff0000"), 1);
-    expect(pixels[(2 * 5 + 2) * 4]).toBe(255);
-    expect(pixels[(2 * 5 + 2) * 4 + 3]).toBe(255);
-    drawDab(pixels, 5, 5, { x: 2.5, y: 2.5 }, 3, parseHexColor("#000000"), 1, true);
-    expect(pixels[(2 * 5 + 2) * 4 + 3]).toBe(0);
+    const coverage = new Uint8ClampedArray(5 * 5);
+    accumulateDab(coverage, 5, 5, { x: 2.5, y: 2.5 }, 3, 1, 1);
+    const painted = lay(coverage, 5, 5, parseHexColor("#ff0000"));
+    expect(painted[(2 * 5 + 2) * 4]).toBe(255);
+    expect(painted[(2 * 5 + 2) * 4 + 3]).toBe(255);
+    // Erasing reads the same coverage; the colour is irrelevant, only the alpha it takes away.
+    const erased = lay(coverage, 5, 5, parseHexColor("#000000"), painted, true);
+    expect(erased[(2 * 5 + 2) * 4 + 3]).toBe(0);
   });
 
   it("clips brush coverage to the active alpha selection", () => {
-    const pixels = new Uint8ClampedArray(3 * 3 * 4);
     const selection = new Uint8ClampedArray(3 * 3); selection[4] = 255;
-    drawDab(pixels, 3, 3, { x: 1.5, y: 1.5 }, 5, parseHexColor("#ff0000"), 1, false, 1, selection);
-    expect(pixels[4 * 4]).toBe(255);
-    expect(pixels[0]).toBe(0);
+    const coverage = new Uint8ClampedArray(3 * 3);
+    accumulateDab(coverage, 3, 3, { x: 1.5, y: 1.5 }, 5, 1, 1, 1, selection);
+    const painted = lay(coverage, 3, 3, parseHexColor("#ff0000"));
+    expect(painted[4 * 4]).toBe(255);
+    expect(painted[0]).toBe(0);
   });
 
   it("resamples a curved pointer path instead of joining sparse points as corners", () => {
-    const pixels = new Uint8ClampedArray(7 * 5 * 4);
-    drawQuadraticStrokeSegment(pixels, 7, 5, { x: 1, y: 3 }, { x: 3, y: 0 }, { x: 5, y: 3 }, 1, parseHexColor("#ffffff"), 1, false);
-    expect(pixels[(1 * 7 + 3) * 4 + 3]).toBeGreaterThan(0);
+    const coverage = new Uint8ClampedArray(7 * 5);
+    accumulateStrokeSegment(coverage, 7, 5, { x: 1, y: 3 }, { x: 3, y: 0 }, { x: 5, y: 3 }, 1, 1, 1);
+    const painted = lay(coverage, 7, 5, parseHexColor("#ffffff"));
+    expect(painted[(1 * 7 + 3) * 4 + 3]).toBeGreaterThan(0);
   });
 
   it("renders angled non-round brush tips", () => {
-    const horizontal = new Uint8ClampedArray(11 * 11 * 4);
-    const vertical = new Uint8ClampedArray(11 * 11 * 4);
-    drawDab(horizontal, 11, 11, { x: 5.5, y: 5.5 }, 9, parseHexColor("#ffffff"), 1, false, 1, undefined, .25, 0, false);
-    drawDab(vertical, 11, 11, { x: 5.5, y: 5.5 }, 9, parseHexColor("#ffffff"), 1, false, 1, undefined, .25, 90, false);
-    expect(horizontal[(5 * 11 + 1) * 4 + 3]).toBeGreaterThan(0);
-    expect(horizontal[(1 * 11 + 5) * 4 + 3]).toBe(0);
-    expect(vertical[(1 * 11 + 5) * 4 + 3]).toBeGreaterThan(0);
+    const horizontal = new Uint8ClampedArray(11 * 11), vertical = new Uint8ClampedArray(11 * 11);
+    accumulateDab(horizontal, 11, 11, { x: 5.5, y: 5.5 }, 9, 1, 1, 1, undefined, .25, 0, false);
+    accumulateDab(vertical, 11, 11, { x: 5.5, y: 5.5 }, 9, 1, 1, 1, undefined, .25, 90, false);
+    expect(horizontal[5 * 11 + 1]!).toBeGreaterThan(0);
+    expect(horizontal[1 * 11 + 5]!).toBe(0);
+    expect(vertical[1 * 11 + 5]!).toBeGreaterThan(0);
   });
 });
 

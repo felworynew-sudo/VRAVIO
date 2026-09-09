@@ -7,7 +7,7 @@ function mixPixel(pixels: Uint8ClampedArray, target: number, source: Uint8Clampe
 
 /**
  * Distance-based coverage of a brush shape, softened by `hardness` the same
- * way `drawDab` in paint.ts does: full coverage out to `hardness` of the
+ * way `accumulateDab` in paint.ts does: full coverage out to `hardness` of the
  * radius, then a linear falloff to the edge. `hardness = 0` degenerates to
  * the old fixed `1 - distance` falloff every caller here used before the
  * option existed — the default, so a caller that does not pass it keeps

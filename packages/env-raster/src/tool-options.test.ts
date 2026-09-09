@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   blurStrokeSegment, cloneStrokeSegment, createRectangleSelection, dodgeBurnStrokeSegment,
-  drawQuadraticStrokeSegment, drawShape, floodFill, sampleAverage, smudgeStrokeSegment, translateLayerPixels, liftSelection, stampFloating,
+  accumulateStrokeSegment, compositeCoverage, drawShape, floodFill, sampleAverage, smudgeStrokeSegment, translateLayerPixels, liftSelection, stampFloating,
 } from "./index";
 import type { Point, RgbaColor } from "./types";
 
@@ -52,8 +52,14 @@ const changesOutput = (base: () => Uint8ClampedArray, run: (pixels: Uint8Clamped
 };
 
 describe("every brush option reaches the brush", () => {
-  const stroke = (pixels: Uint8ClampedArray, size: number, opacity: number, hardness: number, spacing: number, roundness: number, angle: number, erase = false) =>
-    drawQuadraticStrokeSegment(pixels, W, H, from, mid, to, size, erase ? white : red, opacity, erase, undefined, hardness, spacing, roundness, angle);
+  // A brush gathers its dabs into a coverage mask and composites once, so an option only
+  // reaches the brush if it survives both halves of that — opacity is the stroke's ceiling
+  // here, not a per-dab multiplier.
+  const stroke = (pixels: Uint8ClampedArray, size: number, opacity: number, hardness: number, spacing: number, roundness: number, angle: number, erase = false) => {
+    const coverage = new Uint8ClampedArray(W * H);
+    accumulateStrokeSegment(coverage, W, H, from, mid, to, size, 1, opacity, undefined, hardness, spacing, roundness, angle);
+    compositeCoverage(pixels, pixels.slice(), coverage, W, H, { x: 0, y: 0, width: W, height: H }, erase ? white : red, erase);
+  };
 
   it("size", () => expect(changesOutput(blank, (p, high) => stroke(p, high ? 40 : 8, 1, 0.82, 0.12, 1, 0))).toBe(true));
   it("opacity", () => expect(changesOutput(blank, (p, high) => stroke(p, 30, high ? 0.2 : 1, 0.82, 0.12, 1, 0))).toBe(true));

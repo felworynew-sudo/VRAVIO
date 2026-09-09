@@ -180,7 +180,7 @@ export interface ToolContext<TState> {
    *
    * This is the enforcement CLAUDE.md's "one door, not one checkpoint" rule
    * calls for: a tool does not decide whether it may touch a pixel, it reads
-   * how much this says it may and stops there — `floodFill`, `drawDab` and
+   * how much this says it may and stops there — `floodFill`, `accumulateDab` and
    * every painting primitive in @vravio/env-raster take a mask exactly this
    * shape for that reason. `commit` enforces the selection independently at
    * the write end regardless, so a tool that ignored this mask would still
