@@ -8,7 +8,19 @@ import { kernel } from "./kernel";
 import { defaultTool, toolById } from "./tools";
 import { openModal } from "./modals/runtime";
 
-export type Theme = "dark" | "light" | "contrast";
+export type Theme = "dark" | "light" | "contrast" | "ps-dark";
+export interface InterfacePalette {
+  background: string;
+  surface: string;
+  raisedSurface: string;
+  hoverSurface: string;
+  border: string;
+  text: string;
+  mutedText: string;
+  success: string;
+  warning: string;
+  danger: string;
+}
 export type Language = "en" | "ru" | "uk" | "es" | "de" | "ja" | "zh";
 export type RendererPreference = "auto" | "webgpu" | "webgl2" | "canvas2d";
 export type ViewportMode = "fit" | "actual" | "custom";
@@ -46,6 +58,9 @@ export interface ShellPreferences {
   dragZoom: boolean;
   showTooltips: boolean;
   contextualBar: boolean;
+  /** The command palette is always available via Ctrl+K; this only controls
+   * its optional button in the application bar. */
+  showCommandPaletteButton: boolean;
   snapToGuides: boolean;
   smartGuides: boolean;
   /** Grid snapping is its own on/off + spacing, separate from smartGuides —
@@ -77,6 +92,10 @@ export interface ShellPreferences {
   vectorColor: string;
   audioColor: string;
   videoColor: string;
+  /** A complete neutral UI palette. It is only applied after the user edits a
+   * color; until then the selected built-in theme remains intact. */
+  interfacePalette: InterfacePalette;
+  useCustomInterfacePalette: boolean;
   /**
    * "Don't ask again" for a `confirmModal` call, keyed by that call's own `key`
    * (e.g. `"delete-layer-mask"`) — `false` means skip asking and auto-confirm,
@@ -90,12 +109,22 @@ export interface ShellPreferences {
 
 const detectedConcurrency = typeof navigator === "undefined" || !navigator.hardwareConcurrency ? 4 : navigator.hardwareConcurrency;
 
+export const interfacePaletteForTheme = (theme: Theme): InterfacePalette => {
+  if (theme === "light") return { background: "#e8eaf0", surface: "#f8f9fb", raisedSurface: "#ffffff", hoverSurface: "#e0e3eb", border: "#c5cad5", text: "#1a1d24", mutedText: "#626a78", success: "#267b53", warning: "#a86a15", danger: "#c0392b" };
+  if (theme === "contrast") return { background: "#000000", surface: "#000000", raisedSurface: "#090909", hoverSurface: "#111111", border: "#ffffff", text: "#ffffff", mutedText: "#dddddd", success: "#7ee3a4", warning: "#ffff00", danger: "#ff0000" };
+  /* Adobe Photoshop's Dark UI is deliberately neutral (not blue-black): the
+     familiar #323232 panels, #535353 active controls and quiet grey dividers
+     let the image rather than the chrome carry the colour. */
+  if (theme === "ps-dark") return { background: "#1e1e1e", surface: "#323232", raisedSurface: "#3e3e3e", hoverSurface: "#535353", border: "#5a5a5a", text: "#f0f0f0", mutedText: "#b6b6b6", success: "#8ccc9b", warning: "#e0ad45", danger: "#e06c6c" };
+  return { background: "#111318", surface: "#191c22", raisedSurface: "#20242c", hoverSurface: "#2a303a", border: "#323844", text: "#eef1f6", mutedText: "#929baa", success: "#78c995", warning: "#e0a13a", danger: "#d86161" };
+};
+
 const defaultPreferences: ShellPreferences = {
   renderer: "auto", memoryBudgetMb: 1024, workerCount: Math.max(1, Math.min(8, detectedConcurrency - 1)),
-  dragZoom: true, showTooltips: true, contextualBar: true, showPerformanceOverlay: false, snapToGuides: true, smartGuides: true, snapToGrid: false, snapGridSize: 20, snapSensitivity: 8, showRulers: false, showGuides: true, selectionGlow: true,
+  dragZoom: true, showTooltips: true, contextualBar: true, showCommandPaletteButton: true, showPerformanceOverlay: false, snapToGuides: true, smartGuides: true, snapToGrid: false, snapGridSize: 20, snapSensitivity: 8, showRulers: false, showGuides: true, selectionGlow: true,
   guideColor: "#00a8ff", canvasSurround: "#2b2f36", focusColor: "#84a8ff",
   rasterColor: "#a100ff", vectorColor: "#0068ff", audioColor: "#ffb600", videoColor: "#ff0000",
-  confirmPreferences: {},
+  interfacePalette: interfacePaletteForTheme("dark"), useCustomInterfacePalette: false, confirmPreferences: {},
 };
 
 function readPreference<T extends string>(key: string, values: readonly T[], fallback: T): T {
@@ -138,6 +167,8 @@ interface ShellState {
   /** Give a tab to a document the kernel created, such as a round-trip child. */
   adoptDocument(id: string): void;
   requestNewDocument(kind: EnvironmentKind): void;
+  /** Leaves all open documents intact and returns to the non-document home. */
+  showHome(): void;
   activateDocument(id: string): void;
   closeDocument(id: string): void;
   setTool(documentId: string, toolId: string): void;
@@ -179,7 +210,7 @@ const createHistory = (memoryBudgetMb: number) => {
 
 export const useShellStore = create<ShellState>((set) => ({
   documentIds: [], activeDocumentId: null, mruOrder: [], activeToolByDocument: {}, selectedLayerIdsByDocument: {}, editingMaskLayerIdByDocument: {}, maskForegroundIsWhiteByDocument: {}, viewports: {}, foregroundColor: "#000000", backgroundColor: "#ffffff", toolOptions: {}, paletteOpen: false, selectionEdgesHidden: false, settingsOpen: false,
-  theme: readPreference("vravio.theme", ["dark", "light", "contrast"] as const, "dark"),
+  theme: readPreference("vravio.theme", ["dark", "light", "contrast", "ps-dark"] as const, "dark"),
   language: readPreference("vravio.language", ["en", "ru", "uk", "es", "de", "ja", "zh"] as const, "ru"),
   preferences: readPreferences(),
   openDocument: (kind, options) => set((state) => {
@@ -237,6 +268,7 @@ export const useShellStore = create<ShellState>((set) => ({
   // here for `App.tsx` to notice: the shell store no longer carries "a dialog
   // is open" for this one dialog (stage 7 of docs/migration-plan.md).
   requestNewDocument: (kind) => { openModal("new-document", { initialKind: kind }); },
+  showHome: () => set({ activeDocumentId: null }),
   activateDocument: (id) => set((state) => ({ activeDocumentId: id, mruOrder: [id, ...state.mruOrder.filter((item) => item !== id)] })),
   closeDocument: (id) => set((state) => {
     kernel.documents.close(id);
@@ -266,7 +298,11 @@ export const useShellStore = create<ShellState>((set) => ({
   resetColors: () => set({ foregroundColor: "#000000", backgroundColor: "#ffffff" }),
   setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
-  setTheme: (theme) => { savePreference("vravio.theme", theme); set({ theme }); },
+  setTheme: (theme) => { savePreference("vravio.theme", theme); set((state) => {
+    const preferences = state.preferences.useCustomInterfacePalette ? state.preferences : { ...state.preferences, interfacePalette: interfacePaletteForTheme(theme) };
+    if (!state.preferences.useCustomInterfacePalette) savePreference("vravio.preferences", JSON.stringify(preferences));
+    return { theme, preferences };
+  }); },
   setLanguage: (language) => { savePreference("vravio.language", language); set({ language }); },
   updatePreferences: (patch) => set((state) => {
     const preferences = { ...state.preferences, ...patch };
@@ -279,12 +315,12 @@ export const useShellStore = create<ShellState>((set) => ({
     return { preferences };
   }),
   resetAppearance: () => set((state) => {
-    const preferences = { ...state.preferences, guideColor: defaultPreferences.guideColor, canvasSurround: defaultPreferences.canvasSurround, focusColor: defaultPreferences.focusColor, rasterColor: defaultPreferences.rasterColor, vectorColor: defaultPreferences.vectorColor, audioColor: defaultPreferences.audioColor, videoColor: defaultPreferences.videoColor };
+    const preferences = { ...state.preferences, guideColor: defaultPreferences.guideColor, canvasSurround: defaultPreferences.canvasSurround, focusColor: defaultPreferences.focusColor, rasterColor: defaultPreferences.rasterColor, vectorColor: defaultPreferences.vectorColor, audioColor: defaultPreferences.audioColor, videoColor: defaultPreferences.videoColor, interfacePalette: interfacePaletteForTheme(state.theme), useCustomInterfacePalette: false };
     savePreference("vravio.preferences", JSON.stringify(preferences));
     return { preferences };
   }),
   cycleTheme: () => set((state) => {
-    const theme = state.theme === "dark" ? "light" : state.theme === "light" ? "contrast" : "dark";
+    const theme = state.theme === "dark" ? "light" : state.theme === "light" ? "contrast" : state.theme === "contrast" ? "ps-dark" : "dark";
     savePreference("vravio.theme", theme);
     return { theme };
   }),

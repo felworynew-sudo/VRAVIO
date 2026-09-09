@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { shortcutFromEvent } from "@vravio/kernel";
 import { text } from "./i18n";
-import { useShellStore, type Language, type RendererPreference, type Theme } from "./store";
+import { interfacePaletteForTheme, useShellStore, type InterfacePalette, type Language, type RendererPreference, type Theme } from "./store";
 import { kernel } from "./kernel";
 import { isShortcutOverridden, rebindCommandShortcut, resetCommandShortcut } from "./shortcuts";
 
@@ -44,7 +44,8 @@ export function SettingsDialog() {
           {page === "interface" && <>
             <SettingsHeading title={text(language, "Interface", "Интерфейс")} description={text(language, "Language, theme and semantic interface colors.", "Язык, тема и смысловые цвета интерфейса.")} />
             <SettingRow title={text(language, "Language", "Язык")} description={text(language, "Unsupported translations temporarily fall back to English.", "Непереведённые строки временно отображаются на английском.")}><select value={language} onChange={(event) => store.setLanguage(event.target.value as Language)}>{languages.map((item) => <option value={item.value} key={item.value}>{item.label}</option>)}</select></SettingRow>
-            <SettingRow title={text(language, "Color theme", "Цветовая тема")} description={text(language, "Applied immediately and saved locally.", "Применяется сразу и сохраняется локально.")}><select value={store.theme} onChange={(event) => store.setTheme(event.target.value as Theme)}><option value="dark">{text(language, "Dark", "Тёмная")}</option><option value="light">{text(language, "Light", "Светлая")}</option><option value="contrast">{text(language, "High contrast", "Контрастная")}</option></select></SettingRow>
+            <SettingRow title={text(language, "Color theme", "Цветовая тема")} description={text(language, "Applied immediately and saved locally.", "Применяется сразу и сохраняется локально.")}><select value={store.theme} onChange={(event) => store.setTheme(event.target.value as Theme)}><option value="dark">{text(language, "Dark", "Тёмная")}</option><option value="ps-dark">PS Dark</option><option value="light">{text(language, "Light", "Светлая")}</option><option value="contrast">{text(language, "High contrast", "Контрастная")}</option></select></SettingRow>
+            <ToggleRow title={text(language, "Command palette button", "Кнопка палитры команд")} description={text(language, "Show the compact command-palette button in the application bar. Ctrl+K always works.", "Показывать компактную кнопку палитры команд в верхней панели. Ctrl+K работает всегда.")} checked={store.preferences.showCommandPaletteButton} onChange={(showCommandPaletteButton) => store.updatePreferences({ showCommandPaletteButton })} />
             <p className="settings-color-note">{text(
               language,
               "Every accented control — active toolbar buttons, checkboxes, sliders, drop outlines — takes its color from whichever environment's document is open (Raster/Vector/Audio/Video below). \"Focus\" is only the fallback used with no document open, at the Welcome screen.",
@@ -57,7 +58,12 @@ export function SettingsDialog() {
               <ColorSetting label={text(language, "Vector", "Вектор")} value={store.preferences.vectorColor} onChange={(vectorColor) => store.updatePreferences({ vectorColor })} />
               <ColorSetting label={text(language, "Audio", "Аудио")} value={store.preferences.audioColor} onChange={(audioColor) => store.updatePreferences({ audioColor })} />
               <ColorSetting label={text(language, "Video", "Видео")} value={store.preferences.videoColor} onChange={(videoColor) => store.updatePreferences({ videoColor })} />
-            </div><button className="settings-reset" onClick={store.resetAppearance}>{text(language, "Reset appearance colors", "Сбросить цвета оформления")}</button>
+            </div>
+            <SettingsHeading title={text(language, "Interface palette", "Палитра интерфейса")} description={text(language, "Editing a color creates a local custom palette. Reset restores the selected theme, including PS Dark.", "Изменение цвета создаёт локальную палитру. Сброс возвращает выбранную тему, включая PS Dark.")} />
+            <div className="settings-color-grid interface-palette-grid">
+              {(Object.entries(store.preferences.interfacePalette ?? interfacePaletteForTheme(store.theme)) as [keyof InterfacePalette, string][]).map(([key, value]) => <ColorSetting key={key} label={interfacePaletteLabel(key, language)} value={value} onChange={(next) => store.updatePreferences({ useCustomInterfacePalette: true, interfacePalette: { ...(store.preferences.interfacePalette ?? interfacePaletteForTheme(store.theme)), [key]: next } })} />)}
+            </div>
+            <button className="settings-reset" onClick={store.resetAppearance}>{text(language, "Reset appearance colors", "Сбросить цвета оформления")}</button>
           </>}
           {page === "performance" && <>
             <SettingsHeading title={text(language, "Performance", "Производительность")} description={text(language, "Rendering backend and resource budgets. Changes are consumed by shared platform services.", "Графический движок и лимиты ресурсов. Эти параметры используются общими платформенными сервисами.")} />
@@ -99,7 +105,16 @@ function SettingRow({ title, description, children }: { title: string; descripti
 // `description` is simply forwarded — SettingRow has always rendered one, this
 // wrapper just never passed it along, so no toggle could explain itself.
 function ToggleRow({ title, description, checked, onChange }: { title: string; description?: string; checked: boolean; onChange(value: boolean): void }) { return <SettingRow title={title} {...(description === undefined ? {} : { description })}><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} /></SettingRow>; }
-function ColorSetting({ label, value, onChange }: { label: string; value: string; onChange(value: string): void }) { return <label><span>{label}</span><input type="color" value={value} onChange={(event) => onChange(event.target.value)} /></label>; }
+function interfacePaletteLabel(key: keyof InterfacePalette, language: Language): string {
+  const labels: Record<keyof InterfacePalette, readonly [string, string]> = { background: ["Application background", "Фон приложения"], surface: ["Panel surface", "Поверхность панели"], raisedSurface: ["Raised surface", "Приподнятая поверхность"], hoverSurface: ["Hover / active", "Наведение / активное"], border: ["Dividers and borders", "Разделители и границы"], text: ["Primary text", "Основной текст"], mutedText: ["Secondary text", "Вторичный текст"], success: ["Success status", "Статус успеха"], warning: ["Warning", "Предупреждение"], danger: ["Danger", "Опасное действие"] };
+  return text(language, labels[key][0], labels[key][1]);
+}
+function ColorSetting({ label, value, onChange }: { label: string; value: string; onChange(value: string): void }) {
+  const [hex, setHex] = useState(value);
+  useEffect(() => setHex(value), [value]);
+  const commit = () => { const normalized = hex.trim(); if (/^#[0-9a-fA-F]{6}$/.test(normalized)) onChange(normalized.toLowerCase()); else setHex(value); };
+  return <label className="color-setting"><span>{label}</span><div><input type="color" value={value} onChange={(event) => onChange(event.target.value)} /><input className="color-hex" aria-label={`${label} hex`} value={hex} maxLength={7} onChange={(event) => setHex(event.target.value)} onBlur={commit} onKeyDown={(event) => { if (event.key === "Enter") { event.currentTarget.blur(); } }} /></div></label>;
+}
 function NumberInput({ value, min, max, suffix, onChange }: { value: number; min: number; max: number; suffix?: string; onChange(value: number): void }) { return <span className="number-setting"><input type="number" value={value} min={min} max={max} onChange={(event) => onChange(Math.max(min, Math.min(max, event.target.valueAsNumber)))} />{suffix}</span>; }
 
 /**

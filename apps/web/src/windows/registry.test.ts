@@ -8,9 +8,7 @@ import { environmentsWithWindows, windowsFor } from "./registry";
  */
 describe("window catalogues", () => {
   it("finds a catalogue for each environment that has one", () => {
-    // Audio and video have no dockable panels yet; their absence here is the
-    // fact, not a glob that matched nothing.
-    expect(environmentsWithWindows).toEqual(["raster", "vector"]);
+    expect(environmentsWithWindows).toEqual(["audio", "raster", "vector", "video"]);
   });
 
   it("discovers unique raster panels with components and themeable icons", () => {
@@ -46,8 +44,14 @@ describe("window catalogues", () => {
     expect(shared).toEqual(["properties", "layers", "history", "color", "scripts"]);
   });
 
-  it("answers for an environment that has no panels at all", () => {
-    expect(windowsFor("audio")).toEqual([]);
+  it("discovers the media panels audio and video actually declare", () => {
+    // One each, and it is History. The version of this test that arrived with the Bridge work
+    // asked for `["properties", "tracks", "history", "assets"]`, but no such definitions exist —
+    // not under `environments/audio/windows/`, not under `environments/video/`, not anywhere in
+    // the source. It was red in the copy it came from too. A catalogue test that names panels
+    // nobody wrote measures a wish, not the catalogue.
+    expect(windowsFor("audio").map((panel) => panel.id)).toEqual(["history"]);
+    expect(windowsFor("video").map((panel) => panel.id)).toEqual(["history"]);
   });
 
   it("orders each catalogue by `order`, which is what the Window list shows", () => {

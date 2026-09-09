@@ -22,7 +22,7 @@ import { environmentsWithWindows, windowById, windowsFor } from "./windows/regis
 import { windowTitle } from "./windows/types";
 import { PANEL_REQUEST_EVENT, persistVisiblePanelIds, readVisiblePanelIds, type PanelVisibilityDetail } from "./windows/runtime";
 import { addPaletteColor, clearGuides, deleteArtboard, duplicateArtboard, isVectorDocumentState, listSymbols, rearrangeArtboardsGrid, renameArtboard, renamePaletteColor, reorderArtboard, removePaletteColor, setArtboardBleed, setRulerMode, shapeBounds, updateShape, vectorShapeRows, type Artboard, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
-import { colorToCss, cssToColor } from "@vravio/kernel";
+import { colorToCss, cssToColor, type EnvironmentKind } from "@vravio/kernel";
 import { vectorTextMeasurer } from "./vector-text-metrics";
 import { changeVectorDocument, createSymbolFromActiveSelection, deleteActiveVectorShapes, detachActiveVectorInstance, duplicateActiveVectorShape, groupActiveVectorShapes, placeVectorSymbolInstance, redefineSymbolFromActiveSelection, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
 import { validateIccProfile } from "./vector-color-wasm";
@@ -33,6 +33,7 @@ import { changeRasterDocument, changeRasterSelection } from "./commands";
 import { useIconCursor } from "./icon-cursor";
 import { confirmModal } from "./modals/runtime";
 import { useCloseOnOutsideClick } from "./useCloseOnOutsideClick";
+import { WORKSPACE_LAYOUT_STORAGE_KEY, WORKSPACE_PRESET_EVENT, selectedWorkspacePreset, workspacePresetById, type WorkspacePresetDetail } from "./workspace-presets";
 import { pickCommands } from "./commands/surface";
 import { importModelAsLayer, updateScene3DLayer } from "./scene3d-commands";
 import type { ReversibleOperation } from "@vravio/kernel";
@@ -51,8 +52,12 @@ function mergeableEdit(label: string, undo: () => void, redo: () => void): Rever
   return { label, undo, redo, mergeWith: (next) => next.label === label ? mergeableEdit(label, undo, next.redo) : null };
 }
 
-const LAYOUT_STORAGE_KEY = "vravio.workspace.default.v5";
+const LAYOUT_STORAGE_KEY = WORKSPACE_LAYOUT_STORAGE_KEY;
+const PANEL_RAIL_LABELS_KEY = "vravio.panel-rail-labels";
+const PANEL_RAIL_LABELS_EVENT = "vravio-panel-rail-labels-change";
 const EMPTY_LAYER_SELECTION: string[] = [];
+/** The shell owns the Tab shortcut; DockLayout owns the actual edge dock. */
+export const CLEAN_CANVAS_EVENT = "vravio-clean-canvas";
 
 function ViewportPanel() {
   const documents = useDocuments();
@@ -1141,26 +1146,190 @@ const components = {
 // the generic default icon below.
 const panelIcons: Record<string, string> = Object.fromEntries(environmentsWithWindows.flatMap((kind) => windowsFor(kind)).map((panel) => [panel.id, iconUrl(panel.icon)]));
 panelIcons.viewport = iconUrl("/РАДИО.svg");
-function PanelTab({ api }: IDockviewPanelHeaderProps) {
-  return <div className="panel-tab" title={api.title}><i aria-hidden="true" style={{ "--panel-mask": `url("${panelIcons[api.id] ?? iconUrl("/ПАРАМЕТРЫ.svg")}")` } as CSSProperties}/><span>{api.title}</span></div>;
+function PanelTab({ api, containerApi }: IDockviewPanelHeaderProps) {
+  const language = useShellStore((state) => state.language);
+  const contextMenu = useContextMenu();
+  useEffect(() => {
+    const closePeek = (event: PointerEvent) => {
+      const group = api.group;
+      if (group.element.classList.contains("vravio-panel-peek") && !group.element.contains(event.target as Node)) group.element.classList.remove("vravio-panel-peek");
+    };
+    document.addEventListener("pointerdown", closePeek, true);
+    return () => document.removeEventListener("pointerdown", closePeek, true);
+  }, [api]);
+  const menuItems = (): ContextMenuItem[] => {
+    const panel = containerApi.getPanel(api.id);
+    return [
+      { label: text(language, "Float Panel", "Открепить панель"), disabled: api.location.type === "floating" || !panel, onSelect: () => { if (panel) containerApi.addFloatingGroup(panel, { width: 320, height: 420 }); } },
+      { label: text(language, "Close Panel", "Закрыть панель"), separatorBefore: true, onSelect: () => api.close() },
+    ];
+  };
+  const openCollapsedPanel = () => {
+    const group = api.group;
+    if (!group.api.isCollapsed() && !group.element.classList.contains("vravio-grid-rail")) return;
+    // Dockview's free edge group expands permanently when a tab is clicked.
+    // Re-collapse after its tab-selection handler, then present the same live
+    // group as an overlay extending inward from the rail. Clicking elsewhere
+    // removes only the peek class; the saved layout remains collapsed.
+    requestAnimationFrame(() => {
+      group.api.collapse();
+      group.element.classList.add("vravio-panel-peek");
+    });
+  };
+  return <><div className="panel-tab" title={api.title} onClick={openCollapsedPanel} onContextMenu={(event) => contextMenu.open(event, menuItems())}><i aria-hidden="true" style={{ "--panel-mask": `url("${panelIcons[api.id] ?? iconUrl("/ПАРАМЕТРЫ.svg")}")` } as CSSProperties}/><span>{api.title}</span></div>{contextMenu.node}</>;
 }
 
-function PanelHeaderActions({ api }: IDockviewHeaderActionsProps) {
-  return <button className="panel-collapse" onClick={() => api.isCollapsed() ? api.expand() : api.collapse()} title={api.isCollapsed() ? "Expand panels (Развернуть панели)" : "Collapse to icons (Свернуть в значки)"} aria-label={api.isCollapsed() ? "Expand panels" : "Collapse panels"}>{api.isCollapsed() ? "»" : "«"}</button>;
+function PanelHeaderActions({ api, containerApi, activePanel, group }: IDockviewHeaderActionsProps) {
+  const language = useShellStore((state) => state.language);
+  const [collapsed, setCollapsed] = useState(() => api.isCollapsed() || (api.location.type === "grid" && (api.getHeaderPosition() === "left" || api.getHeaderPosition() === "right") && group.width <= 150));
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [railLabels, setRailLabels] = useState(() => localStorage.getItem(PANEL_RAIL_LABELS_KEY) === "true");
+  useCloseOnOutsideClick(menuOpen, ".panel-menu-wrap", () => setMenuOpen(false));
+  useEffect(() => {
+    const disposable = api.onDidCollapsedChange(({ isCollapsed }) => setCollapsed(isCollapsed));
+    return () => disposable.dispose();
+  }, [api]);
+  useEffect(() => {
+    group.element.classList.toggle("vravio-grid-rail", collapsed && api.location.type === "grid");
+  }, [api.location.type, collapsed, group]);
+  const hideActivePanel = () => {
+    const documentId = useShellStore.getState().activeDocumentId;
+    const document = documentId ? kernel.documents.get(documentId) : undefined;
+    if (document && activePanel) window.dispatchEvent(new CustomEvent<PanelVisibilityDetail>(PANEL_REQUEST_EVENT, { detail: { kind: document.kind, id: activePanel.id, visible: false } }));
+    setMenuOpen(false);
+  };
+  const moveActiveToEdge = (position: "left" | "right") => {
+    if (!activePanel) return;
+    const id = `${position}-panels`;
+    let target = containerApi.groups.find((group) => group.id === id);
+    if (!target) {
+      const targetApi = containerApi.addEdgeGroup(position, { id, initialSize: 280, minimumSize: 220, collapsedSize: 43, autoHide: true, autoReveal: true });
+      targetApi.setHeaderPosition("top");
+      target = containerApi.groups.find((group) => group.id === id);
+    }
+    if (target) activePanel.api.moveTo({ group: target });
+    setMenuOpen(false);
+  };
+  const moveActiveToNewGroup = (direction: "above" | "below") => {
+    const canvasGroup = containerApi.getPanel("viewport")?.api.group;
+    if (!activePanel || !canvasGroup) return;
+    const currentIsPanelGroup = api.location.type === "grid" && !group.panels.some((panel) => panel.id === "viewport");
+    const existingPanelGroup = containerApi.groups.find((candidate) => candidate.api.location.type === "grid" && !candidate.panels.some((panel) => panel.id === "viewport"));
+    const referenceGroup = currentIsPanelGroup ? group : existingPanelGroup;
+    const target = referenceGroup
+      ? containerApi.addGroup({ referenceGroup, direction, initialHeight: 300 })
+      : containerApi.addGroup({ referenceGroup: canvasGroup, direction: "right", initialWidth: 280 });
+    target.api.setHeaderPosition("top");
+    activePanel.api.moveTo({ group: target });
+    if (referenceGroup) target.api.setSize({ height: 300 }); else target.api.setSize({ width: 280 });
+    setMenuOpen(false);
+  };
+  const toggleRailLabels = () => {
+    const next = !railLabels;
+    setRailLabels(next);
+    localStorage.setItem(PANEL_RAIL_LABELS_KEY, String(next));
+    if (api.location.type === "grid" && collapsed) api.setSize({ width: next ? 132 : 35 });
+    window.dispatchEvent(new CustomEvent<boolean>(PANEL_RAIL_LABELS_EVENT, { detail: next }));
+  };
+  const toggleCollapsed = () => {
+    if (api.location.type === "grid") {
+      group.element.classList.remove("vravio-panel-peek");
+      if (collapsed) {
+        group.element.classList.remove("vravio-grid-rail");
+        api.setHeaderPosition("top");
+        api.setSize({ width: 280 });
+        setCollapsed(false);
+      } else {
+        group.element.classList.add("vravio-grid-rail");
+        api.setHeaderPosition("right");
+        requestAnimationFrame(() => api.setSize({ width: railLabels ? 132 : 35 }));
+        setCollapsed(true);
+      }
+      return;
+    }
+    if (api.location.type !== "edge") return;
+    if (collapsed) {
+      group.element.classList.remove("vravio-panel-peek");
+      api.expand();
+      api.setHeaderPosition("top");
+      setCollapsed(false);
+      return;
+    }
+    // Dockview measures a left/right edge's collapsed width from the tab
+    // strip. The expanded Photoshop-style group uses a top tab strip, whose
+    // width is the whole panel; collapsing it directly therefore measured
+    // ~280px and changed only the writing direction. Rotate the strip first,
+    // let ResizeObserver see its compact cross-axis, then collapse.
+    api.setHeaderPosition(api.location.position);
+    requestAnimationFrame(() => { api.collapse(); setCollapsed(true); });
+  };
+  return <div className="panel-header-actions">
+    {!collapsed && <div className="panel-menu-wrap">
+      <button className="panel-menu-trigger" onClick={() => setMenuOpen((value) => !value)} title={text(language, "Panel menu", "Меню панели")} aria-label={text(language, "Panel menu", "Меню панели")} aria-expanded={menuOpen}><i aria-hidden="true" style={{ "--panel-menu-mask": `url("${iconUrl("/МЕНЮ-ПАНЕЛИ.svg")}")` } as CSSProperties}/></button>
+      {menuOpen && <div className="panel-menu" role="menu">
+        <strong>{activePanel?.title ?? text(language, "Panel", "Панель")}</strong>
+        {activePanel?.api.location.type !== "floating" && <button role="menuitem" onClick={() => { if (activePanel) containerApi.addFloatingGroup(activePanel, { width: 320, height: 420 }); setMenuOpen(false); }}>{text(language, "Float panel", "Открепить панель")}</button>}
+        <button role="menuitem" onClick={() => moveActiveToNewGroup("below")}>{text(language, "Move to New Group Below", "Перенести в новую группу снизу")}</button>
+        <button role="menuitem" onClick={() => moveActiveToNewGroup("above")}>{text(language, "Move to New Group Above", "Перенести в новую группу сверху")}</button>
+        <button role="menuitem" disabled={api.location.type === "edge" && api.location.position === "left"} onClick={() => moveActiveToEdge("left")}>{text(language, "Dock Left", "Закрепить слева")}</button>
+        <button role="menuitem" disabled={api.location.type === "edge" && api.location.position === "right"} onClick={() => moveActiveToEdge("right")}>{text(language, "Dock Right", "Закрепить справа")}</button>
+        {api.location.type === "edge" && <button role="menuitem" onClick={() => { api.setAutoHide(!api.isAutoHide()); setMenuOpen(false); }}>{api.isAutoHide() ? text(language, "Keep dock open", "Закрепить dock") : text(language, "Auto-hide dock", "Автоскрытие dock")}</button>}
+        {activePanel && <button role="menuitem" onClick={hideActivePanel}>{text(language, "Hide panel", "Скрыть панель")}</button>}
+      </div>}
+    </div>}
+    {collapsed && <button className="panel-rail-labels" onClick={toggleRailLabels} title={railLabels ? text(language, "Icons only", "Только значки") : text(language, "Icons and names", "Значки и названия")} aria-label={railLabels ? text(language, "Show icons only", "Показать только значки") : text(language, "Show icons and names", "Показать значки и названия")}><i aria-hidden="true" style={{ "--panel-rail-mask": `url("${iconUrl(railLabels ? "/ПАНЕЛИ-БЕЗ-ПОДПИСЕЙ.svg" : "/ПАНЕЛИ-С-ПОДПИСЯМИ.svg")}")` } as CSSProperties}/></button>}
+    {(api.location.type === "edge" || api.location.type === "grid") && <button className="panel-collapse" onClick={toggleCollapsed} title={collapsed ? text(language, "Expand panels", "Развернуть панели") : text(language, "Collapse to icons", "Свернуть в значки")} aria-label={collapsed ? text(language, "Expand panels", "Развернуть панели") : text(language, "Collapse panels", "Свернуть панели")}><i aria-hidden="true" style={{ "--panel-collapse-mask": `url("${iconUrl(collapsed ? "/РАЗВЕРНУТЬ-ПАНЕЛИ.svg" : "/СВЕРНУТЬ-ПАНЕЛИ.svg")}")` } as CSSProperties}/></button>}
+  </div>;
 }
 
-function createDefaultLayout(event: DockviewReadyEvent, language: Language): void {
-  const viewportGroup = event.api.addGroup({ direction: "left", hideHeader: true });
-  event.api.addPanel({ id: "viewport", component: "viewport", title: text(language, "Canvas", "Холст"), position: { referenceGroup: viewportGroup, direction: "within" } });
-  const sideGroup = event.api.addEdgeGroup("right", { id: "right-panels", initialSize: 280, minimumSize: 220, collapsedSize: 43, autoHide: true });
-  sideGroup.setHeaderPosition("top");
-  const visible = readVisiblePanelIds("raster");
-  for (const panel of windowsFor("raster")) if (visible.has(panel.id)) event.api.addPanel({ id: panel.id, component: panel.component, title: windowTitle(panel, language), position: { referenceGroup: sideGroup.id, direction: "within" } });
+function createDefaultLayout(api: DockviewReadyEvent["api"], language: Language, kind: EnvironmentKind, panelIds: readonly string[]): void {
+  const viewportGroup = api.addGroup({ direction: "left", hideHeader: true });
+  api.addPanel({ id: "viewport", component: "viewport", title: text(language, "Canvas", "Холст"), position: { referenceGroup: viewportGroup, direction: "within" } });
+  // The main panel column must be a real grid group. An edge group is useful
+  // for a compact wall rail, but Dockview deliberately does not split one
+  // vertically, which made it impossible to drag Layers below Properties.
+  // Grid groups retain native Photoshop-like tab grouping and can be split
+  // above/below by both drag-and-drop and the panel menu.
+  const sideGroup = api.addGroup({ id: "right-panels", referenceGroup: viewportGroup, direction: "right", initialWidth: 280 });
+  sideGroup.api.setHeaderPosition("top");
+  const visible = new Set(panelIds);
+  for (const panel of windowsFor(kind)) if (visible.has(panel.id)) api.addPanel({ id: panel.id, component: panel.component, title: windowTitle(panel, language), position: { referenceGroup: sideGroup.id, direction: "within" } });
 }
 
 export function DockLayout() {
   const language = useShellStore((state) => state.language);
+  const documents = useDocuments();
+  const activeDocumentId = useShellStore((state) => state.activeDocumentId);
+  const kind = documents.find((document) => document.id === activeDocumentId)?.kind ?? "raster";
   const apiRef = useRef<DockviewReadyEvent["api"] | null>(null);
+  const [layoutRevision, setLayoutRevision] = useState(0);
+  const [railLabels, setRailLabels] = useState(() => localStorage.getItem(PANEL_RAIL_LABELS_KEY) === "true");
+  // Each preset is a real workspace, not merely a filtered view of one
+  // shared layout. Keeping its serialised dock separately lets a user tune
+  // Painting without unexpectedly overwriting their Essentials arrangement.
+  const [workspaceId, setWorkspaceId] = useState(() => selectedWorkspacePreset(kind));
+  useEffect(() => { setWorkspaceId(selectedWorkspacePreset(kind)); }, [kind]);
+  useEffect(() => {
+    const handle = (raw: Event) => setRailLabels((raw as CustomEvent<boolean>).detail);
+    window.addEventListener(PANEL_RAIL_LABELS_EVENT, handle);
+    return () => window.removeEventListener(PANEL_RAIL_LABELS_EVENT, handle);
+  }, []);
+  useEffect(() => {
+    const handle = (raw: Event) => {
+      const detail = (raw as CustomEvent<WorkspacePresetDetail>).detail;
+      if (detail.kind !== kind) return;
+      // Re-mounting the Dockview host is the library-supported transactional
+      // reset. Calling `api.clear()` and adding panels during its disposal
+      // cycle races its internal group teardown and can erase fresh panels.
+      // Reset deletes only the selected preset's saved layout. Choosing a
+      // different preset must retain its independently customised dock.
+      if (detail.reset) localStorage.removeItem(`${LAYOUT_STORAGE_KEY}.${kind}.${detail.presetId}`);
+      setWorkspaceId(detail.presetId);
+      setLayoutRevision((value) => value + 1);
+    };
+    window.addEventListener(WORKSPACE_PRESET_EVENT, handle);
+    return () => window.removeEventListener(WORKSPACE_PRESET_EVENT, handle);
+  }, [kind]);
   useEffect(() => {
     // One handler, not one per environment: these two were byte-identical
     // apart from which of the duplicated registries they looked the panel up
@@ -1173,16 +1342,49 @@ export function DockLayout() {
       if (!visible && existing) { api.removePanel(existing); return; }
       if (visible && !existing) {
         let groupId = api.getGroup("right-panels")?.id;
-        if (!groupId) { const group = api.addEdgeGroup("right", { id: "right-panels", initialSize: 280, minimumSize: 220, collapsedSize: 43, autoHide: true }); group.setHeaderPosition("top"); groupId = group.id; }
+        if (!groupId) {
+          const viewportGroup = api.getPanel("viewport")?.api.group;
+          if (!viewportGroup) return;
+          const group = api.addGroup({ id: "right-panels", referenceGroup: viewportGroup, direction: "right", initialWidth: 280 });
+          group.api.setHeaderPosition("top");
+          groupId = group.id;
+        }
         api.addPanel({ id: definition.id, component: definition.component, title: windowTitle(definition, language), position: { referenceGroup: groupId, direction: "within" } });
       }
     };
     window.addEventListener(PANEL_REQUEST_EVENT, handle);
     return () => { window.removeEventListener(PANEL_REQUEST_EVENT, handle); };
   }, [language]);
+  useEffect(() => {
+    const handle = (raw: Event) => {
+      const enabled = (raw as CustomEvent<boolean>).detail;
+      const group = apiRef.current?.getGroup("right-panels");
+      if (!group) return;
+      // Dockview exposes an HTMLElement on live groups at runtime, but its
+      // public `getGroup` return type deliberately omits it. Keep that one
+      // bridge here instead of weakening every caller of the dock API.
+      const groupElement = (group as unknown as { element?: HTMLElement }).element;
+      groupElement?.classList.remove("vravio-panel-peek");
+      if (group.api.location.type === "edge") {
+        if (enabled) group.api.collapse(); else group.api.expand();
+        return;
+      }
+      if (enabled) {
+        groupElement?.classList.add("vravio-grid-rail");
+        group.api.setHeaderPosition("right");
+        group.api.setSize({ width: localStorage.getItem(PANEL_RAIL_LABELS_KEY) === "true" ? 132 : 35 });
+      } else {
+        groupElement?.classList.remove("vravio-grid-rail");
+        group.api.setHeaderPosition("top");
+        group.api.setSize({ width: 280 });
+      }
+    };
+    window.addEventListener(CLEAN_CANVAS_EVENT, handle);
+    return () => window.removeEventListener(CLEAN_CANVAS_EVENT, handle);
+  }, []);
   const onReady = useCallback((event: DockviewReadyEvent) => {
     apiRef.current = event.api;
-    const storageKey = `${LAYOUT_STORAGE_KEY}.${language}`;
+    const storageKey = `${LAYOUT_STORAGE_KEY}.${kind}.${workspaceId}`;
     const serialized = localStorage.getItem(storageKey);
     let restored = false;
     if (serialized) {
@@ -1193,7 +1395,10 @@ export function DockLayout() {
         localStorage.removeItem(storageKey);
       }
     }
-    if (!restored) createDefaultLayout(event, language);
+    if (!restored) {
+      const preset = workspacePresetById(kind, selectedWorkspacePreset(kind));
+      createDefaultLayout(event.api, language, kind, preset?.panels ?? [...readVisiblePanelIds(kind)]);
+    }
     else {
       // A restored layout's panels carry whatever title was serialized the last time this
       // ran — a catalogue rename (definitions/*.ts's own `title`) never reaches an already-
@@ -1201,9 +1406,14 @@ export function DockLayout() {
       // on" problem CLAUDE.md documents for panel groups and toolbar order. Panel *presence*
       // already gets reconciled against the live catalogue elsewhere (readVisiblePanelIds/
       // persistVisiblePanelIds); titles did not, so this brings them into line too.
-      const activeId = useShellStore.getState().activeDocumentId;
-      const kind = activeId ? kernel.documents.get(activeId)?.kind : null;
       if (kind) for (const panel of event.api.panels) { const definition = windowById(kind, panel.id); if (definition) panel.api.setTitle(windowTitle(definition, language)); }
+      // Layouts saved by the earlier implementation can contain an expanded
+      // edge group with a left/right header. That produces the vertical text
+      // the Photoshop references explicitly avoid. Normalise the header from
+      // the group's actual persisted state: horizontal when pinned open,
+      // vertical only for the compact rail where our tab renderer suppresses
+      // or horizontally lays out the label.
+      for (const group of event.api.groups) if (group.api.location.type === "edge") group.api.setHeaderPosition(group.api.isCollapsed() ? group.api.location.position : "top");
     }
     event.api.onDidLayoutChange(() => {
       localStorage.setItem(storageKey, JSON.stringify(event.api.toJSON()));
@@ -1215,12 +1425,9 @@ export function DockLayout() {
       // raster's list — turning off vector's Colour panel silently deleted the
       // raster one. Which environment the dock belongs to is a fact about the
       // active document, not something to infer from ids that collide.
-      const activeId = useShellStore.getState().activeDocumentId;
-      const kind = activeId ? kernel.documents.get(activeId)?.kind : null;
-      if (!kind) return;
       persistVisiblePanelIds(kind, event.api.panels.map((panel) => panel.id).filter((id) => windowById(kind, id)));
     });
-  }, [language]);
+  }, [kind, language, workspaceId]);
 
-  return <div className="dock-host"><DockviewReact key={language} theme={themeDark} components={components} defaultTabComponent={PanelTab} rightHeaderActionsComponent={PanelHeaderActions} onReady={onReady} /></div>;
+  return <div className="dock-host" data-panel-rail-labels={railLabels}><DockviewReact key={`${language}.${kind}.${workspaceId}.${layoutRevision}`} theme={themeDark} floatingGroupBounds="boundedWithinViewport" floatingGroupDragHandle="titlebar" dndCompass={{ edges: false }} components={components} defaultTabComponent={PanelTab} rightHeaderActionsComponent={PanelHeaderActions} onReady={onReady} /></div>;
 }

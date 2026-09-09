@@ -161,6 +161,7 @@ interface AutomationDragState {
 
 export function AudioWorkspace({ document }: { document: VravioDocument }) {
   const language = useShellStore((shell) => shell.language);
+  const [workspaceMode, setWorkspaceMode] = useState<"edit" | "record" | "mix" | "master">("edit");
   const [pixelsPerSecond, setPixelsPerSecond] = useState(DEFAULT_PIXELS_PER_SECOND);
   const [playheadSample, setPlayheadSample] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -378,6 +379,7 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
 
   const timelineWidthPx = Math.max(400, Math.round((durationSamples / sampleRate) * pixelsPerSecond) + 100);
   const selectedClip = state.selection ? state.tracks.find((track) => track.id === state.selection!.trackId)?.clips.find((clip) => state.selection!.clipIds.includes(clip.id)) : undefined;
+  const clipCount = state.tracks.reduce((count, track) => count + track.clips.length, 0);
 
   // Everything audio contributes to running a plugin: which clip it is about.
   // Reading that clip's audible window and writing the result back are
@@ -386,27 +388,49 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
   usePluginRuns("audio", state, { documentId: document.id, trackId: state.selection?.trackId ?? "", clipId: selectedClip?.id ?? "" } satisfies AudioPluginDoor);
 
   return <div className="audio-workspace">
+    <header className="media-workspace-switcher" aria-label={text(language, "Audio workspaces", "Рабочие среды аудио")}>
+      {([
+        ["edit", "Edit", "Монтаж"],
+        ["record", "Record", "Запись"],
+        ["mix", "Mix", "Микс"],
+        ["master", "Master", "Мастеринг"],
+      ] as const).map(([id, en, ru]) => <button key={id} className={workspaceMode === id ? "active" : ""} onClick={() => setWorkspaceMode(id)}>{text(language, en, ru)}</button>)}
+      <span className="media-workspace-meta">{state.sampleRate.toLocaleString()} Hz · {state.tracks.length} {text(language, "tracks", "дорожек")}</span>
+    </header>
     <div className="audio-transport">
-      <button onClick={togglePlay} title={text(language, "Play/Pause", "Играть/Пауза")}>{isPlaying ? "⏸" : "▶"}</button>
-      <button onClick={stopToStart} title={text(language, "Stop", "Стоп")}>⏹</button>
+      <div className="media-control-group" aria-label={text(language, "Transport", "Транспорт")}> 
+        <button className="media-icon-button" onClick={togglePlay} title={text(language, "Play/Pause", "Играть/Пауза")} aria-label={text(language, "Play/Pause", "Играть/Пауза")}>{isPlaying ? "Ⅱ" : "▶"}</button>
+        <button className="media-icon-button" onClick={stopToStart} title={text(language, "Stop", "Стоп")} aria-label={text(language, "Stop", "Стоп")}>■</button>
+        <button className={recorder ? "media-icon-button active" : "media-icon-button"} onClick={() => void toggleRecording()} title={text(language, "Record from microphone", "Запись с микрофона")} aria-label={text(language, "Record from microphone", "Запись с микрофона")}>●</button>
+      </div>
       <span className="audio-time">{formatTime(playheadSample / sampleRate)} / {formatTime(durationSamples / sampleRate)}</span>
-      <button className={splitMode ? "active" : ""} onClick={() => setSplitMode((value) => !value)} title={text(language, "Split tool", "Инструмент разреза")}>✂</button>
-      <button className={rippleMode ? "active" : ""} onClick={() => setRippleMode((value) => !value)} title={text(language, "Ripple: deleting or right-edge-trimming a clip shifts later clips to close/open the gap", "Сдвиг: удаление или обрезка правого края клипа сдвигает следующие клипы, закрывая или открывая пробел")}>{text(language, "Ripple", "Сдвиг")}</button>
-      <span className="audio-transport-sep" />
-      <button onClick={() => setPixelsPerSecond((value) => Math.max(10, value / 1.5))} title={text(language, "Zoom out", "Уменьшить")}>−</button>
-      <button onClick={() => setPixelsPerSecond((value) => Math.min(2000, value * 1.5))} title={text(language, "Zoom in", "Увеличить")}>+</button>
-      <span className="audio-transport-sep" />
-      <button className={viewMode === "spectrogram" ? "active" : ""} onClick={() => setViewMode((mode) => mode === "waveform" ? "spectrogram" : "waveform")} title={text(language, "Toggle spectrogram view", "Переключить вид спектрограммы")}>{text(language, "Spectrogram", "Спектрограмма")}</button>
-      <button className={automationMode ? "active" : ""} onClick={() => setAutomationMode((value) => !value)} title={text(language, "Volume automation: click a track lane to place a point, drag to move one", "Автоматизация громкости: клик по дорожке — новая точка, перетаскивание — сдвиг")}>{text(language, "Automation", "Автоматизация")}</button>
-      <span className="audio-transport-sep" />
-      <button onClick={() => addAudioTrack(document.id)}>{text(language, "+ Track", "+ Дорожка")}</button>
-      <button onClick={() => fileInputRef.current?.click()}>{text(language, "Import…", "Импорт…")}</button>
-      <input ref={fileInputRef} type="file" accept="audio/*" multiple hidden onChange={(event) => { void importFiles(event.target.files); event.target.value = ""; }} />
-      <button className={recorder ? "active" : ""} onClick={() => void toggleRecording()} title={text(language, "Record from microphone", "Запись с микрофона")}>⏺</button>
-      <button className={punchMode ? "active" : ""} onClick={() => setPunchMode((value) => !value)} title={text(language, "Punch in: recording replaces only the selected clip's span between where recording started and the playhead, as a new take", "Punch-in: запись заменяет только участок выбранного клипа между началом записи и плейхедом, как новый дубль")}>{text(language, "Punch", "Punch")}</button>
-      <button onClick={() => void exportMixdown()}>{text(language, "Export WAV…", "Экспорт WAV…")}</button>
       {state.selection && <button data-role="trash" onClick={() => deleteSelectedClips(document.id, rippleMode)}>{text(language, "Delete Clip", "Удалить клип")}</button>}
     </div>
+    <div className="media-edit-toolbar" aria-label={text(language, "Timeline tools", "Инструменты таймлайна")}>
+      <div className="media-control-group">
+        <button className={splitMode ? "active" : ""} onClick={() => setSplitMode((value) => !value)} title={text(language, "Split tool", "Инструмент разреза")}>{text(language, "Split", "Разрез")}</button>
+        <button className={rippleMode ? "active" : ""} onClick={() => setRippleMode((value) => !value)} title={text(language, "Ripple: deleting or right-edge-trimming a clip shifts later clips to close/open the gap", "Сдвиг: удаление или обрезка правого края клипа сдвигает следующие клипы, закрывая или открывая пробел")}>{text(language, "Ripple", "Сдвиг")}</button>
+        <button className={viewMode === "spectrogram" ? "active" : ""} onClick={() => setViewMode((mode) => mode === "waveform" ? "spectrogram" : "waveform")} title={text(language, "Toggle spectrogram view", "Переключить вид спектрограммы")}>{text(language, "Spectrum", "Спектр")}</button>
+        <button className={automationMode ? "active" : ""} onClick={() => setAutomationMode((value) => !value)} title={text(language, "Volume automation: click a track lane to place a point, drag to move one", "Автоматизация громкости: клик по дорожке — новая точка, перетаскивание — сдвиг")}>{text(language, "Automation", "Автоматизация")}</button>
+      </div>
+      <div className="media-control-group media-zoom-group">
+        <button className="media-icon-button" onClick={() => setPixelsPerSecond((value) => Math.max(10, value / 1.5))} title={text(language, "Zoom out", "Уменьшить")} aria-label={text(language, "Zoom out", "Уменьшить")}>−</button>
+        <button className="media-icon-button" onClick={() => setPixelsPerSecond((value) => Math.min(2000, value * 1.5))} title={text(language, "Zoom in", "Увеличить")} aria-label={text(language, "Zoom in", "Увеличить")}>+</button>
+      </div>
+      <div className="media-project-actions">
+        <button onClick={() => addAudioTrack(document.id)}>{text(language, "+ Track", "+ Дорожка")}</button>
+        <button onClick={() => fileInputRef.current?.click()}>{text(language, "Import…", "Импорт…")}</button>
+        <input ref={fileInputRef} type="file" accept="audio/*" multiple hidden onChange={(event) => { void importFiles(event.target.files); event.target.value = ""; }} />
+        <button className={punchMode ? "active" : ""} onClick={() => setPunchMode((value) => !value)} title={text(language, "Punch in: recording replaces only the selected clip's span between where recording started and the playhead, as a new take", "Punch-in: запись заменяет только участок выбранного клипа между началом записи и плейхедом, как новый дубль")}>{text(language, "Punch", "Punch")}</button>
+        <button onClick={() => void exportMixdown()}>{text(language, "Export WAV…", "Экспорт WAV…")}</button>
+      </div>
+    </div>
+
+    {workspaceMode === "record" && <section className="audio-workspace-strip" aria-label={text(language, "Recording", "Запись")}>
+      <strong>{text(language, "Recording", "Запись")}</strong>
+      <span>{recorder ? text(language, "Recording from the system microphone", "Идёт запись с системного микрофона") : text(language, "Choose a track, then use the record button in the transport", "Выберите дорожку и нажмите кнопку записи в транспорте")}</span>
+      <span>{punchMode ? text(language, "Punch-in is enabled", "Punch-in включён") : text(language, "Punch-in is off", "Punch-in выключен")}</span>
+    </section>}
 
     {selectedClip && state.selection && <div className="audio-clip-inspector">
       {selectedClip.takes.length > 1 && <label><span>{text(language, "Take", "Дубль")}</span>
@@ -538,5 +562,30 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
         </div>
       </div>
     </div>
+
+    {workspaceMode === "mix" && <section className="audio-bottom-panel audio-mixer" aria-label={text(language, "Mixer", "Микшер")}>
+      <header><strong>{text(language, "Mixer", "Микшер")}</strong><span>{text(language, "Track controls are live", "Регуляторы дорожек работают в реальном времени")}</span></header>
+      <div className="audio-mixer-strips">
+        {state.tracks.map((track) => <section className="audio-mixer-strip" key={track.id}>
+          <strong title={track.name}>{track.name}</strong>
+          <div className="audio-mixer-buttons">
+            <button className={track.muted ? "active" : ""} onClick={() => setTrackMuted(document.id, track.id, !track.muted)} title={text(language, "Mute", "Заглушить")}>M</button>
+            <button className={track.soloed ? "active" : ""} onClick={() => setTrackSoloed(document.id, track.id, !track.soloed)} title={text(language, "Solo", "Соло")}>S</button>
+          </div>
+          <label><span>{text(language, "Gain", "Громкость")}</span><input aria-label={`${track.name}: ${text(language, "gain", "громкость")}`} type="range" min={0} max={1.5} step={0.01} value={track.volume} onChange={(event) => setTrackVolume(document.id, track.id, event.target.valueAsNumber)} /></label>
+          <label><span>{text(language, "Pan", "Панорама")}</span><input aria-label={`${track.name}: ${text(language, "pan", "панорама")}`} type="range" min={-1} max={1} step={0.01} value={track.pan} onChange={(event) => setTrackPan(document.id, track.id, event.target.valueAsNumber)} /></label>
+        </section>)}
+      </div>
+    </section>}
+
+    {workspaceMode === "master" && <section className="audio-bottom-panel audio-analysis" aria-label={text(language, "Project summary", "Сводка проекта")}>
+      <header><strong>{text(language, "Project summary", "Сводка проекта")}</strong><span>{text(language, "Analysis meters require the next audio-engine stage", "Полные измерители появятся вместе со следующим этапом аудиодвижка")}</span></header>
+      <dl>
+        <div><dt>{text(language, "Format", "Формат")}</dt><dd>{state.sampleRate.toLocaleString()} Hz · WAV</dd></div>
+        <div><dt>{text(language, "Duration", "Длительность")}</dt><dd>{formatTime(durationSamples / sampleRate)}</dd></div>
+        <div><dt>{text(language, "Tracks", "Дорожки")}</dt><dd>{state.tracks.length}</dd></div>
+        <div><dt>{text(language, "Clips", "Клипы")}</dt><dd>{clipCount}</dd></div>
+      </dl>
+    </section>}
   </div>;
 }

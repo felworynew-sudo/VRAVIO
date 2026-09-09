@@ -9,6 +9,22 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
     "core:window:allow-start-dragging",
-    "core:window:allow-is-maximized"
+    "core:window:allow-is-maximized",
+    "fs:default",
+    "fs:allow-read-dir",
+    "fs:allow-read-file",
+    "fs:allow-stat",
+    {
+      "identifier": "fs:scope",
+      "allow": [
+        { "path": "$HOME" }, { "path": "$HOME/**/*" },
+        { "path": "$DESKTOP" }, { "path": "$DESKTOP/**/*" },
+        { "path": "$DOCUMENT" }, { "path": "$DOCUMENT/**/*" },
+        { "path": "$DOWNLOAD" }, { "path": "$DOWNLOAD/**/*" },
+        { "path": "$PICTURE" }, { "path": "$PICTURE/**/*" },
+        { "path": "$AUDIO" }, { "path": "$AUDIO/**/*" },
+        { "path": "$VIDEO" }, { "path": "$VIDEO/**/*" }
+      ]
+    }
   ]
 }

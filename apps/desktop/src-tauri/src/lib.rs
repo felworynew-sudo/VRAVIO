@@ -12,6 +12,9 @@
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Supplies the desktop implementation of the home browser's read-only
+        // file port; document state remains entirely in the shared web kernel.
+        .plugin(tauri_plugin_fs::init())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

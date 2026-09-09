@@ -28,9 +28,7 @@ export function windowById(kind: EnvironmentKind | string, id: string): WindowDe
   return windowsFor(kind).find((definition) => definition.id === id);
 }
 
-/** Which environments have a panel catalogue at all — audio and video do not
- * yet, and asking for theirs is a legitimate question with an empty answer,
- * not a mistake. */
+/** Which environments have a panel catalogue at all. */
 export const environmentsWithWindows: readonly string[] = [...byEnvironment.keys()].sort();
 
 const EMPTY: readonly WindowDefinition[] = [];

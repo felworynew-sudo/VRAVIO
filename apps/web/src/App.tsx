@@ -3,9 +3,9 @@ import { WARP_PRESETS, confineToSelection, cropRasterDocument, decodePsd, defaul
 import { maskToRgba, rgbaToMask } from "./raster-pixel-buffers";
 import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
 import { withBusyPainted } from "./busy";
-import { useShellStore, type Language } from "./store";
+import { interfacePaletteForTheme, useShellStore, type Language } from "./store";
 import type { EnvironmentKind, RenderBackend } from "@vravio/kernel";
-import { DockLayout } from "./DockLayout";
+import { CLEAN_CANVAS_EVENT, DockLayout } from "./DockLayout";
 import { environmentMeta } from "./environment";
 import { toolById, toolsFor, type ToolDefinition, type ToolOption } from "./tools";
 import { smartCropRatios } from "./environments/raster/commands/definitions/smart-crop";
@@ -48,6 +48,15 @@ import { exportVectorDocumentToSvg } from "./vector-svg-export";
 import { vectorTextMeasurer } from "./vector-text-metrics";
 import { importSvgToJson } from "./vector-svg-wasm";
 import { luminanceHistogram } from "./raster-adjustments/histogram";
+import { HomeScreen } from "./bridge/HomeScreen";
+import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
+import { applyWorkspacePreset, resetWorkspacePreset, selectedWorkspacePreset, workspacePresetsFor } from "./workspace-presets";
+import { decodeAudioFileToWav } from "./audioImport";
+import { decodeWav, isAudioDocumentState } from "@vravio/env-audio";
+import { addClipFromAsset as addAudioClipFromAsset } from "./audio-commands";
+import { probeVideoMetadata } from "./videoImport";
+import { addClipFromAsset as addVideoClipFromAsset } from "./video-commands";
+import { isVideoDocumentState } from "@vravio/env-video";
 import "./styles.css";
 
 export function App() {
@@ -57,6 +66,7 @@ export function App() {
   const [query, setQuery] = useState("");
   const [openToolGroup, setOpenToolGroup] = useState<string | null>(null);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+  const [cleanCanvas, setCleanCanvas] = useState(false);
   const openImageRef = useRef<HTMLInputElement>(null);
   const importSvgAsVectorRef = useRef<HTMLInputElement>(null);
   const [transformMetrics, setTransformMetrics] = useState<{ active: boolean; x: number; y: number; width: number; height: number; rotation: number; warp?: boolean } | null>(null);
@@ -93,7 +103,9 @@ export function App() {
   // auto-tinting and its own row in Settings' color grid — not a speculative system
   // built ahead of that need, just the one lookup this rule already goes through.
   const environmentColorByKind: Record<EnvironmentKind, string> = { raster: store.preferences.rasterColor, vector: store.preferences.vectorColor, audio: store.preferences.audioColor, video: store.preferences.videoColor };
-  const themeStyle = { "--focus": active ? environmentColorByKind[active.kind] : store.preferences.focusColor, "--raster": store.preferences.rasterColor, "--vector": store.preferences.vectorColor, "--audio": store.preferences.audioColor, "--video": store.preferences.videoColor, "--canvas-surround": store.preferences.canvasSurround, "--guide": store.preferences.guideColor } as CSSProperties;
+  const interfacePalette = store.preferences.interfacePalette ?? interfacePaletteForTheme(store.theme);
+  const customInterfaceStyle: Record<string, string> = store.preferences.useCustomInterfacePalette ? { "--bg": interfacePalette.background, "--surface": interfacePalette.surface, "--surface2": interfacePalette.raisedSurface, "--surface3": interfacePalette.hoverSurface, "--border": interfacePalette.border, "--text": interfacePalette.text, "--muted": interfacePalette.mutedText, "--success": interfacePalette.success, "--warning": interfacePalette.warning, "--danger": interfacePalette.danger } : {};
+  const themeStyle = { "--focus": active ? environmentColorByKind[active.kind] : store.preferences.focusColor, "--raster": store.preferences.rasterColor, "--vector": store.preferences.vectorColor, "--audio": store.preferences.audioColor, "--video": store.preferences.videoColor, "--canvas-surround": store.preferences.canvasSurround, "--guide": store.preferences.guideColor, ...customInterfaceStyle } as CSSProperties & Record<string, string>;
 
   const openDecodedRaster = (name: string, decoded: DecodedRaw): string => {
     store.openDocument("raster", { name, width: decoded.width, height: decoded.height, resolution: 72, resolutionUnit: "ppi", backgroundColor: null, pixelAspectRatio: 1 });
@@ -178,6 +190,36 @@ export function App() {
     const id = useShellStore.getState().activeDocumentId; if (!id) return;
     const surface = window.document.createElement("canvas"); surface.width = source.width; surface.height = source.height; const context = surface.getContext("2d"); if (!context) return; context.drawImage(source.image, 0, 0, source.width, source.height); source.release();
     kernel.documents.update<RasterDocumentState>(id, (state) => { setLayerPixels(state.layers[0]!, context.getImageData(0, 0, state.width, state.height).data, state.width, state.height); });
+  };
+
+  // The home browser is intentionally not a second importer. It only routes a
+  // file to the environment that already owns its decoding and document setup.
+  const openBridgeFile = async (file: File): Promise<void> => {
+    const extension = file.name.split(".").pop()?.toLowerCase() ?? "";
+    if (extension === "svg") { await importSvgAsVector(file); return; }
+    if (["mp3", "wav", "flac", "ogg", "aac", "m4a"].includes(extension) || file.type.startsWith("audio/")) {
+      const wav = await decodeAudioFileToWav(file);
+      if (!wav) throw new Error(text(store.language, "This audio format could not be decoded by this browser.", "Этот аудиоформат не удалось декодировать в текущем браузере."));
+      const decoded = decodeWav(wav);
+      store.openDocument("audio", { name: file.name, width: 1, height: 1, resolution: 72, resolutionUnit: "ppi", backgroundColor: null, pixelAspectRatio: 1, sampleRate: decoded.sampleRate, channels: decoded.channelData.length, audioBitDepth: 32 });
+      const documentId = useShellStore.getState().activeDocumentId;
+      if (!documentId) return;
+      const assetId = await kernel.assets.importAsset(wav, { kind: "audio", mime: "audio/wav", name: file.name });
+      await addAudioClipFromAsset(documentId, assetId, file.name, decoded.channelData[0]?.length ?? 0, decoded.sampleRate);
+      return;
+    }
+    if (["mp4", "mov", "mkv", "webm", "avi"].includes(extension) || file.type.startsWith("video/")) {
+      const frameRate = 30;
+      const meta = await probeVideoMetadata(file, frameRate);
+      if (!meta) throw new Error(text(store.language, "This video format could not be read by this browser.", "Этот видеоформат не удалось прочитать в текущем браузере."));
+      store.openDocument("video", { name: file.name, width: meta.width, height: meta.height, resolution: 72, resolutionUnit: "ppi", backgroundColor: "#000000", pixelAspectRatio: 1, frameRate });
+      const documentId = useShellStore.getState().activeDocumentId;
+      if (!documentId) return;
+      const assetId = await kernel.assets.importAsset(file, { kind: "video", mime: file.type || "video/mp4", name: file.name, meta: meta as unknown as Record<string, unknown> });
+      await addVideoClipFromAsset(documentId, assetId, file.name, meta.durationFrames, meta.frameRate, "video", undefined, 0, meta.width, meta.height);
+      return;
+    }
+    await importImage(file);
   };
   const download = (blob: Blob, name: string) => { void kernel.platform.fs.saveFile({ name, mime: blob.type || "application/octet-stream", data: blob }).catch((error) => diagnostic("error", "file.save", error instanceof Error ? error.message : String(error), error)); };
   /** Stage 10 of docs/vector-plan.md: the whole export pipeline is a pure
@@ -456,6 +498,11 @@ export function App() {
       if (!editing && modifier && (key === "+" || key === "=")) { event.preventDefault(); void kernel.commands.execute("view.zoomIn", activeCommandContext()); }
       if (!editing && modifier && key === "-") { event.preventDefault(); void kernel.commands.execute("view.zoomOut", activeCommandContext()); }
       if (event.key === "Escape") { store.setPaletteOpen(false); store.setSettingsOpen(false); }
+      if (!editing && active && event.code === "Tab") {
+        event.preventDefault();
+        setCleanCanvas((current) => { const next = !current; window.dispatchEvent(new CustomEvent(CLEAN_CANVAS_EVENT, { detail: next })); return next; });
+        return;
+      }
       if (!modifier && !editing && active) {
         if (key === "d") { event.preventDefault(); if (editingMaskLayerId) store.setMaskForegroundWhite(active.id, false); else store.resetColors(); return; }
         if (key === "x") { event.preventDefault(); if (editingMaskLayerId) store.swapMaskColors(active.id); else store.swapColors(); return; }
@@ -470,9 +517,10 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [store, active]);
 
-  return <div className="app" data-theme={store.theme} data-has-toolbar={active?.kind === "raster" || active?.kind === "vector"} style={themeStyle}>
+  return <div className="app" data-theme={store.theme} data-home={!active} data-clean-canvas={cleanCanvas || undefined} data-has-toolbar={active?.kind === "raster" || active?.kind === "vector"} style={themeStyle}>
     <header className="menu-bar">
       <strong className={active ? "brand compact" : "brand full"}><img src={active ? `${import.meta.env.BASE_URL}логотип цветная плашка.svg` : `${import.meta.env.BASE_URL}логотип белый.svg`} alt="VRAVIO" /></strong>
+      <button className="home-button" onClick={() => store.showHome()} aria-label={text(store.language, "Home", "Главная")} title={text(store.language, "Home", "Главная")}><i style={{ "--icon-mask": `url("${import.meta.env.BASE_URL}ГЛАВНАЯ.svg")` } as CSSProperties}/></button>
       <nav aria-label={store.language === "ru" ? "Главное меню" : "Main menu"}>
         <Menu label="File (Файл)" language={store.language} open={openMenu === "file"} onToggle={() => setOpenMenu(openMenu === "file" ? null : "file")} items={[
           ["New… (Новый…)", "Ctrl+N", () => store.requestNewDocument("raster")],
@@ -555,7 +603,19 @@ export function App() {
           ] as MainMenuItem),
           ["Manage Plugins… (Управление плагинами…)", "", () => {}, true],
         ]}/>
-        <Menu label="Window (Окно)" language={store.language} open={openMenu === "window"} onToggle={() => setOpenMenu(openMenu === "window" ? null : "window")} items={[...windowMenuItems(active?.kind, store.language), ["Settings (Настройки)", "", () => store.setSettingsOpen(true)], ["Command Palette (Палитра команд)", "Ctrl+K", () => store.setPaletteOpen(true)]]}/>
+        <Menu label="Window (Окно)" language={store.language} open={openMenu === "window"} onToggle={() => setOpenMenu(openMenu === "window" ? null : "window")} items={[
+          ...(active && workspacePresetsFor(active.kind).length ? [{ label: "Workspace (Рабочая среда)", items: [
+            ...workspacePresetsFor(active.kind).map((preset) => [
+              `${preset.label.en} (${preset.label.ru})${selectedWorkspacePreset(active.kind) === preset.id ? " ✓" : ""}`,
+              "",
+              () => applyWorkspacePreset(active.kind, preset.id),
+            ] as MainMenuItem),
+            ["Reset Workspace (Сбросить рабочую среду)", "", () => resetWorkspacePreset(active.kind)] as MainMenuItem,
+          ] }] as MainMenuGroup[] : []),
+          ...windowMenuItems(active?.kind, store.language),
+          ["Settings (Настройки)", "", () => store.setSettingsOpen(true)],
+          ["Command Palette (Палитра команд)", "Ctrl+K", () => store.setPaletteOpen(true)],
+        ]}/>
         <Menu label="Help (Справка)" language={store.language} open={openMenu === "help"} onToggle={() => setOpenMenu(openMenu === "help" ? null : "help")} items={[["Diagnostics log (Журнал диагностики)", "", () => setDiagnosticsOpen(true)], ["About VRAVIO (О VRAVIO)", "", () => window.alert("VRAVIO — local-first creative suite")]]}/>
       </nav>
       <button className="settings-button" onClick={() => store.setSettingsOpen(true)} aria-label={store.language === "ru" ? "Настройки" : "Settings"} title={store.language === "ru" ? "Настройки" : "Settings"}><img src={`${import.meta.env.BASE_URL}НАСТРОЙКИ.svg`} alt=""/></button>
@@ -565,9 +625,10 @@ export function App() {
           regardless of how many menus fit. Inert on the web build: the
           attribute means nothing without Tauri's injected drag handler. */}
       <div className="titlebar-drag" data-tauri-drag-region="true"/>
+      {active && store.preferences.showCommandPaletteButton && <button className="palette-button" onClick={() => store.setPaletteOpen(true)} title={store.language === "ru" ? "Палитра команд (Ctrl+K)" : "Command Palette (Ctrl+K)"} aria-label={store.language === "ru" ? "Палитра команд, Ctrl+K" : "Command Palette, Ctrl+K"}><i aria-hidden="true" style={{ "--icon-mask": `url("${import.meta.env.BASE_URL}ПАЛИТРА-КОМАНД.svg")` } as CSSProperties}/></button>}
+      {active && <WorkspaceSwitcher kind={active.kind} language={store.language}/>} 
       <input ref={openImageRef} hidden type="file" accept={`image/png,image/jpeg,image/webp,image/gif,image/avif,image/svg+xml,.svg,.psd,.psb,${rawFileExtensions.map((extension) => `.${extension}`).join(",")}`} onChange={(event) => { const file = event.target.files?.[0]; if (file) void importImage(file); event.currentTarget.value = ""; }}/>
       <input ref={importSvgAsVectorRef} hidden type="file" accept="image/svg+xml,.svg" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importSvgAsVector(file); event.currentTarget.value = ""; }}/>
-      <button className="palette-button" onClick={() => store.setPaletteOpen(true)}>⌘ {store.language === "ru" ? "Команды" : "Commands"} <kbd>Ctrl K</kbd></button>
       {/* Native window chrome, folded into the same row as the menu — the
           OS title bar is switched off entirely (tauri.conf.json's
           decorations: false), so without this the window would have no way
@@ -591,10 +652,11 @@ export function App() {
       {active.kind === "raster" && <ColorWells foreground={effectiveForegroundColor} background={effectiveBackgroundColor} monochrome={Boolean(editingMaskLayerId)} onForeground={(color) => editingMaskLayerId ? store.setMaskForegroundWhite(active.id, color.toLowerCase() !== "#000000") : store.setForegroundColor(color)} onBackground={(color) => editingMaskLayerId ? store.setMaskForegroundWhite(active.id, color.toLowerCase() === "#000000") : store.setBackgroundColor(color)} onSwap={() => editingMaskLayerId ? store.swapMaskColors(active.id) : store.swapColors()} onReset={() => editingMaskLayerId ? store.setMaskForegroundWhite(active.id, false) : store.resetColors()} />}
     </aside>}
 
-    {documents.length > 1 && <div className="document-tabs" role="tablist" aria-label="Documents (Документы)">
+    {documents.length > 0 && <div className="document-tabs" role="tablist" aria-label="Documents (Документы)">
       {documents.map((document) => <div className="tab-wrap" key={document.id} data-kind={document.kind} data-linked={document.provenance ? "" : undefined}>
         <button role="tab" aria-selected={document.id === store.activeDocumentId} onClick={() => store.activateDocument(document.id)}>
-          <EnvironmentIcon kind={document.kind} className="tab-environment-icon" />{localized(document.name, store.language)}{document.dirty && <i>●</i>}
+          <EnvironmentIcon kind={document.kind} className="tab-environment-icon" />{localized(document.name, store.language)}
+          {(document.dirty || document.id === store.activeDocumentId) && <i className={`tab-save-state${document.dirty ? " dirty" : ""}`} title={document.dirty ? text(store.language, "Modified", "Изменён") : text(store.language, "Saved", "Сохранено")} aria-label={document.dirty ? text(store.language, "Modified", "Изменён") : text(store.language, "Saved", "Сохранено")} style={document.dirty ? undefined : { "--icon-mask": `url("${import.meta.env.BASE_URL}СОХРАНЕНО.svg")` } as CSSProperties}/>} 
           {/* A tab opened out of another keeps its own result when the parent
               undoes, so the two can end up showing different pictures. Nothing
               else on screen would say why. */}
@@ -604,13 +666,13 @@ export function App() {
       </div>)}
     </div>}
 
-    <OptionsBar language={store.language} tool={activeTool} pixelsPerInch={active && isRasterDocumentState(active.state) ? active.state.resolution : undefined} values={activeTool ? { ...(store.toolOptions[activeTool.id] ?? {}), ...(activeTool.options.some((option) => option.id === "color") ? { color: effectiveForegroundColor } : {}) } : {}} transform={transformMetrics} onTransformCommit={() => window.dispatchEvent(new Event("vravio-transform-commit"))} onTransformCancel={() => window.dispatchEvent(new Event("vravio-transform-cancel"))} onChange={(id, value) => { if (!activeTool) return; store.setToolOption(activeTool.id, id, value); if (id === "color") { if (editingMaskLayerId && active) store.setMaskForegroundWhite(active.id, String(value).toLowerCase() !== "#000000"); else store.setForegroundColor(String(value)); } }} alignSelectionCount={active && isRasterDocumentState(active.state) ? (selectedLayerIds.length || 1) : 0} onAlign={(edge) => alignOrDistributeLayers("align", edge)} onDistribute={(edge) => alignOrDistributeLayers("distribute", edge)} smartGuides={store.preferences.smartGuides} snapToGrid={store.preferences.snapToGrid} onToggleSmartGuides={(smartGuides) => store.updatePreferences({ smartGuides })} onToggleSnapToGrid={(snapToGrid) => store.updatePreferences({ snapToGrid })} />
+    {(active?.kind === "raster" || active?.kind === "vector") && <OptionsBar language={store.language} tool={activeTool} pixelsPerInch={isRasterDocumentState(active.state) ? active.state.resolution : undefined} values={activeTool ? { ...(store.toolOptions[activeTool.id] ?? {}), ...(activeTool.options.some((option) => option.id === "color") ? { color: effectiveForegroundColor } : {}) } : {}} transform={transformMetrics} onTransformCommit={() => window.dispatchEvent(new Event("vravio-transform-commit"))} onTransformCancel={() => window.dispatchEvent(new Event("vravio-transform-cancel"))} onChange={(id, value) => { if (!activeTool) return; store.setToolOption(activeTool.id, id, value); if (id === "color") { if (editingMaskLayerId) store.setMaskForegroundWhite(active.id, String(value).toLowerCase() !== "#000000"); else store.setForegroundColor(String(value)); } }} alignSelectionCount={isRasterDocumentState(active.state) ? (selectedLayerIds.length || 1) : 0} onAlign={(edge) => alignOrDistributeLayers("align", edge)} onDistribute={(edge) => alignOrDistributeLayers("distribute", edge)} smartGuides={store.preferences.smartGuides} snapToGrid={store.preferences.snapToGrid} onToggleSmartGuides={(smartGuides) => store.updatePreferences({ smartGuides })} onToggleSnapToGrid={(snapToGrid) => store.updatePreferences({ snapToGrid })} />}
 
     <main className="workspace">
-      {active ? <DockLayout /> : <WelcomeScreen language={store.language} requestNewDocument={store.requestNewDocument} />}
+      {active ? <DockLayout /> : <HomeScreen language={store.language} requestNewDocument={store.requestNewDocument} openFile={openBridgeFile} />}
       {active && <ContextualBar documentId={active.id} state={active.state} language={store.language} visible={store.preferences.contextualBar} />}
     </main>
-    <footer className="status-bar"><span>{active ? resolveLabel(environmentMeta[active.kind].label, store.language) : text(store.language, "Ready", "Готово")}</span><span>{active ? `${Math.round((store.viewports[active.id]?.zoom ?? 1) * 100)}% · ` : ""}sRGB · {renderBackend ?? "detecting"}</span></footer>
+    {active && <footer className="status-bar"><span>{resolveLabel(environmentMeta[active.kind].label, store.language)}</span><span>{isAudioDocumentState(active.state) ? `${(active.state.sampleRate / 1000).toLocaleString()} kHz · ${active.state.channels === 1 ? text(store.language, "Mono", "Моно") : text(store.language, "Stereo", "Стерео")} · ${active.state.bitDepth} bit` : isVideoDocumentState(active.state) ? `${active.state.width}×${active.state.height} · ${active.state.frameRate} fps` : `${Math.round((store.viewports[active.id]?.zoom ?? 1) * 100)}% · sRGB · ${renderBackend ?? "detecting"}`}</span></footer>}
     {store.preferences.showPerformanceOverlay && <PerformanceOverlay documentId={active?.id ?? null} />}
 
     {store.paletteOpen && <div className="dialog-backdrop" onMouseDown={() => store.setPaletteOpen(false)}>
@@ -882,5 +944,3 @@ function OptionsBar({ language, tool, values, transform, pixelsPerInch, onTransf
   if (transform?.active) return <div className="options-bar transform-options"><strong>Free Transform (Свободная трансформация)</strong>{transform.warp && <WarpStyleControls language={language}/>}<label>X:<input value={Math.round(transform.x)} readOnly/></label><label>Y:<input value={Math.round(transform.y)} readOnly/></label><label>W:<input value={Math.round(transform.width)} readOnly/></label><label>H:<input value={Math.round(transform.height)} readOnly/></label><label>∠:<input value={`${Math.round(transform.rotation * 10) / 10}°`} readOnly/></label><button title="Cancel (Отмена)" onClick={onTransformCancel}>×</button><button className="commit" title="Commit (Подтвердить)" onClick={onTransformCommit}>✓</button></div>;
   return <div className="options-bar"><strong>{tool ? resolveLabel(tool.label, language) : text(language, "Tool options", "Параметры инструмента")}</strong>{tool ? tool.options.map((option) => <OptionRow key={option.id} language={language} option={option} pixelsPerInch={pixelsPerInch} value={values[option.id] ?? option.defaultValue} onChange={(value) => onChange(option.id, value)} />) : <span className="muted">{language === "ru" ? "Выберите или создайте документ" : "Select or create a document"}</span>}{tool?.id === "raster.move" && <AlignDistributeBar selectionCount={alignSelectionCount} onAlign={onAlign} onDistribute={onDistribute}/>}{tool?.kind === "vector" && <SnapControls language={language} smartGuides={smartGuides} snapToGrid={snapToGrid} onToggleSmartGuides={onToggleSmartGuides} onToggleSnapToGrid={onToggleSnapToGrid}/>}</div>;
 }
-
-
