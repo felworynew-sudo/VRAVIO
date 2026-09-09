@@ -102,6 +102,10 @@ export const tools: readonly ToolDefinition[] = [
   // No `iconFile` — a hand-picked Unicode glyph instead, the same way a
   // tool without a matching file in icons/ (off-limits to add to; every
   // existing file there is an uncommitted Illustrator export) gets one.
+  // No `iconFile`, for the reason given just above: nothing in icons/ depicts
+  // this, and that folder is off-limits to add to. The glyph is a placeholder
+  // an icon can replace without touching anything else.
+  { id: "raster.puppetWarp", kind: "raster", icon: "✲", label: { en: "Puppet Warp", ru: "Марионеточная деформация" }, shortcut: "", options: [] },
   { id: "vector.artboard", kind: "vector", icon: "▭", label: { en: "Artboard Tool", ru: "Монтажная область" }, shortcut: "B", options: [{ id: "moveArtwork", label: { en: "Move/Copy Artwork with Artboard", ru: "Двигать артворк вместе с артбордом" }, type: "boolean", defaultValue: false }] },
 ];
 
@@ -125,7 +129,7 @@ export const rasterToolGroups: readonly (readonly string[])[] = [
   ["raster.eyedropper"],
   ["raster.text"],
   ["raster.shape"],
-  ["raster.crop"],
+  ["raster.crop", "raster.puppetWarp"],
   ["raster.hand", "raster.rotateView", "raster.zoom"],
 ];
 

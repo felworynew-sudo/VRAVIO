@@ -57,6 +57,7 @@ const ALLOWED: readonly { readonly match: string; readonly reason: string }[] = 
   { match: "transform-", reason: "canvas handles drawn over artwork" },
   { match: "crop-", reason: "canvas overlay over artwork — same convention as transform- handles" },
   { match: "guide-overlay", reason: "canvas overlay over artwork" },
+  { match: "puppet-", reason: "the puppet-warp mesh and its pins are drawn over artwork, so they are legible-over-anything colours rather than theme ones" },
   { match: "patch-source-path", reason: "canvas overlay over artwork" },
   { match: "text-frame-draft", reason: "canvas overlay over artwork" },
   { match: "vector-handle", reason: "canvas overlay over artwork" },

@@ -24,6 +24,11 @@ import type { CommandDefinition } from "../types";
 function toolShortcutCommands(): readonly CommandDefinition[] {
   const groups = new Map<string, typeof tools[number][]>();
   for (const tool of tools) {
+    // A tool with no shortcut gets no shortcut command. Without this, the first
+    // such tool (Puppet Warp, which Photoshop also reaches from a menu rather
+    // than a key) registered a command with an empty id suffix and an empty
+    // label — a palette entry that names nothing and presses nothing.
+    if (!tool.shortcut) continue;
     const key = `${tool.kind}:${tool.shortcut.toLocaleUpperCase()}`;
     (groups.get(key) ?? groups.set(key, []).get(key)!).push(tool);
   }
