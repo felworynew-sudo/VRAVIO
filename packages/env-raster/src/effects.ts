@@ -1,3 +1,4 @@
+import { layerDocumentPixels } from "./layer-bounds";
 import { parseHexColor } from "./color";
 import type { RasterLayer, RgbaColor } from "./types";
 
@@ -71,13 +72,23 @@ const renderedEffects = new WeakMap<Uint8ClampedArray, RenderedEffects>();
 
 /** Produces a temporary rendered surface; source pixels remain untouched. */
 export function renderLayerEffects(layer: RasterLayer, width: number, height: number): Uint8ClampedArray {
-  const source = layer.pixels, effects = layer.effects ?? {};
+  const effects = layer.effects ?? {};
   // Allocate only once an effect is actually enabled: the compositor calls this for every
   // layer on every frame, and the no-effects case is by far the most common.
-  if (!Object.values(effects).some((effect) => effect?.enabled)) return source;
-  const cached = renderedEffects.get(source);
+  if (!Object.values(effects).some((effect) => effect?.enabled)) return layer.pixels;
+  const cached = renderedEffects.get(layer.pixels);
   if (cached && cached.effects === layer.effects && cached.width === width && cached.height === height) return cached.output;
-  const output = new Uint8ClampedArray(source.length);
+  // Document space, both in and out. A layer's pixels are stored in the layer's
+  // own bounds — the optimisation that took 21 layers from 166 MB to 3.1 MB —
+  // so a trimmed layer's buffer has a stride of its own, while everything below
+  // (and render.ts's `wholeCanvas` branch, which reads this surface back)
+  // addresses it as `y * documentWidth + x`. Reading the layer's buffer at the
+  // document's stride sheared the picture and ran off the end of a buffer that
+  // was also too short: the "turning on a layer style distorts the layer" the
+  // owner reported. The materialised copy is what the WeakMap above caches, so
+  // it is paid once per edit, not once per tile.
+  const source = layerDocumentPixels(layer, width, height);
+  const output = new Uint8ClampedArray(width * height * 4);
   const shadow = effects.dropShadow;
   if (shadow?.enabled) {
     const color = parseHexColor(shadow.color);
@@ -130,6 +141,9 @@ export function renderLayerEffects(layer: RasterLayer, width: number, height: nu
       overlayPixel(output, index, shade >= 0 ? { r: 255, g: 255, b: 255, a: 255 } : { r: 0, g: 0, b: 0, a: 255 }, Math.min(1, Math.abs(shade)));
     }
   }
-  renderedEffects.set(source, { effects: layer.effects, width, height, output });
+  // Keyed on the layer's own buffer, not the materialised copy: that copy is
+  // new every call, so keying on it would cache nothing and hold the entry
+  // alive by its only reference.
+  renderedEffects.set(layer.pixels, { effects: layer.effects, width, height, output });
   return output;
 }

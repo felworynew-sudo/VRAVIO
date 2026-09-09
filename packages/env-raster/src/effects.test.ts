@@ -146,3 +146,60 @@ describe("layer effects cache", () => {
     expect(renderLayerEffects(layer, W / 2, H * 2)).not.toBe(first);
   });
 });
+
+/**
+ * The owner's report: turning on almost any layer style makes the layer come
+ * out distorted in the viewport.
+ *
+ * Every case above builds its layer with `createRasterLayer(W, H)`, whose
+ * bounds are the whole document — so every one of them reads a buffer whose
+ * stride happens to equal the document width. Real layers do not look like
+ * that: pixels are stored in the layer's own bounds (the optimisation that took
+ * 21 layers from 166 MB to 3.1 MB), so a trimmed layer's buffer has a stride of
+ * its own, and reading it at the document's stride shears the picture.
+ */
+describe("layer effects on a layer stored in its own bounds", () => {
+  /** The same square, but trimmed the way `setLayerPixels` leaves a real layer:
+   * a 16x16 buffer with bounds at (12, 12), not a 40x40 one. */
+  function trimmedSquareLayer(): RasterLayer {
+    const layer = createRasterLayer(W, H, "Shape");
+    const size = 16;
+    const pixels = new Uint8ClampedArray(size * size * 4);
+    for (let index = 0; index < size * size; index += 1) {
+      pixels[index * 4] = 180; pixels[index * 4 + 1] = 120; pixels[index * 4 + 2] = 90; pixels[index * 4 + 3] = 255;
+    }
+    layer.pixels = pixels;
+    layer.bounds = { x: 12, y: 12, width: size, height: size };
+    layer.width = size; layer.height = size;
+    return layer;
+  }
+
+  it("renders a surface the size of the document, not of the layer's buffer", () => {
+    const layer = trimmedSquareLayer();
+    layer.effects = { dropShadow: { enabled: true, color: "#000000", opacity: 1, offsetX: 4, offsetY: 4 } };
+    // The compositor reads this surface at document size and document stride
+    // (render.ts's `wholeCanvas` branch), so anything shorter is read past its
+    // end for most of the canvas.
+    expect(renderLayerEffects(layer, W, H).length).toBe(W * H * 4);
+  });
+
+  it("puts the layer's own pixels where the layer actually is", () => {
+    const layer = trimmedSquareLayer();
+    layer.effects = { dropShadow: { enabled: true, color: "#000000", opacity: 1, offsetX: 4, offsetY: 4 } };
+    const rendered = renderLayerEffects(layer, W, H);
+
+    // The square occupies (12,12)-(27,27) in document space and nothing else
+    // does; the shadow adds an opaque skirt down and right of it. What must not
+    // happen is the square landing somewhere else, which is what reading a
+    // 16-wide buffer at a stride of 40 produces.
+    expect(at(rendered, 20, 20)).toEqual({ r: 180, g: 120, b: 90, a: 255 });
+    expect(at(rendered, 12, 12).a).toBe(255);
+    expect(at(rendered, 27, 27).a).toBe(255);
+    // Above and left of the square there is neither shape nor shadow.
+    expect(at(rendered, 4, 4).a).toBe(0);
+    expect(at(rendered, 35, 8).a).toBe(0);
+    // The shadow is offset by (4,4), so just past the bottom-right corner it is
+    // there and it is black.
+    expect(at(rendered, 30, 30)).toEqual({ r: 0, g: 0, b: 0, a: 255 });
+  });
+});
