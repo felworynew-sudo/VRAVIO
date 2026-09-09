@@ -26,6 +26,19 @@ import type { ToolContext, ToolPointer, VectorToolDefinition } from "../types";
  * invisible shape nothing can select.
  */
 
+/** A press in progress. The draft — and with it the textarea — is opened only when this ends,
+ * never on the press itself: a field focused during `pointerdown` loses that focus again the
+ * moment the browser applies the press's own default focus to the canvas underneath, and the
+ * blur that follows finishes the edit before a single character can be typed. An empty edit
+ * removes its shape, so the visible result was a Type tool that created nothing at all.
+ * Raster's Type tool has always done it this way (`raster/tools/definitions/text.tsx` opens its
+ * draft in `onGestureEnd`); this file was the one that did not. */
+interface Gesture {
+  readonly from: { x: number; y: number };
+  readonly current: { x: number; y: number };
+  readonly pointerId: number;
+}
+
 interface Draft {
   readonly shapeId: string;
   /** What the shape held when editing began, so Escape can put it back. */
@@ -34,9 +47,12 @@ interface Draft {
   readonly value: string;
 }
 
-export interface VectorTextState { readonly draft: Draft | null }
+export interface VectorTextState { readonly draft: Draft | null; readonly gesture: Gesture | null }
 
-const empty: VectorTextState = { draft: null };
+const empty: VectorTextState = { draft: null, gesture: null };
+
+/** Below this a drag is a click — the same 4px raster's Type tool uses. */
+const DRAG_THRESHOLD = 4;
 
 function applyValue(context: ToolContext<VectorTextState>, draft: Draft, value: string): void {
   context.mutate((state: VectorDocumentState) => {
@@ -66,30 +82,50 @@ const vectorText: VectorToolDefinition<VectorTextState> = {
   onPointerDown(context: ToolContext<VectorTextState>, pointer: ToolPointer) {
     const current = context.state.draft;
     if (current) { finish(context, current, current.value); return; }
+    context.setState({ draft: null, gesture: { from: pointer.point, current: pointer.point, pointerId: pointer.pointerId } });
+  },
 
-    const hit = shapeAtIndexed(context.spatialIndex, context.document.shapes, pointer.point.x, pointer.point.y);
+  onPointerMove(context: ToolContext<VectorTextState>, pointer: ToolPointer) {
+    const gesture = context.state.gesture;
+    if (!gesture || gesture.pointerId !== pointer.pointerId) return;
+    context.setState({ ...context.state, gesture: { ...gesture, current: pointer.point } });
+  },
+
+  onGestureEnd(context: ToolContext<VectorTextState>, pointer: ToolPointer) {
+    const gesture = context.state.gesture;
+    if (!gesture || gesture.pointerId !== pointer.pointerId) return;
+
+    const hit = shapeAtIndexed(context.spatialIndex, context.document.shapes, gesture.from.x, gesture.from.y);
     if (hit?.kind === "text") {
       context.mutate((state: VectorDocumentState) => { state.activeShapeId = hit.id; state.selection = [hit.id]; });
-      context.setState({ draft: { shapeId: hit.id, original: hit.value, created: false, value: hit.value } });
+      context.setState({ gesture: null, draft: { shapeId: hit.id, original: hit.value, created: false, value: hit.value } });
       return;
     }
 
-    // A new object starts empty rather than pre-filled with the word "Text":
-    // the first thing anyone does with placeholder text is select it and delete
-    // it, and an empty draft is also what makes "typed nothing, so nothing was
-    // created" work.
-    const shape = createShape("text", pointer.point.x, pointer.point.y, { ...emptyVectorStyle(), fills: [solidFill(cssToColor(context.foregroundColor))] });
+    // Click makes point text, drag makes area text of the width dragged — Illustrator's and
+    // Inkscape's split, and the one raster's own Type tool already makes between its "point"
+    // and "area" modes. Area text wraps inside its frame; point text only breaks where the
+    // typist breaks it.
+    const dragged = Math.hypot(gesture.current.x - gesture.from.x, gesture.current.y - gesture.from.y) >= DRAG_THRESHOLD;
+    const left = Math.min(gesture.from.x, gesture.current.x), top = Math.min(gesture.from.y, gesture.current.y);
+    const fontSize = typeof context.options.fontSize === "number" ? context.options.fontSize : 48;
+
+    // A new object starts empty rather than pre-filled with the word "Text": the first thing
+    // anyone does with placeholder text is select it and delete it, and an empty draft is also
+    // what makes "typed nothing, so nothing was created" work.
+    const origin = dragged ? { x: left, y: top + fontSize } : gesture.from;
+    const shape = createShape("text", origin.x, origin.y, { ...emptyVectorStyle(), fills: [solidFill(cssToColor(context.foregroundColor))] });
     if (shape.kind !== "text") return;
     shape.value = "";
-    shape.fontSize = typeof context.options.fontSize === "number" ? context.options.fontSize : 48;
+    shape.fontSize = fontSize;
+    if (dragged) shape.frameWidth = Math.max(fontSize, Math.abs(gesture.current.x - gesture.from.x));
     context.mutate((state: VectorDocumentState) => {
       addShape(state, shape);
       state.activeShapeId = shape.id;
       state.selection = [shape.id];
     });
-    context.setState({ draft: { shapeId: shape.id, original: "", created: true, value: "" } });
+    context.setState({ gesture: null, draft: { shapeId: shape.id, original: "", created: true, value: "" } });
   },
-
   onDeactivate(context: ToolContext<VectorTextState>) {
     const draft = context.state.draft;
     if (draft) finish(context, draft, draft.value);
@@ -125,7 +161,7 @@ const vectorText: VectorToolDefinition<VectorTextState> = {
         onPointerDown={(event) => event.stopPropagation()}
         onChange={(event) => {
           const value = event.target.value;
-          context.setState({ draft: { ...draft, value } });
+          context.setState({ gesture: null, draft: { ...draft, value } });
           // The shape follows every keystroke, so the canvas under the field
           // shows the real object rather than a preview of one.
           applyValue(context, draft, value);
