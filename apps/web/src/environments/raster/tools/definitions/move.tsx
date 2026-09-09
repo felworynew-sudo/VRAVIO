@@ -725,13 +725,13 @@ const move: RasterToolDefinition<MoveState> = {
     if (!showControls || !bounds) return null;
     if (pending.corners) {
       const mode = String(options.transformMode ?? "distort") as QuadTransformMode;
-      return <svg className="transform-controls" viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
+      return <svg className="transform-controls" strokeWidth={1 / zoom} viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
         <polygon className="transform-quad-outline" points={pending.corners.map((corner) => `${corner.x},${corner.y}`).join(" ")}/>
         {quadHandlePoints(pending.corners, mode).map(({ index, point }) => <rect className="transform-handle" key={index} x={point.x - 4 / zoom} y={point.y - 4 / zoom} width={8 / zoom} height={8 / zoom}/>)}
       </svg>;
     }
     if (pending.mesh) {
-      return <svg className="transform-controls" viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
+      return <svg className="transform-controls" strokeWidth={1 / zoom} viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
         {Array.from({ length: WARP_GRID + 1 }, (_, row) => <polyline key={`row-${row}`} className="transform-quad-outline" points={pending.mesh!.slice(row * (WARP_GRID + 1), row * (WARP_GRID + 1) + WARP_GRID + 1).map((anchor) => `${anchor.x},${anchor.y}`).join(" ")}/>)}
         {Array.from({ length: WARP_GRID + 1 }, (_, col) => <polyline key={`col-${col}`} className="transform-quad-outline" points={Array.from({ length: WARP_GRID + 1 }, (_, row) => pending.mesh![row * (WARP_GRID + 1) + col]!).map((anchor) => `${anchor.x},${anchor.y}`).join(" ")}/>)}
         {pending.mesh.map((anchor, index) => <rect className="transform-handle" key={index} x={anchor.x - 4 / zoom} y={anchor.y - 4 / zoom} width={8 / zoom} height={8 / zoom}/>)}
@@ -739,7 +739,7 @@ const move: RasterToolDefinition<MoveState> = {
     }
     return <>
       {text && <canvas ref={textPreviewRef} className="text-transform-preview" style={{ left: text.targetBounds.x, top: text.targetBounds.y, width: text.targetBounds.width, height: text.targetBounds.height, transform: `rotate(${pending.rotation}deg)` }}/>}
-      <svg className="transform-controls" viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
+      <svg className="transform-controls" strokeWidth={1 / zoom} viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
         <rect x={bounds.x} y={bounds.y} width={bounds.width} height={bounds.height}/>
         {/* No dedicated rotation lever: a corner handle now doubles as both scale (grabbed
             exactly) and rotate (grabbed just outside it), the same convention Photoshop's own

@@ -16,6 +16,21 @@ import type { DocumentViewport } from "./store";
  * second copy of it (see `environments/raster/tools/types.ts`'s own comment
  * on `cloneSource`).
  */
+/** Patchy's own clone-source marker geometry, in screen pixels: radius 7, arms
+ * running from radius+3 in to a 2px gap at the centre. Kept as constants so the
+ * one thing that must never change with the zoom is not a literal inside JSX. */
+const CLONE_MARKER_RADIUS = 7;
+const CLONE_MARKER_REACH = CLONE_MARKER_RADIUS + 3;
+const CLONE_MARKER_GAP = 2;
+const CLONE_MARKER_BOX = (CLONE_MARKER_REACH + 2) * 2;
+const CLONE_MARKER_CENTRE = CLONE_MARKER_BOX / 2;
+const CLONE_MARKER_ARMS: readonly (readonly [number, number, number, number])[] = [
+  [CLONE_MARKER_CENTRE - CLONE_MARKER_REACH, CLONE_MARKER_CENTRE, CLONE_MARKER_CENTRE - CLONE_MARKER_GAP, CLONE_MARKER_CENTRE],
+  [CLONE_MARKER_CENTRE + CLONE_MARKER_GAP, CLONE_MARKER_CENTRE, CLONE_MARKER_CENTRE + CLONE_MARKER_REACH, CLONE_MARKER_CENTRE],
+  [CLONE_MARKER_CENTRE, CLONE_MARKER_CENTRE - CLONE_MARKER_REACH, CLONE_MARKER_CENTRE, CLONE_MARKER_CENTRE - CLONE_MARKER_GAP],
+  [CLONE_MARKER_CENTRE, CLONE_MARKER_CENTRE + CLONE_MARKER_GAP, CLONE_MARKER_CENTRE, CLONE_MARKER_CENTRE + CLONE_MARKER_REACH],
+];
+
 export function useBrushCursor(params: {
   state: RasterDocumentState;
   viewport: DocumentViewport;
@@ -142,15 +157,30 @@ export function useBrushCursor(params: {
             width: `${Number(toolOptions["raster.clone"]?.size ?? 24) * viewport.zoom}px`,
             height: `${Number(toolOptions["raster.clone"]?.size ?? 24) * viewport.zoom}px`,
           } : { opacity: 0 }}/>
-        {cloneSourceView && <div className="clone-source-cursor" style={{
+        {/* The source marker is Patchy's, geometry included (canvas_widget_render.cpp,
+            the Clone/Healing branch of its overlay pass): a circle of a constant
+            7px radius with four arms running from radius+3 inward to 2px short of
+            the centre, so the exact pixel being read stays visible through the
+            marker. Drawn twice — a dark halo under a bright line — which is what
+            keeps it legible over both light and dark artwork.
+
+            Constant, not `size * zoom`: only its *position* depends on the zoom.
+            The ring this replaced was drawn at the brush's document footprint,
+            so at 400% the marker for a 200px brush covered most of the canvas —
+            the scaling-with-zoom complaint, on the tool the owner named. The
+            footprint still belongs on the brush ring at the pointer, where the
+            stroke is actually going to land; the source is a point, not an area. */}
+        {cloneSourceView && <svg className="clone-source-cursor" width={CLONE_MARKER_BOX} height={CLONE_MARKER_BOX} viewBox={`0 0 ${CLONE_MARKER_BOX} ${CLONE_MARKER_BOX}`} aria-hidden="true" style={{
           left: documentOriginX + cloneSourceView.x * viewport.zoom,
           top: documentOriginY + cloneSourceView.y * viewport.zoom,
-          width: Number(toolOptions["raster.clone"]?.size ?? 24) * viewport.zoom,
-          height: Number(toolOptions["raster.clone"]?.size ?? 24) * viewport.zoom,
         }}>
-          <span className="cursor-ring"/>
-          <span className="cursor-crosshair"/>
-        </div>}
+          {[{ stroke: "rgba(20,23,28,.78)", width: 3 }, { stroke: "rgba(245,248,252,.92)", width: 1.4 }].map((pen) => (
+            <g key={pen.width} stroke={pen.stroke} strokeWidth={pen.width} fill="none" strokeLinecap="round">
+              <circle cx={CLONE_MARKER_BOX / 2} cy={CLONE_MARKER_BOX / 2} r={CLONE_MARKER_RADIUS}/>
+              {CLONE_MARKER_ARMS.map(([x1, y1, x2, y2]) => <line key={`${x1},${y1}`} x1={x1} y1={y1} x2={x2} y2={y2}/>)}
+            </g>
+          ))}
+        </svg>}
       </>
     )}
   </>;

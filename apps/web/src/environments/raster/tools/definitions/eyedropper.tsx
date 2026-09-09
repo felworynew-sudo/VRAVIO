@@ -128,7 +128,11 @@ const eyedropper: RasterToolDefinition<EyedropperState> = {
     if (context.state.gesture || context.state.view) context.setState({ gesture: null, view: null });
   },
 
-  Overlay({ state, document }) {
+  // Screen space, not document space: the loupe is a fixed number of CSS
+  // pixels across and is positioned by the pointer's own screen coordinates,
+  // so mounted in the scaled stage it grew with the zoom and drifted away from
+  // the cursor. Nothing about it is measured in document units.
+  ScreenOverlay({ state, document }) {
     const view = state.view;
     if (!view) return null;
     if (view.loupe) return <Loupe state={state} document={document}/>;

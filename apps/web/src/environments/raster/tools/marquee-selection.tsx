@@ -146,7 +146,7 @@ export function createMarqueeTool(id: string, kind: MarqueeKind): RasterToolDefi
       if (context.state.drag || context.state.draw) context.setState(empty);
     },
 
-    Overlay({ state, document }) {
+    Overlay({ state, document, context }) {
       const draw = state.draw;
       if (!draw) return null;
       const rect = kind === "lasso"
@@ -158,7 +158,13 @@ export function createMarqueeTool(id: string, kind: MarqueeKind): RasterToolDefi
         : marqueeRect(draw.from.x, draw.from.y, draw.current.x, draw.current.y);
       if (rect.width <= 0 || rect.height <= 0) return null;
 
-      return <svg className="selection-overlay" viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
+      // The outline is interface, so its width is a screen constant: this SVG sits inside
+      // .raster-stage and is scaled by the zoom along with the document, and the stroke has to
+      // divide that back out. Set here rather than in styles.css deliberately — a bare
+      // stroke-width there beats a presentation attribute and has silently re-broken exactly
+      // this twice before (CLAUDE.md §2).
+      const stroke = 0.8 / context.viewport.zoom;
+      return <svg className="selection-overlay" strokeWidth={stroke} viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
         {kind === "lasso"
           ? <polyline points={draw.points.map((point) => `${point.x},${point.y}`).join(" ")} />
           : kind === "ellipse"

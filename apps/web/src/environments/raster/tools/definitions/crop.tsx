@@ -240,7 +240,9 @@ const crop: RasterToolDefinition<CropState> = {
           <line key={`h${i}`} className="crop-third" x1={rect.x} y1={y} x2={rect.x + rect.width} y2={y} strokeWidth={strokeWidth} />,
         ];
       })}
-      <rect className="crop-outline" x={rect.x} y={rect.y} width={rect.width} height={rect.height} strokeWidth={strokeWidth} />
+      {/* The dash lengths are a screen measurement too, so they divide by the zoom
+          like the width beside them; left in CSS they stretched with the document. */}
+      <rect className="crop-outline" x={rect.x} y={rect.y} width={rect.width} height={rect.height} strokeWidth={strokeWidth} strokeDasharray={`${4 * strokeWidth} ${3 * strokeWidth}`} />
       {HANDLES.map((entry) => {
         const hx = rect.x + (entry.hx + 1) * rect.width / 2, hy = rect.y + (entry.hy + 1) * rect.height / 2;
         return <rect className="crop-handle" key={entry.id} x={hx - handleSize / 2} y={hy - handleSize / 2} width={handleSize} height={handleSize} strokeWidth={strokeWidth} />;

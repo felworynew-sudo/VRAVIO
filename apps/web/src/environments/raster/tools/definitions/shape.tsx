@@ -88,7 +88,7 @@ const shape: RasterToolDefinition<ShapeState> = {
     if (context.state.draw) context.setState(empty);
   },
 
-  Overlay({ state, document, options }) {
+  Overlay({ state, document, options, context }) {
     const draw = state.draw;
     if (!draw) return null;
     const rect = { x: draw.from.x, y: draw.from.y, width: draw.current.x - draw.from.x, height: draw.current.y - draw.from.y };
@@ -98,11 +98,14 @@ const shape: RasterToolDefinition<ShapeState> = {
     // Matches the old preview exactly, simplification included: a triangle,
     // polygon or star drafts as its bounding box, not its real outline —
     // only the committed layer (`drawShape` above) draws those precisely.
-    return <svg className="shape-draft" viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
+    // Screen-constant outline inside the zoomed stage — see marquee-selection.tsx.
+    return <svg className="shape-draft" strokeWidth={1 / context.viewport.zoom} viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
       {kind === "ellipse"
         ? <ellipse cx={box.x + box.width / 2} cy={box.y + box.height / 2} rx={box.width / 2} ry={box.height / 2}/>
         : kind === "line"
-          ? <line x1={rect.x} y1={rect.y} x2={rect.x + rect.width} y2={rect.y + rect.height}/>
+          // The line preview is drawn heavier than the box outlines, and that 2px
+          // is a screen measurement like the rest of them.
+          ? <line x1={rect.x} y1={rect.y} x2={rect.x + rect.width} y2={rect.y + rect.height} strokeWidth={2 / context.viewport.zoom}/>
           : <rect x={box.x} y={box.y} width={box.width} height={box.height} rx={kind === "roundedRectangle" ? Number(options.cornerRadius ?? 16) : 0}/>}
     </svg>;
   },

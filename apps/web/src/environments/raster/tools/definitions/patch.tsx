@@ -127,7 +127,7 @@ const patch: RasterToolDefinition<PatchState> = {
 
   Overlay({ state, document, context }) {
     if (state.fallbackLasso) {
-      return <svg className="selection-overlay" viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
+      return <svg className="selection-overlay" strokeWidth={0.8 / context.viewport.zoom} viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
         <polyline points={state.fallbackLasso.points.map((point) => `${point.x},${point.y}`).join(" ")}/>
       </svg>;
     }
@@ -141,8 +141,12 @@ const patch: RasterToolDefinition<PatchState> = {
     // Where the patch is reading from. The destination keeps its own
     // marching ants, so the pair shows both halves of the operation at
     // once — otherwise a drag looks like it is moving the selection.
+    // Screen measurements, divided back out of the stage's zoom — the dash
+    // lengths as much as the width, since a dash pattern in document units
+    // stretches with the zoom exactly like the line it is drawn on.
+    const zoom = context.viewport.zoom;
     return <svg className="patch-source-overlay" viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
-      <path className="patch-source-path" d={path} transform={`translate(${offsetX} ${offsetY})`}/>
+      <path className="patch-source-path" strokeWidth={1.5 / zoom} strokeDasharray={`${5 / zoom} ${4 / zoom}`} d={path} transform={`translate(${offsetX} ${offsetY})`}/>
     </svg>;
   },
 };

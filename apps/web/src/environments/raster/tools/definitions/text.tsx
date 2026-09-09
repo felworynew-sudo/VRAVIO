@@ -205,7 +205,8 @@ function TextOverlay({ state, document, options, context }: { state: TextState; 
     const gesture = state.gesture;
     if (!gesture) return null;
     const frame = { x: Math.min(gesture.from.x, gesture.current.x), y: Math.min(gesture.from.y, gesture.current.y), width: Math.abs(gesture.current.x - gesture.from.x), height: Math.abs(gesture.current.y - gesture.from.y) };
-    return <svg className="text-frame-draft" viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
+    const guideStroke = 1 / context.viewport.zoom;
+    return <svg className="text-frame-draft" strokeWidth={guideStroke} strokeDasharray={`${5 * guideStroke} ${4 * guideStroke}`} viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
       <rect x={frame.x} y={frame.y} width={frame.width} height={frame.height}/>
     </svg>;
   }
@@ -254,7 +255,7 @@ function TextOverlay({ state, document, options, context }: { state: TextState; 
         }
       }}
       placeholder="Type (Введите текст)"/>
-    {draft.path && <svg className="text-path-guide" viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
+    {draft.path && <svg className="text-path-guide" strokeWidth={1 / context.viewport.zoom} strokeDasharray={`${5 / context.viewport.zoom} ${4 / context.viewport.zoom}`} viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
       <path d={`M ${draft.path.start.x} ${draft.path.start.y} Q ${draft.path.control.x} ${draft.path.control.y} ${draft.path.end.x} ${draft.path.end.y}`}/>
     </svg>}
   </>;

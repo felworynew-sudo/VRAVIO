@@ -382,7 +382,15 @@ export interface RasterToolDefinition<TState = unknown> {
    *
    * A component rather than an imperative handle, because what it draws is a
    * function of the tool's state and React already knows how to keep those
-   * two in step. Sizes inside it are screen pixels.
+   * two in step.
+   *
+   * It is mounted inside `.raster-stage`, so it works in document coordinates
+   * and everything in it is scaled by the zoom — including line widths and
+   * handle sizes, which therefore have to divide by `context.viewport.zoom`
+   * themselves. Chrome that is measured in screen pixels belongs in
+   * `ScreenOverlay` below instead. (This comment used to claim the opposite,
+   * "sizes inside it are screen pixels", which is how the eyedropper's loupe
+   * came to grow with the zoom.)
    *
    * `options` is the same live options-bar snapshot `ToolContext.options`
    * carries — added for `raster.shape`, whose live drag preview has to
@@ -400,6 +408,28 @@ export interface RasterToolDefinition<TState = unknown> {
    * would be the identical values under a different spelling.
    */
   readonly Overlay?: (props: { state: TState; document: RasterDocumentState; options: Readonly<Record<string, string | number | boolean>>; context: ToolContext<TState> }) => ReactNode;
+
+  /**
+   * The same, but mounted in the screen-space layer instead — outside
+   * `.raster-stage` and the CSS scale transform the zoom puts on it.
+   *
+   * `Overlay` above is mounted *inside* that transform, so everything it draws
+   * is in document coordinates and everything it draws grows with the zoom. For
+   * a drag preview or a selection outline that is what you want; for a piece of
+   * chrome measured in screen pixels — the eyedropper's loupe, a readout, a
+   * marker — it is the bug CLAUDE.md §1 keeps recording: the interface does not
+   * scale with the zoom, ever.
+   *
+   * Which of the two an element belongs in is decided by the coordinates it is
+   * written in, not by what it looks like. Document coordinates and a size in
+   * document units → `Overlay`, with any stroke width or handle size divided by
+   * `context.viewport.zoom` explicitly (never `vector-effect:non-scaling-stroke`,
+   * which does not cancel a CSS transform on an ancestor). Screen coordinates
+   * (`ToolPointer.screenX`/`screenY`) and a size in CSS pixels → here, where
+   * nothing is scaled and a constant stays a constant. This is the same split
+   * the brush ring and the clone stamp's source marker already use.
+   */
+  readonly ScreenOverlay?: (props: { state: TState; document: RasterDocumentState; options: Readonly<Record<string, string | number | boolean>>; context: ToolContext<TState> }) => ReactNode;
 }
 
 export interface RasterToolModule<TState = unknown> {
