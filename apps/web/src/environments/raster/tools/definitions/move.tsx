@@ -319,7 +319,20 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
     void context.commitDocument(beforeDoc, afterDoc, "Transform Type Layer (Трансформация текстового слоя)");
     return;
   }
-  const after = cloneRasterState(pending.before);
+  // Built on the document as it is *now*, not on the snapshot this transform
+  // opened with. A pending transform can stay open across other edits — the
+  // owner found it by deleting a layer while a Free Transform was up: the
+  // delete went through, and then committing the transform wrote back a whole
+  // document cloned from `pending.before`, which still had that layer, so the
+  // deletion silently came back. Anything a transform does not itself change
+  // has to survive it.
+  const current = context.document;
+  // The layer this transform belongs to may be gone entirely (deleted while
+  // the frame was open). There is nothing to apply it to then, and re-adding
+  // it would be the same resurrection by another route, so the transform is
+  // dropped.
+  if (!current.layers.some((item) => item.id === pending.layerId)) return;
+  const after = cloneRasterState(current);
   const layer = after.layers.find((item) => item.id === pending.layerId);
   let bounds: RasterRect | null = null;
   if (layer) {
@@ -346,7 +359,10 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
   }
   after.selection = cloneSelection(pending.selection);
   if (nextActiveLayerId) after.activeLayerId = nextActiveLayerId;
-  void context.commitDocument(pending.before, after, "Commit Transform (Применить трансформацию)", bounds);
+  // Undo returns to the document as it was a moment ago, not to how it looked
+  // when the frame opened: an edit made while the transform was up is its own
+  // history step and must not be swallowed by this one.
+  void context.commitDocument(current, after, "Commit Transform (Применить трансформацию)", bounds);
 }
 
 /** A layer's pixels laid out at document size — every ToolContext hands this out already

@@ -989,6 +989,35 @@ function ArtboardsPanel() {
         {text(language, "Clear Guides", "Очистить направляющие")}
       </button>
     </div>
+    {/* The active artboard's own numbers, which docs/vector-plan.md stage 15
+        named as a hole: "изменение размера через ручки, X/Y/W/H в панели
+        свойств... не сделаны". Dragging is how a layout is found and typing is
+        how it is made exact — a 1080x1080 artboard is a number, not a drag —
+        and Illustrator's own Artboard options are these same four fields.
+        Editing width or height keeps the top-left corner still, which is what
+        the same fields do there. */}
+    {(() => {
+      const activeArtboard = state.artboards.find((item) => item.id === state.activeArtboardId);
+      if (!activeArtboard) return null;
+      const set = (patch: { x?: number; y?: number; width?: number; height?: number }) =>
+        void changeVectorDocument(active.id, "Artboard Bounds (Границы монтажной области)", (draft) => {
+          const artboard = draft.artboards.find((item) => item.id === activeArtboard.id);
+          if (!artboard) return false;
+          if (patch.x !== undefined) artboard.x = patch.x;
+          if (patch.y !== undefined) artboard.y = patch.y;
+          // Never zero or negative: an artboard with no area cannot be clicked,
+          // and so could never be given its size back.
+          if (patch.width !== undefined) artboard.width = Math.max(1, patch.width);
+          if (patch.height !== undefined) artboard.height = Math.max(1, patch.height);
+          return true;
+        });
+      return <div className="artboard-fields">
+        <label>X<input type="number" value={Math.round(activeArtboard.x)} onChange={(event) => set({ x: event.target.valueAsNumber })}/></label>
+        <label>Y<input type="number" value={Math.round(activeArtboard.y)} onChange={(event) => set({ y: event.target.valueAsNumber })}/></label>
+        <label>W<input type="number" min={1} value={Math.round(activeArtboard.width)} onChange={(event) => set({ width: event.target.valueAsNumber })}/></label>
+        <label>H<input type="number" min={1} value={Math.round(activeArtboard.height)} onChange={(event) => set({ height: event.target.valueAsNumber })}/></label>
+      </div>;
+    })()}
     {state.artboards.length === 0
       ? <div className="empty-row">{text(language, "No artboards yet — the document itself is the canvas.", "Монтажных областей пока нет — холст пока сам является документом.")}</div>
       : <>

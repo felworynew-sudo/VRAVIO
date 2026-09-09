@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FRAME_HANDLES, anchorPoint, handleAtScreenPoint, handlePoint, scaleForHandleDrag, unionBounds } from "./transform-frame";
+import { FRAME_HANDLES, anchorPoint, handleAtScreenPoint, handlePoint, resizeRectByHandle, scaleForHandleDrag, unionBounds } from "./transform-frame";
 
 const box = { x: 100, y: 200, width: 200, height: 100 };
 
@@ -69,5 +69,43 @@ describe("the selection frame", () => {
     expect(unionBounds([{ x: 0, y: 0, width: 10, height: 10 }, { x: 90, y: 40, width: 10, height: 10 }]))
       .toEqual({ x: 0, y: 0, width: 100, height: 50 });
     expect(unionBounds([])).toBeNull();
+  });
+});
+
+describe("resizing an artboard by a handle", () => {
+  const rect = { x: 100, y: 200, width: 200, height: 100 };
+
+  it("moves the dragged corner and leaves the opposite one where it was", () => {
+    expect(resizeRectByHandle(rect, { x: 1, y: 1 }, { x: 400, y: 500 }))
+      .toEqual({ x: 100, y: 200, width: 300, height: 300 });
+    // Dragging the top-left instead: the bottom-right is what holds still.
+    expect(resizeRectByHandle(rect, { x: -1, y: -1 }, { x: 50, y: 150 }))
+      .toEqual({ x: 50, y: 150, width: 250, height: 150 });
+  });
+
+  it("moves one edge only for a side handle", () => {
+    // The pointer wandering vertically must not change the height.
+    expect(resizeRectByHandle(rect, { x: 1, y: 0 }, { x: 400, y: 999 }))
+      .toEqual({ x: 100, y: 200, width: 300, height: 100 });
+    expect(resizeRectByHandle(rect, { x: 0, y: -1 }, { x: -999, y: 150 }))
+      .toEqual({ x: 100, y: 150, width: 200, height: 150 });
+  });
+
+  it("flips rather than inverting when dragged past the anchor", () => {
+    // Past the opposite corner the rectangle carries on as a normal rectangle
+    // on the other side, never with a negative width.
+    const flipped = resizeRectByHandle(rect, { x: 1, y: 1 }, { x: 40, y: 120 });
+    expect(flipped.width).toBeGreaterThan(0);
+    expect(flipped.height).toBeGreaterThan(0);
+    expect(flipped.x).toBe(40);
+    expect(flipped.y).toBe(120);
+  });
+
+  it("never collapses to nothing", () => {
+    // Dropped exactly on its own anchor: a zero-sized artboard cannot be
+    // clicked, so it could never be given its size back.
+    const collapsed = resizeRectByHandle(rect, { x: 1, y: 1 }, { x: 100, y: 200 });
+    expect(collapsed.width).toBeGreaterThanOrEqual(1);
+    expect(collapsed.height).toBeGreaterThanOrEqual(1);
   });
 });

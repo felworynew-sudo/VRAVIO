@@ -104,3 +104,30 @@ export function unionBounds(all: readonly VectorBounds[]): VectorBounds | null {
   }
   return { x: left, y: top, width: right - left, height: bottom - top };
 }
+
+/**
+ * The rectangle a handle drag produces — the artboard counterpart of
+ * `scaleForHandleDrag`.
+ *
+ * An artboard is a rectangle, not a set of shapes, so it is resized by moving
+ * its edges rather than by scaling anything: the dragged edge follows the
+ * pointer, the opposite one stays where it was, and a side handle moves one
+ * edge only. Measured from the rectangle the drag *started* with, never from
+ * the rectangle as it is now — measuring against something the same drag keeps
+ * changing is how a resize accelerates away from the pointer.
+ *
+ * Never smaller than a unit in either direction: an artboard with no area
+ * cannot be clicked, and so could never be given its size back.
+ */
+export function resizeRectByHandle(startRect: VectorBounds, handle: FrameHandle, pointer: { x: number; y: number }): VectorBounds {
+  const anchor = anchorPoint(startRect, handle);
+  const grabbed = handlePoint(startRect, handle);
+  const movingX = handle.x !== 0 ? pointer.x : grabbed.x;
+  const movingY = handle.y !== 0 ? pointer.y : grabbed.y;
+  return {
+    x: handle.x === 0 ? startRect.x : Math.min(anchor.x, movingX),
+    y: handle.y === 0 ? startRect.y : Math.min(anchor.y, movingY),
+    width: handle.x === 0 ? startRect.width : Math.max(1, Math.abs(movingX - anchor.x)),
+    height: handle.y === 0 ? startRect.height : Math.max(1, Math.abs(movingY - anchor.y)),
+  };
+}

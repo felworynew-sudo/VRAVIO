@@ -90,6 +90,20 @@ export function confirmModal(props: { title: string; message: string; confirmLab
 }
 
 /**
+ * Asks for a new artboard's size, resolving to it or to null if the dialog was
+ * dismissed. Same shape as `confirmModal`: the caller awaits an answer instead
+ * of splitting the work across two callbacks.
+ */
+export function artboardSizeModal(props: { width: number; height: number }): Promise<{ width: number; height: number } | null> {
+  return new Promise((resolve) => {
+    const close = openModal("artboard-size", {
+      ...props,
+      onResolve: (size: { width: number; height: number } | null) => { close(); resolve(size); },
+    });
+  });
+}
+
+/**
  * Shows an error to the user.
  *
  * Separate from `diagnostic("error", …)`, which records it: several import and
