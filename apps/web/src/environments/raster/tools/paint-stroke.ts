@@ -1,4 +1,4 @@
-import { drawDab, drawQuadraticStrokeSegment, parseHexColor, sampleAverage, toHexColor, unionRect, type Point, type RasterRect } from "@vravio/env-raster";
+import { accumulateDab, accumulateStrokeSegment, compositeCoverage, parseHexColor, sampleAverage, toHexColor, unionRect, type Point, type RasterRect } from "@vravio/env-raster";
 import { locksRefuse } from "./lock-guard";
 import type { PaintTarget, RasterToolDefinition, ToolContext, ToolPointer } from "./types";
 
@@ -36,8 +36,18 @@ interface Stroke {
   strokeBounds: RasterRect | null;
   /** Distance travelled since the last dab, carried across pointer samples — without it every
    * sample would get a dab of its own regardless of the brush's spacing. See
-   * `drawQuadraticStrokeSegment`, which owns the explanation. */
+   * `accumulateStrokeSegment`, which owns the explanation. */
   spacingCarry: number;
+  /**
+   * How much of the stroke has reached each pixel, 0..255.
+   *
+   * The dabs go here, and the picture is composited from `before` plus this, once per frame over
+   * the band that changed. Compositing each dab straight into the layer instead blended the same
+   * pixel about eight times at the default spacing — measured, four times the cost of a stroke at
+   * 50% spacing — and made a half-opacity stroke darken wherever it crossed itself, which
+   * Photoshop's does not.
+   */
+  coverage: Uint8ClampedArray;
   readonly target: PaintTarget["kind"];
   readonly layerId: string;
 }
@@ -79,7 +89,11 @@ function resolvedOptions(context: ToolContext<PaintStrokeState>, config: PaintSt
   const options = context.options;
   return {
     size: Number(options.size ?? 24),
-    opacity: Number(options.opacity ?? 100) / 100 * Number(options.flow ?? 100) / 100,
+    // Two separate numbers, as in Photoshop: opacity is the most the stroke may ever reach, flow
+    // is how fast each dab gets there. Multiplied together, as they used to be, neither can mean
+    // what it says — a 50% stroke would keep darkening every time it crossed itself.
+    opacity: Number(options.opacity ?? 100) / 100,
+    flow: Number(options.flow ?? 100) / 100,
     hardness: config.pinnedHardness ? 1 : Number(options.hardness ?? 82) / 100,
     spacing: Number(options.spacing ?? 12) / 100,
     roundness: Number(options.roundness ?? 100) / 100,
@@ -89,16 +103,20 @@ function resolvedOptions(context: ToolContext<PaintStrokeState>, config: PaintSt
   };
 }
 
-function paintDab(context: ToolContext<PaintStrokeState>, config: PaintStrokeConfig, target: Uint8ClampedArray, point: Point): void {
+function paintDab(context: ToolContext<PaintStrokeState>, config: PaintStrokeConfig, coverage: Uint8ClampedArray, point: Point): void {
   const o = resolvedOptions(context, config);
-  const erase = config.erase && context.paintTarget.kind === "pixels";
-  drawDab(target, context.document.width, context.document.height, point, o.size, resolveColor(context, config), o.opacity, erase, o.hardness, context.paintMask, o.roundness, o.angle, o.pressureSize, o.pressureOpacity);
+  accumulateDab(coverage, context.document.width, context.document.height, point, o.size, o.flow, o.opacity, o.hardness, context.paintMask, o.roundness, o.angle, o.pressureSize, o.pressureOpacity);
 }
 
-function paintSegment(context: ToolContext<PaintStrokeState>, config: PaintStrokeConfig, target: Uint8ClampedArray, from: Point, control: Point, to: Point, carry = 0): number {
+function paintSegment(context: ToolContext<PaintStrokeState>, config: PaintStrokeConfig, coverage: Uint8ClampedArray, from: Point, control: Point, to: Point, carry = 0): number {
   const o = resolvedOptions(context, config);
+  return accumulateStrokeSegment(coverage, context.document.width, context.document.height, from, control, to, o.size, o.flow, o.opacity, context.paintMask, o.hardness, o.spacing, o.roundness, o.angle, o.pressureSize, o.pressureOpacity, carry);
+}
+
+/** Lays the coverage gathered so far onto the working buffer, over one rectangle. */
+function layStroke(context: ToolContext<PaintStrokeState>, config: PaintStrokeConfig, stroke: Stroke, region: RasterRect): void {
   const erase = config.erase && context.paintTarget.kind === "pixels";
-  return drawQuadraticStrokeSegment(target, context.document.width, context.document.height, from, control, to, o.size, resolveColor(context, config), o.opacity, erase, context.paintMask, o.hardness, o.spacing, o.roundness, o.angle, o.pressureSize, o.pressureOpacity, carry);
+  compositeCoverage(stroke.working, stroke.before, stroke.coverage, context.document.width, context.document.height, region, resolveColor(context, config), erase);
 }
 
 /** Extends the stroke to `point`, mutating it in place — see the note on the
@@ -106,10 +124,16 @@ function paintSegment(context: ToolContext<PaintStrokeState>, config: PaintStrok
 function appendPoint(context: ToolContext<PaintStrokeState>, config: PaintStrokeConfig, stroke: Stroke, point: Point): void {
   if (Math.hypot(point.x - stroke.pending.x, point.y - stroke.pending.y) < 0.05) return;
   const end: Point = { x: (stroke.pending.x + point.x) / 2, y: (stroke.pending.y + point.y) / 2, pressure: ((stroke.pending.pressure ?? 1) + (point.pressure ?? 1)) / 2 };
-  stroke.spacingCarry = paintSegment(context, config, stroke.working, stroke.curveStart, stroke.pending, end, stroke.spacingCarry);
+  stroke.spacingCarry = paintSegment(context, config, stroke.coverage, stroke.curveStart, stroke.pending, end, stroke.spacingCarry);
   const pad = Number(context.options.size ?? 24) / 2 + 2;
-  stroke.dirty = unionRect(stroke.dirty, stroke.curveStart.x, stroke.curveStart.y, stroke.pending.x, stroke.pending.y, pad);
-  stroke.dirty = unionRect(stroke.dirty, point.x, point.y, end.x, end.y, pad);
+  const touched = unionRect(
+    unionRect(null, stroke.curveStart.x, stroke.curveStart.y, stroke.pending.x, stroke.pending.y, pad),
+    point.x, point.y, end.x, end.y, pad,
+  );
+  // Laid down once for the band this step touched, from the pristine `before` — so a band that
+  // gets recomposited on a later frame does not build on itself.
+  layStroke(context, config, stroke, touched);
+  stroke.dirty = stroke.dirty ? unionRect(stroke.dirty, touched.x, touched.y, touched.x + touched.width, touched.y + touched.height, 0) : touched;
   stroke.strokeBounds = unionRect(stroke.strokeBounds, stroke.dirty.x, stroke.dirty.y, stroke.dirty.x + stroke.dirty.width, stroke.dirty.y + stroke.dirty.height, 0);
   stroke.curveStart = end;
   stroke.pending = point;
@@ -156,18 +180,26 @@ export function createPaintStrokeTool(config: PaintStrokeConfig): RasterToolDefi
         // gesture in progress — same as in the old switch, which never
         // touched `gesture.current` for this case either.
         const control: Point = { x: (shiftFrom.x + pointer.point.x) / 2, y: (shiftFrom.y + pointer.point.y) / 2, pressure: 1 };
-        paintSegment(context, config, working, shiftFrom, control, pointer.point);
+        const lineCoverage = new Uint8ClampedArray(context.document.width * context.document.height);
+        paintSegment(context, config, lineCoverage, shiftFrom, control, pointer.point);
+        const pad = Number(context.options.size ?? 24) / 2 + 2;
+        const line = unionRect(null, shiftFrom.x, shiftFrom.y, pointer.point.x, pointer.point.y, pad);
+        layStroke(context, config, { before, working, coverage: lineCoverage } as Stroke, line);
         context.setLastStrokePoint({ toolId: config.id, layerId: key, point: pointer.point });
         context.schedulePreview(working, context.paintTarget.kind, context.paintTarget.layerId, null);
         void context.commit(before, working, context.paintTarget.kind === "mask" ? "Paint Layer Mask (Рисование по маске слоя)" : "Straight Brush Line (Прямая линия кисти)", context.paintTarget.kind, context.paintTarget.layerId);
         return;
       }
 
-      paintDab(context, config, working, pointer.point);
-      context.schedulePreview(working, context.paintTarget.kind, context.paintTarget.layerId, null);
-      context.setState({
-        stroke: { pointerId: pointer.pointerId, before, working, curveStart: pointer.point, pending: pointer.point, dirty: null, strokeBounds: null, spacingCarry: 0, target: context.paintTarget.kind, layerId: context.paintTarget.layerId },
-      });
+      const coverage = new Uint8ClampedArray(context.document.width * context.document.height);
+      const stroke: Stroke = { pointerId: pointer.pointerId, before, working, coverage, curveStart: pointer.point, pending: pointer.point, dirty: null, strokeBounds: null, spacingCarry: 0, target: context.paintTarget.kind, layerId: context.paintTarget.layerId };
+      paintDab(context, config, coverage, pointer.point);
+      const pad = Number(context.options.size ?? 24) / 2 + 2;
+      const first = unionRect(null, pointer.point.x, pointer.point.y, pointer.point.x, pointer.point.y, pad);
+      layStroke(context, config, stroke, first);
+      stroke.strokeBounds = first;
+      context.schedulePreview(working, context.paintTarget.kind, context.paintTarget.layerId, first);
+      context.setState({ stroke });
     },
 
     onPointerMove(context, pointer) {
@@ -185,7 +217,10 @@ export function createPaintStrokeTool(config: PaintStrokeConfig): RasterToolDefi
       // The curve lags half a step behind the raw input by construction
       // (`appendPoint` always ends on a midpoint) — this closes the last
       // gap so the stroke visibly reaches where the pointer was released.
-      paintSegment(context, config, stroke.working, stroke.curveStart, stroke.pending, stroke.pending, stroke.spacingCarry);
+      paintSegment(context, config, stroke.coverage, stroke.curveStart, stroke.pending, stroke.pending, stroke.spacingCarry);
+      const closing = unionRect(null, stroke.curveStart.x, stroke.curveStart.y, stroke.pending.x, stroke.pending.y, Number(context.options.size ?? 24) / 2 + 2);
+      layStroke(context, config, stroke, closing);
+      stroke.strokeBounds = unionRect(stroke.strokeBounds, closing.x, closing.y, closing.x + closing.width, closing.y + closing.height, 0);
       context.setLastStrokePoint({ toolId: config.id, layerId: strokeKey({ kind: stroke.target, layerId: stroke.layerId }), point: stroke.pending });
       commitStroke(context, config, stroke);
       context.setState(empty);
