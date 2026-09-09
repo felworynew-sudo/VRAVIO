@@ -39,6 +39,32 @@ export interface PendingTransform {
   readonly selection: PixelSelection | null;
   readonly rotation: number;
   readonly text?: PendingTextTransform;
+  /**
+   * A scale or rotate still under the hand, described rather than resampled.
+   *
+   * While this is set, `pixels` is deliberately *stale* — it still holds what the layer looked
+   * like when the drag began — and what the user sees is that same content drawn once into a
+   * canvas and moved with a CSS transform, over a composite the real layer is hidden from. The
+   * honest resample happens once, when the gesture ends.
+   *
+   * This is Krita's Instant Preview and what GIMP and Photoshop do too: during a drag they
+   * transform the already-rendered layer rather than recomputing pixels per frame. Measured here
+   * before the change, one frame of a rotate cost 4.8ms on a small layer and about 64ms on a
+   * 1200x1200 one — every frame, at any canvas size — and the composite that followed it repainted
+   * on top of that.
+   *
+   * The same door the text branch of this very tool has always used (`text-transform-preview`);
+   * this extends it to pixel layers rather than inventing a second mechanism.
+   */
+  readonly live?: {
+    /** Where the pristine content sits inside `pixels`. */
+    readonly source: RasterRect;
+    /** Where it should appear now. */
+    readonly target: RasterRect;
+    /** Degrees to turn it by, about `target`'s centre — the delta this drag has added, since
+     * whatever came before is already baked into `pixels`. */
+    readonly rotation: number;
+  };
   /** Content lifted off the layer once; every drag places the same float rather than cutting a
    * second hole out of an image already cut from — see CLAUDE.md's floating-selection lesson. */
   readonly float?: FloatingPixels;
@@ -138,6 +164,14 @@ function applyQuadHandleDelta(base: readonly [Point, Point, Point, Point], handl
 /** The frame a pending transform's handles sit on — text uses its own live-typed bounds, a
  * pixel transform falls back to the selection or the transformed content's own opaque extent. */
 export function pendingBounds(pending: PendingTransform, width: number, height: number): RasterRect | null {
+  // A live drag knows exactly where its content is, so the frame follows it without asking the
+  // pixels — which also skips `layerOpaqueBounds`' scan of the whole document buffer, paid on
+  // every render and every pointer move while a transform is open.
+  if (pending.live) {
+    return pending.live.rotation
+      ? rotatedDestinationBounds(pending.live.target, pending.live.rotation)
+      : pending.live.target;
+  }
   return pending.text?.targetBounds ?? pending.selection?.bounds ?? layerOpaqueBounds(pending.pixels, width, height);
 }
 
@@ -424,6 +458,11 @@ function applyDragFrame(context: ToolContext<MoveState>, drag: MoveDrag, interpo
     if (drag.handleY === -1) top = point.y; else if (drag.handleY === 1) bottom = point.y;
     const target = { x: Math.min(left, right), y: Math.min(top, bottom), width: Math.max(1, Math.abs(right - left)), height: Math.max(1, Math.abs(bottom - top)) };
     if (drag.text) return { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: 0, text: { ...drag.text, targetBounds: target } };
+    if (!interpolate) {
+      // Under the hand: describe it, draw nothing. The Overlay puts the layer's own content on
+      // screen through a CSS transform, and the resample below runs once on release.
+      return { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: context.state.pending?.rotation ?? 0, live: { source, target, rotation: 0 } };
+    }
     const pixels = scaleLayerPixels(drag.basePixels, state.width, state.height, source, target, drag.baseSelection);
     const selection = scaleSelection(drag.baseSelection, state.width, state.height, source, target);
     const pending: PendingTransform = { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels, selection, rotation: context.state.pending?.rotation ?? 0 };
@@ -433,6 +472,11 @@ function applyDragFrame(context: ToolContext<MoveState>, drag: MoveDrag, interpo
   if (drag.kind === "rotate") {
     const angle = drag.baseRotation + (Math.atan2(point.y - drag.center.y, point.x - drag.center.x) - drag.startAngle) * 180 / Math.PI;
     if (drag.text) return { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: angle, text: drag.text };
+    if (!interpolate) {
+      // The turn this drag has added; whatever the layer was rotated by before is already in
+      // `basePixels`, so only the delta goes to the CSS transform.
+      return { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: angle, live: { source: drag.sourceBounds, target: drag.sourceBounds, rotation: angle - drag.baseRotation } };
+    }
     const pixels = rotateLayerPixels(drag.basePixels, state.width, state.height, drag.sourceBounds, angle - drag.baseRotation, drag.baseSelection, interpolate);
     const selection = rotateSelection(drag.baseSelection, state.width, state.height, drag.sourceBounds, angle - drag.baseRotation);
     const pending: PendingTransform = { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels, selection, rotation: angle };
@@ -720,6 +764,32 @@ const move: RasterToolDefinition<MoveState> = {
       if (ctx2d) ctx2d.putImageData(new ImageData(cropPixels(pending!.pixels, document.width, bounds) as Uint8ClampedArray<ArrayBuffer>, overlay.width, overlay.height), 0, 0);
     }, [text?.initialBounds, pending?.pixels, document.width]);
 
+    // The live preview's own canvas — filled once from the pristine content and then only moved,
+    // which is the whole point: no pixel is resampled until the gesture ends.
+    const livePreviewRef = useRef<HTMLCanvasElement>(null);
+    const live = pending?.live;
+    useEffect(() => {
+      if (!live || !pending) return;
+      context.previewWithLayerHidden(pending.layerId);
+      // Put the real layer back the moment the drag stops describing itself; the resampled
+      // result is already in the document by then, and leaving it hidden would blank the layer.
+      return () => context.previewWithLayerHidden(null);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [Boolean(live), pending?.layerId]);
+    useEffect(() => {
+      const overlay = livePreviewRef.current;
+      if (!live || !overlay || !pending) return;
+      const source = live.source;
+      const width = Math.max(1, Math.round(source.width)), height = Math.max(1, Math.round(source.height));
+      // Redrawn only when the *content* changes, not when it moves: the dependency list carries
+      // the source rectangle and the buffer, never the target or the angle.
+      if (overlay.width !== width) overlay.width = width;
+      if (overlay.height !== height) overlay.height = height;
+      const ctx2d = overlay.getContext("2d");
+      if (ctx2d) ctx2d.putImageData(new ImageData(cropPixels(pending.pixels, document.width, { x: Math.round(source.x), y: Math.round(source.y), width, height }) as Uint8ClampedArray<ArrayBuffer>, width, height), 0, 0);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [live?.source.x, live?.source.y, live?.source.width, live?.source.height, pending?.pixels, document.width]);
+
     if (!pending) return null;
     const zoom = context.viewport.zoom;
     const bounds = pendingBounds(pending, document.width, document.height);
@@ -741,6 +811,7 @@ const move: RasterToolDefinition<MoveState> = {
       </svg>;
     }
     return <>
+      {live && <canvas ref={livePreviewRef} className="text-transform-preview" style={{ left: live.target.x, top: live.target.y, width: live.target.width, height: live.target.height, transform: `rotate(${live.rotation}deg)` }}/>}
       {text && <canvas ref={textPreviewRef} className="text-transform-preview" style={{ left: text.targetBounds.x, top: text.targetBounds.y, width: text.targetBounds.width, height: text.targetBounds.height, transform: `rotate(${pending.rotation}deg)` }}/>}
       <svg className="transform-controls" strokeWidth={1 / zoom} viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
         <rect x={bounds.x} y={bounds.y} width={bounds.width} height={bounds.height}/>

@@ -228,3 +228,73 @@ describe("warp styles", () => {
     expect(Array.from(flagAfterArc.pixels)).toEqual(Array.from(flagDirect.pixels));
   });
 });
+
+describe("a transform under the hand does not resample", () => {
+  /** Opens a pending transform the way a move drag does. */
+  function opened(context: ToolContext<MoveState>, box: { state: MoveState }) {
+    move.onPointerDown!(context, pointerAt(24, 20));
+    move.onPointerMove!(context, pointerAt(24, 20));
+    move.onGestureEnd!(context, pointerAt(24, 20));
+    return { pending: box.state.pending!, bounds: pendingBounds(box.state.pending!, WIDTH, HEIGHT)! };
+  }
+
+  it("describes a rotation while dragging and resamples once on release", () => {
+    // Krita's Instant Preview, and what this tool already did for text: while the hand is moving,
+    // the pixels are left alone and the frame carries a description the Overlay draws with a CSS
+    // transform; the honest resample happens when the gesture ends. Before this, every frame
+    // resampled — measured at 4.8ms for a small layer and about 64ms for a 1200x1200 one.
+    const { context, box } = harness(blockDocument());
+    const { pending, bounds } = opened(context, box);
+    const untouched = pending.pixels;
+
+    // Press outside the frame and clear of any handle's own grab radius (11 units), so this is
+    // the rotate zone rather than a scale handle, and turn.
+    move.onPointerDown!(context, pointerAt(bounds.x - 20, bounds.y - 20));
+    move.onPointerMove!(context, pointerAt(bounds.x + bounds.width + 20, bounds.y - 20));
+
+    const during = box.state.pending!;
+    expect(during.live, "a drag in progress carries a description").toBeTruthy();
+    expect(during.live!.rotation).not.toBe(0);
+    // The content is the one the drag started with — nothing was resampled. (Not the same
+    // object: a drag copies the buffer once at its start, which is not the same as resampling.)
+    expect(Array.from(during.pixels)).toEqual(Array.from(untouched));
+
+    move.onGestureEnd!(context, pointerAt(bounds.x + bounds.width + 20, bounds.y - 20));
+    const after = box.state.pending!;
+    expect(after.live, "the description is gone once the gesture ends").toBeUndefined();
+    expect(Array.from(after.pixels)).not.toEqual(Array.from(untouched));
+  });
+
+  it("does the same for a scale handle", () => {
+    const { context, box } = harness(blockDocument());
+    const { pending, bounds } = opened(context, box);
+    const untouched = pending.pixels;
+
+    move.onPointerDown!(context, pointerAt(bounds.x + bounds.width, bounds.y + bounds.height));
+    move.onPointerMove!(context, pointerAt(bounds.x + bounds.width + 8, bounds.y + bounds.height + 5));
+
+    const during = box.state.pending!;
+    expect(during.live).toBeTruthy();
+    expect(Array.from(during.pixels)).toEqual(Array.from(untouched));
+    // And the frame follows the description, not the stale pixels — otherwise the handles would
+    // stand still while the content appeared to move.
+    const live = pendingBounds(during, WIDTH, HEIGHT)!;
+    expect(live.width).toBeGreaterThan(bounds.width);
+
+    move.onGestureEnd!(context, pointerAt(bounds.x + bounds.width + 8, bounds.y + bounds.height + 5));
+    expect(box.state.pending!.live).toBeUndefined();
+  });
+
+  it("still ends up where the description said it would", () => {
+    // The preview and the result have to agree, or the picture jumps on release.
+    const { context, box } = harness(blockDocument());
+    const { bounds } = opened(context, box);
+    move.onPointerDown!(context, pointerAt(bounds.x + bounds.width, bounds.y + bounds.height));
+    move.onPointerMove!(context, pointerAt(bounds.x + bounds.width + 8, bounds.y + bounds.height + 5));
+    const promised = pendingBounds(box.state.pending!, WIDTH, HEIGHT)!;
+    move.onGestureEnd!(context, pointerAt(bounds.x + bounds.width + 8, bounds.y + bounds.height + 5));
+    const delivered = pendingBounds(box.state.pending!, WIDTH, HEIGHT)!;
+    expect(Math.abs(delivered.width - promised.width)).toBeLessThanOrEqual(2);
+    expect(Math.abs(delivered.height - promised.height)).toBeLessThanOrEqual(2);
+  });
+});
