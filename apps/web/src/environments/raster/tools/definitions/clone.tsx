@@ -1,4 +1,4 @@
-import { cloneDab, cloneStrokeSegment, unionRect, type Point, type RasterRect } from "@vravio/env-raster";
+import { cloneDab, cloneQuadraticStrokeSegment, cloneStrokeSegment, unionRect, type Point, type RasterRect } from "@vravio/env-raster";
 import type { RasterToolDefinition, ToolContext } from "../types";
 import { locksRefuse } from "../lock-guard";
 
@@ -50,20 +50,28 @@ function resolvedOptions(options: Readonly<Record<string, string | number | bool
 }
 
 /**
- * Extends the stroke to `point` — ported exactly from the old
- * `appendBrushPoint`'s clone branch, lag included: the segment actually
- * drawn is `curveStart -> pending` (the *previous* call's numbers), not
- * `curveStart -> point`. `point` and the midpoint `end` only ever decide
- * where `curveStart`/`pending` land for the *next* call. That means the
- * true final point of a stroke is never itself the target of a draw call —
- * only ever a `pending` some later call draws *up to* — which is exactly
- * how the old code behaved too, not a gap this port introduces.
+ * Extends the stroke to `point`, along the same quadratic through the midpoints the brush walks.
+ *
+ * What this replaced was the old `appendBrushPoint`'s clone branch, which stamped a *straight*
+ * segment from `curveStart` (a midpoint) to `pending` (the previous sample). The next call began
+ * at the next midpoint, so the stretch from each sample to the midpoint after it was never
+ * stamped at all: half of every gap between samples. A slow hand hides it — the halves are a
+ * pixel or two and the dabs overlap anyway — but a fast one leaves the trail in dashes. Found
+ * live, with a drag that produced three samples: two stamped bands, two holes.
+ *
+ * A quadratic starts exactly where the previous one ended, so the path is covered once and
+ * completely; the brush has walked one since it started carrying its spacing.
+ *
+ * The curve still lags one sample behind the hand, since its control point is the previous
+ * sample. `onGestureEnd` closes that last gap explicitly, the way Krita's
+ * `KisToolFreehandHelper::finishStroke` paints one final segment from `olderPaintInformation` to
+ * `previousPaintInformation`, and for the same reason.
  */
 function appendPoint(context: ToolContext<CloneState>, stroke: Stroke, point: Point): void {
   if (Math.hypot(point.x - stroke.pending.x, point.y - stroke.pending.y) < 0.05) return;
   const end: Point = { x: (stroke.pending.x + point.x) / 2, y: (stroke.pending.y + point.y) / 2, pressure: ((stroke.pending.pressure ?? 1) + (point.pressure ?? 1)) / 2 };
   const o = resolvedOptions(context.options);
-  stroke.spacingCarry = cloneStrokeSegment(stroke.working, context.document.width, context.document.height, stroke.curveStart, stroke.pending, stroke.sourceOffsetX, stroke.sourceOffsetY, o.size, o.opacity, context.paintMask, o.hardness, o.roundness, o.angle, true, false, stroke.before, o.spacing, stroke.spacingCarry);
+  stroke.spacingCarry = cloneQuadraticStrokeSegment(stroke.working, context.document.width, context.document.height, stroke.curveStart, stroke.pending, end, stroke.sourceOffsetX, stroke.sourceOffsetY, o.size, o.opacity, context.paintMask, o.hardness, o.roundness, o.angle, true, false, stroke.before, o.spacing, stroke.spacingCarry);
   const pad = o.size / 2 + 2;
   stroke.dirty = unionRect(stroke.dirty, stroke.curveStart.x, stroke.curveStart.y, stroke.pending.x, stroke.pending.y, pad);
   stroke.dirty = unionRect(stroke.dirty, point.x, point.y, end.x, end.y, pad);
@@ -126,6 +134,14 @@ const clone: RasterToolDefinition<CloneState> = {
     const stroke = context.state.stroke;
     if (!stroke || stroke.pointerId !== pointer.pointerId) return;
     appendPoint(context, stroke, pointer.point);
+    // The stroke lags one sample behind by construction (see `appendPoint`),
+    // so the stretch from the last drawn point to where the pointer was
+    // released is still unstamped — this is the segment that closes it.
+    const o = resolvedOptions(context.options);
+    cloneQuadraticStrokeSegment(stroke.working, context.document.width, context.document.height, stroke.curveStart, stroke.pending, stroke.pending, stroke.sourceOffsetX, stroke.sourceOffsetY, o.size, o.opacity, context.paintMask, o.hardness, o.roundness, o.angle, true, false, stroke.before, o.spacing, stroke.spacingCarry);
+    const closing = unionRect(null, stroke.curveStart.x, stroke.curveStart.y, stroke.pending.x, stroke.pending.y, o.size / 2 + 2);
+    stroke.strokeBounds = unionRect(stroke.strokeBounds, closing.x, closing.y, closing.x + closing.width, closing.y + closing.height, 0);
+    context.schedulePreview(stroke.working, "pixels", context.paintTarget.layerId, closing);
     context.setLastStrokePoint({ toolId: clone.id, layerId: context.paintTarget.layerId, point: stroke.pending });
     void context.commit(stroke.before, stroke.working, "Clone (Штамп)", "pixels", context.paintTarget.layerId, stroke.strokeBounds);
     context.setState(empty);

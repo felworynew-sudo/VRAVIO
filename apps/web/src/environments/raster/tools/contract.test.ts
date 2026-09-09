@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { appendLayer, createRasterDocument, createRasterLayer, setLayerPixels, type PixelSelection, type RasterDocumentState } from "@vravio/env-raster";
-import { rasterTools } from "./registry";
+import { rasterTools, rasterToolById } from "./registry";
 import { toolById } from "../../../tools";
 import type { NavigationContext, NavigationGesture, RasterToolDefinition, ToolContext, ToolPointer } from "./types";
 import type { DocumentViewport } from "../../../store";
@@ -663,5 +663,69 @@ describe("locks reach every tool that paints into the active layer", () => {
     // rather than writing into the active one, so a lock on whatever happens to
     // be selected has no bearing on it beyond Lock All.
     expect(offenders).toEqual(["shape.tsx"]);
+  });
+});
+
+/**
+ * A dragged stroke must mark the whole path, not the samples it happened to receive.
+ *
+ * Both faults below were found live, not by a test: with a pointer stream of three samples the
+ * clone stamp laid two bands with two holes between them, and the spot healing brush left three
+ * separate circles. Both walked the path in a way that only covered part of it — the stamp drew
+ * from a midpoint back to the *previous* sample (so the sample-to-midpoint half of every gap went
+ * unstamped), and the healing brush stamped one dab per sample with nothing in between.
+ *
+ * A slow hand hides both, which is why they survived: the samples arrive a pixel or two apart and
+ * the dabs overlap anyway. The gesture below is what a fast hand looks like — samples far apart
+ * relative to the tip — and it is the case the tools were wrong for.
+ */
+describe("a stroke covers the path it was dragged along", () => {
+  /** Samples 12px apart with a 4px tip: a fast hand, and four times the gap a dab can bridge. */
+  const sparseDrag = (context: ToolContext<unknown>, tool: RasterToolDefinition<unknown>) => {
+    if (tool.id === "raster.clone") tool.onPointerDown?.(context, { ...pointerAt(8, 10), altKey: true });
+    tool.onPointerDown?.(context, pointerAt(8, 30));
+    tool.onPointerMove?.(context, pointerAt(20, 30));
+    tool.onPointerMove?.(context, pointerAt(32, 30));
+    tool.onGestureEnd?.(context, pointerAt(32, 30));
+  };
+
+  /** Where along the row the commit differs from the untouched document. */
+  const markedColumns = (tool: RasterToolDefinition<unknown>): number[] => {
+    const { effects, untouched } = drive(tool, { size: 4, spacing: 18, hardness: 82, opacity: 100, roundness: 100, angle: 0, alignMode: "registered" }, (context) => sparseDrag(context, tool));
+    const commit = effects.commits.at(-1);
+    expect(commit, "the gesture committed nothing at all").toBeTruthy();
+    const before = materialise(untouched.layers[0]!, untouched);
+    const marked: number[] = [];
+    for (let x = 9; x <= 31; x += 1) {
+      const index = (30 * 64 + x) * 4;
+      const changed = commit!.after[index] !== before[index] || commit!.after[index + 1] !== before[index + 1]
+        || commit!.after[index + 2] !== before[index + 2] || commit!.after[index + 3] !== before[index + 3];
+      if (changed) marked.push(x);
+    }
+    return marked;
+  };
+
+  it("leaves no holes in a clone stamp's trail", () => {
+    const marked = markedColumns(rasterToolById.get("raster.clone")!);
+    // Every interior column of the drag, with none skipped: the old walk marked
+    // roughly half of them, in two runs.
+    expect(marked).toEqual(Array.from({ length: 23 }, (_, index) => index + 9));
+  });
+
+  it("leaves no holes in a spot healing brush's marked region", () => {
+    // Measured on the mask the brush marks, not on the pixels it commits: the repair is a
+    // Poisson solve from the region's own boundary, and over this fixture's smooth gradient it
+    // reconstructs many pixels to exactly the value they already had. "Did this pixel change"
+    // would therefore report holes where the region is whole — a measurement of the fixture, not
+    // of the tool.
+    const { effects } = drive(rasterToolById.get("raster.spotHeal")!, { size: 4, spacing: 18, hardness: 82, roundness: 100, angle: 0 }, (context) => sparseDrag(context, rasterToolById.get("raster.spotHeal")!));
+    const preview = effects.spotHealPreviews.at(-1);
+    expect(preview, "the brush marked nothing at all").toBeTruthy();
+    const marked: number[] = [];
+    for (let x = 9; x <= 31; x += 1) {
+      const local = (30 - preview!.originY) * preview!.width + (x - preview!.originX);
+      if (preview!.mask[local]! > 0) marked.push(x);
+    }
+    expect(marked).toEqual(Array.from({ length: 23 }, (_, index) => index + 9));
   });
 });

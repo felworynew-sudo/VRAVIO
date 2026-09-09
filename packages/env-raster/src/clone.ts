@@ -126,3 +126,63 @@ export function cloneStrokeSegment(
   }
   return travelled;
 }
+
+/**
+ * The quadratic slice of the pointer's path the stamp actually follows, stamping along it.
+ *
+ * The straight {@link cloneStrokeSegment} above cannot be used for a freehand stroke, and the
+ * reason is not smoothing but coverage. The tool smooths by ending each slice on the midpoint
+ * between two pointer samples, so a straight segment drawn from that midpoint to the *previous*
+ * sample leaves the other half of every gap — sample to midpoint — never stamped at all. With a
+ * hand moving slowly the halves are a pixel or two and the dab spacing hides them; with a fast
+ * stroke, or a sparse stream of samples, the stamp comes out in dashes. Measured live: a drag
+ * that produced three samples stamped two bands and skipped two.
+ *
+ * The brush has not had this problem since it started walking a quadratic through the midpoints
+ * (`accumulateStrokeSegment`) — the curve starts exactly where the previous one ended, so the
+ * path is covered once and completely. This is that walk, stamping instead of accumulating.
+ */
+export function cloneQuadraticStrokeSegment(
+  pixels: Uint8ClampedArray,
+  width: number,
+  height: number,
+  from: Point,
+  control: Point,
+  to: Point,
+  sourceOffsetX: number,
+  sourceOffsetY: number,
+  size: number,
+  opacity: number,
+  selectionMask?: Uint8ClampedArray,
+  hardness = 0.82,
+  roundness = 1,
+  angleDegrees = 0,
+  pressureSize = true,
+  pressureOpacity = false,
+  sourcePixels: Uint8ClampedArray = pixels,
+  spacing = 0.18,
+  carry = 0,
+): number {
+  const approximateLength = Math.hypot(control.x - from.x, control.y - from.y) + Math.hypot(to.x - control.x, to.y - control.y);
+  const step = Math.max(0.5, size * Math.max(0.01, spacing));
+  if (!(approximateLength > 0)) return carry;
+  const walk = Math.max(1, Math.ceil(approximateLength / Math.min(step, 2)));
+  const at = (t: number): { x: number; y: number } => {
+    const inverse = 1 - t;
+    return {
+      x: inverse * inverse * from.x + 2 * inverse * t * control.x + t * t * to.x,
+      y: inverse * inverse * from.y + 2 * inverse * t * control.y + t * t * to.y,
+    };
+  };
+  let previous = at(0);
+  let travelled = carry;
+  for (let index = 1; index <= walk; index += 1) {
+    const current = at(index / walk);
+    travelled += Math.hypot(current.x - previous.x, current.y - previous.y);
+    previous = current;
+    if (travelled < step) continue;
+    travelled -= step;
+    cloneDab(pixels, width, height, current.x + sourceOffsetX, current.y + sourceOffsetY, current.x, current.y, size, opacity, hardness, selectionMask, roundness, angleDegrees, pressureSize, pressureOpacity, sourcePixels);
+  }
+  return travelled;
+}
