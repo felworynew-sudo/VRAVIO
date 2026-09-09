@@ -78,6 +78,9 @@ const empty: NodesState = { selectedNode: null, nodeDrag: null, shapeDrag: null 
 
 const nodes: VectorToolDefinition<NodesState> = {
   id: "vector.nodes",
+  // The bounding box belongs to moving and scaling an object, not to editing
+  // its path — see `editsPathPoints` in ../types.ts.
+  editsPathPoints: true,
   createState: () => empty,
 
   onPointerDown(context, pointer) {
@@ -107,7 +110,7 @@ const nodes: VectorToolDefinition<NodesState> = {
       const dx = pointer.point.x - shapeDrag.start.x, dy = pointer.point.y - shapeDrag.start.y;
       context.setState({ ...context.state, shapeDrag: { ...shapeDrag, start: pointer.point } });
       context.mutate((draft: VectorDocumentState) => {
-        const shape = draft.shapes.find((item) => item.id === shapeDrag.shapeId);
+        const shape = draft.shapes.find((item) => item.id === shapeDrag.shapeIds[0]);
         if (!shape) return;
         if (shape.kind === "rectangle" || shape.kind === "ellipse" || shape.kind === "text" || shape.kind === "image") { shape.x += dx; shape.y += dy; }
         else if (shape.kind === "line") { shape.x1 += dx; shape.y1 += dy; shape.x2 += dx; shape.y2 += dy; }

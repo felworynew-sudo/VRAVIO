@@ -60,6 +60,7 @@ const ALLOWED: readonly { readonly match: string; readonly reason: string }[] = 
   { match: "patch-source-path", reason: "canvas overlay over artwork" },
   { match: "text-frame-draft", reason: "canvas overlay over artwork" },
   { match: "vector-handle", reason: "canvas overlay over artwork" },
+  { match: "vector-marquee-band", reason: "the selection band is drawn over artwork, so it is white on a faint wash rather than a theme colour" },
   { match: "vector-snap-guide", reason: "alignment-guide colour: legible over any artwork, not over a theme" },
   { match: "vector-node", reason: "canvas overlay over artwork" },
   { match: "curve-line", reason: "plotted data over its own graph" },

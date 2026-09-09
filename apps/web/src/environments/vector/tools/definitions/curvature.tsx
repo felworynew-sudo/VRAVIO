@@ -135,6 +135,9 @@ export function hasCurvatureDraft(context: ToolContext<CurvatureState>): boolean
 
 const curvature: VectorToolDefinition<CurvatureState> = {
   id: "vector.curvature",
+  // The bounding box belongs to moving and scaling an object, not to editing
+  // its path — see `editsPathPoints` in ../types.ts.
+  editsPathPoints: true,
   createState: () => empty,
 
   onPointerDown(context, pointer: ToolPointer) {

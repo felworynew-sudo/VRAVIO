@@ -669,7 +669,7 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
         simply a constant, never divided by zoom, the same way the CSS
         cascade regression (commit `5ba9856`) could not have happened here —
         there is nothing left for a stray `stroke-width` rule to defeat. */}
-    {bounds && (() => {
+    {bounds && !catalogueTool?.editsPathPoints && (() => {
       const corners = [
         toScreenPoint({ x: bounds.x, y: bounds.y }, workspaceSize, viewport, canvasBounds),
         toScreenPoint({ x: bounds.x + bounds.width, y: bounds.y }, workspaceSize, viewport, canvasBounds),

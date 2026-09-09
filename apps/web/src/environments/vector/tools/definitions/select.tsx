@@ -1,4 +1,6 @@
-import { invertMatrix, resolveSnapForBounds, shapeAtIndexed, shapeWorldBounds, transformVector, translateShape, visibleGuides, worldTransform, type SnapLine, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { invertMatrix, resolveSnapForBounds, shapeAtIndexed, shapeWorldBounds, shapeWorldBoundsIndexed, transformVector, translateShape, visibleGuides, worldTransform, type SnapLine, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { toScreenPoint } from "../../../../vector-coordinates";
+import { constrainToAxis, rectBetween, rectsOverlap, resolveMarqueeRelease, resolveSelectionPress } from "../selection-rules";
 import type { VectorSnapshot } from "../../../../vector-commands";
 import type { ToolContext, ToolPointer, VectorToolDefinition } from "../types";
 
@@ -11,7 +13,12 @@ import type { ToolContext, ToolPointer, VectorToolDefinition } from "../types";
  * "what is selected" has never itself been an undoable edit in this project.
  */
 export interface SelectState {
-  readonly drag: { readonly shapeId: string; readonly start: { readonly x: number; readonly y: number }; readonly before: VectorSnapshot } | null;
+  /** Every selected shape moves, not just the one the pointer landed on — the
+   * raster Move tool has always moved the whole selection, and a vector editor
+   * that moves one object out of five is the odd one out, not the careful one. */
+  readonly drag: { readonly shapeIds: readonly string[]; readonly start: { readonly x: number; readonly y: number }; readonly before: VectorSnapshot } | null;
+  /** The rubber band, while one is being dragged from empty space. */
+  readonly marquee: { readonly from: { readonly x: number; readonly y: number }; readonly to: { readonly x: number; readonly y: number }; readonly additive: boolean; readonly selectionAtPress: readonly string[] } | null;
   /** The line(s) the current drag is snapped to, for the Overlay to
    * highlight — docs/vector-plan.md stage 5's "подсветка того, к чему
    * привязались", without which a snap looks like the editor nudging a
@@ -19,19 +26,33 @@ export interface SelectState {
   readonly snapLines: readonly SnapLine[];
 }
 
-const empty: SelectState = { drag: null, snapLines: [] };
+const empty: SelectState = { drag: null, marquee: null, snapLines: [] };
 
 /** Shared by `vector.select` and `vector.nodes`' own fallback (see `nodes.ts`) — the
  * exact pre-port "pick a shape, start a move drag, or deselect" tail. */
 export function beginSelectDrag(context: ToolContext<SelectState>, pointer: ToolPointer): void {
   const hit = shapeAtIndexed(context.spatialIndex, context.document.shapes, pointer.point.x, pointer.point.y);
-  if (hit) {
-    context.setState({ drag: { shapeId: hit.id, start: pointer.point, before: context.snapshot() }, snapLines: [] });
-    context.mutate((draft: VectorDocumentState) => { draft.activeShapeId = hit.id; draft.selection = [hit.id]; });
-  } else {
-    context.setState(empty);
-    context.mutate((draft: VectorDocumentState) => { draft.activeShapeId = null; draft.selection = []; });
+  const selection = context.document.selection ?? [];
+  const decision = resolveSelectionPress(hit?.id ?? null, selection, pointer.shiftKey);
+
+  if (!hit) {
+    // Empty space rubber-bands. Nothing is deselected yet: the band decides on
+    // release, so a drag that starts badly and is dragged onto the objects
+    // still ends up selecting them.
+    context.setState({ drag: null, marquee: { from: pointer.point, to: pointer.point, additive: pointer.shiftKey, selectionAtPress: selection }, snapLines: [] });
+    return;
   }
+
+  const next = decision.selection;
+  context.mutate((draft: VectorDocumentState) => {
+    draft.selection = [...next];
+    // The active shape is the one just clicked while it is still selected;
+    // shift-clicking a shape *off* hands the role to whatever remains, so the
+    // panels never point at something the canvas no longer shows as selected.
+    draft.activeShapeId = next.includes(hit.id) ? hit.id : next[next.length - 1] ?? null;
+  });
+  if (!decision.drag) { context.setState(empty); return; }
+  context.setState({ drag: { shapeIds: next.length ? next : [hit.id], start: pointer.point, before: context.snapshot() }, marquee: null, snapLines: [] });
 }
 
 /** The chain of parent group ids above a shape — excluded from its own snap
@@ -58,13 +79,20 @@ const select: VectorToolDefinition<SelectState> = {
   onPointerDown: beginSelectDrag,
 
   onPointerMove(context: ToolContext<SelectState>, pointer: ToolPointer) {
+    const marquee = context.state.marquee;
+    if (marquee) { context.setState({ ...context.state, marquee: { ...marquee, to: pointer.point } }); return; }
     const drag = context.state.drag;
     if (!drag) return;
-    const dx = pointer.point.x - drag.start.x, dy = pointer.point.y - drag.start.y;
+    const constrained = constrainToAxis(pointer.point.x - drag.start.x, pointer.point.y - drag.start.y, pointer.shiftKey);
+    const dx = constrained.x, dy = constrained.y;
 
     let snapLines: readonly SnapLine[] = [];
     context.mutate((draft: VectorDocumentState) => {
-      const shape = draft.shapes.find((item) => item.id === drag.shapeId);
+      // The first selected shape leads: it is the one snapping is resolved
+      // against, and every other selected shape takes the same world delta, so
+      // a group of objects keeps its arrangement instead of each member
+      // snapping to something different.
+      const shape = draft.shapes.find((item) => item.id === drag.shapeIds[0]);
       if (!shape) return;
       const world = worldTransform(shape, draft.shapes);
       const inverse = invertMatrix(world);
@@ -77,7 +105,12 @@ const select: VectorToolDefinition<SelectState> = {
       const currentWorldBounds = shapeWorldBounds(shape, draft.shapes);
       const projectedBounds = { x: currentWorldBounds.x + worldDelta.x, y: currentWorldBounds.y + worldDelta.y, width: currentWorldBounds.width, height: currentWorldBounds.height };
 
-      const excludeIds = new Set([shape.id, ...ancestorIds(shape, draft.shapes)]);
+      // Nothing in the moving set is a snap candidate: a shape cannot snap to
+      // another shape travelling with it by the same delta.
+      const excludeIds = new Set([...drag.shapeIds, ...drag.shapeIds.flatMap((id) => {
+        const member = draft.shapes.find((item) => item.id === id);
+        return member ? ancestorIds(member, draft.shapes) : [];
+      })]);
       // `drag.snapLines` (this same drag's previous frame) makes the snap
       // sticky — see resolveSnapForBounds's own doc comment for why a
       // dragged shape otherwise visibly jumps between near-tied candidate
@@ -94,19 +127,71 @@ const select: VectorToolDefinition<SelectState> = {
       // it just never snaps, the same fallback shapeAt's own inverse check
       // already uses.
       const localDelta = inverse ? transformVector(inverse, totalWorldDelta) : { x: dx, y: dy };
-      translateShape(draft, drag.shapeId, localDelta.x, localDelta.y);
+      translateShape(draft, shape.id, localDelta.x, localDelta.y);
+
+      // Everyone else takes the same *world* delta, converted through their own
+      // parent transform — a member inside a scaled or rotated group needs a
+      // different local delta to travel the same distance on screen. A shape
+      // whose ancestor is also moving is skipped: translating the group already
+      // carried it, and moving it again would double its travel.
+      for (const id of drag.shapeIds.slice(1)) {
+        const member = draft.shapes.find((item) => item.id === id);
+        if (!member) continue;
+        if (ancestorIds(member, draft.shapes).some((ancestorId) => drag.shapeIds.includes(ancestorId))) continue;
+        const memberInverse = invertMatrix(worldTransform(member, draft.shapes));
+        const memberDelta = memberInverse ? transformVector(memberInverse, totalWorldDelta) : { x: dx, y: dy };
+        translateShape(draft, member.id, memberDelta.x, memberDelta.y);
+      }
     });
-    context.setState({ drag: { ...drag, start: pointer.point }, snapLines });
+    // `start` moves to the raw pointer, not to the constrained point: the
+    // constraint is applied to the whole gesture each frame, so releasing Shift
+    // mid-drag returns the shape to where the pointer actually is.
+    context.setState({ drag: { ...drag, start: pointer.point }, marquee: null, snapLines });
   },
 
-  onGestureEnd(context: ToolContext<SelectState>) {
-    const drag = context.state.drag;
+  onGestureEnd(context: ToolContext<SelectState>, pointer: ToolPointer) {
+    const { drag, marquee } = context.state;
     context.setState(empty);
-    if (drag) context.commitDrag(drag.before, "Move Shape (Переместить фигуру)");
+    if (drag) { context.commitDrag(drag.before, "Move Shape (Переместить фигуру)"); return; }
+    if (!marquee) return;
+
+    const band = rectBetween(marquee.from, pointer.point);
+    // A press that never travelled is a click on empty space, and that clears
+    // the selection — Photoshop's behaviour, and the pre-port behaviour of this
+    // file. Anything wider than a hair is a band.
+    const dragged = band.width > 1 || band.height > 1;
+    const caught = dragged
+      ? context.document.shapes
+        .filter((shape) => shape.parentId === null && shape.visible !== false && !shape.locked)
+        .filter((shape) => {
+          const bounds = shapeWorldBoundsIndexed(context.spatialIndex, shape.id) ?? shapeWorldBounds(shape, context.document.shapes);
+          return bounds.width >= 0 && rectsOverlap(band, bounds);
+        })
+        .map((shape) => shape.id)
+      : [];
+    const next = resolveMarqueeRelease(caught, marquee.selectionAtPress, marquee.additive);
+    context.mutate((draft: VectorDocumentState) => {
+      draft.selection = [...next];
+      draft.activeShapeId = next[next.length - 1] ?? null;
+    });
   },
 
   onDeactivate(context: ToolContext<SelectState>) {
     context.setState(empty);
+  },
+
+  ScreenOverlay({ state, context }) {
+    const marquee = state.marquee;
+    if (!marquee) return null;
+    const from = toScreenPoint(marquee.from, context.workspaceSize, context.viewport, context.stageBounds);
+    const to = toScreenPoint(marquee.to, context.workspaceSize, context.viewport, context.stageBounds);
+    const band = rectBetween(from, to);
+    if (band.width < 1 && band.height < 1) return null;
+    // Screen space, so the band's outline is a literal 1px however far the
+    // document is zoomed — there is no scale on this layer to divide out. The
+    // dashed thin rectangle is what Photoshop draws while a selection band is
+    // being dragged.
+    return <rect className="vector-marquee-band" x={band.x} y={band.y} width={band.width} height={band.height}/>;
   },
 
   Overlay({ state, document, context }) {

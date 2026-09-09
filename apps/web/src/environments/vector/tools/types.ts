@@ -144,6 +144,22 @@ export interface VectorToolDefinition<TState = unknown> {
    */
   readonly navigation?: NavigationHooks;
 
+  /**
+   * True for tools whose subject is the path itself — its anchors, its handles,
+   * its curves — rather than the object as a whole.
+   *
+   * The workspace draws a bounding box with corner handles around the active
+   * shape, which is the right chrome for moving and scaling it and the wrong
+   * chrome for editing its points: it sits on top of the anchors the tool is
+   * drawing, and it offers a scale grip at the very corner a node most often
+   * needs to be dragged to. Illustrator and Photoshop both hide it under the
+   * Direct Selection and Pen tools for exactly that reason.
+   *
+   * Declared by the tool rather than listed as ids in the workspace, so a new
+   * path editor arrives correct instead of arriving with the box still on.
+   */
+  readonly editsPathPoints?: boolean;
+
   onPointerDown?(context: ToolContext<TState>, pointer: ToolPointer): void;
   onPointerMove?(context: ToolContext<TState>, pointer: ToolPointer): void;
   /** Pointer-up *or* pointer-leave — `VectorWorkspace`'s pre-port canvas ends a

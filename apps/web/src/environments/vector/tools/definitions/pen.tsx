@@ -128,6 +128,9 @@ export function hasDraft(context: ToolContext<PenState>): boolean {
 
 const pen: VectorToolDefinition<PenState> = {
   id: "vector.pen",
+  // The bounding box belongs to moving and scaling an object, not to editing
+  // its path — see `editsPathPoints` in ../types.ts.
+  editsPathPoints: true,
   createState: () => empty,
 
   onPointerDown(context, pointer: ToolPointer) {
