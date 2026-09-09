@@ -49,24 +49,41 @@ export interface SelectState {
 const empty: SelectState = { drag: null, resize: null, rotate: null, marquee: null, snapLines: [] };
 
 /**
- * The corner whose rotate zone a point falls in — which is anywhere outside the frame.
- *
- * Rotation has no ring and no widget of its own: everything beyond the frame rotates, however far
- * out, and the scale handles (tested first by both callers) keep their own grab radius. That is
- * the owner's observation about Photoshop and it is what Krita's Free Transform does —
- * `kis_free_transform_strategy.cpp` makes ROTATE the default function for any position outside
- * the box and lets its `HandleChooser` override it only within a handle's radius.
- *
- * Written first as a finite ring around the corners, which matched no donor at all: rotation
- * simply stopped being offered a couple of dozen pixels out, and never worked past an edge.
- *
- * The corner decides only which way the cursor's elbow points, since the rotation itself is about
- * the frame's centre; it is the nearest one.
+ * How far a rotate zone reaches past a handle, in screen pixels — Graphite's own
+ * `BOUNDS_ROTATE_THRESHOLD`, which is 20.
  */
-function rotateCornerForPoint(bounds: VectorBounds, point: { x: number; y: number }): FrameHandle | null {
+const ROTATE_ZONE_SCREEN = 20;
+
+/**
+ * The corner whose rotate zone a point falls in: near a handle, and outside the frame.
+ *
+ * Vector editors bound this zone, where raster ones do not, and the two environments follow their
+ * own donors rather than each other. Graphite — a vector editor built to Illustrator's model —
+ * spells the rule out in `transformation_cage.rs`'s `check_rotate`: return false if the cursor is
+ * inside the bounds, otherwise accept it if it falls within a ±20px square of *any* of the eight
+ * transform handle positions (corners and edge midpoints alike). Illustrator behaves the same way
+ * from the user's side — the rotate cursor appears just off a handle, not halfway across the
+ * artboard. Inkscape does not even have the zone: its selector toggles between scale and rotate
+ * handles on a second click.
+ *
+ * Raster's Free Transform keeps Krita's unbounded rule, which is what Photoshop does there. The
+ * two are deliberately different, and each matches the donors of its own environment.
+ *
+ * The corner returned decides only which way the cursor's elbow points, since the rotation itself
+ * is about the frame's centre — so an edge handle's zone still yields the nearest corner.
+ */
+function rotateCornerForPoint(
+  bounds: VectorBounds,
+  point: { x: number; y: number },
+  screenHandles: readonly { readonly handle: FrameHandle; readonly point: { x: number; y: number } }[],
+  screenPoint: { x: number; y: number },
+): FrameHandle | null {
   const inside = point.x >= bounds.x && point.x <= bounds.x + bounds.width
     && point.y >= bounds.y && point.y <= bounds.y + bounds.height;
   if (inside) return null;
+  const near = screenHandles.some((entry) =>
+    Math.abs(entry.point.x - screenPoint.x) < ROTATE_ZONE_SCREEN && Math.abs(entry.point.y - screenPoint.y) < ROTATE_ZONE_SCREEN);
+  if (!near) return null;
   return {
     x: point.x < bounds.x + bounds.width / 2 ? -1 : 1,
     y: point.y < bounds.y + bounds.height / 2 ? -1 : 1,
@@ -178,9 +195,9 @@ const select: VectorToolDefinition<SelectState> = {
           });
           return;
         }
-        // Outside the frame: rotate rather than scale. Checked after the handles, so a press
-        // meant for a handle is never swallowed.
-        const turning = rotateCornerForPoint(bounds, pointer.point);
+        // Just outside a handle: rotate rather than scale. Checked after the handles themselves,
+        // so a press meant for one is never swallowed by the zone around it.
+        const turning = rotateCornerForPoint(bounds, pointer.point, screenHandles(context, bounds), pointerScreen);
         if (turning) {
           // The frame's centre is the pivot, which is what Illustrator and Photoshop both turn
           // about by default — the opposite corner is the *scale* anchor, and using it here would
@@ -361,11 +378,13 @@ const select: VectorToolDefinition<SelectState> = {
     const handles = screenHandles(context, bounds);
     const caught = handleAtScreenPoint(handles, pointerScreen.x, pointerScreen.y);
     if (caught) return scaleCursorFor(caught.x, caught.y);
-    const corner = rotateCornerForPoint(bounds, pointer.point);
+    const corner = rotateCornerForPoint(bounds, pointer.point, handles, pointerScreen);
     if (corner) return rotateCursorFor(corner.x as -1 | 1, corner.y as -1 | 1);
-    // Nothing outside is left over — the rotate zone owns all of it — so this is the inside of
-    // the frame, where the selection moves.
-    return "move";
+    // Inside the frame the selection moves; further out than the rotate zone reaches, the pointer
+    // is over the canvas and belongs to whatever is there.
+    const inside = pointer.point.x >= bounds.x && pointer.point.x <= bounds.x + bounds.width
+      && pointer.point.y >= bounds.y && pointer.point.y <= bounds.y + bounds.height;
+    return inside ? "move" : undefined;
   },
   onDeactivate(context: ToolContext<SelectState>) {
     context.setState(empty);

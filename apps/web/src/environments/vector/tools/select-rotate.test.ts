@@ -193,15 +193,32 @@ describe("the vector selection frame's cursors", () => {
     expect(decodeCursor(select.cursorFor!(context, at(b.x, b.y))!)).toContain(ROTATE_ART);
   });
 
-  it("says move inside the frame and offers rotation however far outside it", () => {
-    // The owner's observation about Photoshop, and Krita's own rule: outside the frame is the
-    // rotate zone, without limit. This asserted `undefined` far out while the zone was still a
-    // finite ring — the ring is gone, and so is the dead space it left.
+  it("offers rotation near a handle but not far out — a vector editor bounds this zone", () => {
+    // Graphite's `check_rotate`: outside the bounds *and* within a ±20px square of one of the
+    // eight handle positions. Illustrator reads the same way from the user's side. Raster keeps
+    // Krita's unbounded rule instead, and the difference between the two is deliberate.
     const { context, document } = harness();
     const b = shapeWorldBounds(document.shapes[0]!, document.shapes);
     expect(select.cursorFor!(context, at(b.x + b.width / 2, b.y + b.height / 2))).toBe("move");
-    for (const [dx, dy] of [[-14, -14], [-300, -300], [b.width + 200, b.height + 200], [b.width / 2, -400]] as const) {
-      expect(decodeCursor(select.cursorFor!(context, at(b.x + dx, b.y + dy))!), `at ${dx},${dy}`).toContain(ROTATE_ART);
+
+    // Just off a corner, and just off an edge midpoint: both rotate.
+    expect(decodeCursor(select.cursorFor!(context, at(b.x - 12, b.y - 12))!)).toContain(ROTATE_ART);
+    expect(decodeCursor(select.cursorFor!(context, at(b.x + b.width / 2, b.y - 12))!)).toContain(ROTATE_ART);
+
+    // Well past the zone there is nothing — the canvas belongs to whatever is under it.
+    for (const [dx, dy] of [[-300, -300], [b.width + 200, b.height + 200], [b.width / 2, -400]] as const) {
+      expect(select.cursorFor!(context, at(b.x + dx, b.y + dy)), `at ${dx},${dy}`).toBeUndefined();
     }
+  });
+
+  it("does not start a rotation from far outside the frame either", () => {
+    // The cursor and the gesture have to agree: if no rotate cursor is shown out there, a press
+    // out there must not rotate.
+    const { context, document, commitDrag } = harness();
+    const b = shapeWorldBounds(document.shapes[0]!, document.shapes);
+    select.onPointerDown!(context, at(b.x - 300, b.y - 300));
+    select.onPointerMove!(context, at(b.x - 260, b.y - 200));
+    select.onGestureEnd!(context, at(b.x - 260, b.y - 200));
+    for (const call of commitDrag.mock.calls) expect(String(call[1])).not.toContain("Rotate");
   });
 });
