@@ -538,6 +538,35 @@ describe("tile cache", () => {
     expect(third.visible).toHaveLength(8);
   });
 
+  it("stops at its time budget and says there is more, without ever handing out a stale tile", () => {
+    // Why there is a budget at all: this pass runs inside the handler that released the pointer,
+    // and a stroke's ten tiles measured 15 ms there. GIMP renders its projection a chunk at a
+    // time from an idle source for the same reason.
+    const document = createRasterDocument(1024, 1024, { backgroundColor: "#3366ff" });
+    const cache = new RasterTileCache({ tileSize: 64 });
+    const viewport = { x: 0, y: 0, width: 1024, height: 1024 };
+
+    const first = cache.update(document, viewport, { budgetMs: 0 });
+    // One tile always goes in, however small the budget: a pass that composites nothing would
+    // never finish, it would only schedule itself again.
+    expect(first.repainted).toHaveLength(1);
+    expect(first.pending).toBe(true);
+    // Everything it did not get to is absent, not returned as if it were fresh.
+    expect(first.visible).toEqual(first.repainted);
+
+    // Called again — as the caller does on the next frame — it carries on where it stopped.
+    const second = cache.update(document, viewport, { budgetMs: 0 });
+    expect(second.repainted).toHaveLength(1);
+    expect(second.repainted[0]!.rect).not.toEqual(first.repainted[0]!.rect);
+    expect(second.visible).toHaveLength(2);
+
+    // With no budget it finishes in one pass, and says nothing is left.
+    const rest = cache.update(document, viewport);
+    expect(rest.pending).toBe(false);
+    expect(rest.visible).toHaveLength(256);
+    expect(cache.update(document, viewport).repainted).toHaveLength(0);
+  });
+
   it("only composites tiles inside the requested viewport", () => {
     const document = createRasterDocument(256, 256);
     const cache = new RasterTileCache({ tileSize: 64 });

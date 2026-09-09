@@ -21,6 +21,15 @@ import type { DocumentViewport } from "./store";
  * is preserved verbatim, not summarised, because the reasoning is the part
  * that matters if this ever needs touching again.
  */
+
+/**
+ * How long one compositing pass may hold the thread — about half a frame at 60 Hz.
+ *
+ * Small enough that a stroke's release is not felt as a pause, large enough that ordinary edits
+ * still finish in the first pass and nothing appears in stages.
+ */
+const TILE_BUDGET_MS = 8;
+
 export function useRasterCommit(params: {
   document: VravioDocument;
   state: RasterDocumentState;
@@ -72,8 +81,29 @@ export function useRasterCommit(params: {
         else if (changed.width > 0 && changed.height > 0) tiles.current.invalidate(changed);
       }
     }
-    const { repainted } = tiles.current.update(state, { x: 0, y: 0, width: state.width, height: state.height }, mip);
-    for (const tile of repainted) putRegionPixels(canvas, tile.pixels, tile.rect, tile.step);
+    /**
+     * Composites what fits in the budget and comes back on the next frame for the rest.
+     *
+     * The first pass runs inside the handler that released the pointer, and everything it does
+     * there is felt as a pause: ten tiles of a 1920×1080 stroke measured 15 ms, and a longer
+     * stroke costs proportionally more. GIMP has the same problem and the same answer —
+     * `gimp_projection_chunk_render_iteration` renders the invalid area a chunk at a time from an
+     * idle source rather than all of it at once. Here one frame's worth goes in immediately, so a
+     * small edit still lands whole and nothing flickers, and a large one catches up over the next
+     * turns of the event loop instead of holding the pointer.
+     */
+    let next: ReturnType<typeof setTimeout> | undefined;
+    const drain = (budgetMs: number) => {
+      const { repainted, pending } = tiles.current.update(state, { x: 0, y: 0, width: state.width, height: state.height }, { mip, budgetMs });
+      for (const tile of repainted) putRegionPixels(canvas, tile.pixels, tile.rect, tile.step);
+      // A timer, not `requestAnimationFrame`: frames stop in a hidden window, and the first
+      // version of this left the tail of a stroke unpainted for exactly that reason — the canvas
+      // held the stale tiles until something else forced a render. Caught by comparing the visible
+      // canvas against the layer's own pixels, which is the check CLAUDE.md §2 exists for.
+      if (pending) next = setTimeout(() => drain(budgetMs), 0);
+    };
+    drain(TILE_BUDGET_MS);
+    return () => clearTimeout(next);
   }, [document.revision, state, viewport.zoom]);
 
   // Destructive adjustment dialogs render a transient composite here. The

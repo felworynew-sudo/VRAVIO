@@ -71,6 +71,24 @@ export interface TileUpdate {
   readonly visible: readonly RasterTile[];
   /** The subset composited during this call — the only ones that need blitting. */
   readonly repainted: readonly RasterTile[];
+  /** True when a time budget stopped the pass with tiles still stale. Call again to continue. */
+  readonly pending: boolean;
+}
+
+export interface TileUpdateOptions {
+  /** Subsampling level for the current zoom; see {@link mipForZoom}. */
+  readonly mip?: number;
+  /**
+   * How long this pass may spend compositing, in milliseconds.
+   *
+   * Without it a committed stroke recomposites every tile it touched inside the handler that
+   * released the pointer — measured at 15 ms for ten tiles of a 1920×1080 document, and it grows
+   * with the stroke. GIMP does not do that either: `gimp_projection_chunk_render_iteration`
+   * renders the invalidated area a chunk at a time from an idle source, and
+   * `gimp_chunk_iterator_set_interval` sizes the next chunk from how long the last one actually
+   * took. This is the same bargain in its simplest form — take what fits, say that more is left.
+   */
+  readonly budgetMs?: number;
 }
 
 const key = (col: number, row: number, mip: number) => `${col},${row},${mip}`;
@@ -143,14 +161,19 @@ export class RasterTileCache {
     this.#invalid.clear();
   }
 
-  update(state: RasterDocumentState, viewport: RasterRect, mip = 0): TileUpdate {
+  update(state: RasterDocumentState, viewport: RasterRect, mipOrOptions: number | TileUpdateOptions = 0): TileUpdate {
+    const options = typeof mipOrOptions === "number" ? { mip: mipOrOptions } : mipOrOptions;
+    const mip = options.mip ?? 0;
+    const budgetMs = options.budgetMs ?? Infinity;
     if (state.width !== this.#documentWidth || state.height !== this.#documentHeight) {
       this.reset();
       this.#documentWidth = state.width;
       this.#documentHeight = state.height;
     }
+    const started = performance.now();
     const visible: RasterTile[] = [];
     const repainted: RasterTile[] = [];
+    let pending = false;
     for (const { col, row } of this.#coveringTiles(clampRegionToDocument(state, viewport))) {
       const cacheKey = key(col, row, mip);
       const cached = this.#tiles.get(cacheKey);
@@ -161,6 +184,10 @@ export class RasterTileCache {
         visible.push(cached);
         continue;
       }
+      // Out of time: leave this one stale and say so. The caller comes back for it — a stale tile
+      // is never handed out as if it were fresh, so the worst a caller can do by ignoring
+      // `pending` is show the previous picture in that tile, which is what it was showing anyway.
+      if (repainted.length > 0 && performance.now() - started >= budgetMs) { pending = true; continue; }
       const rect = clampRegionToDocument(state, { x: col * this.tileSize, y: row * this.tileSize, width: this.tileSize, height: this.tileSize });
       if (!rect.width || !rect.height) continue;
       const step = stepForMip(mip);
@@ -172,7 +199,7 @@ export class RasterTileCache {
       repainted.push(tile);
     }
     this.#evict(new Set(visible.map((tile) => key(tile.col, tile.row, mip))));
-    return { visible, repainted };
+    return { visible, repainted, pending };
   }
 
   *#coveringTiles(rect: RasterRect): Generator<{ col: number; row: number }> {
