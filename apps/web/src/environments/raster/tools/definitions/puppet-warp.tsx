@@ -23,7 +23,19 @@ import type { RasterToolDefinition, ToolContext } from "../types";
 
 type PinMode = "position" | "fixed";
 
-interface Pin { readonly vertex: number; readonly at: { x: number; y: number }; readonly mode: PinMode }
+interface Pin {
+  readonly vertex: number;
+  readonly at: { x: number; y: number };
+  readonly mode: PinMode;
+  /** Photoshop's third kind. A pin with an angle turns the artwork around itself; without one
+   * it only holds the artwork down, which is all a Position or Fixed pin ever does. Kept on
+   * every pin rather than making rotation a fourth mode, because that is what it is in
+   * Photoshop too: any pin can be given a rotation. */
+  readonly rotation?: number;
+}
+
+/** A rotation drag in progress: which pin is being turned, and from where. */
+interface Rotating { readonly pin: number; readonly startAngle: number; readonly startRotation: number }
 
 export interface PuppetWarpState {
   /** Built the first time the tool is used on a layer, from that layer's own
@@ -37,19 +49,30 @@ export interface PuppetWarpState {
   } | null;
   readonly pins: readonly Pin[];
   readonly draggingPin: number | null;
+  readonly rotating: Rotating | null;
   /** The deformed vertices, kept so the overlay draws the mesh the user sees
    * rather than the one it started from. */
   readonly deformed: readonly { x: number; y: number }[] | null;
 }
 
-const empty: PuppetWarpState = { session: null, pins: [], draggingPin: null, deformed: null };
+const empty: PuppetWarpState = { session: null, pins: [], draggingPin: null, rotating: null, deformed: null };
+
+/** The rotation ring's drawn radius, in screen pixels. */
+const ROTATE_RING_SCREEN = 18;
+
+/** How far from a pin an Alt-press still grabs that pin's ring. A little wider than the ring
+ * is drawn, because a ring is aimed at rather than hit exactly — but not much wider, or Alt
+ * near a pin would stop being able to place a pin at all. */
+const ROTATE_GRAB_SCREEN = ROTATE_RING_SCREEN * 1.7;
 
 /** How close a click has to land, in document units, to grab a pin rather than
  * place a new one. Scaled by the zoom at the call site so it is a screen
  * distance, the way every other grab radius in this project is. */
 const PIN_GRAB_SCREEN = 12;
 
-const solverPins = (pins: readonly Pin[]): PuppetPin[] => pins.map((pin) => ({ vertex: pin.vertex, at: pin.at }));
+const solverPins = (pins: readonly Pin[]): PuppetPin[] => pins.map((pin) => ({
+  vertex: pin.vertex, at: pin.at, ...(pin.rotation ? { rotation: pin.rotation } : {}),
+}));
 
 function beginSession(context: ToolContext<PuppetWarpState>): PuppetWarpState["session"] {
   const layer = context.activeLayer;
@@ -113,6 +136,25 @@ const puppetWarp: RasterToolDefinition<PuppetWarpState> = {
       return;
     }
 
+    // Alt away from any pin, but near one, turns that pin instead of placing a new one —
+    // Photoshop's own gesture: "press Alt, put the pointer near (not over) a pin, and a
+    // circle appears; drag to rotate". Alt *over* a pin is the delete above, which is the
+    // same key doing the same two things it does there.
+    if (pointer.altKey) {
+      const ring = ROTATE_GRAB_SCREEN / context.viewport.zoom;
+      let nearest = -1, nearestDistance = Infinity;
+      state.pins.forEach((pin, index) => {
+        const distance = Math.hypot(pin.at.x - pointer.point.x, pin.at.y - pointer.point.y);
+        if (distance <= ring && distance < nearestDistance) { nearest = index; nearestDistance = distance; }
+      });
+      if (nearest >= 0) {
+        const pin = state.pins[nearest]!;
+        const startAngle = Math.atan2(pointer.point.y - pin.at.y, pointer.point.x - pin.at.x);
+        context.setState({ ...state, session, draggingPin: null, rotating: { pin: nearest, startAngle, startRotation: pin.rotation ?? 0 } });
+        return;
+      }
+    }
+
     // A click on the artwork drops a pin at the mesh vertex nearest it. Holding
     // Shift makes it a Fixed pin — one that holds the picture down without ever
     // being dragged.
@@ -125,6 +167,16 @@ const puppetWarp: RasterToolDefinition<PuppetWarpState> = {
 
   onPointerMove(context, pointer) {
     const state = context.state;
+    if (state.rotating && state.session) {
+      const pin = state.pins[state.rotating.pin];
+      if (!pin) return;
+      const angle = Math.atan2(pointer.point.y - pin.at.y, pointer.point.x - pin.at.x);
+      const rotation = state.rotating.startRotation + (angle - state.rotating.startAngle);
+      const pins = state.pins.map((item, index) => index === state.rotating!.pin ? { ...item, rotation } : item);
+      const next = { ...state, pins };
+      context.setState({ ...next, deformed: preview(context, next) });
+      return;
+    }
     if (state.draggingPin === null || !state.session) return;
     const pin = state.pins[state.draggingPin];
     if (!pin || pin.mode === "fixed") return;
@@ -140,8 +192,8 @@ const puppetWarp: RasterToolDefinition<PuppetWarpState> = {
   },
 
   onGestureEnd(context) {
-    if (context.state.draggingPin === null) return;
-    context.setState({ ...context.state, draggingPin: null });
+    if (context.state.draggingPin === null && !context.state.rotating) return;
+    context.setState({ ...context.state, draggingPin: null, rotating: null });
   },
 
   onDeactivate(context) {
@@ -166,10 +218,24 @@ const puppetWarp: RasterToolDefinition<PuppetWarpState> = {
     // with a test (zoom-invariant-ui.test.ts).
     return <svg className="puppet-overlay" viewBox={`0 0 ${context.document.width} ${context.document.height}`} preserveAspectRatio="none" aria-hidden="true">
       <path className="puppet-mesh" d={lines.join("")} strokeWidth={0.6 / zoom}/>
-      {state.pins.map((pin, index) => (
-        <circle key={index} className={pin.mode === "fixed" ? "puppet-pin fixed" : "puppet-pin"}
-          cx={pin.at.x} cy={pin.at.y} r={5 / zoom} strokeWidth={1.5 / zoom}/>
-      ))}
+      {state.pins.map((pin, index) => {
+        // A pin carrying an angle wears its ring, so a rotation is visible as a state of the
+        // pin and not only as its effect on the artwork — the same reason Photoshop leaves the
+        // ring drawn on a rotated pin. The tick marks which way the pin faces now.
+        const ring = pin.rotation || state.rotating?.pin === index
+          ? <g className="puppet-pin-ring" key={`ring-${index}`}>
+              <circle cx={pin.at.x} cy={pin.at.y} r={ROTATE_RING_SCREEN / zoom} strokeWidth={1 / zoom} strokeDasharray={`${3 / zoom} ${3 / zoom}`}/>
+              <line x1={pin.at.x} y1={pin.at.y}
+                x2={pin.at.x + Math.cos(pin.rotation ?? 0) * (ROTATE_RING_SCREEN / zoom)}
+                y2={pin.at.y + Math.sin(pin.rotation ?? 0) * (ROTATE_RING_SCREEN / zoom)} strokeWidth={1.5 / zoom}/>
+            </g>
+          : null;
+        return <g key={index}>
+          {ring}
+          <circle className={pin.mode === "fixed" ? "puppet-pin fixed" : "puppet-pin"}
+            cx={pin.at.x} cy={pin.at.y} r={5 / zoom} strokeWidth={1.5 / zoom}/>
+        </g>;
+      })}
     </svg>;
   },
 

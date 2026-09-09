@@ -24,10 +24,9 @@ import type { CommandDefinition } from "../types";
 function toolShortcutCommands(): readonly CommandDefinition[] {
   const groups = new Map<string, typeof tools[number][]>();
   for (const tool of tools) {
-    // A tool with no shortcut gets no shortcut command. Without this, the first
-    // such tool (Puppet Warp, which Photoshop also reaches from a menu rather
-    // than a key) registered a command with an empty id suffix and an empty
-    // label — a palette entry that names nothing and presses nothing.
+    // A tool with no shortcut gets no *shortcut* command — it gets a plain one below instead.
+    // Without this split, the first such tool (Puppet Warp) registered a command with an empty
+    // id suffix and an empty label: a palette entry that names nothing and presses nothing.
     if (!tool.shortcut) continue;
     const key = `${tool.kind}:${tool.shortcut.toLocaleUpperCase()}`;
     (groups.get(key) ?? groups.set(key, []).get(key)!).push(tool);
@@ -66,4 +65,29 @@ function toolShortcutCommands(): readonly CommandDefinition[] {
   });
 }
 
-export default toolShortcutCommands();
+/**
+ * One command per tool that has no shortcut letter, so it is still reachable by name.
+ *
+ * Found by asking the owner's own question of the running app — "как включить марионеточную
+ * деформацию" — and searching the palette for it: nothing came back. Puppet Warp lived only
+ * behind a toolbar flyout, because the generator above is about *letters* and it has none.
+ * Photoshop reaches its own Puppet Warp from a menu rather than a key, which is the same
+ * point: a tool that no key selects still needs a name to select it by.
+ *
+ * Palette only, not the menu bar: the menu has never listed tools (see above), and the palette
+ * is exactly the surface for "I know what it is called".
+ */
+function shortcutlessToolCommands(): readonly CommandDefinition[] {
+  return tools.filter((tool) => !tool.shortcut).map((tool) => ({
+    id: `tool.${tool.id}`,
+    label: tool.label,
+    category: CATEGORY_TOOLS,
+    surfaces: ["palette"],
+    isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === tool.kind,
+    execute: ({ activeDocumentId }) => {
+      if (activeDocumentId) useShellStore.getState().setTool(activeDocumentId, tool.id);
+    },
+  } satisfies CommandDefinition));
+}
+
+export default [...toolShortcutCommands(), ...shortcutlessToolCommands()];

@@ -103,6 +103,10 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "tool.raster.l|L|raster|Tools",
   "tool.raster.m|M|raster|Tools",
   "tool.raster.o|O|raster|Tools",
+  // Puppet Warp has no shortcut letter — Photoshop reaches its own from a menu rather than a key — so it is
+  // named in the palette instead of pressed. Without this entry the tool was reachable only from a toolbar
+  // flyout: searching the palette for "марионеточная" found nothing at all.
+  "tool.raster.puppetWarp|||Tools",
   "tool.raster.r|R|raster|Tools",
   "tool.raster.s|S|raster|Tools",
   "tool.raster.t|T|raster|Tools",

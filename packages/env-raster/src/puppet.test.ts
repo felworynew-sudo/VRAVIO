@@ -139,3 +139,72 @@ describe("drawing through the mesh", () => {
     expect(transparent).toBe(0);
   });
 });
+
+describe("rotation pins", () => {
+  /** The signed angle a vertex has swept around a centre, between two mesh states. */
+  const sweep = (centre: { x: number; y: number }, before: { x: number; y: number }, after: { x: number; y: number }) => {
+    const a = Math.atan2(before.y - centre.y, before.x - centre.x);
+    const b = Math.atan2(after.y - centre.y, after.x - centre.x);
+    let delta = b - a;
+    while (delta > Math.PI) delta -= 2 * Math.PI;
+    while (delta < -Math.PI) delta += 2 * Math.PI;
+    return delta;
+  };
+
+  it("turns the artwork around a pin that a position pin could only hold still", () => {
+    // Photoshop's third pin kind, and the reason it exists: one pin that does not move says
+    // nothing about which way the artwork faces, so on its own it cannot twist anything. The
+    // same pin with an angle does. Both cases are run here, because the difference between
+    // them is the whole feature.
+    const mesh = puppetMesh(BOUNDS, 4);
+    const centre = Math.floor(mesh.vertices.length / 2);
+    const corner = 0;
+
+    const held = solvePuppetMesh(mesh, [{ vertex: centre, at: mesh.vertices[centre]! }]);
+    expect(Math.abs(sweep(mesh.vertices[centre]!, mesh.vertices[corner]!, held[corner]!))).toBeLessThan(0.01);
+
+    const quarter = Math.PI / 4;
+    const turned = solvePuppetMesh(mesh, [{ vertex: centre, at: mesh.vertices[centre]!, rotation: quarter }]);
+    expect(sweep(mesh.vertices[centre]!, mesh.vertices[corner]!, turned[corner]!)).toBeGreaterThan(0.05);
+  });
+
+  it("turns the neighbourhood most, and lets a second pin hold the far side back", () => {
+    // The property that makes it a *pin* rather than a rotate-the-layer command.
+    //
+    // It only shows with something else holding the artwork: a single rotation pin and
+    // nothing else leaves a rigid turn of the whole mesh free of cost, so everything sweeps
+    // by the full angle — which is also what Photoshop does with one pin, and what the first
+    // version of this test wrongly called a bug. Add a pin at the far corner and the twist has
+    // to relax across the mesh instead.
+    const mesh = puppetMesh(BOUNDS, 6);
+    const pinVertex = 0;
+    const near = 1, far = mesh.vertices.length - 1;
+    const turned = solvePuppetMesh(mesh, [
+      { vertex: pinVertex, at: mesh.vertices[pinVertex]!, rotation: Math.PI / 6 },
+      { vertex: far, at: mesh.vertices[far]! },
+    ]);
+
+    const nearSweep = Math.abs(sweep(mesh.vertices[pinVertex]!, mesh.vertices[near]!, turned[near]!));
+    const farSweep = Math.abs(sweep(mesh.vertices[pinVertex]!, mesh.vertices[far]!, turned[far]!));
+    expect(nearSweep).toBeGreaterThan(farSweep);
+    expect(farSweep).toBeLessThan(0.02);
+  });
+  it("still puts a dragged pin exactly where it was dragged", () => {
+    // A rotation must not cost the position constraint: a pin that turns is still a pin.
+    const mesh = puppetMesh(BOUNDS, 4);
+    const vertex = Math.floor(mesh.vertices.length / 2);
+    const target = { x: mesh.vertices[vertex]!.x + 12, y: mesh.vertices[vertex]!.y - 7 };
+    const solved = solvePuppetMesh(mesh, [{ vertex, at: target, rotation: Math.PI / 3 }]);
+    expect(distance(solved[vertex]!, target)).toBeLessThan(0.5);
+  });
+
+  it("leaves a zero rotation exactly as a plain pin", () => {
+    // The default has to cost nothing, or every existing pin would quietly acquire a
+    // constraint the moment the field appeared.
+    const mesh = puppetMesh(BOUNDS, 4);
+    const vertex = 10, at = { x: mesh.vertices[vertex]!.x + 9, y: mesh.vertices[vertex]!.y + 4 };
+    const plain = solvePuppetMesh(mesh, [{ vertex, at }]);
+    const zero = solvePuppetMesh(mesh, [{ vertex, at, rotation: 0 }]);
+    for (let index = 0; index < plain.length; index += 1) expect(distance(plain[index]!, zero[index]!)).toBeLessThan(1e-9);
+  });
+});

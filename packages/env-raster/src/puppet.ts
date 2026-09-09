@@ -148,6 +148,12 @@ class NormalEquations {
  * pin lands on the pointer, low enough to keep the system well conditioned. */
 const PIN_WEIGHT = 1000;
 
+/** How firmly a Rotation pin holds its one-ring. Below `PIN_WEIGHT`, so where a ring vertex
+ * carries a pin of its own the pin still wins — a neighbour the user has pinned by hand is a
+ * statement about where the artwork is, and the ring is only a statement about which way it
+ * faces. */
+const RING_WEIGHT = 250;
+
 /** The local frame of edge (p0 → p1), in which the third vertex of a triangle
  * has coordinates that a rotation and a uniform scale both leave unchanged. */
 function localFrame(p0: Point, p1: Point, p2: Point): { x: number; y: number } {
@@ -157,6 +163,47 @@ function localFrame(p0: Point, p1: Point, p2: Point): { x: number; y: number } {
   const dx = p2.x - p0.x, dy = p2.y - p0.y;
   // (x, y) such that p2 = p0 + x*e + y*perp(e), with perp(e) = (-ey, ex).
   return { x: (dx * ex + dy * ey) / length2, y: (dy * ex - dx * ey) / length2 };
+}
+
+/** Every vertex sharing a triangle edge with `vertex` — the pin's one-ring. */
+function oneRing(mesh: PuppetMesh, vertex: number): number[] {
+  const ring = new Set<number>();
+  for (let t = 0; t < mesh.triangles.length; t += 3) {
+    const corner = [mesh.triangles[t]!, mesh.triangles[t + 1]!, mesh.triangles[t + 2]!];
+    if (!corner.includes(vertex)) continue;
+    for (const other of corner) if (other !== vertex) ring.add(other);
+  }
+  return [...ring];
+}
+
+/**
+ * The rows a Rotation pin contributes: its immediate neighbours are asked to sit where the
+ * pin's own rotation would carry them.
+ *
+ * A Position pin says only "this point is here", which leaves the artwork around it free to
+ * arrive at any angle — so a single pin cannot twist anything, and that is the whole of what
+ * Photoshop's third pin kind adds. Constraining the one-ring is the smallest statement that
+ * says "and this neighbourhood is turned by θ": the ring's own neighbours are still free, so
+ * the twist relaxes outward over the mesh instead of rotating the layer as a block.
+ *
+ * Photoshop is the donor here by behaviour rather than by code (it is closed, and
+ * `mikecokina/puppet-warp` implements position pins only): a Rotation pin turns the mesh
+ * around itself, and the further from the pin, the less of the turn survives.
+ */
+function addRotationRows(equations: NormalEquations, mesh: PuppetMesh, pins: readonly PuppetPin[], xIndex: (v: number) => number, yIndex: (v: number) => number): void {
+  for (const pin of pins) {
+    if (!pin.rotation) continue;
+    const cos = Math.cos(pin.rotation), sin = Math.sin(pin.rotation);
+    const origin = mesh.vertices[pin.vertex];
+    if (!origin) continue;
+    for (const neighbour of oneRing(mesh, pin.vertex)) {
+      const rest = mesh.vertices[neighbour];
+      if (!rest) continue;
+      const dx = rest.x - origin.x, dy = rest.y - origin.y;
+      equations.addRow([{ index: xIndex(neighbour), value: 1 }], pin.at.x + dx * cos - dy * sin, RING_WEIGHT);
+      equations.addRow([{ index: yIndex(neighbour), value: 1 }], pin.at.y + dx * sin + dy * cos, RING_WEIGHT);
+    }
+  }
 }
 
 /**
@@ -192,6 +239,7 @@ export function solvePuppetMesh(mesh: PuppetMesh, pins: readonly PuppetPin[]): r
     similar.addRow([{ index: xIndex(pin.vertex), value: 1 }], pin.at.x, PIN_WEIGHT);
     similar.addRow([{ index: yIndex(pin.vertex), value: 1 }], pin.at.y, PIN_WEIGHT);
   }
+  addRotationRows(similar, mesh, pins, xIndex, yIndex);
   const similarFactor = cholesky(similar.matrix, size);
   if (!similarFactor) return mesh.vertices;
   const intermediate = choleskySolve(similarFactor, size, similar.rhs);
@@ -221,6 +269,10 @@ export function solvePuppetMesh(mesh: PuppetMesh, pins: readonly PuppetPin[]): r
     fitted.addRow([{ index: xIndex(pin.vertex), value: 1 }], pin.at.x, PIN_WEIGHT);
     fitted.addRow([{ index: yIndex(pin.vertex), value: 1 }], pin.at.y, PIN_WEIGHT);
   }
+  // Both stages, or the second would quietly undo the first: step 2 re-fits every edge to the
+  // rotation step 1 chose, and a constraint present in only one of them is a constraint the
+  // other is free to relax away.
+  addRotationRows(fitted, mesh, pins, xIndex, yIndex);
   const fittedFactor = cholesky(fitted.matrix, size);
   if (!fittedFactor) return stage1;
   const final = choleskySolve(fittedFactor, size, fitted.rhs);
