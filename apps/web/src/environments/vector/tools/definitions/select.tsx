@@ -1,6 +1,7 @@
-import { invertMatrix, resolveSnapForBounds, shapeAtIndexed, shapeWorldBounds, shapeWorldBoundsIndexed, transformVector, translateShape, visibleGuides, worldTransform, type SnapLine, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { invertMatrix, resolveSnapForBounds, scaleShapes, shapeAtIndexed, shapeWorldBounds, shapeWorldBoundsIndexed, transformVector, translateShape, visibleGuides, worldTransform, type SnapLine, type VectorBounds, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
 import { toScreenPoint } from "../../../../vector-coordinates";
 import { constrainToAxis, rectBetween, rectsOverlap, resolveMarqueeRelease, resolveSelectionPress } from "../selection-rules";
+import { FRAME_HANDLES, anchorPoint, handleAtScreenPoint, handlePoint, scaleForHandleDrag, unionBounds, type FrameHandle } from "../transform-frame";
 import type { VectorSnapshot } from "../../../../vector-commands";
 import type { ToolContext, ToolPointer, VectorToolDefinition } from "../types";
 
@@ -17,6 +18,11 @@ export interface SelectState {
    * raster Move tool has always moved the whole selection, and a vector editor
    * that moves one object out of five is the odd one out, not the careful one. */
   readonly drag: { readonly shapeIds: readonly string[]; readonly start: { readonly x: number; readonly y: number }; readonly before: VectorSnapshot } | null;
+  /** A live drag of one of the frame's eight handles. `applied` is the scale
+   * already written into the document, so each frame can apply only the part
+   * that is new — every scale is about the same fixed anchor, so they compose
+   * exactly and the box never drifts from where the pointer says it is. */
+  readonly resize: { readonly handle: FrameHandle; readonly ids: readonly string[]; readonly startBounds: VectorBounds; readonly anchor: { readonly x: number; readonly y: number }; readonly applied: { readonly x: number; readonly y: number }; readonly before: VectorSnapshot } | null;
   /** The rubber band, while one is being dragged from empty space. */
   readonly marquee: { readonly from: { readonly x: number; readonly y: number }; readonly to: { readonly x: number; readonly y: number }; readonly additive: boolean; readonly selectionAtPress: readonly string[] } | null;
   /** The line(s) the current drag is snapped to, for the Overlay to
@@ -26,7 +32,7 @@ export interface SelectState {
   readonly snapLines: readonly SnapLine[];
 }
 
-const empty: SelectState = { drag: null, marquee: null, snapLines: [] };
+const empty: SelectState = { drag: null, resize: null, marquee: null, snapLines: [] };
 
 /** Shared by `vector.select` and `vector.nodes`' own fallback (see `nodes.ts`) — the
  * exact pre-port "pick a shape, start a move drag, or deselect" tail. */
@@ -39,7 +45,7 @@ export function beginSelectDrag(context: ToolContext<SelectState>, pointer: Tool
     // Empty space rubber-bands. Nothing is deselected yet: the band decides on
     // release, so a drag that starts badly and is dragged onto the objects
     // still ends up selecting them.
-    context.setState({ drag: null, marquee: { from: pointer.point, to: pointer.point, additive: pointer.shiftKey, selectionAtPress: selection }, snapLines: [] });
+    context.setState({ drag: null, resize: null, marquee: { from: pointer.point, to: pointer.point, additive: pointer.shiftKey, selectionAtPress: selection }, snapLines: [] });
     return;
   }
 
@@ -52,7 +58,7 @@ export function beginSelectDrag(context: ToolContext<SelectState>, pointer: Tool
     draft.activeShapeId = next.includes(hit.id) ? hit.id : next[next.length - 1] ?? null;
   });
   if (!decision.drag) { context.setState(empty); return; }
-  context.setState({ drag: { shapeIds: next.length ? next : [hit.id], start: pointer.point, before: context.snapshot() }, marquee: null, snapLines: [] });
+  context.setState({ drag: { shapeIds: next.length ? next : [hit.id], start: pointer.point, before: context.snapshot() }, resize: null, marquee: null, snapLines: [] });
 }
 
 /** The chain of parent group ids above a shape — excluded from its own snap
@@ -72,13 +78,81 @@ function ancestorIds(shape: VectorShape, shapes: readonly VectorShape[]): string
   return ids;
 }
 
+/** The one frame a selection gets: the union of every selected shape's world
+ * bounds, so several objects sit inside a single box rather than each carrying
+ * its own — which is what the owner asked for, and what every vector editor
+ * does. */
+export function selectionFrameBounds(context: ToolContext<SelectState>): VectorBounds | null {
+  const ids = context.document.selection?.length ? context.document.selection : (context.document.activeShapeId ? [context.document.activeShapeId] : []);
+  if (!ids.length) return null;
+  const boxes = ids
+    .map((id) => shapeWorldBoundsIndexed(context.spatialIndex, id) ?? (() => {
+      const shape = context.document.shapes.find((item) => item.id === id);
+      return shape ? shapeWorldBounds(shape, context.document.shapes) : null;
+    })())
+    .filter((bounds): bounds is VectorBounds => Boolean(bounds));
+  return unionBounds(boxes);
+}
+
+/** The frame's handles in screen pixels, which is where they are hit-tested and
+ * drawn — both need the same list, and computing it twice is how the two drift. */
+function screenHandles(context: ToolContext<SelectState>, bounds: VectorBounds) {
+  return FRAME_HANDLES.map((handle) => ({
+    handle,
+    point: toScreenPoint(handlePoint(bounds, handle), context.workspaceSize, context.viewport, context.stageBounds),
+  }));
+}
+
 const select: VectorToolDefinition<SelectState> = {
   id: "vector.select",
   createState: () => empty,
 
-  onPointerDown: beginSelectDrag,
+  onPointerDown(context: ToolContext<SelectState>, pointer: ToolPointer) {
+    // A handle is checked before the shape under the pointer: it sits on the
+    // selection's own edge, where a shape usually is too, and a press there
+    // means "resize this" rather than "pick whatever is underneath".
+    if (context.options.transform !== false) {
+      const bounds = selectionFrameBounds(context);
+      const ids = context.document.selection ?? [];
+      if (bounds && ids.length) {
+        // The pointer is converted through the same `toScreenPoint` as the
+        // handles rather than compared against `pointer.screenX`: that is
+        // `event.clientX`, measured from the window, while a handle's position is
+        // measured from the workspace element — different origins by the width of
+        // the tool rail and the height of the bars above, so the two never met and
+        // no handle was ever caught (found live, by dragging one and watching
+        // nothing happen).
+        const pointerScreen = toScreenPoint(pointer.point, context.workspaceSize, context.viewport, context.stageBounds);
+        const caught = handleAtScreenPoint(screenHandles(context, bounds), pointerScreen.x, pointerScreen.y);
+        if (caught) {
+          context.setState({
+            drag: null,
+            resize: { handle: caught, ids: [...ids], startBounds: bounds, anchor: anchorPoint(bounds, caught), applied: { x: 1, y: 1 }, before: context.snapshot() },
+            marquee: null, snapLines: [],
+          });
+          return;
+        }
+      }
+    }
+    beginSelectDrag(context, pointer);
+  },
 
   onPointerMove(context: ToolContext<SelectState>, pointer: ToolPointer) {
+    const resize = context.state.resize;
+    if (resize) {
+      // The total scale is always measured from the box the drag started with,
+      // never from the box as it is now: measuring against a box this same drag
+      // has been changing is how a resize accelerates away from the pointer.
+      // Only the part not yet applied is written, and since every scale is about
+      // the same fixed anchor they compose exactly.
+      const total = scaleForHandleDrag(resize.startBounds, resize.handle, pointer.point, pointer.shiftKey);
+      const step = { x: total.x / resize.applied.x, y: total.y / resize.applied.y };
+      if (Number.isFinite(step.x) && Number.isFinite(step.y) && (step.x !== 1 || step.y !== 1)) {
+        context.mutate((draft: VectorDocumentState) => { scaleShapes(draft, resize.ids, resize.anchor, step.x, step.y); });
+      }
+      context.setState({ ...context.state, resize: { ...resize, applied: total } });
+      return;
+    }
     const marquee = context.state.marquee;
     if (marquee) { context.setState({ ...context.state, marquee: { ...marquee, to: pointer.point } }); return; }
     const drag = context.state.drag;
@@ -146,12 +220,13 @@ const select: VectorToolDefinition<SelectState> = {
     // `start` moves to the raw pointer, not to the constrained point: the
     // constraint is applied to the whole gesture each frame, so releasing Shift
     // mid-drag returns the shape to where the pointer actually is.
-    context.setState({ drag: { ...drag, start: pointer.point }, marquee: null, snapLines });
+    context.setState({ drag: { ...drag, start: pointer.point }, resize: null, marquee: null, snapLines });
   },
 
   onGestureEnd(context: ToolContext<SelectState>, pointer: ToolPointer) {
-    const { drag, marquee } = context.state;
+    const { drag, resize, marquee } = context.state;
     context.setState(empty);
+    if (resize) { context.commitDrag(resize.before, "Scale Selection (Масштабировать выделение)"); return; }
     if (drag) { context.commitDrag(drag.before, "Move Shape (Переместить фигуру)"); return; }
     if (!marquee) return;
 
@@ -162,7 +237,13 @@ const select: VectorToolDefinition<SelectState> = {
     const dragged = band.width > 1 || band.height > 1;
     const caught = dragged
       ? context.document.shapes
-        .filter((shape) => shape.parentId === null && shape.visible !== false && !shape.locked)
+        // The same things a click can select: leaf shapes, visible and unlocked.
+        // (Artboards are not shapes in this model, so there is nothing to exclude
+        // for them here.)
+        // Filtering on `parentId === null` instead looked reasonable and was
+        // wrong — a shape drawn on an artboard is parented to it, so a band over
+        // a normal document caught nothing at all (found live, not by reading).
+        .filter((shape) => shape.kind !== "group" && shape.visible !== false && !shape.locked)
         .filter((shape) => {
           const bounds = shapeWorldBoundsIndexed(context.spatialIndex, shape.id) ?? shapeWorldBounds(shape, context.document.shapes);
           return bounds.width >= 0 && rectsOverlap(band, bounds);
@@ -180,9 +261,28 @@ const select: VectorToolDefinition<SelectState> = {
     context.setState(empty);
   },
 
-  ScreenOverlay({ state, context }) {
+  ScreenOverlay({ state, options, context }) {
     const marquee = state.marquee;
-    if (!marquee) return null;
+    if (!marquee) {
+      // The selection frame. Drawn here rather than by the workspace because it
+      // belongs to this tool: it is the chrome for moving and scaling, so the
+      // node and pen tools never show it, and its handles are hit-tested by the
+      // same file that draws them. One box for the whole selection, however
+      // many objects are in it.
+      if (options.transform === false) return null;
+      const bounds = selectionFrameBounds(context);
+      if (!bounds) return null;
+      const corners = [
+        { x: bounds.x, y: bounds.y }, { x: bounds.x + bounds.width, y: bounds.y },
+        { x: bounds.x + bounds.width, y: bounds.y + bounds.height }, { x: bounds.x, y: bounds.y + bounds.height },
+      ].map((point) => toScreenPoint(point, context.workspaceSize, context.viewport, context.stageBounds));
+      return <>
+        <polygon className="vector-selection" points={corners.map((corner) => `${corner.x},${corner.y}`).join(" ")}/>
+        {screenHandles(context, bounds).map(({ handle, point }) => (
+          <rect key={`${handle.x},${handle.y}`} className="vector-handle" x={point.x - 4} y={point.y - 4} width={8} height={8}/>
+        ))}
+      </>;
+    }
     const from = toScreenPoint(marquee.from, context.workspaceSize, context.viewport, context.stageBounds);
     const to = toScreenPoint(marquee.to, context.workspaceSize, context.viewport, context.stageBounds);
     const band = rectBetween(from, to);

@@ -570,13 +570,6 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   };
 
   const active = state.shapes.find((shape) => shape.id === state.activeShapeId) ?? null;
-  // World bounds, not local: an active shape sitting inside a rotated group
-  // needs its selection box drawn where it actually appears on screen, not
-  // where it would sit if it had no parent. Read from the index rather than
-  // recomputed — buildShapeSpatialIndex already walked every shape's
-  // ancestor chain once this revision; a second walk here would just repeat
-  // that work every render.
-  const bounds = active ? (shapeWorldBoundsIndexed(spatialIndex, active.id) ?? null) : null;
   // Stage 15: the stage's own CSS box now spans the canvas bounds, not
   // `state.width`/`height` — the `<svg>`'s `viewBox` (below) carries
   // `canvasBounds`'s own (x, y) origin, so this box's local coordinate
@@ -669,18 +662,11 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
         simply a constant, never divided by zoom, the same way the CSS
         cascade regression (commit `5ba9856`) could not have happened here —
         there is nothing left for a stray `stroke-width` rule to defeat. */}
-    {bounds && !catalogueTool?.editsPathPoints && (() => {
-      const corners = [
-        toScreenPoint({ x: bounds.x, y: bounds.y }, workspaceSize, viewport, canvasBounds),
-        toScreenPoint({ x: bounds.x + bounds.width, y: bounds.y }, workspaceSize, viewport, canvasBounds),
-        toScreenPoint({ x: bounds.x + bounds.width, y: bounds.y + bounds.height }, workspaceSize, viewport, canvasBounds),
-        toScreenPoint({ x: bounds.x, y: bounds.y + bounds.height }, workspaceSize, viewport, canvasBounds),
-      ];
-      return <svg className="vector-selection-overlay" width={workspaceSize.width} height={workspaceSize.height} aria-hidden="true">
-        <polygon className="vector-selection" points={corners.map((corner) => `${corner.x},${corner.y}`).join(" ")}/>
-        {corners.map((corner, index) => <circle key={index} className="vector-handle" cx={corner.x} cy={corner.y} r={5}/>)}
-      </svg>;
-    })()}
+    {/* The selection frame used to be drawn here, for every tool, with four
+        decorative circles and an options-bar checkbox that nothing read. It now
+        lives in vector.select's own ScreenOverlay: the frame is that tool's
+        chrome, its handles are hit-tested by the same file that draws them, and
+        the tools that edit a path show their anchors without a box on top. */}
     {catalogueTool?.ScreenOverlay && <svg className="vector-selection-overlay" width={workspaceSize.width} height={workspaceSize.height} aria-hidden="true">
       <catalogueTool.ScreenOverlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>} context={toolContextFor(catalogueTool.id)}/>
     </svg>}

@@ -67,6 +67,13 @@ export function rotationMatrixAround(degrees: number, cx: number, cy: number): M
   return multiplyMatrix(multiplyMatrix(translationMatrix(cx, cy), rotation), translationMatrix(-cx, -cy));
 }
 
+/** A scale about `(cx, cy)` — the counterpart of `rotationMatrixAround`, and
+ * what dragging a transform handle means: the opposite corner stays put while
+ * everything else moves away from or towards it. */
+export function scaleMatrixAround(sx: number, sy: number, cx: number, cy: number): Matrix {
+  return multiplyMatrix(multiplyMatrix(translationMatrix(cx, cy), scaleMatrix(sx, sy)), translationMatrix(-cx, -cy));
+}
+
 /** SVG/CSS `matrix(a, b, c, d, e, f)` — the one string both a `transform`
  * attribute and a CSS `transform` property accept, so the renderer needs no
  * further branching between the two. */

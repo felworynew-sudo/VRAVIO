@@ -3,7 +3,7 @@ import {
   distanceToPolyline, ellipseOutline, flattenPathOutline, pathSegmentBounds, pointInPolygon, roundedRectOutline,
   type Point,
 } from "./geometry";
-import { applyMatrix, invertMatrix, multiplyMatrix, translationMatrix } from "./matrix";
+import { applyMatrix, IDENTITY_MATRIX, invertMatrix, multiplyMatrix, scaleMatrixAround, translationMatrix } from "./matrix";
 import { flattenVectorShapes, isShapeEffectivelyLocked, isShapeEffectivelyVisible, reorderSiblings, siblingsOf, vectorShapeDescendantIds, worldTransform } from "./tree";
 import { TEXT_LINE_HEIGHT, wrapText } from "./text-wrap";
 import { makeVectorOrderKey } from "./types";
@@ -346,4 +346,46 @@ export function duplicateShape(state: VectorDocumentState, id: string): VectorSh
   state.activeShapeId = copy.id;
   state.selection = [copy.id];
   return copy;
+}
+
+/**
+ * Scales a set of shapes about one world-space anchor — what dragging a corner
+ * of the selection frame means.
+ *
+ * Composed into each shape's own `transform` rather than written into its
+ * `width`/`height`, for two reasons. It is the only formulation that works for
+ * every kind at once (a group and an instance have no width of their own — the
+ * transform *is* their geometry), and it is what Inkscape does, so a scaled
+ * shape keeps its stroke and its corner radii in proportion instead of
+ * silently reinterpreting them.
+ *
+ * The scale is expressed in world space and then carried into each shape's own
+ * parent space (`P⁻¹ · S · P · T`), so a member of a rotated or scaled group
+ * ends up exactly where the frame says it will rather than sliding off along
+ * its parent's axes. A shape whose ancestor is also in the set is skipped: the
+ * ancestor's own scale already carried it, and scaling it again would square
+ * the factor.
+ */
+export function scaleShapes(state: VectorDocumentState, ids: readonly string[], anchor: { x: number; y: number }, scaleX: number, scaleY: number): void {
+  const moving = new Set(ids);
+  const scaleAround = scaleMatrixAround(scaleX, scaleY, anchor.x, anchor.y);
+  for (const id of ids) {
+    const shape = state.shapes.find((item) => item.id === id);
+    if (!shape) continue;
+    let ancestorId = shape.parentId, carried = false;
+    const seen = new Set<string>();
+    while (ancestorId && !seen.has(ancestorId)) {
+      seen.add(ancestorId);
+      if (moving.has(ancestorId)) { carried = true; break; }
+      ancestorId = state.shapes.find((item) => item.id === ancestorId)?.parentId ?? null;
+    }
+    if (carried) continue;
+    const parent = shape.parentId ? state.shapes.find((item) => item.id === shape.parentId) : undefined;
+    const parentWorld = parent ? worldTransform(parent, state.shapes) : IDENTITY_MATRIX;
+    const inverseParent = invertMatrix(parentWorld);
+    // A parent with a zero scale cannot be inverted; the shape is invisible
+    // anyway, and skipping it is better than writing NaNs into its matrix.
+    if (!inverseParent) continue;
+    updateShape(state, id, { transform: multiplyMatrix(inverseParent, multiplyMatrix(scaleAround, multiplyMatrix(parentWorld, shape.transform))) });
+  }
 }
