@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import {
   cloneRasterState, layerAccepts, layerLockReason, layerOpaqueBounds, liftSelection, linkedLayers, meshLayerPixels, meshSelection,
   pickLayerAt, quadLayerPixels, quadSelection, regularMesh, restrictSelectionToContent, rotateLayerPixels, rotateSelection,
-  rotatedDestinationBounds, scaleLayerPixels, scaleSelection, setLayerPixels, stampFloating, translateLayerPixels, translateSelection, unionRect, WARP_GRID, warpPresetMesh,
+  rotatedDestinationBounds, scaleLayerPixels, scaleSelection, setLayerPixels, stampFloating, transformLayerPixels, translateLayerPixels, translateSelection, unionRect, WARP_GRID, warpPresetMesh,
   type WarpPresetId,
   type FloatingPixels, type PixelSelection, type Point, type RasterDocumentState, type RasterLayer, type RasterRect, type RasterTextData,
 } from "@vravio/env-raster";
@@ -28,6 +28,23 @@ import { rotateCursorFor as rotateCursorForCorner, scaleCursorFor } from "../../
  * deliberately left for here.
  */
 
+/** What a transform session has accumulated so far — see `PendingTransform.live`. */
+export interface TransformSession {
+  readonly source: RasterRect;
+  readonly target: RasterRect;
+  readonly rotation: number;
+}
+
+/**
+ * The session a new drag continues, or a fresh one if this is the first gesture.
+ *
+ * A first gesture takes the layer's own rectangle as both source and target: nothing has moved
+ * yet, so the description is the identity, and `pending.pixels` is already the untouched layer.
+ */
+function sessionFor(pending: PendingTransform, bounds: RasterRect): TransformSession {
+  return pending.live ?? { source: { ...bounds }, target: { ...bounds }, rotation: pending.rotation };
+}
+
 export interface PendingTextTransform { readonly original: RasterTextData; readonly initialBounds: RasterRect; readonly targetBounds: RasterRect }
 
 export interface PendingTransform {
@@ -40,29 +57,32 @@ export interface PendingTransform {
   readonly rotation: number;
   readonly text?: PendingTextTransform;
   /**
-   * A scale or rotate still under the hand, described rather than resampled.
+   * The whole transform session, described rather than resampled.
    *
-   * While this is set, `pixels` is deliberately *stale* — it still holds what the layer looked
-   * like when the drag began — and what the user sees is that same content drawn once into a
-   * canvas and moved with a CSS transform, over a composite the real layer is hidden from. The
-   * honest resample happens once, when the gesture ends.
+   * While this is set, `pixels` holds the layer exactly as the session found it, untouched, and
+   * what the user sees is that content drawn once into a canvas and *moved* with a CSS transform
+   * over a composite the real layer is hidden from. Not one pixel is resampled until commit, and
+   * then exactly once, through `transformLayerPixels`.
    *
-   * This is Krita's Instant Preview and what GIMP and Photoshop do too: during a drag they
-   * transform the already-rendered layer rather than recomputing pixels per frame. Measured here
-   * before the change, one frame of a rotate cost 4.8ms on a small layer and about 64ms on a
-   * 1200x1200 one — every frame, at any canvas size — and the composite that followed it repainted
-   * on top of that.
+   * It describes the session, not the current drag, and that is the point. Applying each gesture
+   * to the previous gesture's output cost a resample at every release and compounded the
+   * interpolation: measured on a hard checker, one 90° turn stays pixel-crisp where ten 9° turns
+   * to the same place muddy 28,518 pixels and spend 117ms doing it — CLAUDE.md's own "a warp that
+   * resamples its own output smears", one level up.
    *
-   * The same door the text branch of this very tool has always used (`text-transform-preview`);
-   * this extends it to pixel layers rather than inventing a second mechanism.
+   * The donors keep a description too. GIMP's transform tool holds `trans_infos` and recomputes a
+   * matrix all session; `gimp_transform_tool_transform`, which actually touches pixels, is called
+   * from one place only — `gimp_transform_grid_tool_commit`. Photoshop and Krita apply on Enter.
+   *
+   * The preview is the same door the text branch of this tool has always used
+   * (`text-transform-preview`), extended to pixel layers rather than a second mechanism.
    */
   readonly live?: {
-    /** Where the pristine content sits inside `pixels`. */
+    /** The content's own rectangle in `pixels`, fixed for the session. */
     readonly source: RasterRect;
-    /** Where it should appear now. */
+    /** Where that rectangle has been carried to, before rotation. */
     readonly target: RasterRect;
-    /** Degrees to turn it by, about `target`'s centre — the delta this drag has added, since
-     * whatever came before is already baked into `pixels`. */
+    /** Degrees about `target`'s centre — absolute for the session, not per gesture. */
     readonly rotation: number;
   };
   /** Content lifted off the layer once; every drag places the same float rather than cutting a
@@ -100,8 +120,8 @@ type MoveDrag =
    * that drawing on screen. Patchy computes the same union from the same two positions
    * (`moving_layers_dirty_region(old_delta, new_delta)`, canvas_widget_move.cpp). */
   | { kind: "move"; pointerId: number; from: Point; current: Point; previous?: Point; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean; fromOrigin?: boolean; float?: FloatingPixels; linkedBase?: readonly { layerId: string; basePixels: Uint8ClampedArray }[] }
-  | { kind: "scale"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; handleX: -1 | 0 | 1; handleY: -1 | 0 | 1; dx: number; dy: number; text?: PendingTextTransform }
-  | { kind: "rotate"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; center: Point; startAngle: number; baseRotation: number; dx: number; dy: number; handleX: -1 | 1; handleY: -1 | 1; text?: PendingTextTransform }
+  | { kind: "scale"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; session: TransformSession; handleX: -1 | 0 | 1; handleY: -1 | 0 | 1; dx: number; dy: number; text?: PendingTextTransform }
+  | { kind: "rotate"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; session: TransformSession; center: Point; startAngle: number; baseRotation: number; dx: number; dy: number; handleX: -1 | 1; handleY: -1 | 1; text?: PendingTextTransform }
   | { kind: "quad"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; quadOrigin: { pixels: Uint8ClampedArray; bounds: RasterRect; selection: PixelSelection | null }; baseCorners: readonly [Point, Point, Point, Point]; handleIndex: number; mode: QuadTransformMode }
   | { kind: "warp"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; meshOrigin: { pixels: Uint8ClampedArray; bounds: RasterRect; selection: PixelSelection | null }; baseSelection: PixelSelection | null; baseMesh: readonly Point[]; pointIndex: number };
 
@@ -337,12 +357,19 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
   const after = cloneRasterState(current);
   const layer = after.layers.find((item) => item.id === pending.layerId);
   let bounds: RasterRect | null = null;
+  // The session's one and only resample. Everything the hand did — every scale, every turn, at
+  // however many stops — is one description, applied once to the pixels the session started with.
+  // Doing it per gesture instead cost a pass at every release *and* compounded the interpolation;
+  // see `PendingTransform.live` for the measurement and the donors.
+  const resolved = pending.live
+    ? transformLayerPixels(pending.pixels, pending.before.width, pending.before.height, pending.live.source, pending.live.target, pending.live.rotation, pending.selection)
+    : pending.pixels;
   if (layer) {
     const sourceLayer = pending.before.layers.find((item) => item.id === pending.layerId);
     const wasThere = sourceLayer ? layerOpaqueBounds(materialise(sourceLayer, pending.before), pending.before.width, pending.before.height) : null;
-    const isThere = layerOpaqueBounds(pending.pixels, pending.before.width, pending.before.height);
+    const isThere = layerOpaqueBounds(resolved, pending.before.width, pending.before.height);
     bounds = wasThere && isThere ? unionRect(wasThere, isThere.x, isThere.y, isThere.x + isThere.width, isThere.y + isThere.height, 1) : wasThere ?? isThere;
-    setLayerPixels(layer, pending.pixels, pending.before.width, pending.before.height);
+    setLayerPixels(layer, resolved, pending.before.width, pending.before.height);
   }
   // A linked group's partners commit the same way as the primary layer — their own opaque
   // bounds fold into the same dirty-rect union the history step and tile cache repaint from.
@@ -458,38 +485,22 @@ function applyDragFrame(context: ToolContext<MoveState>, drag: MoveDrag, interpo
     if (drag.handleY === -1) top = point.y; else if (drag.handleY === 1) bottom = point.y;
     const target = { x: Math.min(left, right), y: Math.min(top, bottom), width: Math.max(1, Math.abs(right - left)), height: Math.max(1, Math.abs(bottom - top)) };
     if (drag.text) return { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: 0, text: { ...drag.text, targetBounds: target } };
-    if (!interpolate) {
-      // Under the hand: describe it, draw nothing. The Overlay puts the layer's own content on
-      // screen through a CSS transform, and the resample below runs once on release.
-      return { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: context.state.pending?.rotation ?? 0, live: { source, target, rotation: 0 } };
-    }
-    const pixels = scaleLayerPixels(drag.basePixels, state.width, state.height, source, target, drag.baseSelection);
-    const selection = scaleSelection(drag.baseSelection, state.width, state.height, source, target);
-    const pending: PendingTransform = { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels, selection, rotation: context.state.pending?.rotation ?? 0 };
-    context.schedulePreview(pixels, "pixels", pending.layerId);
-    return pending;
+    // Described, never resampled — at any point of the gesture, release included. The session's
+    // own source rectangle and rotation carry through; only where it has been carried changes.
+    const session = drag.session;
+    const scaled = {
+      x: session.target.x + (target.x - source.x) * (session.target.width / source.width),
+      y: session.target.y + (target.y - source.y) * (session.target.height / source.height),
+      width: session.target.width * (target.width / source.width),
+      height: session.target.height * (target.height / source.height),
+    };
+    return { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: session.rotation, live: { source: session.source, target: scaled, rotation: session.rotation } };
   }
   if (drag.kind === "rotate") {
     const angle = drag.baseRotation + (Math.atan2(point.y - drag.center.y, point.x - drag.center.x) - drag.startAngle) * 180 / Math.PI;
     if (drag.text) return { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: angle, text: drag.text };
-    if (!interpolate) {
-      // The turn this drag has added; whatever the layer was rotated by before is already in
-      // `basePixels`, so only the delta goes to the CSS transform.
-      return { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: angle, live: { source: drag.sourceBounds, target: drag.sourceBounds, rotation: angle - drag.baseRotation } };
-    }
-    const pixels = rotateLayerPixels(drag.basePixels, state.width, state.height, drag.sourceBounds, angle - drag.baseRotation, drag.baseSelection, interpolate);
-    const selection = rotateSelection(drag.baseSelection, state.width, state.height, drag.sourceBounds, angle - drag.baseRotation);
-    const pending: PendingTransform = { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels, selection, rotation: angle };
-    // Only the band a rotation can touch: where it was cleared from and where it landed. Without
-    // a rectangle here every frame repaints the whole canvas through a full document composite —
-    // the same cliff a mask stroke used to fall down, and far more expensive than the rotation.
-    const turned = rotatedDestinationBounds(drag.sourceBounds, angle - drag.baseRotation);
-    const dirty = unionRect(
-      unionRect(null, drag.sourceBounds.x, drag.sourceBounds.y, drag.sourceBounds.x + drag.sourceBounds.width, drag.sourceBounds.y + drag.sourceBounds.height, 2),
-      turned.x, turned.y, turned.x + turned.width, turned.y + turned.height, 2,
-    );
-    context.schedulePreview(pixels, "pixels", pending.layerId, dirty);
-    return pending;
+    // The angle is the session's, absolute — nothing about the layer's pixels changes here.
+    return { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: angle, live: { source: drag.session.source, target: drag.session.target, rotation: angle } };
   }
   if (drag.kind === "quad") {
     const dx = point.x - drag.from.x, dy = point.y - drag.from.y;
@@ -578,7 +589,7 @@ const move: RasterToolDefinition<MoveState> = {
         const handle = findScaleHandle(bounds, point, tolerance);
         if (handle) {
           context.capturePointer(pointer.pointerId);
-          context.setState({ pending, drag: { kind: "scale", pointerId: pointer.pointerId, from: point, current: point, before: pending.before, basePixels: pending.text ? pending.pixels : pending.pixels.slice(), baseSelection: cloneSelection(pending.selection), sourceBounds: { ...bounds }, handleX: handle[0], handleY: handle[1], dx: pending.dx, dy: pending.dy, ...(pending.text ? { text: pending.text } : {}) } });
+          context.setState({ pending, drag: { kind: "scale", pointerId: pointer.pointerId, from: point, current: point, before: pending.before, basePixels: pending.text ? pending.pixels : pending.pixels.slice(), baseSelection: cloneSelection(pending.selection), sourceBounds: { ...bounds }, session: sessionFor(pending, bounds), handleX: handle[0], handleY: handle[1], dx: pending.dx, dy: pending.dy, ...(pending.text ? { text: pending.text } : {}) } });
           return;
         }
         // Outside the frame rotates — see `findRotateCorner`, which carries the donor reading.
@@ -587,7 +598,7 @@ const move: RasterToolDefinition<MoveState> = {
         if (rotateCorner) {
           context.capturePointer(pointer.pointerId);
           const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
-          context.setState({ pending, drag: { kind: "rotate", pointerId: pointer.pointerId, from: point, current: point, before: pending.before, basePixels: pending.text ? pending.pixels : pending.pixels.slice(), baseSelection: cloneSelection(pending.selection), sourceBounds: { ...bounds }, center, startAngle: Math.atan2(point.y - center.y, point.x - center.x), baseRotation: pending.rotation, dx: pending.dx, dy: pending.dy, handleX: rotateCorner[0] as -1 | 1, handleY: rotateCorner[1] as -1 | 1, ...(pending.text ? { text: pending.text } : {}) } });
+          context.setState({ pending, drag: { kind: "rotate", pointerId: pointer.pointerId, from: point, current: point, before: pending.before, basePixels: pending.text ? pending.pixels : pending.pixels.slice(), baseSelection: cloneSelection(pending.selection), sourceBounds: { ...bounds }, session: sessionFor(pending, bounds), center, startAngle: Math.atan2(point.y - center.y, point.x - center.x), baseRotation: pending.rotation, dx: pending.dx, dy: pending.dy, handleX: rotateCorner[0] as -1 | 1, handleY: rotateCorner[1] as -1 | 1, ...(pending.text ? { text: pending.text } : {}) } });
           return;
         }
         // "Click away to accept" still holds, but it is decided at the *end* of the gesture now:

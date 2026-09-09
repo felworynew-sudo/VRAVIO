@@ -261,8 +261,32 @@ describe("a transform under the hand does not resample", () => {
 
     move.onGestureEnd!(context, pointerAt(bounds.x + bounds.width + 20, bounds.y - 20));
     const after = box.state.pending!;
-    expect(after.live, "the description is gone once the gesture ends").toBeUndefined();
-    expect(Array.from(after.pixels)).not.toEqual(Array.from(untouched));
+    // Releasing does not resample either: the description survives the stop, because the session
+    // may well continue with another gesture. Applying it at each release cost a pass every time
+    // *and* compounded the interpolation — one 90° turn stays crisp where ten 9° turns do not.
+    expect(after.live, "the description outlives the gesture").toBeTruthy();
+    expect(Array.from(after.pixels)).toEqual(Array.from(untouched));
+  });
+
+  it("keeps one description across several gestures instead of stacking resamples", () => {
+    // Two turns and a scale in one session: the pixels must still be the ones the session opened
+    // with, and the description must carry the total.
+    const { context, box } = harness(blockDocument());
+    const { pending, bounds } = opened(context, box);
+    const untouched = pending.pixels;
+
+    const turn = (fromX: number, fromY: number, toX: number, toY: number) => {
+      move.onPointerDown!(context, pointerAt(fromX, fromY));
+      move.onPointerMove!(context, pointerAt(toX, toY));
+      move.onGestureEnd!(context, pointerAt(toX, toY));
+    };
+    turn(bounds.x - 20, bounds.y - 20, bounds.x + bounds.width + 20, bounds.y - 20);
+    const afterFirst = box.state.pending!.live!.rotation;
+    turn(bounds.x - 20, bounds.y + bounds.height + 20, bounds.x - 20, bounds.y - 20);
+    const afterSecond = box.state.pending!.live!.rotation;
+
+    expect(afterSecond).not.toBe(afterFirst);
+    expect(Array.from(box.state.pending!.pixels)).toEqual(Array.from(untouched));
   });
 
   it("does the same for a scale handle", () => {
@@ -282,7 +306,8 @@ describe("a transform under the hand does not resample", () => {
     expect(live.width).toBeGreaterThan(bounds.width);
 
     move.onGestureEnd!(context, pointerAt(bounds.x + bounds.width + 8, bounds.y + bounds.height + 5));
-    expect(box.state.pending!.live).toBeUndefined();
+    expect(box.state.pending!.live, "still described after the stop").toBeTruthy();
+    expect(Array.from(box.state.pending!.pixels)).toEqual(Array.from(untouched));
   });
 
   it("still ends up where the description said it would", () => {

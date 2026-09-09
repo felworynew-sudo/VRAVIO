@@ -219,6 +219,83 @@ export function scaleSelection(selection: PixelSelection | null, width: number, 
 }
 
 /**
+ * One scale-and-rotate, resampled once.
+ *
+ * A Free Transform is a whole session: the hand scales, lets go, rotates, lets go, nudges a
+ * corner again. Applying each of those to the *previous result* costs a resample per gesture and
+ * — far worse — compounds the interpolation. Measured on a hard checker, one 90° turn leaves the
+ * picture pixel-crisp while ten 9° turns to the same place muddy 28,518 pixels and spend 117ms
+ * doing it. That is the same fault CLAUDE.md already records for the warp mesh ("a warp that
+ * resamples its own output smears"), one level up.
+ *
+ * So the tool keeps the *description* of the whole session and calls this once, at commit —
+ * which is exactly what the donors do. GIMP's transform tool holds `trans_infos` and recomputes
+ * a matrix all session; the only call to `gimp_transform_tool_transform`, the function that
+ * actually touches pixels, is inside `gimp_transform_grid_tool_commit`. Photoshop and Krita
+ * likewise apply on Enter.
+ *
+ * `source` maps onto `target`, and then the result is turned by `degrees` about `target`'s
+ * centre — the order the frame itself implies. One inverse map per destination pixel, one
+ * bilinear read.
+ */
+export function transformLayerPixels(
+  pixels: Uint8ClampedArray, width: number, height: number,
+  source: RasterRect, target: RasterRect, degrees: number,
+  selection: PixelSelection | null = null, interpolate = true,
+): Uint8ClampedArray {
+  const output = pixels.slice();
+  const sample: BilinearSample = bilinearSample();
+  const radians = degrees * Math.PI / 180, cosine = Math.cos(radians), sine = Math.sin(radians);
+  const centerX = target.x + target.width / 2, centerY = target.y + target.height / 2;
+  const scaleX = target.width === 0 ? 0 : source.width / target.width;
+  const scaleY = target.height === 0 ? 0 : source.height / target.height;
+
+  const insideSource = (x: number, y: number) => x >= source.x && x < source.x + source.width && y >= source.y && y < source.y + source.height;
+  const coverage = (x: number, y: number) => x < 0 || x >= width || y < 0 || y >= height ? 0
+    : selection ? selection.mask[y * width + x]! / 255
+    : (insideSource(x, y) ? 1 : 0);
+
+  // The source rectangle is vacated once, before anything is drawn — the same cut-one-hole rule
+  // the rest of this file follows, and the reason a transform cannot smear over its own origin.
+  for (let y = Math.max(0, Math.floor(source.y)); y < Math.min(height, Math.ceil(source.y + source.height)); y += 1) {
+    for (let x = Math.max(0, Math.floor(source.x)); x < Math.min(width, Math.ceil(source.x + source.width)); x += 1) {
+      const alpha = coverage(x, y); if (alpha <= 0) continue;
+      const pixel = (y * width + x) * 4, remaining = 1 - alpha;
+      output[pixel] = Math.round(output[pixel]! * remaining); output[pixel + 1] = Math.round(output[pixel + 1]! * remaining);
+      output[pixel + 2] = Math.round(output[pixel + 2]! * remaining); output[pixel + 3] = Math.round(output[pixel + 3]! * remaining);
+    }
+  }
+
+  const destination = rotatedDestinationBounds(target, degrees);
+  const fromY = Math.max(0, Math.floor(destination.y) - 1), toY = Math.min(height, Math.ceil(destination.y + destination.height) + 1);
+  const fromX = Math.max(0, Math.floor(destination.x) - 1), toX = Math.min(width, Math.ceil(destination.x + destination.width) + 1);
+  for (let y = fromY; y < toY; y += 1) {
+    for (let x = fromX; x < toX; x += 1) {
+      // Undo the rotation about the target's centre, then undo the scale that carried the source
+      // rectangle onto the target — the inverse of the two steps, in the other order.
+      const dx = x + .5 - centerX, dy = y + .5 - centerY;
+      const unrotatedX = centerX + cosine * dx + sine * dy, unrotatedY = centerY - sine * dx + cosine * dy;
+      const sampleX = source.x + (unrotatedX - target.x) * scaleX;
+      const sampleY = source.y + (unrotatedY - target.y) * scaleY;
+      const nearestX = Math.floor(sampleX), nearestY = Math.floor(sampleY);
+      const maskAlpha = coverage(nearestX, nearestY); if (maskAlpha <= 0) continue;
+      if (interpolate) {
+        sampleBilinearInto(pixels, width, height, sampleX - .5, sampleY - .5, sample);
+      } else {
+        const at = (Math.max(0, Math.min(height - 1, nearestY)) * width + Math.max(0, Math.min(width - 1, nearestX))) * 4;
+        sample.r = pixels[at]!; sample.g = pixels[at + 1]!; sample.b = pixels[at + 2]!; sample.a = pixels[at + 3]!;
+      }
+      const to = (y * width + x) * 4, sourceAlpha = sample.a / 255 * maskAlpha, destinationAlpha = output[to + 3]! / 255;
+      const alpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha); if (alpha <= 0) continue;
+      output[to] = Math.round((sample.r * sourceAlpha + output[to]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
+      output[to + 1] = Math.round((sample.g * sourceAlpha + output[to + 1]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
+      output[to + 2] = Math.round((sample.b * sourceAlpha + output[to + 2]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
+      output[to + 3] = Math.round(alpha * 255);
+    }
+  }
+  return output;
+}
+/**
  * Where a rotation of `bounds` can put pixels — the four corners turned about the centre, as a
  * box. Exported because the caller needs the same rectangle to tell the screen what to repaint,
  * and two spellings of it are two chances to repaint the wrong band.
