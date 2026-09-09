@@ -16,6 +16,7 @@ export * from "./smartcrop";
 export * from "./tiling";
 export * from "./tiles";
 export * from "./transform";
+export * from "./puppet";
 export * from "./effects";
 export * from "./types";
 export * from "./spot_heal";
