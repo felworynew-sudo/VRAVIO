@@ -48,7 +48,9 @@ describe("interface does not scale with the canvas zoom", () => {
     // win and put the scaling back — which is exactly how this regressed once
     // already (fixed in 5ba9856).
     const scaledOverlayClasses = [
-      "selection-overlay", "committed-selection", "selection-soft-edge", "selection-hard-edge",
+      // The marching ants replaced selection-soft-edge/selection-hard-edge; naming
+      // classes that no longer exist would leave this list checking nothing.
+      "selection-overlay", "committed-selection", "marching-ants", "marching-ants-dark", "marching-ants-light",
       "shape-draft", "text-frame-draft", "text-path-guide",
       "transform-controls", "transform-quad-outline", "transform-handle",
       "patch-source-path", "crop-outline", "crop-third", "crop-handle",

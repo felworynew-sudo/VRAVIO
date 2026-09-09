@@ -47,8 +47,9 @@ const ALLOWED: readonly { readonly match: string; readonly reason: string }[] = 
   { match: "cursor-ring", reason: "canvas overlay: legible over any artwork, not over a theme" },
   { match: "cursor-crosshair", reason: "canvas overlay: dark halo under a light pen" },
   { match: "selection-overlay", reason: "marching ants: fixed black/white pair over artwork" },
-  { match: "selection-hard-edge", reason: "marching ants over artwork" },
-  { match: "selection-soft-edge", reason: "marching ants over artwork" },
+  // Replaces the selection-hard-edge/selection-soft-edge pair, which no longer
+  // exists: an entry naming a class nothing renders excuses nothing.
+  { match: "marching-ants", reason: "marching ants: the fixed black/white pair Photoshop and Patchy both draw, picked to read over any artwork rather than over a theme" },
   { match: "liquify-brush-cursor", reason: "canvas overlay over artwork" },
   { match: "eyedropper-loupe", reason: "canvas overlay over artwork" },
   { match: "eyedropper-chip", reason: "canvas overlay over artwork" },
@@ -135,7 +136,7 @@ describe("theme tokens", () => {
     // swatch colour, a row's indent depth, a clip's width. These are not
     // palette entries and have no business being declared in a theme; each
     // one below was checked to have a writer in a .tsx file.
-    for (const runtime of ["--tool-mask", "--panel-mask", "--icon-mask", "--mask-link-mask", "--link-badge-mask", "--swap-colors-mask", "--clip-mask", "--accent", "--swatch", "--layer-depth", "--clip-width"]) defined.add(runtime);
+    for (const runtime of ["--tool-mask", "--panel-mask", "--icon-mask", "--mask-link-mask", "--link-badge-mask", "--swap-colors-mask", "--clip-mask", "--accent", "--swatch", "--layer-depth", "--clip-width", "--ant-period"]) defined.add(runtime);
 
     const missing = new Set<string>();
     for (const match of styles.matchAll(/var\(\s*(--[a-z0-9-]+)/gi)) {

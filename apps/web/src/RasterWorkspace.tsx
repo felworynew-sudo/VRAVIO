@@ -22,6 +22,7 @@ import { maskToRgba, putPixels } from "./raster-pixel-buffers";
 import { useCanvasNavigation } from "./raster-navigation";
 import { useBrushCursor } from "./raster-brush-cursor";
 import { useRasterRulerGuides } from "./raster-ruler-guides";
+import { MarchingAnts } from "./marching-ants";
 import { useRasterCommit } from "./raster-commit";
 import { useRasterContextMenus } from "./raster-context-menus";
 import { RasterBrushTipPopup } from "./RasterBrushTipPopup";
@@ -481,7 +482,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       <canvas ref={canvasRef} className={brushLike ? "brush-cursor-canvas" : ""} style={dynamicCursor ? { cursor: dynamicCursor } : undefined} width={state.width} height={state.height} onPointerEnter={updateBrushCursor} onPointerLeave={() => { onBrushCursorLeave(); setDynamicCursor(undefined); }} onPointerDown={handlePointerDown} onPointerMove={(event) => { updateBrushCursor(event); handlePointerMove(event); }} onPointerUp={finishGesture} onPointerCancel={finishGesture} onContextMenu={(event) => { if (selectionLike) { onSelectionContextMenu(event); return; } if (activeToolId === "raster.move" && (toolStates["raster.move"] as MoveState | undefined)?.pending) { onTransformContextMenu(event); return; } event.preventDefault(); if (!brushLike) return; const rect = workspaceRef.current?.getBoundingClientRect(); if (rect) setBrushPopup({ left: Math.min(event.clientX - rect.left, rect.width - 300), top: Math.min(event.clientY - rect.top, rect.height - 430), detailed: false }); }} />
       {/* Whatever the active catalogue tool draws over the canvas. */}
       {catalogueTool?.Overlay && <catalogueTool.Overlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>} context={toolContextFor(catalogueTool.id, canvasRef.current)}/>}
-      {committedSelectionPath && <svg className="selection-overlay committed-selection" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><path className="selection-soft-edge" strokeWidth={3 / viewport.zoom} d={committedSelectionPath} /><path className="selection-hard-edge" strokeWidth={0.7 / viewport.zoom} d={committedSelectionPath} /></svg>}
+      {committedSelectionPath && <svg className="selection-overlay committed-selection" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><MarchingAnts zoom={viewport.zoom}><path d={committedSelectionPath} /></MarchingAnts></svg>}
     </div>
     {/*
       Cursors live outside .raster-stage on purpose: that element carries the zoom's CSS scale

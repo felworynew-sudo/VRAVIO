@@ -1,4 +1,5 @@
 import { combineSelections, createPolygonSelection, patchFromSelection, selectionOutlinePath, type Point } from "@vravio/env-raster";
+import { MarchingAnts } from "../../../../marching-ants";
 import type { RasterToolDefinition, ToolContext } from "../types";
 import { locksRefuse } from "../lock-guard";
 
@@ -127,8 +128,10 @@ const patch: RasterToolDefinition<PatchState> = {
 
   Overlay({ state, document, context }) {
     if (state.fallbackLasso) {
-      return <svg className="selection-overlay" strokeWidth={0.8 / context.viewport.zoom} viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
-        <polyline points={state.fallbackLasso.points.map((point) => `${point.x},${point.y}`).join(" ")}/>
+      return <svg className="selection-overlay" viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
+        <MarchingAnts zoom={context.viewport.zoom}>
+          <polyline points={state.fallbackLasso.points.map((point) => `${point.x},${point.y}`).join(" ")}/>
+        </MarchingAnts>
       </svg>;
     }
     const stroke = state.stroke;
