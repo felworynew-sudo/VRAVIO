@@ -35,6 +35,38 @@ function inverseUnitSquare(mapping: ReturnType<typeof quadMapping>, x: number, y
   return { u: wx / ww, v: wy / ww };
 }
 
+/**
+ * One RGBA sample, interpolated between the four pixels around a fractional
+ * position.
+ *
+ * Every warp in this file used to take the nearest pixel instead, which is what
+ * master-plan.md §1.1 reports as "пиксели не интерполируются": a deformation built
+ * from nearest samples reproduces the source's own values in blocks, and reads
+ * as a picture torn into tiles rather than bent.
+ *
+ * Mixed premultiplied and divided back out, so a sample taken beside a
+ * transparent pixel does not drag that pixel's meaningless colour into the
+ * result — the dark fringe that otherwise appears along every warped edge.
+ */
+function sampleBilinear(pixels: Uint8ClampedArray, width: number, height: number, x: number, y: number): [number, number, number, number] {
+  const cx = Math.max(0, Math.min(width - 1, x)), cy = Math.max(0, Math.min(height - 1, y));
+  const x0 = Math.floor(cx), y0 = Math.floor(cy);
+  const x1 = Math.min(width - 1, x0 + 1), y1 = Math.min(height - 1, y0 + 1);
+  const fx = cx - x0, fy = cy - y0;
+  const corners = [(y0 * width + x0) * 4, (y0 * width + x1) * 4, (y1 * width + x0) * 4, (y1 * width + x1) * 4];
+  const weights = [(1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy];
+  let alpha = 0, red = 0, green = 0, blue = 0;
+  for (let corner = 0; corner < 4; corner += 1) {
+    const at = corners[corner]!, weight = weights[corner]!, cornerAlpha = pixels[at + 3]! / 255;
+    alpha += cornerAlpha * weight;
+    red += pixels[at]! * cornerAlpha * weight;
+    green += pixels[at + 1]! * cornerAlpha * weight;
+    blue += pixels[at + 2]! * cornerAlpha * weight;
+  }
+  if (alpha <= 0) return [0, 0, 0, 0];
+  return [red / alpha, green / alpha, blue / alpha, alpha * 255];
+}
+
 /** Remaps sourceBounds into an arbitrary quadrilateral (TL,TR,BR,BL) instead of scaleLayerPixels'
  * axis-aligned rectangle — the shared engine behind Skew (a parallelogram), Distort (a free
  * quad) and Perspective (a quad the caller keeps trapezoidal by mirroring corner drags), which
@@ -55,14 +87,23 @@ export function quadLayerPixels(pixels: Uint8ClampedArray, width: number, height
   for (let y = Math.max(0, targetTop); y < Math.min(height, targetBottom); y += 1) for (let x = Math.max(0, targetLeft); x < Math.min(width, targetRight); x += 1) {
     const { u, v } = inverseUnitSquare(mapping, x + .5, y + .5);
     if (u < 0 || u > 1 || v < 0 || v > 1) continue;
-    const sourceX = Math.max(left, Math.min(right - 1, Math.floor(sourceBounds.x + u * sourceBounds.width)));
-    const sourceY = Math.max(top, Math.min(bottom - 1, Math.floor(sourceBounds.y + v * sourceBounds.height)));
-    const sourceIndex = sourceY * width + sourceX, maskAlpha = selectedAlpha(sourceIndex); if (maskAlpha <= 0) continue;
-    const from = sourceIndex * 4, to = (y * width + x) * 4, sourceAlpha = source[from + 3]! / 255 * maskAlpha, destinationAlpha = output[to + 3]! / 255, alpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha);
+    // Sampled at the pixel's centre and interpolated: the -0.5 turns a pixel
+    // index into the coordinate of its centre, which is the space the mapping
+    // works in.
+    const sampleX = sourceBounds.x + u * sourceBounds.width - 0.5;
+    const sampleY = sourceBounds.y + v * sourceBounds.height - 0.5;
+    const nearestX = Math.max(left, Math.min(right - 1, Math.round(sampleX)));
+    const nearestY = Math.max(top, Math.min(bottom - 1, Math.round(sampleY)));
+    // The mask is read at the nearest pixel rather than interpolated: it says
+    // which pixels are the caller's to take, and half of that answer is not a
+    // meaningful thing to act on.
+    const maskAlpha = selectedAlpha(nearestY * width + nearestX); if (maskAlpha <= 0) continue;
+    const sample = sampleBilinear(source, width, height, sampleX, sampleY);
+    const to = (y * width + x) * 4, sourceAlpha = sample[3] / 255 * maskAlpha, destinationAlpha = output[to + 3]! / 255, alpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha);
     if (alpha <= 0) continue;
-    output[to] = Math.round((source[from]! * sourceAlpha + output[to]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
-    output[to + 1] = Math.round((source[from + 1]! * sourceAlpha + output[to + 1]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
-    output[to + 2] = Math.round((source[from + 2]! * sourceAlpha + output[to + 2]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
+    output[to] = Math.round((sample[0] * sourceAlpha + output[to]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
+    output[to + 1] = Math.round((sample[1] * sourceAlpha + output[to + 1]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
+    output[to + 2] = Math.round((sample[2] * sourceAlpha + output[to + 2]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
     output[to + 3] = Math.round(alpha * 255);
   }
   return output;
@@ -469,14 +510,77 @@ export function regularMesh(bounds: RasterRect, gridSize: number): Point[] {
  * another cell's already-resampled pixels), which is what keeps a multi-point drag from
  * accumulating resampling blur cell over cell.
  */
+/**
+ * Warps a layer through the 4x4 anchor grid — the Warp transform.
+ *
+ * One pass over the destination, reading the *pristine* source every time.
+ * What it replaces walked the cells one at a time and handed each cell's own
+ * output to the next cell as its input, so every cell after the first resampled
+ * a picture the earlier ones had already resampled and partly cleared: sixteen
+ * chained resamples for this grid, each smearing the last, and cells erasing
+ * their neighbours' work where their source rectangles overlapped. That is
+ * master-plan.md §1.1's "деформация визуально не выглядит как искажение" —
+ * the mesh was not describing a deformation so much as accumulating damage.
+ *
+ * The structure is the donor's (Patchy's warp mesh, and the standard way any
+ * mesh warp is written): for each destination pixel, find the cell it belongs
+ * to, invert that cell's own projective mapping to get where in the source it
+ * came from, and sample there once.
+ */
 export function meshLayerPixels(basePixels: Uint8ClampedArray, width: number, height: number, baseBounds: RasterRect, mesh: readonly Point[], selection: PixelSelection | null): Uint8ClampedArray {
+  const source = basePixels;
+  const output = basePixels.slice();
   const baseGrid = regularMesh(baseBounds, WARP_GRID);
-  let output = basePixels;
+  const left = Math.max(0, Math.floor(baseBounds.x)), top = Math.max(0, Math.floor(baseBounds.y));
+  const right = Math.min(width, Math.ceil(baseBounds.x + baseBounds.width));
+  const bottom = Math.min(height, Math.ceil(baseBounds.y + baseBounds.height));
+  const selectedAlpha = (index: number) => selection
+    ? selection.mask[index]! / 255
+    : (index % width >= left && index % width < right && Math.floor(index / width) >= top && Math.floor(index / width) < bottom ? 1 : 0);
+
+  // The warped area is vacated once, before anything is drawn — the same
+  // cut-one-hole rule `liftSelection` follows, and the reason cells can no
+  // longer erase each other: clearing is not part of drawing a cell any more.
+  for (let y = top; y < bottom; y += 1) for (let x = left; x < right; x += 1) {
+    const index = y * width + x, coverage = selectedAlpha(index);
+    if (coverage <= 0) continue;
+    const pixel = index * 4, remaining = 1 - coverage;
+    output[pixel] = Math.round(output[pixel]! * remaining);
+    output[pixel + 1] = Math.round(output[pixel + 1]! * remaining);
+    output[pixel + 2] = Math.round(output[pixel + 2]! * remaining);
+    output[pixel + 3] = Math.round(output[pixel + 3]! * remaining);
+  }
+
   for (let row = 0; row < WARP_GRID; row += 1) for (let col = 0; col < WARP_GRID; col += 1) {
     const i00 = row * (WARP_GRID + 1) + col, i10 = i00 + 1, i01 = i00 + (WARP_GRID + 1), i11 = i01 + 1;
     const tl = baseGrid[i00]!, tr = baseGrid[i10]!, bl = baseGrid[i01]!;
     const cellSource: RasterRect = { x: tl.x, y: tl.y, width: tr.x - tl.x, height: bl.y - tl.y };
-    output = quadLayerPixels(output, width, height, cellSource, [mesh[i00]!, mesh[i10]!, mesh[i11]!, mesh[i01]!], selection);
+    if (cellSource.width <= 0 || cellSource.height <= 0) continue;
+    const corners: [Point, Point, Point, Point] = [mesh[i00]!, mesh[i10]!, mesh[i11]!, mesh[i01]!];
+    const mapping = quadMapping(corners);
+    const xs = corners.map((point) => point.x), ys = corners.map((point) => point.y);
+    const cellLeft = Math.max(0, Math.floor(Math.min(...xs))), cellTop = Math.max(0, Math.floor(Math.min(...ys)));
+    const cellRight = Math.min(width, Math.ceil(Math.max(...xs))), cellBottom = Math.min(height, Math.ceil(Math.max(...ys)));
+    for (let y = cellTop; y < cellBottom; y += 1) for (let x = cellLeft; x < cellRight; x += 1) {
+      const { u, v } = inverseUnitSquare(mapping, x + 0.5, y + 0.5);
+      if (u < 0 || u > 1 || v < 0 || v > 1) continue;
+      const sampleX = cellSource.x + u * cellSource.width - 0.5;
+      const sampleY = cellSource.y + v * cellSource.height - 0.5;
+      const nearestX = Math.max(left, Math.min(right - 1, Math.round(sampleX)));
+      const nearestY = Math.max(top, Math.min(bottom - 1, Math.round(sampleY)));
+      const maskAlpha = selectedAlpha(nearestY * width + nearestX);
+      if (maskAlpha <= 0) continue;
+      const sample = sampleBilinear(source, width, height, sampleX, sampleY);
+      const to = (y * width + x) * 4;
+      const sourceAlpha = sample[3] / 255 * maskAlpha;
+      const destinationAlpha = output[to + 3]! / 255;
+      const alpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha);
+      if (alpha <= 0) continue;
+      output[to] = Math.round((sample[0] * sourceAlpha + output[to]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
+      output[to + 1] = Math.round((sample[1] * sourceAlpha + output[to + 1]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
+      output[to + 2] = Math.round((sample[2] * sourceAlpha + output[to + 2]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
+      output[to + 3] = Math.round(alpha * 255);
+    }
   }
   return output;
 }
