@@ -1,7 +1,8 @@
 import { useEffect, useRef, type RefObject } from "react";
 import {
   activeRasterLayer, changedRenderRegion, clampRegionToDocument, cloneRasterState, compositeRasterDocument, compositeRasterRegion,
-  DirtyRegion, flattenRasterLayers, layerRenderSignatures, mipForZoom, RasterTileCache, setLayerPixels, RASTER_ASSET_MIME,
+  cropRegion, cropRegionAsMask, DirtyRegion, flattenRasterLayers, layerRenderSignatures, mipForZoom, RasterTileCache, setLayerPixels,
+  swapLayerRegion, swapMaskRegion, RASTER_ASSET_MIME,
   type LayerRenderSignature, type PixelSelection, type RasterDocumentState, type RasterRect,
 } from "@vravio/env-raster";
 import { createBufferRevisionOperation, type AssetId, type VravioDocument } from "@vravio/kernel";
@@ -42,6 +43,8 @@ export function useRasterCommit(params: {
   const commitQueue = useRef<Promise<void>>(Promise.resolve());
   const tiles = useRef(new RasterTileCache({ tileSize: 256 }));
   const documentDirty = useRef(new DirtyRegion());
+  /** Buffers whose asset head is older than the document, because their edits went to memory. */
+  const assetBehind = useRef(new Set<string>());
   /** What the visible canvas currently holds, so idle renders repaint nothing. */
   const painted = useRef<{ canvas: HTMLCanvasElement | null; revision: number; signatures?: readonly LayerRenderSignature[]; mip?: number }>({ canvas: null, revision: -1 });
 
@@ -292,6 +295,43 @@ export function useRasterCommit(params: {
     // Show the result now; the gesture is over and the user is looking at it.
     assign(confined);
 
+    /**
+     * The edit's own rectangle, kept in memory and swapped in and out — GIMP's undo record.
+     *
+     * `gimp_drawable_push_undo(drawable, desc, buffer, x, y, width, height)` stores the part of
+     * the drawable the edit touched, and `gimp_drawable_real_swap_pixels` restores it by
+     * exchanging it with what is there now, which is why one buffer serves both directions.
+     *
+     * What this replaced: every stroke wrote the whole layer to the asset store — eight megabytes
+     * encoded, hashed with SHA-256, written to OPFS and the index rewritten, measured at about
+     * 20 ms of main-thread callbacks per release and eight megabytes of storage growth per stroke.
+     * The rectangle a stroke actually paints is usually a few hundred kilobytes.
+     *
+     * A layer that follows an external asset keeps the old path: there the revision is not
+     * bookkeeping, it is the thing other documents read.
+     */
+    const editRegion = edit.bounds ? clampRegionToDocument(state, edit.bounds) : null;
+    const followsAsset = Boolean(flattenRasterLayers(state.layers).find((item) => item.id === layerId)?.smartSource);
+    if (editRegion && editRegion.width > 0 && editRegion.height > 0 && !followsAsset) {
+      const rect = editRegion;
+      let patch = target === "mask" ? cropRegionAsMask(before, state.width, rect) : cropRegion(before, state.width, rect);
+      const swap = (): void => {
+        kernel.documents.update<RasterDocumentState>(document.id, (current) => {
+          const layer = current.layers.find((item) => item.id === layerId);
+          if (!layer) return;
+          if (target === "mask") { if (layer.mask) patch = swapMaskRegion(layer.mask, rect, patch, current.width, current.height); return; }
+          patch = swapLayerRegion(layer, rect, patch, current.width, current.height);
+        });
+        // Undo repaints the rectangle it changed and nothing else, the same as the edit did.
+        documentDirty.current.add(rect);
+      };
+      // The asset, if this layer has one, no longer matches the document — say so, so that a
+      // later edit taking the asset path records a step that undoes to the right picture.
+      assetBehind.current.add(`${target}:${layerId}`);
+      await history.record({ label, memoryEstimate: patch.byteLength, redo: swap, undo: swap });
+      return;
+    }
+
     // Queue the bookkeeping. Two commits must not interleave: each reads the
     // asset head to name the revision it undoes to, and a head read between
     // another commit's write and its own would record a step that undoes to
@@ -306,7 +346,13 @@ export function useRasterCommit(params: {
           await history.record({ label, memoryEstimate: before.byteLength + confined.byteLength, redo: () => assign(confined), undo: () => assign(before) });
           return;
         }
-        const previousRev = kernel.assets.mustGet(assetId).head;
+        // Strokes go to memory now (see the swap above), so the asset's head can be several
+        // edits behind the layer. Undoing to it would undo those strokes as well, so the buffer
+        // this edit is undone to is written first and *that* is the revision the step names.
+        const behind = assetBehind.current.delete(`${target}:${layerId}`);
+        const previousRev = behind
+          ? await kernel.assets.commitRevision(assetId, toBytes(before, state.width, state.height), "raster", `${label} — base`)
+          : kernel.assets.mustGet(assetId).head;
         // The confined buffer, not the raw one: this revision is what redo and
         // any later reload restore from, so committing the unconfined edit here
         // would show the selection honoured and then quietly undo that on the

@@ -9,6 +9,7 @@ export * from "./filters";
 export * from "./camera-raw-filter";
 export * from "./filter-spec";
 export * from "./paint";
+export * from "./region-patch";
 export * from "./render";
 export * from "./selection";
 export * from "./shapes";
