@@ -145,6 +145,7 @@ export interface VectorToolDefinition<TState = unknown> {
   readonly navigation?: NavigationHooks;
 
 
+
   onPointerDown?(context: ToolContext<TState>, pointer: ToolPointer): void;
   onPointerMove?(context: ToolContext<TState>, pointer: ToolPointer): void;
   /** Pointer-up *or* pointer-leave — `VectorWorkspace`'s pre-port canvas ends a

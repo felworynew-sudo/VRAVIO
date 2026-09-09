@@ -139,6 +139,21 @@ const fullGesture = (context: ToolContext<unknown>, tool: VectorToolDefinition<u
   // per point) — without this, fullGesture's press-drag-release would leave
   // nothing for "commits something history can undo" to find.
   if (tool.id === "vector.curvature") finishCurvaturePath(context as ToolContext<import("./definitions/curvature").CurvatureState>);
+  // vector.text is the third of the same family: a click opens an editor and
+  // nothing reaches history until the edit ends — on blur, on Escape, or by
+  // the tool being put down, which is what this stands in for. A press-drag-
+  // release alone leaves a caret blinking, which is correct and is also why
+  // there would otherwise be nothing here to find.
+  if (tool.id === "vector.text") {
+    // Standing in for typing, which this harness cannot do: it renders no
+    // Overlay, and the editor is a real <textarea> inside one. Something has to
+    // be typed for there to be a result at all — an empty text object is
+    // removed on finish, deliberately, so without this the tool correctly
+    // produces nothing and every option looks inert.
+    const state = context.state as import("./definitions/text").VectorTextState;
+    if (state.draft) context.setState({ draft: { ...state.draft, value: "Aa" } });
+    tool.onDeactivate?.(context);
+  }
 };
 
 /**
