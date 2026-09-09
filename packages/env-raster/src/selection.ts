@@ -139,6 +139,33 @@ export function restrictSelectionToAlpha(selection: PixelSelection | null, pixel
   return bounds.width && bounds.height ? { mask, bounds } : null;
 }
 
+/**
+ * The same restriction, as a *gate* rather than a weight: coverage keeps the
+ * selection's own value wherever the layer has any content at all, and drops to
+ * zero only where the layer is fully transparent.
+ *
+ * The difference matters wherever coverage decides how much of a pixel to take
+ * and how much to leave — moving a selection, above all. `restrictSelectionToAlpha`
+ * multiplies coverage by the pixel's own alpha, so an anti-aliased edge pixel at
+ * alpha 128 comes out half-selected; lifting it then takes half of it and leaves
+ * `alpha * (1 - coverage)` — 64 — sitting at the old position. That is the faint
+ * ghost outline of the moved shape the owner photographed, and its mirror image:
+ * the copy that arrives is thinned to `alpha²/255` for the same reason. The
+ * layer's transparency is already carried by the pixels; folding it into the
+ * selection counts it twice.
+ *
+ * Both survive because they answer different questions. Weighting is right for
+ * "how much of this pixel did the wand select", gating is right for "is this
+ * pixel mine to take" — and only gating keeps a partly transparent pixel whole.
+ */
+export function restrictSelectionToContent(selection: PixelSelection | null, pixels: Uint8ClampedArray, width: number, height: number): PixelSelection | null {
+  if (!selection) return null;
+  const mask = new Uint8ClampedArray(width * height);
+  for (let index = 0; index < mask.length; index += 1) mask[index] = pixels[index * 4 + 3]! > 0 ? selection.mask[index]! : 0;
+  const bounds = selectionBounds(mask, width, height);
+  return bounds.width && bounds.height ? { mask, bounds } : null;
+}
+
 export function selectOpaquePixels(pixels: Uint8ClampedArray, width: number, height: number): PixelSelection | null {
   const mask = new Uint8ClampedArray(width * height);
   for (let index = 0; index < mask.length; index += 1) mask[index] = pixels[index * 4 + 3]!;

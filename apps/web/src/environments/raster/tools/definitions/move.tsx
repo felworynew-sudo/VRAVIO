@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import {
   cloneRasterState, layerAccepts, layerLockReason, layerOpaqueBounds, liftSelection, linkedLayers, meshLayerPixels, meshSelection,
-  pickLayerAt, quadLayerPixels, quadSelection, regularMesh, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection,
+  pickLayerAt, quadLayerPixels, quadSelection, regularMesh, restrictSelectionToContent, rotateLayerPixels, rotateSelection,
   scaleLayerPixels, scaleSelection, setLayerPixels, stampFloating, translateLayerPixels, translateSelection, unionRect, WARP_GRID,
   type FloatingPixels, type PixelSelection, type Point, type RasterDocumentState, type RasterLayer, type RasterRect, type RasterTextData,
 } from "@vravio/env-raster";
@@ -60,9 +60,14 @@ export interface PendingTransform {
 type QuadTransformMode = "skew" | "distort" | "perspective";
 
 type MoveDrag =
-  | { kind: "move"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean; fromOrigin?: boolean; float?: FloatingPixels; linkedBase?: readonly { layerId: string; basePixels: Uint8ClampedArray }[] }
+  /** `previous` is where the pointer was on the frame before this one — not a convenience, a
+   * correctness requirement: the preview repaints strictly the rectangle this file hands over
+   * (`renderWorkingRegion`), so a rectangle that does not cover where the *last* frame drew leaves
+   * that drawing on screen. Patchy computes the same union from the same two positions
+   * (`moving_layers_dirty_region(old_delta, new_delta)`, canvas_widget_move.cpp). */
+  | { kind: "move"; pointerId: number; from: Point; current: Point; previous?: Point; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean; fromOrigin?: boolean; float?: FloatingPixels; linkedBase?: readonly { layerId: string; basePixels: Uint8ClampedArray }[] }
   | { kind: "scale"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; handleX: -1 | 0 | 1; handleY: -1 | 0 | 1; dx: number; dy: number; text?: PendingTextTransform }
-  | { kind: "rotate"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; center: Point; startAngle: number; baseRotation: number; dx: number; dy: number; text?: PendingTextTransform }
+  | { kind: "rotate"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; center: Point; startAngle: number; baseRotation: number; dx: number; dy: number; handleX: -1 | 1; handleY: -1 | 1; text?: PendingTextTransform }
   | { kind: "quad"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; baseCorners: readonly [Point, Point, Point, Point]; handleIndex: number; mode: QuadTransformMode }
   | { kind: "warp"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; meshOrigin: { pixels: Uint8ClampedArray; bounds: RasterRect }; baseSelection: PixelSelection | null; baseMesh: readonly Point[]; pointIndex: number };
 
@@ -178,7 +183,7 @@ function findRotateCorner(bounds: RasterRect, point: Point, tolerance: number, r
  * which the owner found didn't read clearly next to the custom rotate glyph below; a matching
  * hand-drawn arrow in the same white-fill/dark-outline tone reads as one coherent cursor family
  * instead of "one custom icon plus whatever the OS happens to draw". `10 10` hotspot centers it
- * the same way `ROTATE_CURSOR` does, so a handle's exact point is always under the same spot on
+ * the same way the rotate-zone cursor below does, so a handle's exact point is always under the same spot on
  * the glyph regardless of which direction it points. The trailing native keyword after the comma
  * is CSS's own fallback, used only if a browser somehow rejects the data URI entirely. */
 function buildArrowCursor(rotationDegrees: number, fallback: string): string {
@@ -193,17 +198,36 @@ function buildArrowCursor(rotationDegrees: number, fallback: string): string {
 
 const ARROW_CURSOR_EW = buildArrowCursor(0, "ew-resize");
 const ARROW_CURSOR_NS = buildArrowCursor(90, "ns-resize");
+const ARROW_CURSOR_NWSE = buildArrowCursor(45, "nwse-resize");
+const ARROW_CURSOR_NESW = buildArrowCursor(135, "nesw-resize");
+
+/** The resize cursor a scale handle's position implies — the straight double-headed arrow shared
+ * between the two opposite corners on the same diagonal (TL/BR both read as one 45°-rotated
+ * glyph, TR/BL as one 135°-rotated glyph), the same way native `nwse-resize`/`nesw-resize` are
+ * shared between opposite corners: the glyph is 180°-symmetric, so one asset per diagonal is
+ * correct, not four separate per-corner ones. Owner-reviewed against the live cursor gallery
+ * (`cursor-gallery.html`) after an earlier session's bent per-corner glyph shipped and the owner
+ * asked for the straight diagonal back. The frame itself never visually rotates (it's always the
+ * axis-aligned opaque bounding box of the already-rotated pixel content, see `pendingBounds`), so
+ * no rotation compensation is needed here the way a truly rotated frame's handles would. */
+function resizeCursorFor([hx, hy]: readonly [-1 | 0 | 1, -1 | 0 | 1]): string {
+  if (hx === 0) return ARROW_CURSOR_NS;
+  if (hy === 0) return ARROW_CURSOR_EW;
+  return hx === hy ? ARROW_CURSOR_NWSE : ARROW_CURSOR_NESW;
+}
 
 /**
- * A corner's own resize cursor — a bent right-angle glyph tracing the frame's own two edges at
- * that corner (the same shape a corner *handle* already reads as, `┘`-like), with an arrowhead on
- * each of its two outward tips, rather than one straight diagonal line punched through the point.
- * The owner asked for this specifically after the straight `nwse`/`nesw` glyph shipped: "imagine
- * ┘ with arrows on both ends" — a bent double-arrow, not a native OS diagonal. Unlike the straight
- * version, a corner's bend is not 180°-symmetric (TL's bracket opens down-right, BR's opens
- * up-left), so this needs a distinct glyph per corner rather than one shared between opposite
- * corners the way `nwse-resize`/`nesw-resize` are. `signX`/`signY` are which way each arm points
- * — outward from the frame, the direction dragging that corner actually grows it. */
+ * The rotate zone's own cursor — reuses the bent right-angle corner glyph (a `┘`-like bracket
+ * tracing the frame's own two edges, arrowhead on each outward tip) that used to sit on the scale
+ * handle itself, before that duty moved to the plain straight diagonal above. Not a new design:
+ * the asset already existed and already read as "grab and turn this corner" once relocated to the
+ * rotate ring just past the handle, so it was reassigned rather than inventing a curved ⟳-style
+ * glyph to match. Unlike the straight arrow, a corner's bend is not 180°-symmetric (TL's bracket
+ * opens down-right, BR's opens up-left), so this needs a distinct glyph per corner rather than one
+ * shared between opposite corners the way the scale cursor now is. `signX`/`signY` are which way
+ * each arm points — outward from the frame, the direction dragging that corner would grow it (the
+ * scale sense of "this corner", kept as the glyph's own name even though `rotateCursorFor` below
+ * assigns it to the *opposite* corner's rotate zone). */
 function buildCornerArrowCursor(signX: -1 | 1, signY: -1 | 1, fallback: string): string {
   const vx = 12, vy = 12, armLength = 8, headLength = 4, headSpread = 3.5;
   const horizontalTip = { x: vx + signX * armLength, y: vy };
@@ -223,35 +247,22 @@ function buildCornerArrowCursor(signX: -1 | 1, signY: -1 | 1, fallback: string):
   return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 10 10, ${fallback}`;
 }
 
-const CORNER_CURSOR_TL = buildCornerArrowCursor(-1, -1, "nwse-resize");
-const CORNER_CURSOR_TR = buildCornerArrowCursor(1, -1, "nesw-resize");
-const CORNER_CURSOR_BL = buildCornerArrowCursor(-1, 1, "nesw-resize");
-const CORNER_CURSOR_BR = buildCornerArrowCursor(1, 1, "nwse-resize");
+const ROTATE_CURSOR_TL = buildCornerArrowCursor(-1, -1, "alias");
+const ROTATE_CURSOR_TR = buildCornerArrowCursor(1, -1, "alias");
+const ROTATE_CURSOR_BL = buildCornerArrowCursor(-1, 1, "alias");
+const ROTATE_CURSOR_BR = buildCornerArrowCursor(1, 1, "alias");
 
-/** The resize cursor a scale handle's position implies — a bent corner glyph on a corner, a
- * straight one along an edge. The frame itself never visually rotates (it's always the
- * axis-aligned opaque bounding box of the already-rotated pixel content, see `pendingBounds`), so
- * no rotation compensation is needed here the way a truly rotated frame's handles would. */
-function resizeCursorFor([hx, hy]: readonly [-1 | 0 | 1, -1 | 0 | 1]): string {
-  if (hx === 0) return ARROW_CURSOR_NS;
-  if (hy === 0) return ARROW_CURSOR_EW;
-  if (hx === -1 && hy === -1) return CORNER_CURSOR_TL;
-  if (hx === 1 && hy === -1) return CORNER_CURSOR_TR;
-  if (hx === -1 && hy === 1) return CORNER_CURSOR_BL;
-  return CORNER_CURSOR_BR;
+/** The rotate-zone cursor for a given corner handle position — the owner's own mirrored mapping,
+ * checked by eye against the live gallery: hovering the rotate ring past the *top-left* handle
+ * shows the bent glyph that (in isolation) reads as "bottom-right", and so on by point-reflection
+ * through the frame's center for every corner. Not the same convention `resizeCursorFor` uses
+ * (which shows the glyph matching its own corner) — deliberate and owner-specified, not a bug. */
+function rotateCursorFor([hx, hy]: readonly [-1 | 1, -1 | 1]): string {
+  if (hx === -1 && hy === -1) return ROTATE_CURSOR_BR;
+  if (hx === 1 && hy === -1) return ROTATE_CURSOR_BL;
+  if (hx === -1 && hy === 1) return ROTATE_CURSOR_TR;
+  return ROTATE_CURSOR_TL;
 }
-
-/** A small circular-arrow glyph (Material Design's own "refresh" icon, not invented here — see
- * CLAUDE.md section 1) for the rotate zone just outside a corner handle, since CSS has no
- * standard `cursor` keyword for "rotate". White fill with a dark outline, the same
- * legible-on-any-background double-tone convention this project already uses for the brush ring
- * and clone-source crosshair (raster-brush-cursor.tsx) — built through `encodeURIComponent`
- * rather than hand-escaped, so quotes and `#` in the SVG can't quietly break the data URI. */
-const ROTATE_CURSOR = `url("data:image/svg+xml,${encodeURIComponent(
-  "<svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24'>" +
-  "<path d='M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z' fill='white' stroke='black' stroke-width='1.2'/>" +
-  "</svg>",
-)}") 10 10, alias`;
 
 /** Opens a pending transform on the active layer without any pointer gesture — what the Edit ▸
  * Free Transform (Ctrl+T) menu item needs, since it has no drag of its own to start one from.
@@ -264,7 +275,7 @@ export function startPendingTransform(context: ToolContext<MoveState>): void {
   const liveText = layer.kind === "text" && Boolean(layer.text) && !state.selection;
   const before = liveText ? state : cloneRasterState(state);
   const target = liveText ? layer : (before.layers.find((item) => item.id === layer.id) ?? layer);
-  const selection = before.selection ? restrictSelectionToAlpha(before.selection, materialise(target, before), state.width, state.height) : null;
+  const selection = before.selection ? restrictSelectionToContent(before.selection, materialise(target, before), state.width, state.height) : null;
   if (before.selection && !selection) { diagnostic("info", "transform", "Transform ignored: selection contains no opaque pixels", { layerId: target.id }); return; }
   const pixels = materialise(target, before);
   const opaque = layerOpaqueBounds(pixels, state.width, state.height);
@@ -350,7 +361,7 @@ function materialise(layer: RasterDocumentState["layers"][number], document: Ras
  * pre-port `handlePointerDown` did with one shared `if (activeToolId === "raster.move")` block. */
 function beginMoveDrag(context: ToolContext<MoveState>, pointer: ToolPointer, pending: PendingTransform | null, layer: NonNullable<ToolContext<MoveState>["activeLayer"]>): void {
   const state = context.document;
-  const effectiveSelection = !pending ? restrictSelectionToAlpha(state.selection, materialise(layer, state), state.width, state.height) : null;
+  const effectiveSelection = !pending ? restrictSelectionToContent(state.selection, materialise(layer, state), state.width, state.height) : null;
   if (!pending) {
     if (state.selection && !effectiveSelection) { diagnostic("info", "move", "Move ignored: selection contains no opaque pixels", { layerId: layer.id }); return; }
     if (!state.selection && !(layer.kind === "text" && layer.text?.visualBounds?.width ? layer.text.visualBounds : layerOpaqueBounds(materialise(layer, state), state.width, state.height))) {
@@ -369,7 +380,7 @@ function beginMoveDrag(context: ToolContext<MoveState>, pointer: ToolPointer, pe
   // image it has already been cut out of leaves a second hole, and with a feathered edge a
   // second ring, once per drag, none of which was ever committed.
   const origin = next && !next.text ? next.before.layers.find((item) => item.id === next!.layerId) : null;
-  const originSelection = origin ? restrictSelectionToAlpha(next!.before.selection ?? null, materialise(origin, state), state.width, state.height) : null;
+  const originSelection = origin ? restrictSelectionToContent(next!.before.selection ?? null, materialise(origin, state), state.width, state.height) : null;
   // Content is lifted off the layer once and then placed, never cut again — CLAUDE.md's floating
   // selection lesson: cutting per frame leaves a fraction of a soft edge behind at every position
   // the pointer passed through.
@@ -469,7 +480,14 @@ function applyDragFrame(context: ToolContext<MoveState>, drag: MoveDrag): Pendin
     : translateLayerPixels(drag.basePixels, state.width, state.height, shiftX, shiftY, drag.baseSelection);
   const was = drag.float ? drag.float.bounds : layerOpaqueBounds(drag.basePixels, state.width, state.height);
   const now = was ? { ...was, x: was.x + shiftX, y: was.y + shiftY } : null;
-  const touched = [was, now].filter((rect): rect is RasterRect => Boolean(rect));
+  // Where the previous frame put the content, which the repaint has to cover or the drawing it
+  // left there stays on screen — the scattered fragments a fast, direction-changing drag leaves
+  // behind. `was` alone is the *original* position: the box it spans with `now` covers the straight
+  // line between them and nothing else, so every position off that line is exactly the gap.
+  const previousShiftX = drag.previous ? (drag.float || drag.fromOrigin ? drag.startDx + (drag.previous.x - drag.from.x) : drag.previous.x - drag.from.x) : null;
+  const previousShiftY = drag.previous ? (drag.float || drag.fromOrigin ? drag.startDy + (drag.previous.y - drag.from.y) : drag.previous.y - drag.from.y) : null;
+  const then = was && previousShiftX !== null && previousShiftY !== null ? { ...was, x: was.x + previousShiftX, y: was.y + previousShiftY } : null;
+  const touched = [was, then, now].filter((rect): rect is RasterRect => Boolean(rect));
   const dirty = touched.length ? touched.reduce<RasterRect | null>((accumulated, rect) => unionRect(accumulated, rect.x, rect.y, rect.x + rect.width, rect.y + rect.height, 1), null) : null;
   const moved = translateSelection(drag.baseSelection, state.width, state.height, shiftX, shiftY);
   // A linked partner has no selection of its own to restrict the drag to — the selection, if any,
@@ -532,7 +550,7 @@ const move: RasterToolDefinition<MoveState> = {
         if (rotateCorner) {
           context.capturePointer(pointer.pointerId);
           const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
-          context.setState({ pending, drag: { kind: "rotate", pointerId: pointer.pointerId, from: point, current: point, before: pending.before, basePixels: pending.text ? pending.pixels : pending.pixels.slice(), baseSelection: cloneSelection(pending.selection), sourceBounds: { ...bounds }, center, startAngle: Math.atan2(point.y - center.y, point.x - center.x), baseRotation: pending.rotation, dx: pending.dx, dy: pending.dy, ...(pending.text ? { text: pending.text } : {}) } });
+          context.setState({ pending, drag: { kind: "rotate", pointerId: pointer.pointerId, from: point, current: point, before: pending.before, basePixels: pending.text ? pending.pixels : pending.pixels.slice(), baseSelection: cloneSelection(pending.selection), sourceBounds: { ...bounds }, center, startAngle: Math.atan2(point.y - center.y, point.x - center.x), baseRotation: pending.rotation, dx: pending.dx, dy: pending.dy, handleX: rotateCorner[0] as -1 | 1, handleY: rotateCorner[1] as -1 | 1, ...(pending.text ? { text: pending.text } : {}) } });
           return;
         }
         // Clicking away from the frame accepts the transform, the way it does in Photoshop.
@@ -580,7 +598,7 @@ const move: RasterToolDefinition<MoveState> = {
   onPointerMove(context, pointer) {
     const drag = context.state.drag;
     if (!drag || drag.pointerId !== pointer.pointerId) return;
-    const nextDrag = { ...drag, current: pointer.point } as MoveDrag;
+    const nextDrag = { ...drag, current: pointer.point, previous: drag.current } as MoveDrag;
     context.setState({ pending: context.state.pending, drag: nextDrag });
     // `context.state` is a snapshot taken when this context was built, not a live view — reading
     // it back inside the deferred callback would see the drag as it was *before* the line above,
@@ -621,7 +639,7 @@ const move: RasterToolDefinition<MoveState> = {
   cursorFor(context, pointer) {
     const drag = context.state.drag;
     if (drag) {
-      if (drag.kind === "rotate") return ROTATE_CURSOR;
+      if (drag.kind === "rotate") return rotateCursorFor([drag.handleX, drag.handleY]);
       if (drag.kind === "scale") return resizeCursorFor([drag.handleX, drag.handleY]);
       if (drag.kind === "move") return "move";
       return "pointer";
@@ -643,7 +661,8 @@ const move: RasterToolDefinition<MoveState> = {
     }
     const handle = findScaleHandle(bounds, point, tolerance);
     if (handle) return resizeCursorFor(handle);
-    if (findRotateCorner(bounds, point, tolerance, tolerance * 2.2)) return ROTATE_CURSOR;
+    const rotateCorner = findRotateCorner(bounds, point, tolerance, tolerance * 2.2);
+    if (rotateCorner) return rotateCursorFor([rotateCorner[0] as -1 | 1, rotateCorner[1] as -1 | 1]);
     if (point.x >= bounds.x && point.y >= bounds.y && point.x <= bounds.x + bounds.width && point.y <= bounds.y + bounds.height) return "move";
     return undefined;
   },
