@@ -1,4 +1,4 @@
-import { activeRasterLayer, appendLayer, createRasterLayer, isRasterDocumentState, layerDocumentPixels, setLayerPixels, type RasterDocumentState } from "@vravio/env-raster";
+import { activeRasterLayer, appendLayer, clearSelectedPixels, createRasterLayer, isRasterDocumentState, layerDocumentPixels, setLayerPixels, type RasterDocumentState } from "@vravio/env-raster";
 import { cloneRasterState } from "@vravio/env-raster";
 import { kernel } from "../../../../kernel";
 import { diagnostic } from "../../../../diagnostics";
@@ -217,12 +217,9 @@ const commands: readonly CommandDefinition[] = [
       await changeRasterDocument(activeDocumentId, "Cut (Вырезать)", (draft) => {
         const layer = draft.layers.find((item) => item.id === draft.activeLayerId);
         if (!layer) return false;
-        const pixels = layerDocumentPixels(layer, draft.width, draft.height).slice();
-        for (let index = 0; index < selection.mask.length; index += 1) {
-          const coverage = selection.mask[index]! / 255;
-          if (coverage > 0) pixels[index * 4 + 3] = Math.round(pixels[index * 4 + 3]! * (1 - coverage));
-        }
-        setLayerPixels(layer, pixels, draft.width, draft.height);
+        // The same removal Delete performs, through the one function that
+        // defines what "the selection's contents are gone" means.
+        setLayerPixels(layer, clearSelectedPixels(layerDocumentPixels(layer, draft.width, draft.height), draft.width, draft.height, selection), draft.width, draft.height);
         return true;
       });
     },

@@ -62,6 +62,7 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "image.smartCrop|||Image",
   "layer.bringForward|Mod+]||Layer",
   "layer.bringToFront|Mod+Shift+]||Layer",
+  "layer.clear|Delete||Layer",
   "layer.delete|||Layer",
   "layer.duplicate|Mod+J||Layer",
   "layer.group|Mod+G||Layer",

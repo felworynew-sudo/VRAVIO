@@ -1,10 +1,12 @@
-import { activeRasterLayer, createRasterLayer, groupLayers, isRasterDocumentState, layerFromSelection, mergeLayerDown, mergeVisibleLayers, moveLayerInStack, removeLayer, stampVisibleLayers, ungroupLayer, type RasterDocumentState } from "@vravio/env-raster";
+import { activeRasterLayer, clearSelectedPixels, createRasterLayer, groupLayers, isRasterDocumentState, layerAccepts, layerDocumentPixels, layerFromSelection, mergeLayerDown, mergeVisibleLayers, moveLayerInStack, removeLayer, setLayerPixels, stampVisibleLayers, ungroupLayer, type RasterDocumentState } from "@vravio/env-raster";
 import type { EnvironmentKind } from "@vravio/kernel";
 import { kernel } from "../../../../kernel";
 import { useShellStore } from "../../../../store";
 import { CATEGORY_LAYER } from "../../../../commands/categories";
 import { activeRasterState, isRasterActive } from "../../../../commands/shared";
 import type { CommandDefinition } from "../../../../commands/types";
+import { confirmModal } from "../../../../modals/runtime";
+import { text } from "../../../../i18n";
 import { changeRasterDocument } from "../document-edits";
 
 /**
@@ -88,6 +90,54 @@ const commands: readonly CommandDefinition[] = [
     // named here rather than left as a silent difference between two Deletes.
     isEnabled: isRasterActive,
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void edit(activeDocumentId, "Delete Layer (Удалить слой)", (state) => removeLayer(state, state.activeLayerId)); },
+  },
+  {
+    id: "layer.clear",
+    label: { en: "Clear Layer / Selection", ru: "Очистить слой / выделение" },
+    category: CATEGORY_LAYER,
+    // Windows keyboards only, deliberately: Patchy binds Backspace as well, but
+    // only on macOS, where the key labelled Delete sends Backspace. The
+    // catalogue carries one shortcut per command, and on this platform that one
+    // is Delete.
+    shortcut: "Delete",
+    surfaces: ["menu", "palette"],
+    isEnabled: isRasterActive,
+    execute: async ({ activeDocumentId }) => {
+      const state = activeRasterState(activeDocumentId);
+      if (!state || !activeDocumentId) return;
+      // A mask being edited owns Delete already (the layer panel's own handler,
+      // with its own confirmation) — and both listeners see the same keydown, so
+      // without this the two would fire together on one keypress.
+      if (useShellStore.getState().editingMaskLayerIdByDocument[activeDocumentId]) return;
+
+      // With a selection, Delete clears the selected pixels and the layer stays
+      // — Photoshop's behaviour, and Patchy's `layer.clear` (main_window_layer_ops.cpp).
+      if (state.selection) {
+        const selection = state.selection;
+        await edit(activeDocumentId, "Clear Selection (Очистить выделение)", (draft) => {
+          const layer = draft.layers.find((item) => item.id === draft.activeLayerId);
+          if (!layer || layer.kind === "group" || !layerAccepts(layer, "paint")) return false;
+          setLayerPixels(layer, clearSelectedPixels(layerDocumentPixels(layer, draft.width, draft.height), draft.width, draft.height, selection), draft.width, draft.height);
+          return true;
+        });
+        return;
+      }
+
+      // With nothing selected, Delete removes the layer itself, which is what
+      // the owner asked for — behind the same confirmation the layer panel puts
+      // in front of deleting a mask, since a keypress that silently discards a
+      // whole layer is the one outcome with no visual warning at all.
+      const language = useShellStore.getState().language;
+      const confirmed = await confirmModal({
+        title: text(language, "Delete Layer", "Удалить слой"),
+        message: text(language, "Delete this layer?", "Удалить этот слой?"),
+        confirmLabel: text(language, "Delete", "Удалить"),
+        danger: true,
+        confirmKey: "delete-layer",
+      });
+      if (!confirmed) return;
+      await edit(activeDocumentId, "Delete Layer (Удалить слой)", (draft) => removeLayer(draft, draft.activeLayerId));
+    },
   },
   {
     id: "layer.viaCut",

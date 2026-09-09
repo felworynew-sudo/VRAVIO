@@ -392,6 +392,26 @@ export function liftSelection(
 }
 
 /**
+ * The pixels a layer is left with once the selection's contents are removed —
+ * Delete, and the deleting half of Cut.
+ *
+ * Deliberately `liftSelection`'s own result rather than a second copy of the
+ * same arithmetic: what a clear removes has to be exactly what a move takes,
+ * coverage for coverage, or a feathered edge would delete differently depending
+ * on which of the two the user reached for. The float's content buffer is
+ * discarded here, which costs one document-sized allocation on a keypress and
+ * buys the guarantee that the two can never drift apart.
+ *
+ * A null selection clears the whole layer, which is what the no-selection case
+ * means everywhere else in this file too.
+ */
+export function clearSelectedPixels(
+  pixels: Uint8ClampedArray, width: number, height: number, selection: PixelSelection | null,
+): Uint8ClampedArray {
+  return liftSelection(pixels, width, height, selection).base;
+}
+
+/**
  * Puts floating content back down at an offset, over the layer it came from.
  *
  * Pure composition — nothing is removed here, so however many times a float is
