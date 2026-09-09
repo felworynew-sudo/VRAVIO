@@ -1,7 +1,8 @@
-import { invertMatrix, resolveSnapForBounds, scaleShapes, shapeAtIndexed, shapeWorldBounds, shapeWorldBoundsIndexed, transformVector, translateShape, visibleGuides, worldTransform, type SnapLine, type VectorBounds, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
+import { invertMatrix, resolveSnapForBounds, rotateShapes, scaleShapes, shapeAtIndexed, shapeWorldBounds, shapeWorldBoundsIndexed, transformVector, translateShape, visibleGuides, worldTransform, type SnapLine, type VectorBounds, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
 import { toScreenPoint } from "../../../../vector-coordinates";
 import { constrainToAxis, rectBetween, rectsOverlap, resolveMarqueeRelease, resolveSelectionPress } from "../selection-rules";
 import { FRAME_HANDLES, anchorPoint, handleAtScreenPoint, handlePoint, scaleForHandleDrag, unionBounds, type FrameHandle } from "../transform-frame";
+import { rotateCursorFor, scaleCursorFor } from "../../../../transform-cursors";
 import type { VectorSnapshot } from "../../../../vector-commands";
 import type { ToolContext, ToolPointer, VectorToolDefinition } from "../types";
 
@@ -23,6 +24,19 @@ export interface SelectState {
    * that is new — every scale is about the same fixed anchor, so they compose
    * exactly and the box never drifts from where the pointer says it is. */
   readonly resize: { readonly handle: FrameHandle; readonly ids: readonly string[]; readonly startBounds: VectorBounds; readonly anchor: { readonly x: number; readonly y: number }; readonly applied: { readonly x: number; readonly y: number }; readonly before: VectorSnapshot } | null;
+  /**
+   * A live rotate drag, started from the ring just outside a corner handle.
+   *
+   * `applied` is the angle already written into the document, so each frame writes only the part
+   * that is new — every rotation is about the same fixed pivot, so they compose exactly and the
+   * shape never drifts away from the pointer. The same arrangement `resize` above uses, for the
+   * same reason.
+   */
+  readonly rotate: {
+    readonly handle: FrameHandle; readonly ids: readonly string[];
+    readonly pivot: { readonly x: number; readonly y: number };
+    readonly startAngle: number; readonly applied: number; readonly before: VectorSnapshot;
+  } | null;
   /** The rubber band, while one is being dragged from empty space. */
   readonly marquee: { readonly from: { readonly x: number; readonly y: number }; readonly to: { readonly x: number; readonly y: number }; readonly additive: boolean; readonly selectionAtPress: readonly string[] } | null;
   /** The line(s) the current drag is snapped to, for the Overlay to
@@ -32,7 +46,38 @@ export interface SelectState {
   readonly snapLines: readonly SnapLine[];
 }
 
-const empty: SelectState = { drag: null, resize: null, marquee: null, snapLines: [] };
+const empty: SelectState = { drag: null, resize: null, rotate: null, marquee: null, snapLines: [] };
+
+/**
+ * How far past a corner handle the rotate ring reaches, in screen pixels.
+ *
+ * A ring just outside the handle rather than a widget of its own — Photoshop's Free Transform,
+ * Illustrator's bounding box and this project's own raster frame all put rotation there, so the
+ * gesture is already in the hand. Starts where the handle's own 7px grab area ends.
+ */
+const ROTATE_RING_INNER = 8;
+const ROTATE_RING_OUTER = 26;
+
+/** The corner whose rotate ring a screen point falls in, if any. Corners only: an edge midpoint
+ * stays scale-only, the way Photoshop never rotates off an edge handle either. */
+function rotateCornerAtScreenPoint(
+  screenHandles: readonly { readonly handle: FrameHandle; readonly point: { x: number; y: number } }[],
+  screenX: number, screenY: number,
+): FrameHandle | null {
+  for (const entry of screenHandles) {
+    if (entry.handle.x === 0 || entry.handle.y === 0) continue;
+    const distance = Math.hypot(entry.point.x - screenX, entry.point.y - screenY);
+    if (distance > ROTATE_RING_INNER && distance <= ROTATE_RING_OUTER) return entry.handle;
+  }
+  return null;
+}
+
+/** The angle from a pivot to a point, in degrees — the unit `rotateShapes` takes. */
+const angleAt = (pivot: { x: number; y: number }, point: { x: number; y: number }) =>
+  Math.atan2(point.y - pivot.y, point.x - pivot.x) * 180 / Math.PI;
+
+/** Shift snaps rotation to 15° steps, the increment Illustrator and Photoshop both use. */
+const ROTATE_SNAP_DEGREES = 15;
 
 /** Shared by `vector.select` and `vector.nodes`' own fallback (see `nodes.ts`) — the
  * exact pre-port "pick a shape, start a move drag, or deselect" tail. */
@@ -45,7 +90,7 @@ export function beginSelectDrag(context: ToolContext<SelectState>, pointer: Tool
     // Empty space rubber-bands. Nothing is deselected yet: the band decides on
     // release, so a drag that starts badly and is dragged onto the objects
     // still ends up selecting them.
-    context.setState({ drag: null, resize: null, marquee: { from: pointer.point, to: pointer.point, additive: pointer.shiftKey, selectionAtPress: selection }, snapLines: [] });
+    context.setState({ drag: null, resize: null, rotate: null, marquee: { from: pointer.point, to: pointer.point, additive: pointer.shiftKey, selectionAtPress: selection }, snapLines: [] });
     return;
   }
 
@@ -58,7 +103,7 @@ export function beginSelectDrag(context: ToolContext<SelectState>, pointer: Tool
     draft.activeShapeId = next.includes(hit.id) ? hit.id : next[next.length - 1] ?? null;
   });
   if (!decision.drag) { context.setState(empty); return; }
-  context.setState({ drag: { shapeIds: next.length ? next : [hit.id], start: pointer.point, before: context.snapshot() }, resize: null, marquee: null, snapLines: [] });
+  context.setState({ drag: { shapeIds: next.length ? next : [hit.id], start: pointer.point, before: context.snapshot() }, resize: null, rotate: null, marquee: null, snapLines: [] });
 }
 
 /** The chain of parent group ids above a shape — excluded from its own snap
@@ -128,6 +173,21 @@ const select: VectorToolDefinition<SelectState> = {
           context.setState({
             drag: null,
             resize: { handle: caught, ids: [...ids], startBounds: bounds, anchor: anchorPoint(bounds, caught), applied: { x: 1, y: 1 }, before: context.snapshot() },
+            rotate: null, marquee: null, snapLines: [],
+          });
+          return;
+        }
+        // Just outside a corner handle: rotate rather than scale. Checked after the handle
+        // itself, so the ring can never swallow a press meant for the handle it surrounds.
+        const turning = rotateCornerAtScreenPoint(screenHandles(context, bounds), pointerScreen.x, pointerScreen.y);
+        if (turning) {
+          // The frame's centre is the pivot, which is what Illustrator and Photoshop both turn
+          // about by default — the opposite corner is the *scale* anchor, and using it here would
+          // swing the selection around instead of spinning it in place.
+          const pivot = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+          context.setState({
+            drag: null, resize: null,
+            rotate: { handle: turning, ids: [...ids], pivot, startAngle: angleAt(pivot, pointer.point), applied: 0, before: context.snapshot() },
             marquee: null, snapLines: [],
           });
           return;
@@ -138,6 +198,20 @@ const select: VectorToolDefinition<SelectState> = {
   },
 
   onPointerMove(context: ToolContext<SelectState>, pointer: ToolPointer) {
+    const turning = context.state.rotate;
+    if (turning) {
+      // Measured from the angle the drag started at, never from the shape as it is now: reading
+      // back a value this same drag has been writing is how a rotation runs away from the
+      // pointer (the same trap the resize branch below documents).
+      const raw = angleAt(turning.pivot, pointer.point) - turning.startAngle;
+      const total = pointer.shiftKey ? Math.round(raw / ROTATE_SNAP_DEGREES) * ROTATE_SNAP_DEGREES : raw;
+      const step = total - turning.applied;
+      if (Number.isFinite(step) && step !== 0) {
+        context.mutate((draft: VectorDocumentState) => { rotateShapes(draft, turning.ids, turning.pivot, step); });
+      }
+      context.setState({ ...context.state, rotate: { ...turning, applied: total } });
+      return;
+    }
     const resize = context.state.resize;
     if (resize) {
       // The total scale is always measured from the box the drag started with,
@@ -220,12 +294,13 @@ const select: VectorToolDefinition<SelectState> = {
     // `start` moves to the raw pointer, not to the constrained point: the
     // constraint is applied to the whole gesture each frame, so releasing Shift
     // mid-drag returns the shape to where the pointer actually is.
-    context.setState({ drag: { ...drag, start: pointer.point }, resize: null, marquee: null, snapLines });
+    context.setState({ drag: { ...drag, start: pointer.point }, resize: null, rotate: null, marquee: null, snapLines });
   },
 
   onGestureEnd(context: ToolContext<SelectState>, pointer: ToolPointer) {
-    const { drag, resize, marquee } = context.state;
+    const { drag, resize, rotate, marquee } = context.state;
     context.setState(empty);
+    if (rotate) { context.commitDrag(rotate.before, "Rotate Selection (Повернуть выделение)"); return; }
     if (resize) { context.commitDrag(resize.before, "Scale Selection (Масштабировать выделение)"); return; }
     if (drag) { context.commitDrag(drag.before, "Move Shape (Переместить фигуру)"); return; }
     if (!marquee) return;
@@ -257,6 +332,42 @@ const select: VectorToolDefinition<SelectState> = {
     });
   },
 
+  /**
+   * The frame's cursor under the pointer — the same drawn set raster's Free Transform uses
+   * (`transform-cursors.ts`), so the two environments say the same thing with the same art.
+   *
+   * Vector had no cursor hint at all before this: the frame offered eight handles and a rotate
+   * ring and the pointer stayed a plain arrow over every one of them, which is the one thing a
+   * transform frame has to say out loud.
+   */
+  cursorFor(context: ToolContext<SelectState>, pointer: ToolPointer) {
+    // Mid-gesture the cursor is locked to what is being done, not to what is under the pointer:
+    // a rotate drag that wanders across a scale handle is still a rotate drag, and flipping the
+    // glyph there would contradict the gesture in progress (raster's own frame was fixed for
+    // exactly this after the owner reported it).
+    const turning = context.state.rotate;
+    if (turning) return rotateCursorFor(turning.handle.x as -1 | 1, turning.handle.y as -1 | 1);
+    const resize = context.state.resize;
+    if (resize) return scaleCursorFor(resize.handle.x, resize.handle.y);
+    if (context.state.drag) return "move";
+    if (context.state.marquee) return undefined;
+
+    if (context.options.transform === false) return undefined;
+    const bounds = selectionFrameBounds(context);
+    const ids = context.document.selection ?? [];
+    if (!bounds || !ids.length) return undefined;
+    const pointerScreen = toScreenPoint(pointer.point, context.workspaceSize, context.viewport, context.stageBounds);
+    const handles = screenHandles(context, bounds);
+    const caught = handleAtScreenPoint(handles, pointerScreen.x, pointerScreen.y);
+    if (caught) return scaleCursorFor(caught.x, caught.y);
+    const corner = rotateCornerAtScreenPoint(handles, pointerScreen.x, pointerScreen.y);
+    if (corner) return rotateCursorFor(corner.x as -1 | 1, corner.y as -1 | 1);
+    // Inside the frame the selection moves, which is what "move" says; outside it the pointer
+    // is over the canvas and belongs to whatever is there.
+    const inside = pointer.point.x >= bounds.x && pointer.point.x <= bounds.x + bounds.width
+      && pointer.point.y >= bounds.y && pointer.point.y <= bounds.y + bounds.height;
+    return inside ? "move" : undefined;
+  },
   onDeactivate(context: ToolContext<SelectState>) {
     context.setState(empty);
   },

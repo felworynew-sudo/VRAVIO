@@ -9,6 +9,7 @@ import {
 import { diagnostic } from "../../../../diagnostics";
 import { identityTextTransform, multiplyTextTransform, renderTextLayerPixels, textBoundsTransform } from "../../../../textRender";
 import type { RasterToolDefinition, ToolContext, ToolPointer } from "../types";
+import { rotateCursorFor as rotateCursorForCorner, scaleCursorFor } from "../../../../transform-cursors";
 
 /**
  * The Move tool — auto-select, floating selections, four transform sub-modes
@@ -203,92 +204,22 @@ function findRotateCorner(bounds: RasterRect, point: Point, tolerance: number, r
   });
 }
 
-/** A double-headed straight-arrow glyph, drawn once pointing east-west and rotated per direction
- * — native `nwse-resize`/`ew-resize` etc. render as the OS's own generic diagonal-arrow cursor,
- * which the owner found didn't read clearly next to the custom rotate glyph below; a matching
- * hand-drawn arrow in the same white-fill/dark-outline tone reads as one coherent cursor family
- * instead of "one custom icon plus whatever the OS happens to draw". `10 10` hotspot centers it
- * the same way the rotate-zone cursor below does, so a handle's exact point is always under the same spot on
- * the glyph regardless of which direction it points. The trailing native keyword after the comma
- * is CSS's own fallback, used only if a browser somehow rejects the data URI entirely. */
-function buildArrowCursor(rotationDegrees: number, fallback: string): string {
-  const path = "M4 12h16M4 12l5-5M4 12l5 5M20 12l-5-5M20 12l5 5";
-  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24'>` +
-    `<g transform='rotate(${rotationDegrees} 12 12)'>` +
-    `<path d='${path}' fill='none' stroke='white' stroke-width='4.2' stroke-linecap='round' stroke-linejoin='round'/>` +
-    `<path d='${path}' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/>` +
-    `</g></svg>`;
-  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 10 10, ${fallback}`;
-}
-
-const ARROW_CURSOR_EW = buildArrowCursor(0, "ew-resize");
-const ARROW_CURSOR_NS = buildArrowCursor(90, "ns-resize");
-const ARROW_CURSOR_NWSE = buildArrowCursor(45, "nwse-resize");
-const ARROW_CURSOR_NESW = buildArrowCursor(135, "nesw-resize");
-
-/** The resize cursor a scale handle's position implies — the straight double-headed arrow shared
- * between the two opposite corners on the same diagonal (TL/BR both read as one 45°-rotated
- * glyph, TR/BL as one 135°-rotated glyph), the same way native `nwse-resize`/`nesw-resize` are
- * shared between opposite corners: the glyph is 180°-symmetric, so one asset per diagonal is
- * correct, not four separate per-corner ones. Owner-reviewed against the live cursor gallery
- * (`cursor-gallery.html`) after an earlier session's bent per-corner glyph shipped and the owner
- * asked for the straight diagonal back. The frame itself never visually rotates (it's always the
- * axis-aligned opaque bounding box of the already-rotated pixel content, see `pendingBounds`), so
- * no rotation compensation is needed here the way a truly rotated frame's handles would. */
-function resizeCursorFor([hx, hy]: readonly [-1 | 0 | 1, -1 | 0 | 1]): string {
-  if (hx === 0) return ARROW_CURSOR_NS;
-  if (hy === 0) return ARROW_CURSOR_EW;
-  return hx === hy ? ARROW_CURSOR_NWSE : ARROW_CURSOR_NESW;
-}
-
 /**
- * The rotate zone's own cursor — reuses the bent right-angle corner glyph (a `┘`-like bracket
- * tracing the frame's own two edges, arrowhead on each outward tip) that used to sit on the scale
- * handle itself, before that duty moved to the plain straight diagonal above. Not a new design:
- * the asset already existed and already read as "grab and turn this corner" once relocated to the
- * rotate ring just past the handle, so it was reassigned rather than inventing a curved ⟳-style
- * glyph to match. Unlike the straight arrow, a corner's bend is not 180°-symmetric (TL's bracket
- * opens down-right, BR's opens up-left), so this needs a distinct glyph per corner rather than one
- * shared between opposite corners the way the scale cursor now is. `signX`/`signY` are which way
- * each arm points — outward from the frame, the direction dragging that corner would grow it (the
- * scale sense of "this corner", kept as the glyph's own name even though `rotateCursorFor` below
- * assigns it to the *opposite* corner's rotate zone). */
-function buildCornerArrowCursor(signX: -1 | 1, signY: -1 | 1, fallback: string): string {
-  const vx = 12, vy = 12, armLength = 8, headLength = 4, headSpread = 3.5;
-  const horizontalTip = { x: vx + signX * armLength, y: vy };
-  const verticalTip = { x: vx, y: vy + signY * armLength };
-  const path = [
-    `M${vx} ${vy}L${horizontalTip.x} ${horizontalTip.y}`,
-    `M${horizontalTip.x} ${horizontalTip.y}L${horizontalTip.x - signX * headLength} ${horizontalTip.y - headSpread}`,
-    `M${horizontalTip.x} ${horizontalTip.y}L${horizontalTip.x - signX * headLength} ${horizontalTip.y + headSpread}`,
-    `M${vx} ${vy}L${verticalTip.x} ${verticalTip.y}`,
-    `M${verticalTip.x} ${verticalTip.y}L${verticalTip.x - headSpread} ${verticalTip.y - signY * headLength}`,
-    `M${verticalTip.x} ${verticalTip.y}L${verticalTip.x + headSpread} ${verticalTip.y - signY * headLength}`,
-  ].join("");
-  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 24 24'>` +
-    `<path d='${path}' fill='none' stroke='white' stroke-width='4' stroke-linecap='round' stroke-linejoin='round'/>` +
-    `<path d='${path}' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/>` +
-    `</svg>`;
-  return `url("data:image/svg+xml,${encodeURIComponent(svg)}") 10 10, ${fallback}`;
+ * The frame's own cursors now come from `transform-cursors.ts` — the owner's drawn set, placed
+ * per their `пример.svg` reference sheet, and shared with vector's selection frame so the two
+ * environments cannot answer the same question with different art.
+ *
+ * What used to be here was two builders drawing the glyphs by hand in code. CLAUDE.md records
+ * why that was wrong the first time ("все курсоры готовы, свои придумывать не нужно"), and the
+ * same answer applies to the shapes themselves, not only to which zone they sit on.
+ */
+function resizeCursorFor([hx, hy]: readonly [-1 | 0 | 1, -1 | 0 | 1]): string {
+  return scaleCursorFor(hx, hy);
 }
 
-const ROTATE_CURSOR_TL = buildCornerArrowCursor(-1, -1, "alias");
-const ROTATE_CURSOR_TR = buildCornerArrowCursor(1, -1, "alias");
-const ROTATE_CURSOR_BL = buildCornerArrowCursor(-1, 1, "alias");
-const ROTATE_CURSOR_BR = buildCornerArrowCursor(1, 1, "alias");
-
-/** The rotate-zone cursor for a given corner handle position — the owner's own mirrored mapping,
- * checked by eye against the live gallery: hovering the rotate ring past the *top-left* handle
- * shows the bent glyph that (in isolation) reads as "bottom-right", and so on by point-reflection
- * through the frame's center for every corner. Not the same convention `resizeCursorFor` uses
- * (which shows the glyph matching its own corner) — deliberate and owner-specified, not a bug. */
 function rotateCursorFor([hx, hy]: readonly [-1 | 1, -1 | 1]): string {
-  if (hx === -1 && hy === -1) return ROTATE_CURSOR_BR;
-  if (hx === 1 && hy === -1) return ROTATE_CURSOR_BL;
-  if (hx === -1 && hy === 1) return ROTATE_CURSOR_TR;
-  return ROTATE_CURSOR_TL;
+  return rotateCursorForCorner(hx, hy);
 }
-
 /** Opens a pending transform on the active layer without any pointer gesture — what the Edit ▸
  * Free Transform (Ctrl+T) menu item needs, since it has no drag of its own to start one from.
  * A no-op if one is already open (matches the old menu command's own guard). */

@@ -41,6 +41,9 @@ const RASTER_ONLY_TOOLS = new Set([
 export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const workspaceRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  /** The element every canvas gesture is received and captured on — see its own comment in the
+   * render below. */
+  const pointerFieldRef = useRef<HTMLDivElement>(null);
   const previousActiveLayerId = useRef<string | null>(null);
   const sourcePointRef = useRef<{ x: number; y: number } | null>(null);
   const cloneOffsetRef = useRef<{ x: number; y: number } | null>(null);
@@ -187,7 +190,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     button: native.button, pressure: native.pressure,
   });
 
-  const toolPointerFrom = (event: React.PointerEvent<HTMLCanvasElement>): ToolPointer | null => {
+  const toolPointerFrom = (event: React.PointerEvent<HTMLElement>): ToolPointer | null => {
     const workspace = workspaceRef.current;
     if (!workspace) return null;
     return toolPointerFromNative(event.nativeEvent, workspace, workspace.getBoundingClientRect());
@@ -216,7 +219,13 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         toolStatesRef.current = { ...toolStatesRef.current, [toolId]: next };
         setToolStates(toolStatesRef.current);
       },
-      capturePointer: (pointerId) => canvas?.setPointerCapture(pointerId),
+      // Captured on the pointer field, which is the element that actually receives the gesture.
+      // Capturing on the canvas is what it used to do, and once the canvas stopped taking pointer
+      // events (see the field's own comment) that quietly swallowed every drag: capture retargets
+      // all further events to the captured element, so they were delivered to something that
+      // cannot receive them — no move, no up, nothing committed. Caught live, with a brush stroke
+      // that painted on screen and left the document at revision 0.
+      capturePointer: (pointerId) => pointerFieldRef.current?.setPointerCapture(pointerId),
       layerPixels: () => (activeLayer ? canvasPixels(activeLayer) : new Uint8ClampedArray(state.width * state.height * 4)),
       compositePixels: () => compositeRasterDocument(state),
       paintTarget,
@@ -378,9 +387,9 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     setDynamicCursor(undefined);
   });
 
-  const handlePointerDown = (event: React.PointerEvent<HTMLCanvasElement>) => {
+  const handlePointerDown = (event: React.PointerEvent<HTMLElement>) => {
     if (event.button === 2) return;
-    const canvas = event.currentTarget;
+    const canvas = canvasRef.current;
     if (!workspaceRef.current) return;
 
     const layer = activeRasterLayer(state);
@@ -421,12 +430,12 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     }
   };
 
-  const handlePointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
+  const handlePointerMove = (event: React.PointerEvent<HTMLElement>) => {
     if (!catalogueTool) return;
     const workspace = workspaceRef.current;
     if (!workspace) return;
     const rect = workspace.getBoundingClientRect();
-    const context = toolContextFor(catalogueTool.id, event.currentTarget);
+    const context = toolContextFor(catalogueTool.id, canvasRef.current);
     let lastPointer: ToolPointer | undefined;
     if (catalogueTool.onPointerMove) {
       // Coalesced samples, not just the one event React handed over: a
@@ -448,10 +457,10 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     setDynamicCursor(catalogueTool.cursorFor?.(context, lastPointer ?? toolPointerFromNative(event.nativeEvent, workspace, rect)));
   };
 
-  const finishGesture = (event: React.PointerEvent<HTMLCanvasElement>) => {
+  const finishGesture = (event: React.PointerEvent<HTMLElement>) => {
     if (catalogueTool?.onGestureEnd) {
       const pointer = toolPointerFrom(event);
-      if (pointer) { catalogueTool.onGestureEnd(toolContextFor(catalogueTool.id, event.currentTarget), pointer); return; }
+      if (pointer) { catalogueTool.onGestureEnd(toolContextFor(catalogueTool.id, canvasRef.current), pointer); return; }
     }
   };
 
@@ -489,8 +498,29 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   };
 
   return <div ref={workspaceRef} className="raster-workspace" data-active-tool={activeToolId} data-pixel-zoom={viewport.zoom >= 1 || undefined} data-space-held={spaceHeld || undefined} data-navigating={navigating || undefined} onPointerDownCapture={beginNavigation} onPointerMoveCapture={moveNavigation} onPointerUpCapture={endNavigation} onPointerCancelCapture={endNavigation} onWheel={handleWheel} onDragOver={(event) => { if ([...(event.dataTransfer?.items ?? [])].some((item) => item.kind === "file")) event.preventDefault(); }} onDrop={onDropModel}>
+    {/*
+      The pointer field: every canvas gesture is received here, not on the <canvas> itself.
+
+      The canvas element is exactly the document's size, so anything the user has to reach
+      *outside* the artwork was simply unreachable — no element there, no events. The owner
+      found it on the transform frame: a layer that fits the canvas exactly puts its corner
+      handles on the canvas corners, which leaves the rotate ring (a few screen pixels further
+      out) hanging over nothing, so such a layer could not be rotated at all. Scaling outward
+      from an edge handle had the same hole, and so did starting a marquee or a stroke just
+      off the artwork and dragging in — all of which Photoshop allows, because in Photoshop the
+      *document window* takes the gesture, not the page.
+
+      So the field spans the workspace and the canvas is `pointer-events: none`. It sits before
+      the stage in document order, which puts it underneath everything that draws — rulers and
+      guides keep their own handlers and still win, and the live text editor inside the stage
+      keeps receiving its own events, because only the canvas gives up pointer events, not the
+      stage. Coordinates never had to change: `pointFromNativeEvent` has always measured from
+      the workspace element, so a point past the canvas edge already came out as the document
+      coordinate it is (negative, or past the width) rather than being clamped or lost.
+    */}
+    <div ref={pointerFieldRef} className="raster-pointer-field" style={dynamicCursor ? { cursor: dynamicCursor } : undefined} onPointerEnter={updateBrushCursor} onPointerLeave={() => { onBrushCursorLeave(); setDynamicCursor(undefined); }} onPointerDown={handlePointerDown} onPointerMove={(event) => { updateBrushCursor(event); handlePointerMove(event); }} onPointerUp={finishGesture} onPointerCancel={finishGesture} onContextMenu={(event) => { if (selectionLike) { onSelectionContextMenu(event); return; } if (activeToolId === "raster.move" && (toolStates["raster.move"] as MoveState | undefined)?.pending) { onTransformContextMenu(event); return; } event.preventDefault(); if (!brushLike) return; const rect = workspaceRef.current?.getBoundingClientRect(); if (rect) setBrushPopup({ left: Math.min(event.clientX - rect.left, rect.width - 300), top: Math.min(event.clientY - rect.top, rect.height - 430), detailed: false }); }} />
     <div className="raster-stage" style={stageStyle}>
-      <canvas ref={canvasRef} className={brushLike ? "brush-cursor-canvas" : ""} style={dynamicCursor ? { cursor: dynamicCursor } : undefined} width={state.width} height={state.height} onPointerEnter={updateBrushCursor} onPointerLeave={() => { onBrushCursorLeave(); setDynamicCursor(undefined); }} onPointerDown={handlePointerDown} onPointerMove={(event) => { updateBrushCursor(event); handlePointerMove(event); }} onPointerUp={finishGesture} onPointerCancel={finishGesture} onContextMenu={(event) => { if (selectionLike) { onSelectionContextMenu(event); return; } if (activeToolId === "raster.move" && (toolStates["raster.move"] as MoveState | undefined)?.pending) { onTransformContextMenu(event); return; } event.preventDefault(); if (!brushLike) return; const rect = workspaceRef.current?.getBoundingClientRect(); if (rect) setBrushPopup({ left: Math.min(event.clientX - rect.left, rect.width - 300), top: Math.min(event.clientY - rect.top, rect.height - 430), detailed: false }); }} />
+      <canvas ref={canvasRef} className={brushLike ? "brush-cursor-canvas" : ""} width={state.width} height={state.height} />
       {/* Whatever the active catalogue tool draws over the canvas. */}
       {catalogueTool?.Overlay && <catalogueTool.Overlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>} context={toolContextFor(catalogueTool.id, canvasRef.current)}/>}
       {committedSelectionPath && <svg className="selection-overlay committed-selection" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><MarchingAnts zoom={viewport.zoom}><path d={committedSelectionPath} /></MarchingAnts></svg>}

@@ -105,7 +105,7 @@ export function useBrushCursor(params: {
     context.globalCompositeOperation = "source-over";
   };
 
-  const updateBrushCursor = (event: React.PointerEvent<HTMLCanvasElement>) => {
+  const updateBrushCursor = (event: React.PointerEvent<HTMLElement>) => {
     if (!brushLike || !workspaceRef.current || !brushCursorRef.current) return;
     // Screen pixels, not document ones: the cursor is interface, drawn in a layer
     // that sits outside .raster-stage's zoom transform, so a plain client-relative

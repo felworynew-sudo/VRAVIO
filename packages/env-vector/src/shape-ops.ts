@@ -3,7 +3,7 @@ import {
   distanceToPolyline, ellipseOutline, flattenPathOutline, pathSegmentBounds, pointInPolygon, roundedRectOutline,
   type Point,
 } from "./geometry";
-import { applyMatrix, IDENTITY_MATRIX, invertMatrix, multiplyMatrix, scaleMatrixAround, translationMatrix } from "./matrix";
+import { applyMatrix, IDENTITY_MATRIX, invertMatrix, multiplyMatrix, rotationMatrixAround, scaleMatrixAround, translationMatrix, type Matrix } from "./matrix";
 import { flattenVectorShapes, isShapeEffectivelyLocked, isShapeEffectivelyVisible, reorderSiblings, siblingsOf, vectorShapeDescendantIds, worldTransform } from "./tree";
 import { TEXT_LINE_HEIGHT, wrapText } from "./text-wrap";
 import { makeVectorOrderKey } from "./types";
@@ -367,8 +367,30 @@ export function duplicateShape(state: VectorDocumentState, id: string): VectorSh
  * the factor.
  */
 export function scaleShapes(state: VectorDocumentState, ids: readonly string[], anchor: { x: number; y: number }, scaleX: number, scaleY: number): void {
+  applyWorldMatrix(state, ids, scaleMatrixAround(scaleX, scaleY, anchor.x, anchor.y));
+}
+
+/**
+ * Turns every shape in `ids` about one world-space pivot, by `degrees`.
+ *
+ * The rotate half of the selection frame, and the same construction as `scaleShapes` above for
+ * the same reasons: composed into each shape's own `transform` (the only formulation a group or
+ * an instance can even express, since their transform *is* their geometry), and carried through
+ * the parent's space so a member of a rotated group lands where the frame says.
+ *
+ * Sharing `applyWorldMatrix` with the scale rather than repeating its body: they differ only in
+ * which matrix they build, and two copies of that ancestor-skipping, parent-carrying walk are two
+ * futures that drift the first time either is fixed alone (CLAUDE.md §4).
+ */
+export function rotateShapes(state: VectorDocumentState, ids: readonly string[], pivot: { x: number; y: number }, degrees: number): void {
+  applyWorldMatrix(state, ids, rotationMatrixAround(degrees, pivot.x, pivot.y));
+}
+
+/** Composes one world-space matrix into every listed shape, in that shape's own parent space
+ * (`P⁻¹ · M · P · T`). A shape whose ancestor is also in the set is skipped: the ancestor's own
+ * transform already carried it, and applying it twice would square the effect. */
+function applyWorldMatrix(state: VectorDocumentState, ids: readonly string[], world: Matrix): void {
   const moving = new Set(ids);
-  const scaleAround = scaleMatrixAround(scaleX, scaleY, anchor.x, anchor.y);
   for (const id of ids) {
     const shape = state.shapes.find((item) => item.id === id);
     if (!shape) continue;
@@ -386,6 +408,6 @@ export function scaleShapes(state: VectorDocumentState, ids: readonly string[], 
     // A parent with a zero scale cannot be inverted; the shape is invisible
     // anyway, and skipping it is better than writing NaNs into its matrix.
     if (!inverseParent) continue;
-    updateShape(state, id, { transform: multiplyMatrix(inverseParent, multiplyMatrix(scaleAround, multiplyMatrix(parentWorld, shape.transform))) });
+    updateShape(state, id, { transform: multiplyMatrix(inverseParent, multiplyMatrix(world, multiplyMatrix(parentWorld, shape.transform))) });
   }
 }

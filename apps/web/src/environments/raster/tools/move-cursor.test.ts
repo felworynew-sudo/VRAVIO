@@ -44,13 +44,23 @@ function decodeCursorSvg(cursor: string): string {
   return decodeURIComponent(match[1]!.replace(/^data:image\/svg\+xml,/, ""));
 }
 
-// The bent rotate-corner glyph's own two arm-tip coordinates — the horizontal arm's tip sits at
-// x=20 (pointing right) or x=4 (pointing left), the vertical arm's at y=4 (up) or y=20 (down); a
-// corner glyph is the *pair*, so a test must check both substrings to tell all four apart (x=20
-// alone matches both TR and BR, for instance).
-function hasCornerGlyph(cursor: string, horizontalTipX: 4 | 20, verticalTipY: 4 | 20): boolean {
+/**
+ * Which corner a rotate cursor is drawn for.
+ *
+ * The four are the owner's one supplied path (`Rotate-DL.svg`, the top-left elbow) plus a
+ * reflection each, so the reflection *is* the identity of the glyph: no transform is top-left,
+ * a horizontal flip is top-right, a vertical flip is bottom-left, both is bottom-right. Reading
+ * it back out of the data URI is how a test tells all four apart — and unlike matching some
+ * coordinate inside the artwork, it keeps meaning the same thing if the owner redraws the path.
+ */
+function rotateCorner(cursor: string): "TL" | "TR" | "BL" | "BR" | "not-a-rotate-cursor" {
   const svg = decodeCursorSvg(cursor);
-  return svg.includes(`M12 12L${horizontalTipX} 12`) && svg.includes(`M12 12L12 ${verticalTipY}`);
+  if (!svg.includes("M54.09,341.55")) return "not-a-rotate-cursor";
+  const flipX = svg.includes("scale(-1 1)"), flipY = svg.includes("scale(1 -1)"), flipBoth = svg.includes("scale(-1 -1)");
+  if (flipBoth) return "BR";
+  if (flipX) return "TR";
+  if (flipY) return "BL";
+  return "TL";
 }
 
 describe("move tool's cursor hint", () => {
@@ -73,17 +83,24 @@ describe("move tool's cursor hint", () => {
     expect(topLeft).not.toBe(topRight);
   });
 
-  it("gives the rotate glyph just outside a corner handle, mirrored through the frame's center — hovering past the top-right handle shows the glyph that (in isolation) reads as bottom-left, the owner's own specified mapping", () => {
-    const cursor = move.cursorFor!(fakeContext({ pending, drag: null }), fakePointer(bounds.x + bounds.width + 15, bounds.y - 15));
-    expect(cursor).toContain("alias");
-    expect(hasCornerGlyph(cursor!, 4, 20)).toBe(true); // bottom-left glyph, per the owner's mirrored mapping
+  it("gives each corner's rotate zone that corner's own glyph, the way the reference sheet places them", () => {
+    // `пример.svg` draws every rotate glyph just outside the corner it belongs to, so the mapping
+    // is direct. (It was mirrored before, but only because the old art was a scale bracket
+    // pressed into rotate duty — this set is drawn for the job.)
+    const at = (x: number, y: number) => move.cursorFor!(fakeContext({ pending, drag: null }), fakePointer(x, y));
+    expect(rotateCorner(at(bounds.x - 15, bounds.y - 15)!)).toBe("TL");
+    expect(rotateCorner(at(bounds.x + bounds.width + 15, bounds.y - 15)!)).toBe("TR");
+    expect(rotateCorner(at(bounds.x - 15, bounds.y + bounds.height + 15)!)).toBe("BL");
+    expect(rotateCorner(at(bounds.x + bounds.width + 15, bounds.y + bounds.height + 15)!)).toBe("BR");
   });
 
-  it("mirrors every corner the same way: TL's rotate zone shows BR, BL's shows TR", () => {
-    const topLeft = move.cursorFor!(fakeContext({ pending, drag: null }), fakePointer(bounds.x - 15, bounds.y - 15));
-    expect(hasCornerGlyph(topLeft!, 20, 20)).toBe(true); // bottom-right glyph
-    const bottomLeft = move.cursorFor!(fakeContext({ pending, drag: null }), fakePointer(bounds.x - 15, bounds.y + bounds.height + 15));
-    expect(hasCornerGlyph(bottomLeft!, 20, 4)).toBe(true); // top-right glyph
+  it("gives all four corners a different rotate glyph — a bend is not 180°-symmetric the way the scale arrow is", () => {
+    const at = (x: number, y: number) => move.cursorFor!(fakeContext({ pending, drag: null }), fakePointer(x, y));
+    const corners = [
+      at(bounds.x - 15, bounds.y - 15)!, at(bounds.x + bounds.width + 15, bounds.y - 15)!,
+      at(bounds.x - 15, bounds.y + bounds.height + 15)!, at(bounds.x + bounds.width + 15, bounds.y + bounds.height + 15)!,
+    ];
+    expect(new Set(corners).size).toBe(4);
   });
 
   it("gives a move cursor inside the frame, away from any handle", () => {
@@ -94,7 +111,7 @@ describe("move tool's cursor hint", () => {
     expect(move.cursorFor!(fakeContext({ pending, drag: null }), fakePointer(bounds.x - 50, bounds.y - 50))).toBeUndefined();
   });
 
-  it("locks the cursor to the held corner's own mirrored rotate glyph while a rotate drag is in progress, even hovering a scale handle", () => {
+  it("locks the cursor to the held corner's rotate glyph while a rotate drag is in progress, even hovering a scale handle", () => {
     const drag = { kind: "rotate", pointerId: 1, handleX: 1, handleY: -1 } as unknown as NonNullable<MoveState["drag"]>;
     // Exactly on the top-right scale handle — without the fix this would read back a resize
     // cursor, contradicting the rotate gesture the pointer is actually mid-way through.
@@ -102,8 +119,8 @@ describe("move tool's cursor hint", () => {
     expect(cursor).toContain("alias");
     expect(cursor).not.toContain("resize");
     // The drag started on the top-right corner (handleX: 1, handleY: -1), so the locked cursor
-    // stays the bottom-left glyph regardless of where the pointer wanders mid-drag.
-    expect(hasCornerGlyph(cursor!, 4, 20)).toBe(true);
+    // stays that corner's glyph regardless of where the pointer wanders mid-drag.
+    expect(rotateCorner(cursor!)).toBe("TR");
   });
 
   it("locks the cursor to the held handle's resize glyph while a scale drag is in progress, even hovering the rotate zone", () => {
