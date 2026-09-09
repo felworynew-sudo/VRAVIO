@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import {
   cloneRasterState, layerAccepts, layerLockReason, layerOpaqueBounds, liftSelection, linkedLayers, meshLayerPixels, meshSelection,
   pickLayerAt, quadLayerPixels, quadSelection, regularMesh, restrictSelectionToContent, rotateLayerPixels, rotateSelection,
-  scaleLayerPixels, scaleSelection, setLayerPixels, stampFloating, translateLayerPixels, translateSelection, unionRect, WARP_GRID, warpPresetMesh,
+  rotatedDestinationBounds, scaleLayerPixels, scaleSelection, setLayerPixels, stampFloating, translateLayerPixels, translateSelection, unionRect, WARP_GRID, warpPresetMesh,
   type WarpPresetId,
   type FloatingPixels, type PixelSelection, type Point, type RasterDocumentState, type RasterLayer, type RasterRect, type RasterTextData,
 } from "@vravio/env-raster";
@@ -414,7 +414,7 @@ function beginMoveDrag(context: ToolContext<MoveState>, pointer: ToolPointer, pe
 /** Recomputes one frame of whichever drag is in progress and previews it — the direct port of
  * the pre-catalogue `applyTransformFrame`, called from `scheduleWork` (per-frame, coalesced)
  * during a drag and once more, synchronously, from `onGestureEnd`. */
-function applyDragFrame(context: ToolContext<MoveState>, drag: MoveDrag): PendingTransform | null {
+function applyDragFrame(context: ToolContext<MoveState>, drag: MoveDrag, interpolate = true): PendingTransform | null {
   const state = context.document;
   const point = drag.current;
   if (drag.kind === "scale") {
@@ -433,10 +433,18 @@ function applyDragFrame(context: ToolContext<MoveState>, drag: MoveDrag): Pendin
   if (drag.kind === "rotate") {
     const angle = drag.baseRotation + (Math.atan2(point.y - drag.center.y, point.x - drag.center.x) - drag.startAngle) * 180 / Math.PI;
     if (drag.text) return { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: angle, text: drag.text };
-    const pixels = rotateLayerPixels(drag.basePixels, state.width, state.height, drag.sourceBounds, angle - drag.baseRotation, drag.baseSelection);
+    const pixels = rotateLayerPixels(drag.basePixels, state.width, state.height, drag.sourceBounds, angle - drag.baseRotation, drag.baseSelection, interpolate);
     const selection = rotateSelection(drag.baseSelection, state.width, state.height, drag.sourceBounds, angle - drag.baseRotation);
     const pending: PendingTransform = { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels, selection, rotation: angle };
-    context.schedulePreview(pixels, "pixels", pending.layerId);
+    // Only the band a rotation can touch: where it was cleared from and where it landed. Without
+    // a rectangle here every frame repaints the whole canvas through a full document composite —
+    // the same cliff a mask stroke used to fall down, and far more expensive than the rotation.
+    const turned = rotatedDestinationBounds(drag.sourceBounds, angle - drag.baseRotation);
+    const dirty = unionRect(
+      unionRect(null, drag.sourceBounds.x, drag.sourceBounds.y, drag.sourceBounds.x + drag.sourceBounds.width, drag.sourceBounds.y + drag.sourceBounds.height, 2),
+      turned.x, turned.y, turned.x + turned.width, turned.y + turned.height, 2,
+    );
+    context.schedulePreview(pixels, "pixels", pending.layerId, dirty);
     return pending;
   }
   if (drag.kind === "quad") {
@@ -593,7 +601,9 @@ const move: RasterToolDefinition<MoveState> = {
     // coalescing in `scheduleWork`'s own contract correct: whichever call was scheduled last
     // carries its own accurate position, not a stale re-read of a snapshot that never updates.
     context.scheduleWork(() => {
-      const pending = applyDragFrame(context, nextDrag);
+      // Preview quality while the hand is moving; `onGestureEnd` runs the same frame again
+      // accurately, and that is the one that gets committed.
+      const pending = applyDragFrame(context, nextDrag, false);
       if (pending) context.setState({ pending, drag: nextDrag });
     });
   },

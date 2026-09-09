@@ -391,23 +391,36 @@ export function rotateShapes(state: VectorDocumentState, ids: readonly string[],
  * transform already carried it, and applying it twice would square the effect. */
 function applyWorldMatrix(state: VectorDocumentState, ids: readonly string[], world: Matrix): void {
   const moving = new Set(ids);
+  // Indexed once. Every lookup here used to be `state.shapes.find` — one linear scan per selected
+  // shape, plus another per step of its ancestor walk — so transforming a large selection was
+  // quadratic in the document: measured at 17ms for 1000 selected shapes, which is a frame of a
+  // drag gone on nothing but searching. Twenty selected shapes never showed it.
+  const indexById = new Map(state.shapes.map((shape, index) => [shape.id, index] as const));
+  const byId = (id: string): VectorShape | undefined => {
+    const index = indexById.get(id);
+    return index === undefined ? undefined : state.shapes[index];
+  };
   for (const id of ids) {
-    const shape = state.shapes.find((item) => item.id === id);
+    const shape = byId(id);
     if (!shape) continue;
     let ancestorId = shape.parentId, carried = false;
     const seen = new Set<string>();
     while (ancestorId && !seen.has(ancestorId)) {
       seen.add(ancestorId);
       if (moving.has(ancestorId)) { carried = true; break; }
-      ancestorId = state.shapes.find((item) => item.id === ancestorId)?.parentId ?? null;
+      ancestorId = byId(ancestorId)?.parentId ?? null;
     }
     if (carried) continue;
-    const parent = shape.parentId ? state.shapes.find((item) => item.id === shape.parentId) : undefined;
+    const parent = shape.parentId ? byId(shape.parentId) : undefined;
     const parentWorld = parent ? worldTransform(parent, state.shapes) : IDENTITY_MATRIX;
     const inverseParent = invertMatrix(parentWorld);
     // A parent with a zero scale cannot be inverted; the shape is invisible
     // anyway, and skipping it is better than writing NaNs into its matrix.
     if (!inverseParent) continue;
-    updateShape(state, id, { transform: multiplyMatrix(inverseParent, multiplyMatrix(world, multiplyMatrix(parentWorld, shape.transform))) });
+    const index = indexById.get(id);
+    if (index === undefined) continue;
+    // Written straight to its slot rather than through `updateShape`, which would search for the
+    // shape a third time; the patch is the same one it would have applied.
+    state.shapes[index] = { ...shape, transform: multiplyMatrix(inverseParent, multiplyMatrix(world, multiplyMatrix(parentWorld, shape.transform))) } as VectorShape;
   }
 }

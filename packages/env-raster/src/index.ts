@@ -15,6 +15,7 @@ export * from "./shapes";
 export * from "./smartcrop";
 export * from "./tiling";
 export * from "./tiles";
+export * from "./sampling";
 export * from "./transform";
 export * from "./warp-presets";
 export * from "./puppet";
