@@ -25,6 +25,8 @@ interface Stroke {
   pending: Point;
   dirty: RasterRect | null;
   strokeBounds: RasterRect | null;
+  /** Distance since the last stamp, carried across pointer samples — see `cloneStrokeSegment`. */
+  spacingCarry: number;
   readonly sourceOffsetX: number;
   readonly sourceOffsetY: number;
 }
@@ -61,7 +63,7 @@ function appendPoint(context: ToolContext<CloneState>, stroke: Stroke, point: Po
   if (Math.hypot(point.x - stroke.pending.x, point.y - stroke.pending.y) < 0.05) return;
   const end: Point = { x: (stroke.pending.x + point.x) / 2, y: (stroke.pending.y + point.y) / 2, pressure: ((stroke.pending.pressure ?? 1) + (point.pressure ?? 1)) / 2 };
   const o = resolvedOptions(context.options);
-  cloneStrokeSegment(stroke.working, context.document.width, context.document.height, stroke.curveStart, stroke.pending, stroke.sourceOffsetX, stroke.sourceOffsetY, o.size, o.opacity, context.paintMask, o.hardness, o.roundness, o.angle, true, false, stroke.before, o.spacing);
+  stroke.spacingCarry = cloneStrokeSegment(stroke.working, context.document.width, context.document.height, stroke.curveStart, stroke.pending, stroke.sourceOffsetX, stroke.sourceOffsetY, o.size, o.opacity, context.paintMask, o.hardness, o.roundness, o.angle, true, false, stroke.before, o.spacing, stroke.spacingCarry);
   const pad = o.size / 2 + 2;
   stroke.dirty = unionRect(stroke.dirty, stroke.curveStart.x, stroke.curveStart.y, stroke.pending.x, stroke.pending.y, pad);
   stroke.dirty = unionRect(stroke.dirty, point.x, point.y, end.x, end.y, pad);
@@ -109,7 +111,7 @@ const clone: RasterToolDefinition<CloneState> = {
 
     cloneDab(working, context.document.width, context.document.height, pointer.point.x + offset.x, pointer.point.y + offset.y, pointer.point.x, pointer.point.y, o.size, o.opacity, o.hardness, context.paintMask, o.roundness, o.angle, true, false, before);
     context.schedulePreview(working, "pixels", key, null);
-    context.setState({ stroke: { pointerId: pointer.pointerId, before, working, curveStart: pointer.point, pending: pointer.point, dirty: null, strokeBounds: null, sourceOffsetX: offset.x, sourceOffsetY: offset.y } });
+    context.setState({ stroke: { pointerId: pointer.pointerId, before, working, curveStart: pointer.point, pending: pointer.point, dirty: null, strokeBounds: null, spacingCarry: 0, sourceOffsetX: offset.x, sourceOffsetY: offset.y } });
   },
 
   onPointerMove(context, pointer) {

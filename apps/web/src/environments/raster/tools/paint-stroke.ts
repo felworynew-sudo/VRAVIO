@@ -34,6 +34,10 @@ interface Stroke {
   pending: Point;
   dirty: RasterRect | null;
   strokeBounds: RasterRect | null;
+  /** Distance travelled since the last dab, carried across pointer samples — without it every
+   * sample would get a dab of its own regardless of the brush's spacing. See
+   * `drawQuadraticStrokeSegment`, which owns the explanation. */
+  spacingCarry: number;
   readonly target: PaintTarget["kind"];
   readonly layerId: string;
 }
@@ -91,10 +95,10 @@ function paintDab(context: ToolContext<PaintStrokeState>, config: PaintStrokeCon
   drawDab(target, context.document.width, context.document.height, point, o.size, resolveColor(context, config), o.opacity, erase, o.hardness, context.paintMask, o.roundness, o.angle, o.pressureSize, o.pressureOpacity);
 }
 
-function paintSegment(context: ToolContext<PaintStrokeState>, config: PaintStrokeConfig, target: Uint8ClampedArray, from: Point, control: Point, to: Point): void {
+function paintSegment(context: ToolContext<PaintStrokeState>, config: PaintStrokeConfig, target: Uint8ClampedArray, from: Point, control: Point, to: Point, carry = 0): number {
   const o = resolvedOptions(context, config);
   const erase = config.erase && context.paintTarget.kind === "pixels";
-  drawQuadraticStrokeSegment(target, context.document.width, context.document.height, from, control, to, o.size, resolveColor(context, config), o.opacity, erase, context.paintMask, o.hardness, o.spacing, o.roundness, o.angle, o.pressureSize, o.pressureOpacity);
+  return drawQuadraticStrokeSegment(target, context.document.width, context.document.height, from, control, to, o.size, resolveColor(context, config), o.opacity, erase, context.paintMask, o.hardness, o.spacing, o.roundness, o.angle, o.pressureSize, o.pressureOpacity, carry);
 }
 
 /** Extends the stroke to `point`, mutating it in place — see the note on the
@@ -102,7 +106,7 @@ function paintSegment(context: ToolContext<PaintStrokeState>, config: PaintStrok
 function appendPoint(context: ToolContext<PaintStrokeState>, config: PaintStrokeConfig, stroke: Stroke, point: Point): void {
   if (Math.hypot(point.x - stroke.pending.x, point.y - stroke.pending.y) < 0.05) return;
   const end: Point = { x: (stroke.pending.x + point.x) / 2, y: (stroke.pending.y + point.y) / 2, pressure: ((stroke.pending.pressure ?? 1) + (point.pressure ?? 1)) / 2 };
-  paintSegment(context, config, stroke.working, stroke.curveStart, stroke.pending, end);
+  stroke.spacingCarry = paintSegment(context, config, stroke.working, stroke.curveStart, stroke.pending, end, stroke.spacingCarry);
   const pad = Number(context.options.size ?? 24) / 2 + 2;
   stroke.dirty = unionRect(stroke.dirty, stroke.curveStart.x, stroke.curveStart.y, stroke.pending.x, stroke.pending.y, pad);
   stroke.dirty = unionRect(stroke.dirty, point.x, point.y, end.x, end.y, pad);
@@ -162,7 +166,7 @@ export function createPaintStrokeTool(config: PaintStrokeConfig): RasterToolDefi
       paintDab(context, config, working, pointer.point);
       context.schedulePreview(working, context.paintTarget.kind, context.paintTarget.layerId, null);
       context.setState({
-        stroke: { pointerId: pointer.pointerId, before, working, curveStart: pointer.point, pending: pointer.point, dirty: null, strokeBounds: null, target: context.paintTarget.kind, layerId: context.paintTarget.layerId },
+        stroke: { pointerId: pointer.pointerId, before, working, curveStart: pointer.point, pending: pointer.point, dirty: null, strokeBounds: null, spacingCarry: 0, target: context.paintTarget.kind, layerId: context.paintTarget.layerId },
       });
     },
 
@@ -181,7 +185,7 @@ export function createPaintStrokeTool(config: PaintStrokeConfig): RasterToolDefi
       // The curve lags half a step behind the raw input by construction
       // (`appendPoint` always ends on a midpoint) — this closes the last
       // gap so the stroke visibly reaches where the pointer was released.
-      paintSegment(context, config, stroke.working, stroke.curveStart, stroke.pending, stroke.pending);
+      paintSegment(context, config, stroke.working, stroke.curveStart, stroke.pending, stroke.pending, stroke.spacingCarry);
       context.setLastStrokePoint({ toolId: config.id, layerId: strokeKey({ kind: stroke.target, layerId: stroke.layerId }), point: stroke.pending });
       commitStroke(context, config, stroke);
       context.setState(empty);

@@ -8,7 +8,7 @@ import { createBufferRevisionOperation, type AssetId, type VravioDocument } from
 import { kernel } from "./kernel";
 import { diagnostic } from "./diagnostics";
 import { applyRasterRules } from "./environments/raster/rules/registry";
-import { cropPixels, fromBytes, putPixels, putRegionPixels, rgbaToMask, stateDeltaBytes, toBytes, withActiveLayerPixels, withLayerMaskPixels, withLayersPixels } from "./raster-pixel-buffers";
+import { cropPixels, fromBytes, putPixels, putRegionPixels, rgbaToMask, stateDeltaBytes, toBytes, withActiveLayerPixels, withLayerMaskPixels, withLayerMaskRegion, withLayersPixels } from "./raster-pixel-buffers";
 import type { DocumentViewport } from "./store";
 
 /**
@@ -118,11 +118,17 @@ export function useRasterCommit(params: {
    * document every pointermove is what makes brushes stutter on large canvases (spec §4.2), and
    * a stroke only ever changes a few hundred pixels around the cursor.
    */
-  const renderWorkingRegion = (pixels: Uint8ClampedArray, dirty: RasterRect) => {
+  const renderWorkingRegion = (pixels: Uint8ClampedArray, dirty: RasterRect, target: "pixels" | "mask" = "pixels", layerId = state.activeLayerId) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const region = clampRegionToDocument(state, dirty);
     if (!region.width || !region.height) return;
+    if (target === "mask") {
+      // A mask has no "one visible layer" shortcut — what is on screen is always the composite —
+      // but it can still be composited a band at a time, which is the whole point.
+      putRegionPixels(canvas, compositeRasterRegion(withLayerMaskRegion(state, layerId, pixels, region), region), region);
+      return;
+    }
     const layer = activeRasterLayer(state);
     const direct = state.layers.length === 1 && layer.visible && layer.opacity === 1 && layer.blendMode === "normal";
     putRegionPixels(canvas, direct ? cropPixels(pixels, state.width, region) : compositeRasterRegion(withActiveLayerPixels(state, pixels), region), region);

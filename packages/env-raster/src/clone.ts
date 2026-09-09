@@ -1,4 +1,5 @@
 import type { Point } from "./types";
+import { FALLOFF_STEPS, falloffTable } from "./paint";
 
 function compositeClonePixel(
   destPixels: Uint8ClampedArray,
@@ -44,6 +45,7 @@ export function cloneDab(
   const cosine = Math.cos(radians);
   const sine = Math.sin(radians);
 
+  const table = falloffTable(hardness);
   const left = Math.max(0, Math.floor(targetX - radius));
   const right = Math.min(width - 1, Math.ceil(targetX + radius));
   const top = Math.max(0, Math.floor(targetY - radius));
@@ -53,12 +55,16 @@ export function cloneDab(
     for (let x = left; x <= right; x += 1) {
       const dx = x + 0.5 - targetX;
       const dy = y + 0.5 - targetY;
-      const rotatedX = dx * cosine + dy * sine;
-      const rotatedY = -dx * sine + dy * cosine;
-      const distance = Math.hypot(rotatedX / radius, rotatedY / shortRadius);
-      if (distance > 1) continue;
-
-      const coverage = distance <= hardness ? 1 : 1 - (distance - hardness) / Math.max(0.0001, 1 - hardness);
+      const rotatedX = (dx * cosine + dy * sine) / radius;
+      const rotatedY = (-dx * sine + dy * cosine) / shortRadius;
+      const squared = rotatedX * rotatedX + rotatedY * rotatedY;
+      if (squared >= 1) continue;
+      const distance = Math.sqrt(squared);
+      // The brush's falloff, not a second copy of it. This file used to carry its own straight
+      // ramp; once the brush moved to the donor's curve the two would have disagreed about what
+      // "hardness 60%" means depending on which tool you picked (CLAUDE.md §4).
+      const coverage = table[(distance * FALLOFF_STEPS) | 0]! * Math.min(1, (1 - distance) * radius);
+      if (coverage <= 0) continue;
       const selectionAlpha = selectionMask ? selectionMask[y * width + x]! / 255 : 1;
       if (selectionAlpha <= 0) continue;
 
@@ -93,18 +99,30 @@ export function cloneStrokeSegment(
   pressureOpacity = false,
   sourcePixels: Uint8ClampedArray = pixels,
   /** Gap between dabs as a fraction of the tip, the same units the brush uses. */
-  spacing = 0.18
-): void {
+  spacing = 0.18,
+  /** Distance travelled since the last stamp, carried across pointer samples. */
+  carry = 0,
+): number {
   const distance = Math.hypot(to.x - from.x, to.y - from.y);
-  // The spacing option was declared and shown in the options bar but never
-  // reached here: the gap was a constant, so the control did nothing.
-  const steps = Math.max(1, Math.ceil(distance / Math.max(1, size * Math.max(0.01, spacing))));
-  for (let step = 0; step <= steps; step += 1) {
-    const t = step / steps;
+  const step = Math.max(0.5, size * Math.max(0.01, spacing));
+  if (!(distance > 0)) return carry;
+  // Carried across pointer samples, exactly as the brush does — see
+  // `drawQuadraticStrokeSegment`, which owns the explanation. This used to run
+  // `for (step = 0; step <= steps)` with `steps` forced to at least one, so every pointer sample
+  // stamped at its own start *and* end however close together they were: the stamp did far more
+  // work than its spacing asked for, and re-stamped the same spot on every sample.
+  const walk = Math.max(1, Math.ceil(distance / Math.min(step, 2)));
+  let travelled = carry;
+  let previousX = from.x, previousY = from.y;
+  for (let index = 1; index <= walk; index += 1) {
+    const t = index / walk;
     const currentX = from.x + (to.x - from.x) * t;
     const currentY = from.y + (to.y - from.y) * t;
-    const sourceX = currentX + sourceOffsetX;
-    const sourceY = currentY + sourceOffsetY;
-    cloneDab(pixels, width, height, sourceX, sourceY, currentX, currentY, size, opacity, hardness, selectionMask, roundness, angleDegrees, pressureSize, pressureOpacity, sourcePixels);
+    travelled += Math.hypot(currentX - previousX, currentY - previousY);
+    previousX = currentX; previousY = currentY;
+    if (travelled < step) continue;
+    travelled -= step;
+    cloneDab(pixels, width, height, currentX + sourceOffsetX, currentY + sourceOffsetY, currentX, currentY, size, opacity, hardness, selectionMask, roundness, angleDegrees, pressureSize, pressureOpacity, sourcePixels);
   }
+  return travelled;
 }

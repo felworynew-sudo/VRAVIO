@@ -247,15 +247,11 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
           entry.frame = null;
           const region = entry.dirty;
           entry.dirty = null;
-          // Matches scheduleWorkingRender's own dispatch exactly, quirk
-          // included: a dirty region always takes the pixels-only fast path
-          // regardless of target, because renderWorkingRegion (unlike
-          // renderWorking) has no mask-compositing branch. A masked stroke's
-          // live preview is briefly the pixel-layer composite until the
-          // gesture ends and the real commit repaints correctly — a
-          // pre-existing cosmetic quirk of the path this reuses, not
-          // something this port introduces or should quietly diverge from.
-          if (region && entry.target === "pixels") renderWorkingRegion(entry.working, region);
+          // A mask takes the region path too now. It used to fall through to the full path —
+          // documented here as a cosmetic quirk, but it was also the reason painting on a mask
+          // stuttered where painting on a layer did not: the full path converts the whole
+          // working buffer back to a mask and composites the entire document, every frame.
+          if (region) renderWorkingRegion(entry.working, region, entry.target, entry.layerId);
           else renderWorking(entry.working, entry.target, entry.layerId);
         });
       },
