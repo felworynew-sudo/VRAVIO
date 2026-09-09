@@ -1,4 +1,4 @@
-import type { PixelSelection, RasterRect } from "./types";
+import type { PixelSelection, Point, RasterRect } from "./types";
 
 export type SelectionCombineMode = "replace" | "add" | "subtract" | "intersect" | "difference";
 
@@ -11,20 +11,97 @@ export function selectionBounds(mask: Uint8ClampedArray, width: number, height: 
   return right < left ? { x: 0, y: 0, width: 0, height: 0 } : { x: left, y: top, width: right - left + 1, height: bottom - top + 1 };
 }
 
-/** Builds the actual alpha-mask boundary instead of displaying its bounding box. */
-export function selectionOutlinePath(mask: Uint8ClampedArray, width: number, height: number, threshold = 127): string {
-  const selected = (x: number, y: number) => x >= 0 && x < width && y >= 0 && y < height && mask[y * width + x]! > threshold;
-  const parts: string[] = [];
+/** One closed boundary of a selection, as the corners of a rectilinear loop. */
+export interface SelectionOutlineLoop { readonly points: readonly Point[] }
+
+/**
+ * The selection's boundary, traced into closed loops.
+ *
+ * Ported from Patchy's `trace_mask_outlines` (core/mask_outline.cpp). What was
+ * here before emitted one separate subpath per pixel edge — `M x y h1`,
+ * `M x+1 y v1` and so on — which draws the same picture as long as the line is
+ * solid, and breaks completely as soon as it is dashed: every subpath is one
+ * document unit long and restarts the dash phase, so at any zoom below 400% each
+ * fragment fell inside a single "on" dash and the marching ants came out as a
+ * plain white line. (That is exactly what the owner reported: correct while
+ * dragging, where the preview draws one honest rectangle, wrong the moment the
+ * committed outline took over.) A dash pattern needs a path to run along, and a
+ * marching offset needs it even more.
+ *
+ * The walk keeps selected pixels on its right: East along a top edge, South
+ * along a right edge, West along a bottom edge, North along a left edge. At a
+ * corner it tries a right turn first, then straight, then left — the saddle rule
+ * that makes two diagonally touching regions hug their own pixel instead of
+ * merging into one contour. A point is recorded only where the direction
+ * changes, so a straight run of a thousand pixels is two points, not a thousand.
+ *
+ * One visited bit per horizontal lattice edge finds each loop exactly once:
+ * every closed rectilinear loop has horizontal edges, and a given horizontal
+ * edge carries either East or West traffic, never both.
+ */
+export function traceSelectionOutlines(mask: Uint8ClampedArray, width: number, height: number, threshold = 127): SelectionOutlineLoop[] {
+  const loops: SelectionOutlineLoop[] = [];
+  if (width <= 0 || height <= 0) return loops;
   const bounds = selectionBounds(mask, width, height);
-  const right = Math.min(width, bounds.x + bounds.width), bottom = Math.min(height, bounds.y + bounds.height);
-  for (let y = bounds.y; y < bottom; y += 1) for (let x = bounds.x; x < right; x += 1) {
-    if (!selected(x, y)) continue;
-    if (!selected(x, y - 1)) parts.push(`M${x} ${y}h1`);
-    if (!selected(x + 1, y)) parts.push(`M${x + 1} ${y}v1`);
-    if (!selected(x, y + 1)) parts.push(`M${x + 1} ${y + 1}h-1`);
-    if (!selected(x - 1, y)) parts.push(`M${x} ${y + 1}v-1`);
+  if (!bounds.width || !bounds.height) return loops;
+
+  const selected = (x: number, y: number) => x >= 0 && x < width && y >= 0 && y < height && mask[y * width + x]! > threshold;
+  // Directions clockwise in y-down coordinates, so +1 is a right turn.
+  const east = 0, south = 1, west = 2, north = 3;
+  const stepX = [1, 0, -1, 0], stepY = [0, 1, 0, -1];
+  const canWalk = (cx: number, cy: number, direction: number) => {
+    if (direction === east) return selected(cx, cy) && !selected(cx, cy - 1);
+    if (direction === south) return selected(cx - 1, cy) && !selected(cx, cy);
+    if (direction === west) return selected(cx - 1, cy - 1) && !selected(cx - 1, cy);
+    return selected(cx, cy - 1) && !selected(cx - 1, cy - 1);
+  };
+
+  const visited = new Uint8Array(width * (height + 1));
+  const edgeIndex = (leftX: number, y: number) => y * width + leftX;
+
+  const traceLoop = (startX: number, startY: number, startDirection: number) => {
+    const points: Point[] = [];
+    let cx = startX, cy = startY, direction = startDirection;
+    for (;;) {
+      if (direction === east) visited[edgeIndex(cx, cy)] = 1;
+      else if (direction === west) visited[edgeIndex(cx - 1, cy)] = 1;
+      cx += stepX[direction]!; cy += stepY[direction]!;
+      let next = direction;
+      for (const candidate of [(direction + 1) & 3, direction, (direction + 3) & 3]) {
+        if (canWalk(cx, cy, candidate)) { next = candidate; break; }
+      }
+      if (next !== direction) points.push({ x: cx, y: cy });
+      if (cx === startX && cy === startY && next === startDirection) break;
+      direction = next;
+    }
+    if (points.length < 2) return;
+    // Start at the topmost-leftmost corner, so the same selection always traces
+    // to the same list — a path that reshuffles between renders would restart
+    // the dash phase and make the ants twitch.
+    let best = 0;
+    for (let index = 1; index < points.length; index += 1) {
+      const point = points[index]!, current = points[best]!;
+      if (point.y < current.y || (point.y === current.y && point.x < current.x)) best = index;
+    }
+    loops.push({ points: [...points.slice(best), ...points.slice(0, best)] });
+  };
+
+  const top = Math.max(0, bounds.y), bottom = Math.min(height, bounds.y + bounds.height);
+  const left = Math.max(0, bounds.x), right = Math.min(width, bounds.x + bounds.width);
+  for (let y = top; y <= bottom; y += 1) for (let x = left; x < right; x += 1) {
+    const below = selected(x, y), above = selected(x, y - 1);
+    if (below === above || visited[edgeIndex(x, y)]) continue;
+    if (below) traceLoop(x, y, east);       // top edge: outer contour, clockwise
+    else traceLoop(x + 1, y, west);         // bottom edge: hole contour, counterclockwise
   }
-  return parts.join("");
+  return loops;
+}
+
+/** The traced boundary as an SVG path — one closed subpath per loop. */
+export function selectionOutlinePath(mask: Uint8ClampedArray, width: number, height: number, threshold = 127): string {
+  return traceSelectionOutlines(mask, width, height, threshold)
+    .map((loop) => `M${loop.points.map((point) => `${point.x} ${point.y}`).join("L")}Z`)
+    .join("");
 }
 
 function boxBlur(mask: Uint8ClampedArray, width: number, height: number, radius: number): Uint8ClampedArray {

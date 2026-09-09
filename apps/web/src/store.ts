@@ -63,10 +63,12 @@ export interface ShellPreferences {
   showRulers: boolean;
   showGuides: boolean;
   /** A soft glow just inside the selection edge, drawn under the marching ants.
-   * Off by default — the ants alone are what Photoshop shows, and this is an
-   * addition the owner asked for rather than a default. Its width is a screen
-   * measurement and never grows with the document zoom (master-plan.md §1.8
-   * makes that an explicit condition). */
+   * On by default: the owner asked for it as a trait of this editor's ants
+   * rather than an extra, and it points inward on purpose — the edge then says
+   * which side of it is selected, which plain ants never do. Kept a setting all
+   * the same, so anyone who wants Photoshop exactly can have it. Its width is a
+   * screen measurement and never grows with the document zoom (master-plan.md
+   * §1.8 makes that an explicit condition). */
   selectionGlow: boolean;
   guideColor: string;
   canvasSurround: string;
@@ -90,7 +92,7 @@ const detectedConcurrency = typeof navigator === "undefined" || !navigator.hardw
 
 const defaultPreferences: ShellPreferences = {
   renderer: "auto", memoryBudgetMb: 1024, workerCount: Math.max(1, Math.min(8, detectedConcurrency - 1)),
-  dragZoom: true, showTooltips: true, contextualBar: true, showPerformanceOverlay: false, snapToGuides: true, smartGuides: true, snapToGrid: false, snapGridSize: 20, snapSensitivity: 8, showRulers: false, showGuides: true, selectionGlow: false,
+  dragZoom: true, showTooltips: true, contextualBar: true, showPerformanceOverlay: false, snapToGuides: true, smartGuides: true, snapToGrid: false, snapGridSize: 20, snapSensitivity: 8, showRulers: false, showGuides: true, selectionGlow: true,
   guideColor: "#00a8ff", canvasSurround: "#2b2f36", focusColor: "#84a8ff",
   rasterColor: "#a100ff", vectorColor: "#0068ff", audioColor: "#ffb600", videoColor: "#ff0000",
   confirmPreferences: {},

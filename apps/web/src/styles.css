@@ -122,10 +122,11 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .marching-ants-dark{stroke:rgb(18 20 24)}
 .marching-ants-light{stroke:rgb(248 250 253);animation:marching-ants 960ms linear infinite}
 @keyframes marching-ants{to{stroke-dashoffset:calc(var(--ant-period) * -1)}}
-/* Someone who asked for less motion gets a still dashed edge, not a crawling
-   one: the dashes still say "selection", the animation is the part that is
-   decoration. */
-@media (prefers-reduced-motion: reduce){.marching-ants-light{animation:none}}
+/* No reduced-motion exception, deliberately. The marching is not decoration —
+   it is how a selection edge is told apart from a dark line in the artwork, and
+   it is the reason the thing is called marching ants at all. Photoshop, GIMP,
+   Krita and Patchy all march unconditionally; a still dashed outline is the bug
+   the owner reported, not an accessible variant of the feature. */
 .selection-overlay rect,.selection-overlay ellipse,.selection-overlay polyline{fill:none}
 .raster-workspace[data-pixel-zoom="true"] .raster-stage canvas{image-rendering:pixelated}
 .raster-stage .text-transform-preview{position:absolute;z-index:2;display:block;pointer-events:none;background:transparent;transform-origin:center;will-change:left,top,width,height,transform}

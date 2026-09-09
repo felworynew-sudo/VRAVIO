@@ -32,13 +32,20 @@ const GLOW_BLUR = 3;
 export function MarchingAnts({ zoom, children }: { zoom: number; children: ReactNode }) {
   // 4px dashes with 4px gaps, so one full cycle is 8px of travel — the donor's
   // pattern and period exactly, at 120ms a step over 8 steps.
+  //
+  // The period carries a unit on purpose.  as a CSS property
+  // takes a <length>; a bare number is valid only as an SVG presentation
+  // attribute. Written unitless the keyframe below was simply invalid, the
+  // offset stayed at 0 forever, and the ants never marched — a dashed line that
+  // holds still, which is what the owner saw. Inside the scaled stage a px here
+  // is a user unit, the same space  is written in.
   const dash = 4 / zoom;
   const glow = useShellStore((shell) => shell.preferences.selectionGlow);
   // The clip has to be unique per instance: three overlays can be on screen at
   // once (a live marquee, the committed edge, the patch tool's lasso), and a
   // shared id would have them all clipping to whichever rendered last.
   const clipId = `selection-glow-clip-${useId()}`;
-  return <g className="marching-ants" style={{ "--ant-period": `${8 / zoom}` } as CSSProperties}>
+  return <g className="marching-ants" style={{ "--ant-period": `${8 / zoom}px` } as CSSProperties}>
     {/* Inward glow (off by default, Settings → Guides). Drawn first so the ants
         stay crisp on top of it, and clipped to the selection's own interior so
         it falls inward only — a plain wide stroke would spill both ways and read
