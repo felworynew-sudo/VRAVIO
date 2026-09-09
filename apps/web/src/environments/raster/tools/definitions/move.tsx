@@ -194,14 +194,32 @@ function findScaleHandle(bounds: RasterRect, point: Point, tolerance: number): (
   return SCALE_HANDLES.find(([hx, hy]) => Math.hypot(point.x - handleScreenPoint(bounds, hx, hy).x, point.y - handleScreenPoint(bounds, hx, hy).y) <= tolerance);
 }
 
-/** Corners only — edge midpoints stay scale-only, matching Photoshop's own Free Transform, which
- * never rotates off an edge handle. See the pointerdown handler's own comment on why a ring just
- * outside the handle (not a separate widget) is the rotate gesture at all. */
-function findRotateCorner(bounds: RasterRect, point: Point, tolerance: number, rotateTolerance: number): (typeof SCALE_HANDLES)[number] | undefined {
-  return SCALE_HANDLES.filter(([hx, hy]) => hx !== 0 && hy !== 0).find(([hx, hy]) => {
-    const distance = Math.hypot(point.x - handleScreenPoint(bounds, hx, hy).x, point.y - handleScreenPoint(bounds, hx, hy).y);
-    return distance > tolerance && distance <= rotateTolerance;
-  });
+/**
+ * Whether a point is in the rotate zone, and which corner's glyph it should wear.
+ *
+ * **Everything outside the frame rotates**, however far out — the owner's own observation about
+ * Photoshop, and it is what Krita's Free Transform does too. `kis_free_transform_strategy.cpp`
+ * picks the function for a position in exactly this order: inside the frame is MOVE, anything
+ * else is ROTATE by default, and only then does its `HandleChooser` override that with a scale
+ * when the cursor falls within one handle's grab radius (`handleRadius = 8`px there).
+ *
+ * This used to be a ring of finite width — `distance > tolerance && distance <= tolerance * 2.2`
+ * — around the corners only, so rotation was unreachable a couple of dozen pixels out and
+ * unreachable entirely beyond an edge. That matched no donor: Krita and Photoshop are unbounded,
+ * Graphite uses a 20px box around each handle (`BOUNDS_ROTATE_THRESHOLD`), and Excalidraw, Konva
+ * and Fabric give rotation a separate handle of its own instead. Ours was a fourth thing.
+ *
+ * The corner only decides which way the cursor's elbow points and is the nearest one, since the
+ * rotation itself is always about the frame's centre. The caller checks the scale handles first,
+ * which is what keeps a handle's own grab radius winning "и немного с запасом".
+ */
+function findRotateCorner(bounds: RasterRect, point: Point): (typeof SCALE_HANDLES)[number] | undefined {
+  const inside = point.x >= bounds.x && point.x <= bounds.x + bounds.width
+    && point.y >= bounds.y && point.y <= bounds.y + bounds.height;
+  if (inside) return undefined;
+  const hx = point.x < bounds.x + bounds.width / 2 ? -1 : 1;
+  const hy = point.y < bounds.y + bounds.height / 2 ? -1 : 1;
+  return SCALE_HANDLES.find(([x, y]) => x === hx && y === hy);
 }
 
 /**
@@ -511,22 +529,19 @@ const move: RasterToolDefinition<MoveState> = {
           context.setState({ pending, drag: { kind: "scale", pointerId: pointer.pointerId, from: point, current: point, before: pending.before, basePixels: pending.text ? pending.pixels : pending.pixels.slice(), baseSelection: cloneSelection(pending.selection), sourceBounds: { ...bounds }, handleX: handle[0], handleY: handle[1], dx: pending.dx, dy: pending.dy, ...(pending.text ? { text: pending.text } : {}) } });
           return;
         }
-        // Photoshop's own convention (found by checking, per CLAUDE.md §1, rather than
-        // inventing a bespoke floating "rotation lever" — a dedicated stem+handle 27px above
-        // the frame, removed along with this comment's predecessor): a ring just *outside* each
-        // corner handle rotates, so the same corner serves both scale (grabbed exactly) and
-        // rotate (grabbed just past it) without a second widget competing for screen space.
-        // Corners only (`hx !== 0 && hy !== 0`) — edge midpoints stay scale-only, matching
-        // Photoshop's own Free Transform, which never rotates off an edge handle.
-        const rotateCorner = findRotateCorner(bounds, point, tolerance, tolerance * 2.2);
+        // Outside the frame rotates — see `findRotateCorner`, which carries the donor reading.
+        // The scale handles were tested just above, so they keep their own grab radius.
+        const rotateCorner = findRotateCorner(bounds, point);
         if (rotateCorner) {
           context.capturePointer(pointer.pointerId);
           const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
           context.setState({ pending, drag: { kind: "rotate", pointerId: pointer.pointerId, from: point, current: point, before: pending.before, basePixels: pending.text ? pending.pixels : pending.pixels.slice(), baseSelection: cloneSelection(pending.selection), sourceBounds: { ...bounds }, center, startAngle: Math.atan2(point.y - center.y, point.x - center.x), baseRotation: pending.rotation, dx: pending.dx, dy: pending.dy, handleX: rotateCorner[0] as -1 | 1, handleY: rotateCorner[1] as -1 | 1, ...(pending.text ? { text: pending.text } : {}) } });
           return;
         }
-        // Clicking away from the frame accepts the transform, the way it does in Photoshop.
-        if (point.x < bounds.x || point.y < bounds.y || point.x > bounds.x + bounds.width || point.y > bounds.y + bounds.height) { commitPending(context, pending); context.setState(empty); return; }
+        // "Click away to accept" still holds, but it is decided at the *end* of the gesture now:
+        // the press outside the frame has already started a rotation above, and only a press that
+        // never moved was a click. Deciding it here instead would make rotation unreachable again,
+        // since every rotate drag begins with a press outside the frame.
       }
       // Inside the frame, not on a handle: fall through and continue dragging the same pending
       // transform, the way clicking inside an already-open Free Transform does in Photoshop.
@@ -586,7 +601,19 @@ const move: RasterToolDefinition<MoveState> = {
   onGestureEnd(context, pointer) {
     const drag = context.state.drag;
     if (!drag || drag.pointerId !== pointer.pointerId) { context.setState({ pending: context.state.pending, drag: null }); return; }
-    if (drag.kind !== "move") { const pending = applyDragFrame(context, drag); context.setState({ pending: pending ?? context.state.pending, drag: null }); return; }
+    if (drag.kind !== "move") {
+      // A rotate that never moved was a click outside the frame, and that still accepts the
+      // transform the way Photoshop does. The decision has to live here rather than at the press:
+      // every rotation *starts* with a press outside the frame, so refusing one there would make
+      // rotating impossible again.
+      if (drag.kind === "rotate" && Math.hypot(drag.current.x - drag.from.x, drag.current.y - drag.from.y) < 0.5) {
+        const pending = context.state.pending;
+        if (pending) { commitPending(context, pending); context.setState(empty); return; }
+      }
+      const pending = applyDragFrame(context, drag);
+      context.setState({ pending: pending ?? context.state.pending, drag: null });
+      return;
+    }
     const deltaX = drag.current.x - drag.from.x, deltaY = drag.current.y - drag.from.y;
     if (Math.hypot(deltaX, deltaY) < .25) {
       // A click, not a drag. A text transform this same click created gets discarded — Photoshop
@@ -633,7 +660,7 @@ const move: RasterToolDefinition<MoveState> = {
     }
     const handle = findScaleHandle(bounds, point, tolerance);
     if (handle) return resizeCursorFor(handle);
-    const rotateCorner = findRotateCorner(bounds, point, tolerance, tolerance * 2.2);
+    const rotateCorner = findRotateCorner(bounds, point);
     if (rotateCorner) return rotateCursorFor([rotateCorner[0] as -1 | 1, rotateCorner[1] as -1 | 1]);
     if (point.x >= bounds.x && point.y >= bounds.y && point.x <= bounds.x + bounds.width && point.y <= bounds.y + bounds.height) return "move";
     return undefined;

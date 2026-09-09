@@ -107,8 +107,22 @@ describe("move tool's cursor hint", () => {
     expect(move.cursorFor!(fakeContext({ pending, drag: null }), fakePointer(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2))).toBe("move");
   });
 
-  it("gives no hint outside the frame", () => {
-    expect(move.cursorFor!(fakeContext({ pending, drag: null }), fakePointer(bounds.x - 50, bounds.y - 50))).toBeUndefined();
+  it("keeps offering rotation however far outside the frame the pointer goes", () => {
+    // The owner's own observation about Photoshop: the rotate zone runs outward without limit,
+    // while scaling stays on the handles and a little around them. Krita's Free Transform reads
+    // the same way — anything outside the frame is ROTATE by default, and only a handle's own
+    // grab radius overrides it (`kis_free_transform_strategy.cpp`).
+    //
+    // This used to assert `undefined` here, which pinned the old finite ring: rotation stopped
+    // being offered about two dozen pixels out, and never worked past an edge at all.
+    for (const [dx, dy] of [[-50, -50], [-400, -400], [0, -600], [900, 0], [700, 900]] as const) {
+      const cursor = move.cursorFor!(fakeContext({ pending, drag: null }), fakePointer(bounds.x + dx, bounds.y + dy));
+      expect(rotateCorner(cursor!), `at ${dx},${dy}`).not.toBe("not-a-rotate-cursor");
+    }
+  });
+
+  it("still says move inside the frame, so the zones did not swap", () => {
+    expect(move.cursorFor!(fakeContext({ pending, drag: null }), fakePointer(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2))).toBe("move");
   });
 
   it("locks the cursor to the held corner's rotate glyph while a rotate drag is in progress, even hovering a scale handle", () => {

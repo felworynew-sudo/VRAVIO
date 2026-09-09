@@ -193,10 +193,15 @@ describe("the vector selection frame's cursors", () => {
     expect(decodeCursor(select.cursorFor!(context, at(b.x, b.y))!)).toContain(ROTATE_ART);
   });
 
-  it("says move inside the frame and nothing outside it", () => {
+  it("says move inside the frame and offers rotation however far outside it", () => {
+    // The owner's observation about Photoshop, and Krita's own rule: outside the frame is the
+    // rotate zone, without limit. This asserted `undefined` far out while the zone was still a
+    // finite ring — the ring is gone, and so is the dead space it left.
     const { context, document } = harness();
     const b = shapeWorldBounds(document.shapes[0]!, document.shapes);
     expect(select.cursorFor!(context, at(b.x + b.width / 2, b.y + b.height / 2))).toBe("move");
-    expect(select.cursorFor!(context, at(b.x + b.width + 200, b.y + b.height + 200))).toBeUndefined();
+    for (const [dx, dy] of [[-14, -14], [-300, -300], [b.width + 200, b.height + 200], [b.width / 2, -400]] as const) {
+      expect(decodeCursor(select.cursorFor!(context, at(b.x + dx, b.y + dy))!), `at ${dx},${dy}`).toContain(ROTATE_ART);
+    }
   });
 });
