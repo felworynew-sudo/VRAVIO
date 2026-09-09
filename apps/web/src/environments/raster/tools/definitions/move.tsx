@@ -2,7 +2,8 @@ import { useEffect, useRef } from "react";
 import {
   cloneRasterState, layerAccepts, layerLockReason, layerOpaqueBounds, liftSelection, linkedLayers, meshLayerPixels, meshSelection,
   pickLayerAt, quadLayerPixels, quadSelection, regularMesh, restrictSelectionToContent, rotateLayerPixels, rotateSelection,
-  scaleLayerPixels, scaleSelection, setLayerPixels, stampFloating, translateLayerPixels, translateSelection, unionRect, WARP_GRID,
+  scaleLayerPixels, scaleSelection, setLayerPixels, stampFloating, translateLayerPixels, translateSelection, unionRect, WARP_GRID, warpPresetMesh,
+  type WarpPresetId,
   type FloatingPixels, type PixelSelection, type Point, type RasterDocumentState, type RasterLayer, type RasterRect, type RasterTextData,
 } from "@vravio/env-raster";
 import { diagnostic } from "../../../../diagnostics";
@@ -54,7 +55,7 @@ export interface PendingTransform {
    * pristine pixels+bounds every resample reads from, regardless of how many separate point-drags
    * this Warp session sees — never a previous drag's already-warped result. */
   readonly mesh?: readonly Point[];
-  readonly meshOrigin?: { readonly pixels: Uint8ClampedArray; readonly bounds: RasterRect };
+  readonly meshOrigin?: { readonly pixels: Uint8ClampedArray; readonly bounds: RasterRect; readonly selection: PixelSelection | null };
   /** Other layers in `layerId`'s link group, each carrying the same translate this drag applies
    * to the primary layer — Photoshop moves a whole linked group together, not just the layer the
    * pointer grabbed. Plain-translate only: entering Scale/Rotate/Skew/Warp on a linked layer
@@ -75,7 +76,7 @@ type MoveDrag =
   | { kind: "scale"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; handleX: -1 | 0 | 1; handleY: -1 | 0 | 1; dx: number; dy: number; text?: PendingTextTransform }
   | { kind: "rotate"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; center: Point; startAngle: number; baseRotation: number; dx: number; dy: number; handleX: -1 | 1; handleY: -1 | 1; text?: PendingTextTransform }
   | { kind: "quad"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; quadOrigin: { pixels: Uint8ClampedArray; bounds: RasterRect; selection: PixelSelection | null }; baseCorners: readonly [Point, Point, Point, Point]; handleIndex: number; mode: QuadTransformMode }
-  | { kind: "warp"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; meshOrigin: { pixels: Uint8ClampedArray; bounds: RasterRect }; baseSelection: PixelSelection | null; baseMesh: readonly Point[]; pointIndex: number };
+  | { kind: "warp"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; meshOrigin: { pixels: Uint8ClampedArray; bounds: RasterRect; selection: PixelSelection | null }; baseSelection: PixelSelection | null; baseMesh: readonly Point[]; pointIndex: number };
 
 export interface MoveState {
   readonly pending: PendingTransform | null;
@@ -156,7 +157,25 @@ export function enterQuadTransformMode(pending: PendingTransform, bounds: Raster
 /** Enters Warp — the mesh counterpart of {@link enterQuadTransformMode}, same reasoning. */
 export function enterWarpTransformMode(pending: PendingTransform, bounds: RasterRect): PendingTransform {
   if (pending.mesh) return pending;
-  return { ...pending, mesh: regularMesh(bounds, WARP_GRID), meshOrigin: { pixels: pending.pixels.slice(), bounds: { ...bounds } } };
+  return { ...pending, mesh: regularMesh(bounds, WARP_GRID), meshOrigin: { pixels: pending.pixels.slice(), bounds: { ...bounds }, selection: cloneSelection(pending.selection) } };
+}
+
+/**
+ * Applies one of Photoshop's warp styles — Arc, Flag, Fisheye and the rest — to a pending
+ * transform, entering Warp first if it is not already open.
+ *
+ * Always rebuilt from the pristine `meshOrigin`, never from the mesh currently on screen, so
+ * dragging the Bend slider sweeps a shape rather than compounding one warp onto the last —
+ * which is also why picking a style after hand-dragging anchors discards those drags, exactly
+ * as Photoshop's own style dropdown does. `"custom"` puts the flat grid back.
+ */
+export function applyWarpPreset(pending: PendingTransform, bounds: RasterRect, width: number, height: number, preset: WarpPresetId | "custom", bend: number, vertical: boolean): PendingTransform {
+  const entered = enterWarpTransformMode(pending, bounds);
+  const origin = entered.meshOrigin!;
+  const mesh = preset === "custom" ? regularMesh(origin.bounds, WARP_GRID) : warpPresetMesh(preset, bend, origin.bounds, vertical);
+  const pixels = meshLayerPixels(origin.pixels, width, height, origin.bounds, mesh, origin.selection);
+  const selection = meshSelection(origin.selection, width, height, origin.bounds, mesh);
+  return { ...entered, dx: 0, dy: 0, rotation: 0, pixels, selection, mesh, meshOrigin: origin };
 }
 
 export type { QuadTransformMode };
@@ -549,7 +568,7 @@ const move: RasterToolDefinition<MoveState> = {
         const pointIndex = pending.mesh.findIndex((anchor) => Math.hypot(point.x - anchor.x, point.y - anchor.y) <= tolerance);
         if (pointIndex >= 0) {
           context.capturePointer(pointer.pointerId);
-          context.setState({ pending, drag: { kind: "warp", pointerId: pointer.pointerId, from: point, current: point, before: pending.before, meshOrigin: pending.meshOrigin, baseSelection: cloneSelection(pending.selection), baseMesh: pending.mesh, pointIndex } });
+          context.setState({ pending, drag: { kind: "warp", pointerId: pointer.pointerId, from: point, current: point, before: pending.before, meshOrigin: pending.meshOrigin, baseSelection: pending.meshOrigin.selection, baseMesh: pending.mesh, pointIndex } });
           return;
         }
         const xs = pending.mesh.map((anchor) => anchor.x), ys = pending.mesh.map((anchor) => anchor.y);

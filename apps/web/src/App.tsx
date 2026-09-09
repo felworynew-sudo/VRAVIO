@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
+import { WARP_PRESETS, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
 import { maskToRgba, rgbaToMask } from "./raster-pixel-buffers";
 import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
 import { withBusyPainted } from "./busy";
@@ -59,7 +59,7 @@ export function App() {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const openImageRef = useRef<HTMLInputElement>(null);
   const importSvgAsVectorRef = useRef<HTMLInputElement>(null);
-  const [transformMetrics, setTransformMetrics] = useState<{ active: boolean; x: number; y: number; width: number; height: number; rotation: number } | null>(null);
+  const [transformMetrics, setTransformMetrics] = useState<{ active: boolean; x: number; y: number; width: number; height: number; rotation: number; warp?: boolean } | null>(null);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
   const [filterGalleryOpen, setFilterGalleryOpen] = useState(false);
@@ -848,8 +848,38 @@ function SnapControls({ language, smartGuides, snapToGrid, onToggleSmartGuides, 
   </div>;
 }
 
-function OptionsBar({ language, tool, values, transform, pixelsPerInch, onTransformCommit, onTransformCancel, onChange, alignSelectionCount, onAlign, onDistribute, smartGuides, snapToGrid, onToggleSmartGuides, onToggleSnapToGrid }: { language: Language; tool: ReturnType<typeof toolById>; values: Record<string, string | number | boolean>; transform: { active: boolean; x: number; y: number; width: number; height: number; rotation: number } | null; pixelsPerInch?: number | undefined; onTransformCommit(): void; onTransformCancel(): void; onChange(id: string, value: string | number | boolean): void; alignSelectionCount: number; onAlign(edge: AlignEdge): void; onDistribute(edge: AlignEdge): void; smartGuides: boolean; snapToGrid: boolean; onToggleSmartGuides(value: boolean): void; onToggleSnapToGrid(value: boolean): void }) {
-  if (transform?.active) return <div className="options-bar transform-options"><strong>Free Transform (Свободная трансформация)</strong><label>X:<input value={Math.round(transform.x)} readOnly/></label><label>Y:<input value={Math.round(transform.y)} readOnly/></label><label>W:<input value={Math.round(transform.width)} readOnly/></label><label>H:<input value={Math.round(transform.height)} readOnly/></label><label>∠:<input value={`${Math.round(transform.rotation * 10) / 10}°`} readOnly/></label><button title="Cancel (Отмена)" onClick={onTransformCancel}>×</button><button className="commit" title="Commit (Подтвердить)" onClick={onTransformCommit}>✓</button></div>;
+/**
+ * Photoshop's warp-style row: the style dropdown, the orientation toggle and the Bend slider,
+ * shown in the options bar while a Warp is open.
+ *
+ * The choice is local state rather than a saved tool option on purpose. A warp style is a
+ * property of *this* warp — Photoshop reopens Warp at Custom every time — and the mesh itself
+ * is the real record of it; a remembered option would be a second copy of that, free to drift
+ * from the mesh the moment the user drags an anchor by hand (CLAUDE.md §4).
+ */
+function WarpStyleControls({ language }: { language: Language }) {
+  const [style, setStyle] = useState<string>("custom");
+  const [bend, setBend] = useState(50);
+  const [vertical, setVertical] = useState(false);
+  const apply = (next: { style?: string; bend?: number; vertical?: boolean }) => {
+    const detail = { style: next.style ?? style, bend: next.bend ?? bend, vertical: next.vertical ?? vertical };
+    window.dispatchEvent(new CustomEvent("vravio-warp-preset", { detail }));
+  };
+  const preset = WARP_PRESETS.find((entry) => entry.id === style);
+  return <>
+    <label>{text(language, "Warp", "Деформация")}:<select value={style} onChange={(event) => { setStyle(event.target.value); apply({ style: event.target.value }); }}>
+      <option value="custom">{text(language, "Custom", "Заказная")}</option>
+      {WARP_PRESETS.map((entry) => <option key={entry.id} value={entry.id}>{language === "ru" ? entry.label.ru : entry.label.en}</option>)}
+    </select></label>
+    {/* Orientation is offered only for the styles that have a vertical twin — a checkbox that
+        does nothing on Fisheye would be the dead setting CLAUDE.md §3 forbids. */}
+    {preset?.orientable && <button className={vertical ? "active" : undefined} title={text(language, "Change warp orientation", "Изменить ориентацию деформации")} onClick={() => { setVertical(!vertical); apply({ vertical: !vertical }); }}>{vertical ? "↕" : "↔"}</button>}
+    {style !== "custom" && <label>{text(language, "Bend", "Изгиб")}:<input type="range" min={-100} max={100} step={1} value={bend} onChange={(event) => { setBend(Number(event.target.value)); apply({ bend: Number(event.target.value) }); }}/><input type="number" min={-100} max={100} value={bend} onChange={(event) => { setBend(Number(event.target.value)); apply({ bend: Number(event.target.value) }); }}/></label>}
+  </>;
+}
+
+function OptionsBar({ language, tool, values, transform, pixelsPerInch, onTransformCommit, onTransformCancel, onChange, alignSelectionCount, onAlign, onDistribute, smartGuides, snapToGrid, onToggleSmartGuides, onToggleSnapToGrid }: { language: Language; tool: ReturnType<typeof toolById>; values: Record<string, string | number | boolean>; transform: { active: boolean; x: number; y: number; width: number; height: number; rotation: number; warp?: boolean } | null; pixelsPerInch?: number | undefined; onTransformCommit(): void; onTransformCancel(): void; onChange(id: string, value: string | number | boolean): void; alignSelectionCount: number; onAlign(edge: AlignEdge): void; onDistribute(edge: AlignEdge): void; smartGuides: boolean; snapToGrid: boolean; onToggleSmartGuides(value: boolean): void; onToggleSnapToGrid(value: boolean): void }) {
+  if (transform?.active) return <div className="options-bar transform-options"><strong>Free Transform (Свободная трансформация)</strong>{transform.warp && <WarpStyleControls language={language}/>}<label>X:<input value={Math.round(transform.x)} readOnly/></label><label>Y:<input value={Math.round(transform.y)} readOnly/></label><label>W:<input value={Math.round(transform.width)} readOnly/></label><label>H:<input value={Math.round(transform.height)} readOnly/></label><label>∠:<input value={`${Math.round(transform.rotation * 10) / 10}°`} readOnly/></label><button title="Cancel (Отмена)" onClick={onTransformCancel}>×</button><button className="commit" title="Commit (Подтвердить)" onClick={onTransformCommit}>✓</button></div>;
   return <div className="options-bar"><strong>{tool ? resolveLabel(tool.label, language) : text(language, "Tool options", "Параметры инструмента")}</strong>{tool ? tool.options.map((option) => <OptionRow key={option.id} language={language} option={option} pixelsPerInch={pixelsPerInch} value={values[option.id] ?? option.defaultValue} onChange={(value) => onChange(option.id, value)} />) : <span className="muted">{language === "ru" ? "Выберите или создайте документ" : "Select or create a document"}</span>}{tool?.id === "raster.move" && <AlignDistributeBar selectionCount={alignSelectionCount} onAlign={onAlign} onDistribute={onDistribute}/>}{tool?.kind === "vector" && <SnapControls language={language} smartGuides={smartGuides} snapToGrid={snapToGrid} onToggleSmartGuides={onToggleSmartGuides} onToggleSnapToGrid={onToggleSnapToGrid}/>}</div>;
 }
 

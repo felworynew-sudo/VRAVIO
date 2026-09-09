@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createRasterDocument, layerDocumentPixels, setLayerPixels, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
-import move, { enterQuadTransformMode, pendingBounds, type MoveState, type PendingTransform } from "./definitions/move";
+import { WARP_PRESETS, createRasterDocument, layerDocumentPixels, setLayerPixels, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
+import move, { applyWarpPreset, enterQuadTransformMode, pendingBounds, type MoveState, type PendingTransform } from "./definitions/move";
 import type { ToolContext, ToolPointer } from "./types";
 
 /**
@@ -161,5 +161,70 @@ describe("scale and rotate handles across separate drags", () => {
     let farApart = 0;
     for (let index = 0; index < back.length; index += 1) if (Math.abs(back[index]! - original[index]!) > 64) farApart += 1;
     expect(farApart / (WIDTH * HEIGHT * 4)).toBeLessThan(0.05);
+  });
+});
+
+describe("warp styles", () => {
+  /** Opens a pending transform and returns it with the bounds the mesh spans. */
+  function pendingTransform(context: ToolContext<MoveState>, box: { state: MoveState }) {
+    move.onPointerDown!(context, pointerAt(24, 20));
+    move.onPointerMove!(context, pointerAt(24, 20));
+    move.onGestureEnd!(context, pointerAt(24, 20));
+    const pending = box.state.pending!;
+    return { pending, bounds: pendingBounds(pending, WIDTH, HEIGHT)! };
+  }
+
+  it("sweeps the Bend slider from the pristine layer instead of compounding warps", () => {
+    // The property the whole `meshOrigin` arrangement exists for, on the path a user actually
+    // takes: dragging Bend fires a change per step, and every step has to re-warp the *original*
+    // pixels. Warping the previous step's output instead would bend forty times on the way from
+    // 0 to 40 and leave a smear that no amount of dragging back could undo.
+    const { context, box } = harness(blockDocument());
+    const { pending, bounds } = pendingTransform(context, box);
+
+    const direct = applyWarpPreset(pending, bounds, WIDTH, HEIGHT, "arc", 40, false);
+    let swept = pending;
+    for (const bend of [10, 20, 30, 35, 40]) swept = applyWarpPreset(swept, bounds, WIDTH, HEIGHT, "arc", bend, false);
+
+    expect(Array.from(swept.pixels)).toEqual(Array.from(direct.pixels));
+    // And back to zero is back to the start, not a picture that has been through six resamples.
+    const returned = applyWarpPreset(swept, bounds, WIDTH, HEIGHT, "custom", 0, false);
+    expect(Array.from(returned.pixels)).toEqual(Array.from(pending.pixels));
+  });
+
+  it("actually moves pixels for every style in the menu", () => {
+    // CLAUDE.md §3 at the scale of a dropdown: a style that leaves the layer alone is an entry
+    // that lies. Checked on the pixels rather than on the mesh, so a style whose control points
+    // move without the surface following would still fail.
+    for (const preset of WARP_PRESETS) {
+      const { context, box } = harness(blockDocument());
+      const { pending, bounds } = pendingTransform(context, box);
+      const warped = applyWarpPreset(pending, bounds, WIDTH, HEIGHT, preset.id, 60, false);
+      // Every channel, not just alpha: Fisheye pins all four corners, so it redistributes the
+      // content without touching the silhouette at all — an alpha-only count reads zero for it
+      // and would have failed a style that works.
+      let changed = 0;
+      for (let index = 0; index < warped.pixels.length; index += 1) if (warped.pixels[index] !== pending.pixels[index]) changed += 1;
+      expect(`${preset.id}: ${changed}`).not.toBe(`${preset.id}: 0`);
+    }
+  });
+
+  it("turns the deformation on its side when the orientation is flipped", () => {
+    const { context, box } = harness(blockDocument());
+    const { pending, bounds } = pendingTransform(context, box);
+    const horizontal = applyWarpPreset(pending, bounds, WIDTH, HEIGHT, "arc", 60, false);
+    const vertical = applyWarpPreset(pending, bounds, WIDTH, HEIGHT, "arc", 60, true);
+    expect(Array.from(vertical.pixels)).not.toEqual(Array.from(horizontal.pixels));
+  });
+
+  it("keeps the pristine origin across a style change, so styles never stack", () => {
+    // Picking Flag after Arc must give the Flag of the *original* layer, not the Flag of an
+    // already-arced one — the same rule as the Bend sweep, one level up.
+    const { context, box } = harness(blockDocument());
+    const { pending, bounds } = pendingTransform(context, box);
+    const arced = applyWarpPreset(pending, bounds, WIDTH, HEIGHT, "arc", 50, false);
+    const flagAfterArc = applyWarpPreset(arced, bounds, WIDTH, HEIGHT, "flag", 50, false);
+    const flagDirect = applyWarpPreset(pending, bounds, WIDTH, HEIGHT, "flag", 50, false);
+    expect(Array.from(flagAfterArc.pixels)).toEqual(Array.from(flagDirect.pixels));
   });
 });

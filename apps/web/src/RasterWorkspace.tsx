@@ -9,7 +9,7 @@ import { kernel } from "./kernel";
 import { importModelAsLayer } from "./scene3d-commands";
 import { rasterToolById } from "./environments/raster/tools/registry";
 import type { PaintTarget, ToolContext, ToolPointer } from "./environments/raster/tools/types";
-import { commitPending, empty as moveToolEmpty, pendingBounds, startPendingTransform, type MoveState } from "./environments/raster/tools/definitions/move";
+import { applyWarpPreset, commitPending, empty as moveToolEmpty, pendingBounds, startPendingTransform, type MoveState } from "./environments/raster/tools/definitions/move";
 import { defaultViewport, useShellStore, type DocumentViewport } from "./store";
 import { beginBusy } from "./busy";
 import { usePluginRuns } from "./plugins/usePluginRuns";
@@ -299,7 +299,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   useEffect(() => {
     const pending = (toolStates["raster.move"] as MoveState | undefined)?.pending;
     const bounds = pending ? pendingBounds(pending, state.width, state.height) : null;
-    window.dispatchEvent(new CustomEvent("vravio-transform-state", { detail: pending && bounds ? { active: true, x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, rotation: pending.rotation } : null }));
+    window.dispatchEvent(new CustomEvent("vravio-transform-state", { detail: pending && bounds ? { active: true, x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, rotation: pending.rotation, warp: Boolean(pending.mesh) } : null }));
   }, [toolStates, state.width, state.height]);
 
   // Edit ▸ Free Transform (Ctrl+T): the one way to open a pending transform without a canvas
@@ -315,9 +315,20 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       if (pending) run(context, pending);
     };
     const commit = () => withPending((context, pending) => { commitPending(context, pending); context.setState(moveToolEmpty); });
+    // The warp-style dropdown in the options bar (Photoshop keeps it there while a Warp is
+    // open). Same shape as Free Transform above: the bar lives outside this component, so the
+    // only way into the tool's own state is a freshly built context.
+    const preset = (event: Event) => withPending((context, pending) => {
+      const { style, bend, vertical } = (event as CustomEvent<{ style: string; bend: number; vertical: boolean }>).detail;
+      const bounds = pendingBounds(pending, state.width, state.height);
+      if (!bounds || pending.text) return;
+      const next = applyWarpPreset(pending, bounds, state.width, state.height, style as never, bend, vertical);
+      context.setState({ pending: next, drag: null });
+      context.schedulePreview(next.pixels, "pixels", next.layerId);
+    });
     const cancel = () => withPending((context) => { context.setState(moveToolEmpty); context.previewWithLayerHidden(null); });
-    window.addEventListener("vravio-transform-start", start); window.addEventListener("vravio-transform-commit", commit); window.addEventListener("vravio-transform-cancel", cancel);
-    return () => { window.removeEventListener("vravio-transform-start", start); window.removeEventListener("vravio-transform-commit", commit); window.removeEventListener("vravio-transform-cancel", cancel); };
+    window.addEventListener("vravio-transform-start", start); window.addEventListener("vravio-transform-commit", commit); window.addEventListener("vravio-transform-cancel", cancel); window.addEventListener("vravio-warp-preset", preset);
+    return () => { window.removeEventListener("vravio-transform-start", start); window.removeEventListener("vravio-transform-commit", commit); window.removeEventListener("vravio-transform-cancel", cancel); window.removeEventListener("vravio-warp-preset", preset); };
   });
 
   /**
