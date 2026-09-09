@@ -510,27 +510,79 @@ export function regularMesh(bounds: RasterRect, gridSize: number): Point[] {
  * another cell's already-resampled pixels), which is what keeps a multi-point drag from
  * accumulating resampling blur cell over cell.
  */
+/** Bernstein weights of the cubic basis — the donor's own `bernstein_weights`
+ * for order 4 (Patchy, core/warp_mesh.cpp). */
+function bernstein3(t: number): [number, number, number, number] {
+  const s = 1 - t;
+  return [s * s * s, 3 * s * s * t, 3 * s * t * t, t * t * t];
+}
+
+/**
+ * Where the point at (u, v) of the original rectangle lands, for a warp mesh.
+ *
+ * The sixteen anchors are the **control points** of a bicubic Bézier patch, not
+ * the corners of nine flat cells — which is what Photoshop's Warp is, what the
+ * donor stores (`SmartObjectWarp`'s `u_order`/`v_order` are 4, evaluated by
+ * `evaluate_warp_mesh` with exactly these weights), and the whole difference
+ * between a picture that bends and one that folds. Read as cell corners, a
+ * dragged anchor pulls its neighbouring cells into a tent with straight edges
+ * and visible creases along every cell border; read as control points, the same
+ * drag bulges the surface smoothly and the creases cannot exist, because there
+ * is one surface rather than nine patches meeting at an angle.
+ *
+ * A mesh still sitting on its regular grid evaluates to the identity map:
+ * evenly spaced control points make a cubic Bézier the linear function.
+ */
+export function evaluateWarpMesh(mesh: readonly Point[], u: number, v: number): Point {
+  const wu = bernstein3(u), wv = bernstein3(v);
+  let x = 0, y = 0;
+  for (let row = 0; row < 4; row += 1) for (let col = 0; col < 4; col += 1) {
+    const point = mesh[row * 4 + col];
+    if (!point) continue;
+    const weight = wu[col]! * wv[row]!;
+    x += weight * point.x;
+    y += weight * point.y;
+  }
+  return { x, y };
+}
+
+/** How finely the Bézier surface is diced before it is drawn. Each piece is
+ * small enough to be treated as a flat quad without a visible kink, and 24 of
+ * them per axis is well past the point where more stops being distinguishable
+ * on a real layer. */
+const WARP_SUBDIVISIONS = 24;
+
+/** The destination quad and matching source rectangle of one diced piece. */
+function warpPatch(mesh: readonly Point[], bounds: RasterRect, column: number, row: number) {
+  const u0 = column / WARP_SUBDIVISIONS, u1 = (column + 1) / WARP_SUBDIVISIONS;
+  const v0 = row / WARP_SUBDIVISIONS, v1 = (row + 1) / WARP_SUBDIVISIONS;
+  const corners: [Point, Point, Point, Point] = [
+    evaluateWarpMesh(mesh, u0, v0), evaluateWarpMesh(mesh, u1, v0),
+    evaluateWarpMesh(mesh, u1, v1), evaluateWarpMesh(mesh, u0, v1),
+  ];
+  const source: RasterRect = {
+    x: bounds.x + u0 * bounds.width, y: bounds.y + v0 * bounds.height,
+    width: bounds.width / WARP_SUBDIVISIONS, height: bounds.height / WARP_SUBDIVISIONS,
+  };
+  return { corners, source };
+}
+
 /**
  * Warps a layer through the 4x4 anchor grid — the Warp transform.
  *
- * One pass over the destination, reading the *pristine* source every time.
- * What it replaces walked the cells one at a time and handed each cell's own
- * output to the next cell as its input, so every cell after the first resampled
- * a picture the earlier ones had already resampled and partly cleared: sixteen
- * chained resamples for this grid, each smearing the last, and cells erasing
- * their neighbours' work where their source rectangles overlapped. That is
- * master-plan.md §1.1's "деформация визуально не выглядит как искажение" —
- * the mesh was not describing a deformation so much as accumulating damage.
+ * One pass over the destination, reading the *pristine* source every time. What
+ * it replaces walked nine cells one at a time and handed each cell's own output
+ * to the next as its input, so every cell after the first resampled a picture
+ * the earlier ones had already resampled and partly cleared, and cells erased
+ * their neighbours where their source rectangles overlapped.
  *
- * The structure is the donor's (Patchy's warp mesh, and the standard way any
- * mesh warp is written): for each destination pixel, find the cell it belongs
- * to, invert that cell's own projective mapping to get where in the source it
- * came from, and sample there once.
+ * The surface is the donor's: a bicubic Bézier patch over the sixteen anchors
+ * (see `evaluateWarpMesh`), diced into small quads that are flat enough to fill
+ * by the same projective inverse a single quad transform uses.
  */
 export function meshLayerPixels(basePixels: Uint8ClampedArray, width: number, height: number, baseBounds: RasterRect, mesh: readonly Point[], selection: PixelSelection | null): Uint8ClampedArray {
   const source = basePixels;
   const output = basePixels.slice();
-  const baseGrid = regularMesh(baseBounds, WARP_GRID);
   const left = Math.max(0, Math.floor(baseBounds.x)), top = Math.max(0, Math.floor(baseBounds.y));
   const right = Math.min(width, Math.ceil(baseBounds.x + baseBounds.width));
   const bottom = Math.min(height, Math.ceil(baseBounds.y + baseBounds.height));
@@ -539,8 +591,8 @@ export function meshLayerPixels(basePixels: Uint8ClampedArray, width: number, he
     : (index % width >= left && index % width < right && Math.floor(index / width) >= top && Math.floor(index / width) < bottom ? 1 : 0);
 
   // The warped area is vacated once, before anything is drawn — the same
-  // cut-one-hole rule `liftSelection` follows, and the reason cells can no
-  // longer erase each other: clearing is not part of drawing a cell any more.
+  // cut-one-hole rule `liftSelection` follows, and the reason pieces can no
+  // longer erase each other: clearing is not part of drawing one.
   for (let y = top; y < bottom; y += 1) for (let x = left; x < right; x += 1) {
     const index = y * width + x, coverage = selectedAlpha(index);
     if (coverage <= 0) continue;
@@ -551,21 +603,21 @@ export function meshLayerPixels(basePixels: Uint8ClampedArray, width: number, he
     output[pixel + 3] = Math.round(output[pixel + 3]! * remaining);
   }
 
-  for (let row = 0; row < WARP_GRID; row += 1) for (let col = 0; col < WARP_GRID; col += 1) {
-    const i00 = row * (WARP_GRID + 1) + col, i10 = i00 + 1, i01 = i00 + (WARP_GRID + 1), i11 = i01 + 1;
-    const tl = baseGrid[i00]!, tr = baseGrid[i10]!, bl = baseGrid[i01]!;
-    const cellSource: RasterRect = { x: tl.x, y: tl.y, width: tr.x - tl.x, height: bl.y - tl.y };
-    if (cellSource.width <= 0 || cellSource.height <= 0) continue;
-    const corners: [Point, Point, Point, Point] = [mesh[i00]!, mesh[i10]!, mesh[i11]!, mesh[i01]!];
+  for (let row = 0; row < WARP_SUBDIVISIONS; row += 1) for (let column = 0; column < WARP_SUBDIVISIONS; column += 1) {
+    const { corners, source: cellSource } = warpPatch(mesh, baseBounds, column, row);
     const mapping = quadMapping(corners);
     const xs = corners.map((point) => point.x), ys = corners.map((point) => point.y);
     const cellLeft = Math.max(0, Math.floor(Math.min(...xs))), cellTop = Math.max(0, Math.floor(Math.min(...ys)));
-    const cellRight = Math.min(width, Math.ceil(Math.max(...xs))), cellBottom = Math.min(height, Math.ceil(Math.max(...ys)));
+    const cellRight = Math.min(width, Math.ceil(Math.max(...xs)) + 1), cellBottom = Math.min(height, Math.ceil(Math.max(...ys)) + 1);
     for (let y = cellTop; y < cellBottom; y += 1) for (let x = cellLeft; x < cellRight; x += 1) {
       const { u, v } = inverseUnitSquare(mapping, x + 0.5, y + 0.5);
-      if (u < 0 || u > 1 || v < 0 || v > 1) continue;
-      const sampleX = cellSource.x + u * cellSource.width - 0.5;
-      const sampleY = cellSource.y + v * cellSource.height - 0.5;
+      // A hair of tolerance, so the seam between two pieces is covered by one of
+      // them rather than falling between both — 576 pieces means 576 seams, and a
+      // gap on each would read as a grid drawn through the artwork.
+      if (u < -0.002 || u > 1.002 || v < -0.002 || v > 1.002) continue;
+      const cu = Math.max(0, Math.min(1, u)), cv = Math.max(0, Math.min(1, v));
+      const sampleX = cellSource.x + cu * cellSource.width - 0.5;
+      const sampleY = cellSource.y + cv * cellSource.height - 0.5;
       const nearestX = Math.max(left, Math.min(right - 1, Math.round(sampleX)));
       const nearestY = Math.max(top, Math.min(bottom - 1, Math.round(sampleY)));
       const maskAlpha = selectedAlpha(nearestY * width + nearestX);
@@ -585,21 +637,37 @@ export function meshLayerPixels(basePixels: Uint8ClampedArray, width: number, he
   return output;
 }
 
-/** Selection counterpart of meshLayerPixels: each cell's warped mask is folded into one by
- * taking the brighter coverage where two cells' resampling both touch a pixel (they shouldn't
- * for a sane warp, but a max is a safer merge than a plain overwrite if they ever do). */
+/**
+ * Selection counterpart of `meshLayerPixels`: the same Bézier surface, the same
+ * dicing, one mask written in one pass. (It used to call `quadSelection` per
+ * cell, each allocating a canvas-sized mask; at 576 pieces that is not a
+ * refactor away from being unusable, it is a different algorithm.)
+ */
 export function meshSelection(selection: PixelSelection | null, width: number, height: number, baseBounds: RasterRect, mesh: readonly Point[]): PixelSelection | null {
   if (!selection) return null;
-  const baseGrid = regularMesh(baseBounds, WARP_GRID);
   const mask = new Uint8ClampedArray(width * height);
-  for (let row = 0; row < WARP_GRID; row += 1) for (let col = 0; col < WARP_GRID; col += 1) {
-    const i00 = row * (WARP_GRID + 1) + col, i10 = i00 + 1, i01 = i00 + (WARP_GRID + 1), i11 = i01 + 1;
-    const tl = baseGrid[i00]!, tr = baseGrid[i10]!, bl = baseGrid[i01]!;
-    const cellSource: RasterRect = { x: tl.x, y: tl.y, width: tr.x - tl.x, height: bl.y - tl.y };
-    const cell = quadSelection(selection, width, height, cellSource, [mesh[i00]!, mesh[i10]!, mesh[i11]!, mesh[i01]!]);
-    if (!cell) continue;
-    for (let index = 0; index < mask.length; index += 1) mask[index] = Math.max(mask[index]!, cell.mask[index]!);
+  for (let row = 0; row < WARP_SUBDIVISIONS; row += 1) for (let column = 0; column < WARP_SUBDIVISIONS; column += 1) {
+    const { corners, source: cellSource } = warpPatch(mesh, baseBounds, column, row);
+    const mapping = quadMapping(corners);
+    const xs = corners.map((point) => point.x), ys = corners.map((point) => point.y);
+    const cellLeft = Math.max(0, Math.floor(Math.min(...xs))), cellTop = Math.max(0, Math.floor(Math.min(...ys)));
+    const cellRight = Math.min(width, Math.ceil(Math.max(...xs)) + 1), cellBottom = Math.min(height, Math.ceil(Math.max(...ys)) + 1);
+    for (let y = cellTop; y < cellBottom; y += 1) for (let x = cellLeft; x < cellRight; x += 1) {
+      const { u, v } = inverseUnitSquare(mapping, x + 0.5, y + 0.5);
+      if (u < -0.002 || u > 1.002 || v < -0.002 || v > 1.002) continue;
+      const cu = Math.max(0, Math.min(1, u)), cv = Math.max(0, Math.min(1, v));
+      const sourceX = Math.max(0, Math.min(width - 1, Math.round(cellSource.x + cu * cellSource.width - 0.5)));
+      const sourceY = Math.max(0, Math.min(height - 1, Math.round(cellSource.y + cv * cellSource.height - 0.5)));
+      const coverage = selection.mask[sourceY * width + sourceX]!;
+      const at = y * width + x;
+      // Brighter wins where two pieces overlap on a seam, the same merge the
+      // per-cell version used and for the same reason: a plain overwrite would
+      // let the second piece punch a hole in the first.
+      if (coverage > mask[at]!) mask[at] = coverage;
+    }
   }
   const bounds = selectionBounds(mask, width, height);
   return bounds.width && bounds.height ? { mask, bounds } : null;
 }
+
+

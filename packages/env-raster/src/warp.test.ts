@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { WARP_GRID, meshLayerPixels, regularMesh, quadLayerPixels } from "./index";
+import { WARP_GRID, evaluateWarpMesh, meshLayerPixels, regularMesh, quadLayerPixels } from "./index";
 
 /**
  * master-plan.md §1.1: "деформация визуально не выглядит как искажение —
@@ -124,5 +124,49 @@ describe("quad warp sampling", () => {
       outputValues.add(at(output, x, row)[0]!);
     }
     expect([...outputValues].filter((value) => !sourceValues.has(value)).length).toBeGreaterThan(0);
+  });
+});
+
+describe("the warp surface", () => {
+  /** The 4x4 control net over a rectangle, in the order `regularMesh` produces. */
+  const net = () => regularMesh(BOUNDS, WARP_GRID);
+
+  it("leaves the identity mesh as the identity map", () => {
+    // Evenly spaced control points make a cubic Bézier the linear function, so
+    // an untouched cage must map every (u, v) exactly onto the rectangle.
+    const mesh = net();
+    for (const [u, v] of [[0, 0], [1, 0], [0, 1], [1, 1], [0.5, 0.5], [0.25, 0.75]] as const) {
+      const point = evaluateWarpMesh(mesh, u, v);
+      expect(point.x).toBeCloseTo(BOUNDS.x + u * BOUNDS.width, 6);
+      expect(point.y).toBeCloseTo(BOUNDS.y + v * BOUNDS.height, 6);
+    }
+  });
+
+  it("reads the anchors as control points, not as points it passes through", () => {
+    // The difference between Photoshop's Warp and a grid of flat cells. An inner
+    // anchor pulled by 20 moves the surface near it by *less* than 20 — a
+    // control point attracts the curve rather than sitting on it. A cell-corner
+    // reading would put the surface exactly on the dragged point.
+    const mesh = net().map((point, index) => index === 5 ? { x: point.x, y: point.y - 20 } : point);
+    const control = net()[5]!;
+    const surface = evaluateWarpMesh(mesh, 1 / 3, 1 / 3);
+    expect(surface.y).toBeLessThan(control.y);
+    expect(surface.y).toBeGreaterThan(control.y - 20);
+  });
+
+  it("bends smoothly instead of creasing at the old cell borders", () => {
+    // Sampled along a line across the surface, the *second* difference stays
+    // small: a tent made of nine flat cells has corners where its slope jumps,
+    // and that jump is what read as folds through the artwork.
+    const mesh = net().map((point, index) => index === 5 || index === 6 ? { x: point.x, y: point.y - 18 } : point);
+    const ys: number[] = [];
+    for (let step = 0; step <= 60; step += 1) ys.push(evaluateWarpMesh(mesh, step / 60, 0.5).y);
+    let worstBend = 0;
+    for (let index = 1; index + 1 < ys.length; index += 1) {
+      worstBend = Math.max(worstBend, Math.abs(ys[index + 1]! - 2 * ys[index]! + ys[index - 1]!));
+    }
+    // A crease would show up here as a spike; a cubic's curvature over this many
+    // samples is a fraction of a pixel per step.
+    expect(worstBend).toBeLessThan(0.2);
   });
 });
