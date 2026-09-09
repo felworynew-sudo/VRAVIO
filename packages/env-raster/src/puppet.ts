@@ -25,9 +25,15 @@ import type { PixelSelection, Point, RasterRect } from "./types";
  * for a general triangulator to decide, and a grid keeps the vertex ordering
  * predictable enough to test against.
  *
- * The systems are small — a 9x9 grid is 81 vertices, 162 unknowns — so they are
- * solved densely with a Cholesky factorisation, computed once per set of pins
- * and re-used for every frame of a drag, where only the right-hand side moves.
+ * The systems are small — a 9x9 grid is 81 vertices, 162 unknowns — so they are solved densely
+ * with a Cholesky factorisation. Pass a {@link PuppetSolverCache} and that factorisation is
+ * computed once per *set* of pins and reused for every frame of a drag, where only the
+ * right-hand side moves; this is the donor paper's own optimisation (Igarashi et al. 2005 §4).
+ *
+ * That sentence stood here for a while before any of it was true — there was no cache and every
+ * frame refactorised from scratch, at a measured 2.7ms a call. A comment describing behaviour
+ * the code does not have is worse than no comment, so this one now names the type that makes it
+ * true.
  */
 
 export interface PuppetMesh {
@@ -80,6 +86,36 @@ export function nearestVertex(mesh: PuppetMesh, point: Point): number {
     if (distance < bestDistance) { bestDistance = distance; best = index; }
   }
   return best;
+}
+
+/**
+ * The two factorisations a set of pins produces, kept between frames of a drag.
+ *
+ * Both least-squares systems have matrices that depend only on the mesh, on *which* vertices are
+ * pinned, and on which of those carry a rotation — never on where a pin currently sits or how far
+ * it has been turned. Those enter only the right-hand side. So the expensive step (a dense
+ * O(n³) factorisation) survives an entire drag, and each frame costs a pair of substitutions.
+ *
+ * Opaque on purpose: the caller holds one per editing session and passes it back in.
+ */
+export interface PuppetSolverCache {
+  signature: string | null;
+  similarFactor: Float64Array | null;
+  fittedFactor: Float64Array | null;
+}
+
+export function createPuppetSolverCache(): PuppetSolverCache {
+  return { signature: null, similarFactor: null, fittedFactor: null };
+}
+
+/**
+ * What the cached factorisations are valid for: the pinned vertices and, per pin, whether it
+ * carries a rotation at all. Not the positions and not the angle — those move the right-hand
+ * side, which is rebuilt every call anyway. Sorted, so the order the user happened to add pins
+ * in cannot invalidate anything on its own.
+ */
+function pinSignature(pins: readonly PuppetPin[]): string {
+  return pins.map((pin) => `${pin.vertex}:${pin.rotation ? 1 : 0}`).sort().join(",");
 }
 
 /** Dense symmetric positive-definite solve, by Cholesky. The systems here are a
@@ -210,9 +246,13 @@ function addRotationRows(equations: NormalEquations, mesh: PuppetMesh, pins: rea
  * Solves the mesh for a set of pins. Returns the deformed vertices, or the
  * original ones when the pins leave the mesh free to drift.
  */
-export function solvePuppetMesh(mesh: PuppetMesh, pins: readonly PuppetPin[]): readonly Point[] {
+export function solvePuppetMesh(mesh: PuppetMesh, pins: readonly PuppetPin[], cache?: PuppetSolverCache): readonly Point[] {
   const count = mesh.vertices.length;
   if (!pins.length) return mesh.vertices;
+  const signature = cache ? pinSignature(pins) : null;
+  // Valid only if the cache was filled for this very set of pins. Anything else — a pin added,
+  // removed, or newly given a rotation — changes which entries the matrices even have.
+  const reusable = cache !== undefined && cache.signature === signature;
   const size = count * 2;
   const xIndex = (vertex: number) => vertex * 2, yIndex = (vertex: number) => vertex * 2 + 1;
 
@@ -240,7 +280,17 @@ export function solvePuppetMesh(mesh: PuppetMesh, pins: readonly PuppetPin[]): r
     similar.addRow([{ index: yIndex(pin.vertex), value: 1 }], pin.at.y, PIN_WEIGHT);
   }
   addRotationRows(similar, mesh, pins, xIndex, yIndex);
-  const similarFactor = cholesky(similar.matrix, size);
+  let similarFactor = reusable ? cache!.similarFactor : null;
+  if (!similarFactor) {
+    similarFactor = cholesky(similar.matrix, size);
+    if (cache) {
+      // A new epoch: the fitted factor from the old signature must not survive it, even by
+      // accident, so it is cleared together with the signature it belonged to.
+      cache.signature = signature;
+      cache.similarFactor = similarFactor;
+      cache.fittedFactor = null;
+    }
+  }
   if (!similarFactor) return mesh.vertices;
   const intermediate = choleskySolve(similarFactor, size, similar.rhs);
   const stage1: Point[] = Array.from({ length: count }, (_, index) => ({ x: intermediate[xIndex(index)]!, y: intermediate[yIndex(index)]! }));
@@ -273,7 +323,11 @@ export function solvePuppetMesh(mesh: PuppetMesh, pins: readonly PuppetPin[]): r
   // rotation step 1 chose, and a constraint present in only one of them is a constraint the
   // other is free to relax away.
   addRotationRows(fitted, mesh, pins, xIndex, yIndex);
-  const fittedFactor = cholesky(fitted.matrix, size);
+  let fittedFactor = reusable ? cache!.fittedFactor : null;
+  if (!fittedFactor) {
+    fittedFactor = cholesky(fitted.matrix, size);
+    if (cache) cache.fittedFactor = fittedFactor;
+  }
   if (!fittedFactor) return stage1;
   const final = choleskySolve(fittedFactor, size, fitted.rhs);
   return Array.from({ length: count }, (_, index) => ({ x: final[xIndex(index)]!, y: final[yIndex(index)]! }));

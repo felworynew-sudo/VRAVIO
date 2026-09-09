@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nearestVertex, puppetMesh, puppetWarpPixels, solvePuppetMesh } from "./index";
+import { createPuppetSolverCache, nearestVertex, puppetMesh, puppetWarpPixels, solvePuppetMesh } from "./index";
 
 /**
  * master-plan.md §1.2, the Puppet Warp. The method is the donor's — ARAP over a
@@ -206,5 +206,62 @@ describe("rotation pins", () => {
     const plain = solvePuppetMesh(mesh, [{ vertex, at }]);
     const zero = solvePuppetMesh(mesh, [{ vertex, at, rotation: 0 }]);
     for (let index = 0; index < plain.length; index += 1) expect(distance(plain[index]!, zero[index]!)).toBeLessThan(1e-9);
+  });
+});
+
+describe("the solver cache", () => {
+  const identical = (a: readonly { x: number; y: number }[], b: readonly { x: number; y: number }[]) => {
+    expect(a.length).toBe(b.length);
+    for (let index = 0; index < a.length; index += 1) {
+      expect(a[index]!.x).toBeCloseTo(b[index]!.x, 9);
+      expect(a[index]!.y).toBeCloseTo(b[index]!.y, 9);
+    }
+  };
+
+  it("gives the same answer as solving from scratch, frame after frame", () => {
+    // The whole point is that the factorisation survives a drag while the pins move. If a cached
+    // frame differed from an uncached one by anything, the cache would be reusing a matrix that
+    // no longer describes the problem.
+    const mesh = puppetMesh(BOUNDS, 4);
+    const held = nearestVertex(mesh, { x: 30, y: 30 });
+    const dragged = nearestVertex(mesh, { x: 90, y: 90 });
+    const cache = createPuppetSolverCache();
+    for (let frame = 0; frame < 6; frame += 1) {
+      const pins = [
+        { vertex: held, at: mesh.vertices[held]! },
+        { vertex: dragged, at: { x: mesh.vertices[dragged]!.x + frame * 3, y: mesh.vertices[dragged]!.y - frame * 2 } },
+      ];
+      identical(solvePuppetMesh(mesh, pins, cache), solvePuppetMesh(mesh, pins));
+    }
+  });
+
+  it("throws the factorisation away when the pins themselves change", () => {
+    // Adding, removing or newly rotating a pin changes which entries the matrices have, not just
+    // their right-hand side — reusing across that would silently solve the previous problem.
+    const mesh = puppetMesh(BOUNDS, 4);
+    const first = nearestVertex(mesh, { x: 30, y: 30 });
+    const second = nearestVertex(mesh, { x: 90, y: 40 });
+    const cache = createPuppetSolverCache();
+
+    const onePin = [{ vertex: first, at: { x: mesh.vertices[first]!.x + 8, y: mesh.vertices[first]!.y } }];
+    solvePuppetMesh(mesh, onePin, cache);
+
+    const twoPins = [...onePin, { vertex: second, at: mesh.vertices[second]! }];
+    identical(solvePuppetMesh(mesh, twoPins, cache), solvePuppetMesh(mesh, twoPins));
+
+    // And the same again when a pin gains an angle, which adds its whole one-ring to the system.
+    const turned = twoPins.map((pin, index) => index === 1 ? { ...pin, rotation: Math.PI / 5 } : pin);
+    identical(solvePuppetMesh(mesh, turned, cache), solvePuppetMesh(mesh, turned));
+  });
+
+  it("does not care what order the pins arrive in", () => {
+    // The signature is sorted, so re-ordering the same pins must not force a refactorisation —
+    // and must not produce a different answer either.
+    const mesh = puppetMesh(BOUNDS, 4);
+    const a = nearestVertex(mesh, { x: 30, y: 30 }), b = nearestVertex(mesh, { x: 90, y: 40 });
+    const pins = [{ vertex: a, at: { x: mesh.vertices[a]!.x + 5, y: mesh.vertices[a]!.y } }, { vertex: b, at: mesh.vertices[b]! }];
+    const cache = createPuppetSolverCache();
+    solvePuppetMesh(mesh, pins, cache);
+    identical(solvePuppetMesh(mesh, [...pins].reverse(), cache), solvePuppetMesh(mesh, pins));
   });
 });

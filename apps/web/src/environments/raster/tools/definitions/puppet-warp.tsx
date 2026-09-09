@@ -1,4 +1,4 @@
-import { layerOpaqueBounds, nearestVertex, puppetMesh, puppetWarpPixels, setLayerPixels, solvePuppetMesh, type PuppetMesh, type PuppetPin, type RasterRect } from "@vravio/env-raster";
+import { createPuppetSolverCache, layerOpaqueBounds, nearestVertex, puppetMesh, puppetWarpPixels, setLayerPixels, solvePuppetMesh, type PuppetMesh, type PuppetPin, type PuppetSolverCache, type RasterRect } from "@vravio/env-raster";
 import { useEffect } from "react";
 import type { RasterToolDefinition, ToolContext } from "../types";
 
@@ -46,6 +46,9 @@ export interface PuppetWarpState {
     readonly mesh: PuppetMesh;
     readonly basePixels: Uint8ClampedArray;
     readonly bounds: RasterRect;
+    /** Carries the solve's factorisation across frames — see `PuppetSolverCache`. Lives on the
+     * session because that is exactly as long as one mesh does. */
+    readonly solver: PuppetSolverCache;
   } | null;
   readonly pins: readonly Pin[];
   readonly draggingPin: number | null;
@@ -80,14 +83,14 @@ function beginSession(context: ToolContext<PuppetWarpState>): PuppetWarpState["s
   const pixels = context.layerPixels();
   const bounds = layerOpaqueBounds(pixels, context.document.width, context.document.height);
   if (!bounds || bounds.width < 2 || bounds.height < 2) return null;
-  return { layerId: layer.id, mesh: puppetMesh(bounds, 8), basePixels: pixels, bounds };
+  return { layerId: layer.id, mesh: puppetMesh(bounds, 8), basePixels: pixels, bounds, solver: createPuppetSolverCache() };
 }
 
 /** Re-solves and previews. Called on every frame of a pin drag. */
 function preview(context: ToolContext<PuppetWarpState>, state: PuppetWarpState): readonly { x: number; y: number }[] | null {
   const session = state.session;
   if (!session) return null;
-  const deformed = solvePuppetMesh(session.mesh, solverPins(state.pins));
+  const deformed = solvePuppetMesh(session.mesh, solverPins(state.pins), session.solver);
   const pixels = puppetWarpPixels(session.basePixels, context.document.width, context.document.height, session.mesh, deformed, null);
   context.schedulePreview(pixels, "pixels", session.layerId, null);
   return deformed;
@@ -96,7 +99,7 @@ function preview(context: ToolContext<PuppetWarpState>, state: PuppetWarpState):
 function commit(context: ToolContext<PuppetWarpState>, state: PuppetWarpState): void {
   const session = state.session;
   if (!session || !state.pins.length) return;
-  const deformed = solvePuppetMesh(session.mesh, solverPins(state.pins));
+  const deformed = solvePuppetMesh(session.mesh, solverPins(state.pins), session.solver);
   const pixels = puppetWarpPixels(session.basePixels, context.document.width, context.document.height, session.mesh, deformed, null);
   const before = context.document;
   const after = structuredClone(before);
