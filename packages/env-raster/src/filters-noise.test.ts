@@ -114,3 +114,69 @@ describe("noise filters", () => {
     expect(Array.from(first)).toEqual(Array.from(second));
   });
 });
+
+/**
+ * CLAUDE.md §3: a setting that does not change the result is worse than no
+ * setting. These two were the reason the parameter model grew `choices` — as
+ * sliders they would have been meaningless, and as absent controls the filter
+ * offered one of the four behaviours Photoshop and Patchy both have.
+ */
+describe("Add Noise's distribution and monochromatic switches", () => {
+  const render = (settings: Record<string, number>) => applyRasterFilter(flatField(), WIDTH, HEIGHT, "add_noise", settings);
+
+  it("makes gaussian differ from uniform, and cluster closer to the source", () => {
+    const uniform = render({ amount: 30, distribution: 0, monochromatic: 0 });
+    const gaussian = render({ amount: 30, distribution: 1, monochromatic: 0 });
+    expect(Array.from(uniform)).not.toEqual(Array.from(gaussian));
+
+    // Four uniforms summed and halved: the same range, but most samples land
+    // near the middle rather than spread flat across it, so the mean deviation
+    // is smaller while the extremes stay reachable.
+    const meanDeviation = (pixels: Uint8ClampedArray) => {
+      let total = 0;
+      for (let index = 0; index < WIDTH * HEIGHT; index += 1) total += Math.abs(pixels[index * 4]! - 128);
+      return total / (WIDTH * HEIGHT);
+    };
+    expect(meanDeviation(gaussian)).toBeLessThan(meanDeviation(uniform));
+  });
+
+  it("makes monochromatic give every channel the same delta", () => {
+    const coloured = render({ amount: 30, distribution: 0, monochromatic: 0 });
+    const mono = render({ amount: 30, distribution: 0, monochromatic: 1 });
+    let colourSplit = 0, greyPixels = 0;
+    for (let index = 0; index < WIDTH * HEIGHT; index += 1) {
+      const at = index * 4;
+      if (coloured[at] !== coloured[at + 1] || coloured[at + 1] !== coloured[at + 2]) colourSplit += 1;
+      if (mono[at] === mono[at + 1] && mono[at + 1] === mono[at + 2]) greyPixels += 1;
+    }
+    expect(colourSplit).toBeGreaterThan(WIDTH * HEIGHT * 0.9);
+    expect(greyPixels).toBe(WIDTH * HEIGHT);
+  });
+
+  it("offers all four combinations, each a different picture", () => {
+    const results = [[0, 0], [0, 1], [1, 0], [1, 1]].map(([distribution, monochromatic]) =>
+      Array.from(render({ amount: 30, distribution: distribution!, monochromatic: monochromatic! })).join(","));
+    expect(new Set(results).size).toBe(4);
+  });
+
+  it("defaults to Photoshop's own starting point: uniform and coloured", () => {
+    const definition = rasterFilterCatalog.find((entry) => entry.id === "add_noise")!;
+    const byId = Object.fromEntries(definition.parameters.map((parameter) => [parameter.id, parameter]));
+    expect(byId.distribution?.value).toBe(0);
+    expect(byId.distribution?.choices?.[0]).toContain("Uniform");
+    expect(byId.monochromatic?.value).toBe(0);
+    // Every choice parameter has to label every value it can take, or the
+    // dropdown renders blank options.
+    for (const parameter of definition.parameters) {
+      if (!parameter.choices) continue;
+      expect(parameter.choices.length).toBe(parameter.max - parameter.min + 1);
+    }
+  });
+
+  it("leaves Analog Grain as a preset, without switches of its own", () => {
+    // It is the same renderer fixed at gaussian+monochromatic. Giving it the
+    // same two controls would make it Add Noise a second time.
+    const definition = rasterFilterCatalog.find((entry) => entry.id === "film_grain")!;
+    expect(definition.parameters.map((parameter) => parameter.id)).toEqual(["amount"]);
+  });
+});
