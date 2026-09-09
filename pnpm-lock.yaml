@@ -28,12 +28,18 @@ importers:
       '@tauri-apps/api':
         specifier: ^2.9.0
         version: 2.11.1
+      '@vravio/env-audio':
+        specifier: workspace:*
+        version: link:../../packages/env-audio
       '@vravio/env-raster':
         specifier: workspace:*
         version: link:../../packages/env-raster
       '@vravio/env-vector':
         specifier: workspace:*
         version: link:../../packages/env-vector
+      '@vravio/env-video':
+        specifier: workspace:*
+        version: link:../../packages/env-video
       '@vravio/kernel':
         specifier: workspace:*
         version: link:../../packages/kernel
@@ -110,6 +116,19 @@ importers:
 
   crates/vector-text/pkg: {}
 
+  packages/env-audio:
+    dependencies:
+      '@vravio/kernel':
+        specifier: workspace:*
+        version: link:../kernel
+    devDependencies:
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 4.1.11
+        version: 4.1.11(@types/node@26.4.0)(vite@8.2.2(@types/node@26.4.0))
+
   packages/env-raster:
     dependencies:
       '@vravio/kernel':
@@ -138,6 +157,19 @@ importers:
       '@types/rbush':
         specifier: ^3.0.4
         version: 3.0.4
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 4.1.11
+        version: 4.1.11(@types/node@26.4.0)(vite@8.2.2(@types/node@26.4.0))
+
+  packages/env-video:
+    dependencies:
+      '@vravio/kernel':
+        specifier: workspace:*
+        version: link:../kernel
+    devDependencies:
       typescript:
         specifier: 7.0.2
         version: 7.0.2
