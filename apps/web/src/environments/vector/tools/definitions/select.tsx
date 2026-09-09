@@ -130,8 +130,8 @@ const select: VectorToolDefinition<SelectState> = {
     if (!state.drag || !state.snapLines.length) return null;
     const strokeWidth = 1 / context.viewport.zoom;
     return <>{state.snapLines.map((line, index) => line.axis === "x"
-      ? <line key={index} className="vector-snap-guide" x1={line.value} y1={0} x2={line.value} y2={document.height} strokeWidth={strokeWidth}/>
-      : <line key={index} className="vector-snap-guide" x1={0} y1={line.value} x2={document.width} y2={line.value} strokeWidth={strokeWidth}/>)}</>;
+      ? <line key={index} className="vector-snap-guide" x1={line.value} y1={0} x2={line.value} y2={document.height} strokeWidth={strokeWidth} strokeDasharray={`${4 * strokeWidth} ${3 * strokeWidth}`}/>
+      : <line key={index} className="vector-snap-guide" x1={0} y1={line.value} x2={document.width} y2={line.value} strokeWidth={strokeWidth} strokeDasharray={`${4 * strokeWidth} ${3 * strokeWidth}`}/>)}</>;
   },
 };
 

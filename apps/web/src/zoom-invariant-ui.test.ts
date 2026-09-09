@@ -54,6 +54,11 @@ describe("interface does not scale with the canvas zoom", () => {
       "shape-draft", "text-frame-draft", "text-path-guide",
       "transform-controls", "transform-quad-outline", "transform-handle",
       "patch-source-path", "crop-outline", "crop-third", "crop-handle",
+      // Vector chrome drawn inside .vector-stage, which the zoom scales the same
+      // way. Their widths were already divided by the zoom in JSX; their dash
+      // lengths were not, and a dash pattern in document units stretches exactly
+      // like the line it is on.
+      "vector-artboard-outline", "vector-artboard-bleed", "vector-snap-guide", "vector-pen-rubber-band",
     ];
     const offenders: string[] = [];
     for (const property of ["stroke-width", "stroke-dasharray"]) {
@@ -63,5 +68,25 @@ describe("interface does not scale with the canvas zoom", () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("chrome that keeps its width in CSS divides by the zoom there", () => {
+  it("makes .vector-image-placeholder read --vector-zoom", () => {
+    // The one exception to the rule above, and it needs its own guard rather
+    // than an exemption. This box is rendered from the vector shape tree,
+    // several components below anything holding the viewport, so threading the
+    // zoom down to size one dashed placeholder would be a poor trade; instead
+    // `.vector-stage` publishes `--vector-zoom` and the rule divides by it.
+    // That is still the same rule — a screen measurement divided by the zoom —
+    // just expressed where this element can reach it. What must never happen is
+    // the width going back to a bare literal.
+    const rule = styles.match(/\.vector-image-placeholder\s*\{[^}]*\}/)?.[0];
+    expect(rule).toBeTruthy();
+    for (const property of ["stroke-width", "stroke-dasharray"]) {
+      const declaration = rule!.match(new RegExp(`${property}\s*:[^;}]*`))?.[0];
+      expect(declaration, `${property} should be declared`).toBeTruthy();
+      expect(declaration, `${property} must divide by --vector-zoom`).toContain("var(--vector-zoom");
+    }
   });
 });

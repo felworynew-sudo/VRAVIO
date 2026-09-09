@@ -468,7 +468,7 @@ const pen: VectorToolDefinition<PenState> = {
       ? `M ${lastPoint.x} ${lastPoint.y} C ${lastPoint.x + lastPoint.handleOut.x} ${lastPoint.y + lastPoint.handleOut.y}, ${state.cursor.x} ${state.cursor.y}, ${state.cursor.x} ${state.cursor.y}`
       : `M ${lastPoint.x} ${lastPoint.y} L ${state.cursor.x} ${state.cursor.y}`;
     return <>
-      <path className="vector-pen-rubber-band" d={path} fill="none" strokeWidth={1 / zoom}/>
+      <path className="vector-pen-rubber-band" d={path} fill="none" strokeWidth={1 / zoom} strokeDasharray={`${4 / zoom} ${3 / zoom}`}/>
       {state.coordinateInput && <foreignObject x={lastPoint.x + 10 / zoom} y={lastPoint.y - 14 / zoom} width={140 / zoom} height={28 / zoom}>
         {/* The `foreignObject` itself is already sized in document units
             scaled by `1/zoom`, so it renders at a constant 140×28 screen

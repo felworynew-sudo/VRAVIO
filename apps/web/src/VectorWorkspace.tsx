@@ -582,7 +582,14 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
   // `canvasBounds`'s own (x, y) origin, so this box's local coordinate
   // system still starts at (0, 0) regardless of where that origin sits in
   // document space.
-  const stageStyle = { width: canvasBounds.width, height: canvasBounds.height, transform: `translate(-50%, -50%) translate(${viewport.panX}px, ${viewport.panY}px) rotate(${viewport.rotation}deg) scale(${viewport.zoom})` } as CSSProperties;
+  // `--vector-zoom` is published for chrome drawn inside this scaled stage by
+  // components too deep to be handed the viewport — the image placeholder is
+  // rendered from the shape tree, several levels down, and threading zoom
+  // through every shape renderer to size one dashed box would be a poor trade.
+  // Its CSS divides by this exactly the way the JSX elsewhere divides by
+  // `viewport.zoom`, so there is still only one rule: screen measurements are
+  // divided by the zoom, never left to scale.
+  const stageStyle = { width: canvasBounds.width, height: canvasBounds.height, "--vector-zoom": viewport.zoom, transform: `translate(-50%, -50%) translate(${viewport.panX}px, ${viewport.panY}px) rotate(${viewport.rotation}deg) scale(${viewport.zoom})` } as CSSProperties;
 
   // Stage 12 (docs/vector-plan.md): skip rendering leaf shapes definitely
   // outside the current view. `workspaceSize` is only known after the
@@ -644,7 +651,7 @@ export function VectorWorkspace({ document }: { document: VravioDocument }) {
         {pages.map((page) => <g key={page.id}>
           <rect className="vector-artboard-page" x={page.x} y={page.y} width={page.width} height={page.height}/>
           <rect className={page.id === state.activeArtboardId ? "vector-artboard-outline active" : "vector-artboard-outline"} x={page.x} y={page.y} width={page.width} height={page.height} strokeWidth={(page.id === state.activeArtboardId ? 1.5 : 1) / viewport.zoom}/>
-          {page.bleed > 0 && <rect className="vector-artboard-bleed" x={page.x - page.bleed} y={page.y - page.bleed} width={page.width + page.bleed * 2} height={page.height + page.bleed * 2} strokeWidth={1 / viewport.zoom}/>}
+          {page.bleed > 0 && <rect className="vector-artboard-bleed" x={page.x - page.bleed} y={page.y - page.bleed} width={page.width + page.bleed * 2} height={page.height + page.bleed * 2} strokeWidth={1 / viewport.zoom} strokeDasharray={`${4 / viewport.zoom} ${3 / viewport.zoom}`}/>}
           {page.name && <text className="vector-artboard-label" x={page.x} y={page.y - labelSize * 0.6} fontSize={labelSize}>{page.name}</text>}
         </g>)}
         {renderShapeTree(state.shapes, null, modifierResults, proofColors, visibleIds)}
