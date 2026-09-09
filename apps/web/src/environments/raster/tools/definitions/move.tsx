@@ -44,6 +44,12 @@ export interface PendingTransform {
    * not a replacement for ordinary move/scale/rotate — there is no path back out of it within
    * the same pending transform once entered (matches the pre-port behaviour byte for byte). */
   readonly corners?: readonly [Point, Point, Point, Point];
+  /** The pristine pixels+bounds every quad resample reads from, captured once when quad mode is
+   * entered — the exact counterpart of {@link PendingTransform.meshOrigin}, and required for the
+   * same reason. Resampling the previous drag's output through corners that already encode that
+   * drag applies the warp a second time, which is what made a second handle drag scramble the
+   * content and cross the frame over itself. */
+  readonly quadOrigin?: { readonly pixels: Uint8ClampedArray; readonly bounds: RasterRect; readonly selection: PixelSelection | null };
   /** Present once Warp has been entered: the current 4x4 anchor grid. `meshOrigin` is the fixed
    * pristine pixels+bounds every resample reads from, regardless of how many separate point-drags
    * this Warp session sees — never a previous drag's already-warped result. */
@@ -68,7 +74,7 @@ type MoveDrag =
   | { kind: "move"; pointerId: number; from: Point; current: Point; previous?: Point; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean; fromOrigin?: boolean; float?: FloatingPixels; linkedBase?: readonly { layerId: string; basePixels: Uint8ClampedArray }[] }
   | { kind: "scale"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; handleX: -1 | 0 | 1; handleY: -1 | 0 | 1; dx: number; dy: number; text?: PendingTextTransform }
   | { kind: "rotate"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; center: Point; startAngle: number; baseRotation: number; dx: number; dy: number; handleX: -1 | 1; handleY: -1 | 1; text?: PendingTextTransform }
-  | { kind: "quad"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; baseCorners: readonly [Point, Point, Point, Point]; handleIndex: number; mode: QuadTransformMode }
+  | { kind: "quad"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; quadOrigin: { pixels: Uint8ClampedArray; bounds: RasterRect; selection: PixelSelection | null }; baseCorners: readonly [Point, Point, Point, Point]; handleIndex: number; mode: QuadTransformMode }
   | { kind: "warp"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; meshOrigin: { pixels: Uint8ClampedArray; bounds: RasterRect }; baseSelection: PixelSelection | null; baseMesh: readonly Point[]; pointIndex: number };
 
 export interface MoveState {
@@ -144,7 +150,7 @@ export function pendingBounds(pending: PendingTransform, width: number, height: 
 export function enterQuadTransformMode(pending: PendingTransform, bounds: RasterRect): PendingTransform {
   if (pending.corners) return pending;
   const corners: readonly [Point, Point, Point, Point] = [{ x: bounds.x, y: bounds.y }, { x: bounds.x + bounds.width, y: bounds.y }, { x: bounds.x + bounds.width, y: bounds.y + bounds.height }, { x: bounds.x, y: bounds.y + bounds.height }];
-  return { ...pending, corners };
+  return { ...pending, corners, quadOrigin: { pixels: pending.pixels.slice(), bounds: { ...bounds }, selection: cloneSelection(pending.selection) } };
 }
 
 /** Enters Warp — the mesh counterpart of {@link enterQuadTransformMode}, same reasoning. */
@@ -452,9 +458,9 @@ function applyDragFrame(context: ToolContext<MoveState>, drag: MoveDrag): Pendin
   if (drag.kind === "quad") {
     const dx = point.x - drag.from.x, dy = point.y - drag.from.y;
     const corners = applyQuadHandleDelta(drag.baseCorners, drag.handleIndex, drag.mode, dx, dy);
-    const pixels = quadLayerPixels(drag.basePixels, state.width, state.height, drag.sourceBounds, corners, drag.baseSelection);
-    const selection = quadSelection(drag.baseSelection, state.width, state.height, drag.sourceBounds, corners);
-    const pending: PendingTransform = { before: drag.before, layerId: drag.before.activeLayerId, dx: 0, dy: 0, pixels, selection, rotation: 0, corners };
+    const pixels = quadLayerPixels(drag.quadOrigin.pixels, state.width, state.height, drag.quadOrigin.bounds, corners, drag.quadOrigin.selection);
+    const selection = quadSelection(drag.quadOrigin.selection, state.width, state.height, drag.quadOrigin.bounds, corners);
+    const pending: PendingTransform = { before: drag.before, layerId: drag.before.activeLayerId, dx: 0, dy: 0, pixels, selection, rotation: 0, corners, quadOrigin: drag.quadOrigin };
     context.schedulePreview(pixels, "pixels", pending.layerId);
     return pending;
   }
@@ -513,12 +519,12 @@ const move: RasterToolDefinition<MoveState> = {
       const bounds = pendingBounds(pending, state.width, state.height);
       if (!bounds) { context.setState(empty); diagnostic("warn", "transform", "Discarded invalid empty pending transform", { layerId: pending.layerId }); return; }
 
-      if (pending.corners) {
+      if (pending.corners && pending.quadOrigin) {
         const mode = String(context.options.transformMode ?? "distort") as QuadTransformMode;
         const nearest = quadHandlePoints(pending.corners, mode).find((entry) => Math.hypot(point.x - entry.point.x, point.y - entry.point.y) <= tolerance);
         if (nearest) {
           context.capturePointer(pointer.pointerId);
-          context.setState({ pending, drag: { kind: "quad", pointerId: pointer.pointerId, from: point, current: point, before: pending.before, basePixels: pending.pixels.slice(), baseSelection: cloneSelection(pending.selection), sourceBounds: { ...bounds }, baseCorners: pending.corners, handleIndex: nearest.index, mode } });
+          context.setState({ pending, drag: { kind: "quad", pointerId: pointer.pointerId, from: point, current: point, before: pending.before, quadOrigin: pending.quadOrigin, baseCorners: pending.corners, handleIndex: nearest.index, mode } });
           return;
         }
         const xs = pending.corners.map((corner) => corner.x), ys = pending.corners.map((corner) => corner.y);
