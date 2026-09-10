@@ -13,9 +13,9 @@ import { text } from "./i18n";
 import { AudioPlaybackEngine, renderAudioOffline } from "./audioPlayback";
 import { AUTOMATABLE_EFFECT_PARAMS } from "./audioEffects";
 import {
-  addAudioTrack, addBus, addClipFromAsset, addMarker, addSend, addTrackEffect, applyEffectToClip, changeAudioDocument,
+  addAudioTrack, addBus, addClipFromAsset, addCrossfade, addMarker, addSend, addTrackEffect, applyEffectToClip, changeAudioDocument,
   clearEffectParamAutomation, clearTrackVolumeAutomation, commitAudioDrag, commitLoopRegion, cycleClipTake, deleteSelectedClips,
-  moveMarker, previewMoveClip, previewTrimClip, punchInRecording, removeAudioTrack, removeBus, removeEffectParamAutomationPoint,
+  moveMarker, previewMoveClip, previewTrimClip, punchInRecording, removeAudioTrack, removeBus, removeCrossfade, removeEffectParamAutomationPoint,
   removeMarker, removeSend, removeTrackEffect, removeTrackVolumeAutomationPoint, renameBus, renameMarker, setBusMuted, setBusPan, setBusSoloed,
   setBusVolume, setClipFade, setEffectParamAutomationPoint, setClipGain, setLoopEnabled, setLoopRegion, setSelection, setSendEnabled,
   setSendLevel, setSendPre, setTempo, setTimeSignature, setTrackEffectEnabled, setTrackEffectParam, setTrackMuted, setTrackPan, setTrackSoloed,
@@ -638,7 +638,7 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
           onPointerMove={(event) => { onDragMove(event); onAutomationDragMove(event); }}
           onPointerUp={() => { onDragEnd(); onAutomationDragEnd(); }}>
           <div className="audio-playhead audio-playhead-body" style={{ left: playheadSample * pxPerSample }} />
-          {state.tracks.map((track) => <div key={track.id} className={`audio-track-lane${automationMode ? " automation-mode" : ""}`} style={{ height: TRACK_HEIGHT }} onClick={(event) => onLaneClick(track, event)}>
+          {state.tracks.map((track) => { const sortedClips = [...track.clips].sort((a, b) => a.startSample - b.startSample); return <div key={track.id} className={`audio-track-lane${automationMode ? " automation-mode" : ""}`} style={{ height: TRACK_HEIGHT }} onClick={(event) => onLaneClick(track, event)}>
             {track.clips.map((clip) => {
               const selected = state.selection?.trackId === track.id && state.selection.clipIds.includes(clip.id);
               const left = clip.startSample * pxPerSample, width = Math.max(4, clip.durationSamples * pxPerSample);
@@ -662,7 +662,19 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
                 onPointerDown={(event) => beginAutomationDrag(event, track, point.id, (event.currentTarget.closest(".audio-track-lane") as HTMLElement).getBoundingClientRect())}
                 onDoubleClick={(event) => { event.stopPropagation(); removeTrackVolumeAutomationPoint(document.id, track.id, point.id); }} />)}
             </svg>}
-          </div>)}
+            {sortedClips.slice(0, -1).map((clip, index) => {
+              const next = sortedClips[index + 1]!;
+              const touching = clip.startSample + clip.durationSamples === next.startSample;
+              const existing = state.crossfades.find((item) => item.trackId === track.id && item.leftClipId === clip.id && item.rightClipId === next.id);
+              if (!touching && !existing) return null;
+              const left = next.startSample * pxPerSample;
+              return <div key={`crossfade-${clip.id}`} className={`audio-crossfade-marker${existing ? " active" : ""}`} style={{ left }} onClick={(event) => event.stopPropagation()}>
+                {existing
+                  ? <button onClick={() => removeCrossfade(document.id, existing.id)} title={text(language, "Remove crossfade", "Убрать кроссфейд")}>⧖</button>
+                  : <button onClick={() => addCrossfade(document.id, track.id, clip.id, next.id, Math.round(0.05 * sampleRate))} title={text(language, "Add crossfade (50ms)", "Добавить кроссфейд (50мс)")}>+</button>}
+              </div>;
+            })}
+          </div>; })}
         </div>
       </div>
     </div>

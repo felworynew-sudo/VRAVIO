@@ -113,17 +113,28 @@ function scheduleAudioGraph(context: BaseAudioContext, master: AudioNode, state:
       source.connect(clipGain);
       clipGain.connect(clipDestination);
 
+      // A crossfade connecting this clip to its neighbor overrides that one edge's own
+      // fadeIn/fadeOut for this render — the crossfade *is* the fade on that edge, the same
+      // "the transition is the object, not a second thing layered on top of a manual fade"
+      // shape `VideoTransition` uses (`@vravio/env-video`'s own types.ts).
+      const leftCrossfade = state.crossfades.find((item) => item.trackId === track.id && item.leftClipId === clip.id);
+      const rightCrossfade = state.crossfades.find((item) => item.trackId === track.id && item.rightClipId === clip.id);
+      const effectiveFadeInSamples = rightCrossfade ? rightCrossfade.durationSamples : clip.fadeInSamples;
+      const effectiveFadeInType = rightCrossfade ? rightCrossfade.curve : clip.fadeType;
+      const effectiveFadeOutSamples = leftCrossfade ? leftCrossfade.durationSamples : clip.fadeOutSamples;
+      const effectiveFadeOutType = leftCrossfade ? leftCrossfade.curve : clip.fadeType;
+
       // Fade automation only for the portion of the fade not already behind `fromSample` —
       // resuming mid-fade starts the curve from wherever it actually is, not from 0.
-      if (clip.fadeInSamples > 0 && intoClipSamples < clip.fadeInSamples) {
-        const curve = generateCurve(clip.fadeType, clip.fadeInSamples, true);
+      if (effectiveFadeInSamples > 0 && intoClipSamples < effectiveFadeInSamples) {
+        const curve = generateCurve(effectiveFadeInType, effectiveFadeInSamples, true);
         const remaining = curve.slice(intoClipSamples);
         if (remaining.length > 1) clipGain.gain.setValueCurveAtTime(remaining, whenToStart, remaining.length / sampleRate);
       }
-      const fadeOutStart = clip.durationSamples - clip.fadeOutSamples;
-      if (clip.fadeOutSamples > 0 && intoClipSamples < clip.durationSamples) {
+      const fadeOutStart = clip.durationSamples - effectiveFadeOutSamples;
+      if (effectiveFadeOutSamples > 0 && intoClipSamples < clip.durationSamples) {
         const fadeOutStartTime = whenToStart + Math.max(0, fadeOutStart - intoClipSamples) / sampleRate;
-        const curve = generateCurve(clip.fadeType, clip.fadeOutSamples, false);
+        const curve = generateCurve(effectiveFadeOutType, effectiveFadeOutSamples, false);
         const already = Math.max(0, intoClipSamples - fadeOutStart);
         const remaining = curve.slice(already);
         if (remaining.length > 1) clipGain.gain.setValueCurveAtTime(remaining, fadeOutStartTime, remaining.length / sampleRate);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cloneAudioState, createAudioClip, createAudioDocument, createAudioTrack, findClip, findTrack, isAudioDocumentState, migrateAudioDocumentState, timelineDurationSamples } from "./document";
+import { cloneAudioState, createAudioClip, createAudioCrossfade, createAudioDocument, createAudioTrack, findClip, findTrack, isAudioDocumentState, migrateAudioDocumentState, timelineDurationSamples } from "./document";
 
 describe("createAudioDocument", () => {
   it("starts with one empty track and sane defaults", () => {
@@ -134,5 +134,43 @@ describe("isAudioDocumentState migrates on the way in", () => {
     delete (state.tracks[0] as { effects?: unknown }).effects;
     expect(isAudioDocumentState(state)).toBe(true);
     expect(state.tracks[0]!.effects).toEqual([]);
+  });
+});
+
+describe("createAudioCrossfade", () => {
+  it("carries the given fields, clamped to a positive duration", () => {
+    const cf = createAudioCrossfade("track-1", "left-clip", "right-clip", 500, "sCurve");
+    expect(cf.trackId).toBe("track-1");
+    expect(cf.leftClipId).toBe("left-clip");
+    expect(cf.rightClipId).toBe("right-clip");
+    expect(cf.durationSamples).toBe(500);
+    expect(cf.curve).toBe("sCurve");
+  });
+
+  it("defaults to a linear curve", () => {
+    expect(createAudioCrossfade("t", "l", "r", 100).curve).toBe("linear");
+  });
+
+  it("floors and clamps duration to at least 1", () => {
+    expect(createAudioCrossfade("t", "l", "r", 0.4).durationSamples).toBe(1);
+  });
+});
+
+describe("migrateAudioDocumentState backfills crossfades", () => {
+  it("adds an empty array when missing", () => {
+    const state = createAudioDocument();
+    delete (state as { crossfades?: unknown }).crossfades;
+    migrateAudioDocumentState(state);
+    expect(state.crossfades).toEqual([]);
+  });
+});
+
+describe("cloneAudioState deep-clones crossfades", () => {
+  it("mutating a clone's crossfade does not bleed into the original", () => {
+    const state = createAudioDocument();
+    state.crossfades.push(createAudioCrossfade("t", "l", "r", 100));
+    const clone = cloneAudioState(state);
+    clone.crossfades[0]!.durationSamples = 999;
+    expect(state.crossfades[0]!.durationSamples).toBe(100);
   });
 });

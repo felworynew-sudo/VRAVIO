@@ -1,4 +1,4 @@
-import type { AudioBus, AudioClip, AudioDocumentOptions, AudioDocumentState, AudioMarker, AudioTrack, FadeType } from "./types";
+import type { AudioBus, AudioClip, AudioCrossfade, AudioDocumentOptions, AudioDocumentState, AudioMarker, AudioTrack, FadeType } from "./types";
 
 export function createAudioTrack(name = "Track 1 (Дорожка 1)"): AudioTrack {
   return { id: crypto.randomUUID(), name, volume: 1, pan: 0, muted: false, soloed: false, locked: false, clips: [], effects: [], volumeAutomation: [], effectAutomation: {}, sends: [] };
@@ -45,12 +45,16 @@ export function createAudioDocument(options: AudioDocumentOptions = {}): AudioDo
     sampleRate: options.sampleRate ?? 48000, channels: options.channels ?? 2, bitDepth: options.bitDepth ?? 24,
     tracks: [track], activeTrackId: track.id, selection: null,
     masterVolume: 1, loopStart: 0, loopEnd: 0, loopEnabled: false,
-    bpm: 120, timeSigNumerator: 4, timeSigDenominator: 4, markers: [], buses: [],
+    bpm: 120, timeSigNumerator: 4, timeSigDenominator: 4, markers: [], buses: [], crossfades: [],
   };
 }
 
 export function createAudioMarker(name: string, sampleTime: number): AudioMarker {
   return { id: crypto.randomUUID(), name, sampleTime: Math.max(0, Math.floor(sampleTime)) };
+}
+
+export function createAudioCrossfade(trackId: string, leftClipId: string, rightClipId: string, durationSamples: number, curve: FadeType = "linear"): AudioCrossfade {
+  return { id: crypto.randomUUID(), trackId, leftClipId, rightClipId, durationSamples: Math.max(1, Math.floor(durationSamples)), curve };
 }
 
 export function isAudioDocumentState(value: unknown): value is AudioDocumentState {
@@ -70,6 +74,7 @@ export function migrateAudioDocumentState(state: AudioDocumentState): AudioDocum
   if (typeof state.timeSigDenominator !== "number" || state.timeSigDenominator < 1) state.timeSigDenominator = 4;
   if (!Array.isArray(state.markers)) state.markers = [];
   if (!Array.isArray(state.buses)) state.buses = [];
+  if (!Array.isArray(state.crossfades)) state.crossfades = [];
   for (const track of state.tracks) {
     if (!Array.isArray(track.effects)) track.effects = [];
     if (!Array.isArray(track.volumeAutomation)) track.volumeAutomation = [];
@@ -105,6 +110,7 @@ export function cloneAudioState(state: AudioDocumentState): AudioDocumentState {
     selection: state.selection ? { trackId: state.selection.trackId, clipIds: [...state.selection.clipIds] } : null,
     markers: state.markers.map((marker) => ({ ...marker })),
     buses: state.buses.map((bus) => ({ ...bus, effects: bus.effects.map((effect) => ({ ...effect, params: { ...effect.params } })) })),
+    crossfades: state.crossfades.map((crossfade) => ({ ...crossfade })),
   };
 }
 

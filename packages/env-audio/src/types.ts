@@ -165,6 +165,25 @@ export interface AudioMarker {
   sampleTime: number;
 }
 
+/**
+ * A crossfade between two *adjacent* clips on the same track — the video-side
+ * `VideoTransition`'s own counterpart (`@vravio/env-video`'s `types.ts`), same shape: an object
+ * connecting two specific clips with its own duration/curve, not a fade baked separately into
+ * each clip's own fadeIn/fadeOut and hoped to line up. Adding one overlaps `rightClipId` (and
+ * everything after it on the track) leftward by `durationSamples` via the same `rippleShift`
+ * ripple-delete/ripple-trim already use. `curve` reuses `FadeType` rather than inventing a
+ * separate taxonomy — a musical crossfade and a fade-to-silence are the same shape of curve,
+ * just on two clips at once instead of one.
+ */
+export interface AudioCrossfade {
+  readonly id: string;
+  readonly trackId: string;
+  readonly leftClipId: string;
+  readonly rightClipId: string;
+  durationSamples: number;
+  curve: FadeType;
+}
+
 export interface AudioDocumentState {
   kind: "audio";
   schemaVersion: 1;
@@ -190,6 +209,7 @@ export interface AudioDocumentState {
   timeSigDenominator: number;
   markers: AudioMarker[];
   buses: AudioBus[];
+  crossfades: AudioCrossfade[];
 }
 
 export interface AudioDocumentOptions {

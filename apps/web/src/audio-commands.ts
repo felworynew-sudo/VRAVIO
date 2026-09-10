@@ -1,8 +1,8 @@
 import {
   addTake, applyLeftTrim, applyRightTrim, audioEffectCatalog, audioEffectDefaults, canPunchIn, canSplitAt, cloneAudioState,
-  constrainBoundaryTrim, constrainClipDrag, createAudioBus, createAudioClip, createAudioMarker, createAudioTrack, cycleTake, decodeWav,
-  encodeWav, punchInClip, removeAutomationPoint, rippleShift, setAutomationPoint, splitClip, type AudioDocumentState, type AudioEffectId,
-  type FadeType,
+  constrainBoundaryTrim, constrainClipDrag, createAudioBus, createAudioClip, createAudioCrossfade, createAudioMarker, createAudioTrack,
+  cycleTake, decodeWav, encodeWav, punchInClip, removeAutomationPoint, rippleShift, setAutomationPoint, splitClip,
+  type AudioDocumentState, type AudioEffectId, type FadeType,
 } from "@vravio/env-audio";
 import type { AssetId } from "@vravio/kernel";
 import { kernel } from "./kernel";
@@ -259,6 +259,42 @@ export function setTimeSignature(documentId: string, numerator: number, denomina
     if (state.timeSigNumerator === num && state.timeSigDenominator === den) return false;
     state.timeSigNumerator = num; state.timeSigDenominator = den;
     return true;
+  });
+}
+
+// --- Crossfades (a real object between two adjacent clips, the same shape `VideoTransition`
+// uses on the video side — docs/master-plan.md §33.2 priority 3's own "crossfade между клипами")
+
+/**
+ * Creates a crossfade between `leftClipId` and `rightClipId` on `trackId` — the two clips must be
+ * exactly adjacent (the right clip's `startSample` equal to the left clip's own end). Overlaps
+ * the right clip (and every later clip on the track) leftward by `durationSamples` via
+ * `rippleShift`, the same one-pass overlap `video-commands.ts`'s `addTransition` creates.
+ * `scheduleAudioGraph`'s own fade resolution (`apps/web/src/audioPlayback.ts`) treats a clip's
+ * crossfade edge as replacing its manual fadeIn/fadeOut for that edge, not layering on top of it.
+ */
+export function addCrossfade(documentId: string, trackId: string, leftClipId: string, rightClipId: string, durationSamples: number, curve: FadeType = "linear"): void {
+  void changeAudioDocument(documentId, "Add Crossfade (Добавить кроссфейд)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    const left = track?.clips.find((item) => item.id === leftClipId);
+    const right = track?.clips.find((item) => item.id === rightClipId);
+    if (!track || !left || !right) return false;
+    if (right.startSample !== left.startSample + left.durationSamples) return false; // not adjacent
+    const clamped = Math.max(1, Math.min(durationSamples, left.durationSamples, right.durationSamples));
+    track.clips = rippleShift(track.clips, right.startSample, -clamped);
+    state.crossfades.push(createAudioCrossfade(trackId, leftClipId, rightClipId, clamped, curve));
+    return true;
+  });
+}
+
+/** Removes a crossfade's own record without restoring the overlap — the clips stay where the
+ * crossfade left them, the same "the edit already happened" choice `removeTransition` makes on
+ * the video side. */
+export function removeCrossfade(documentId: string, crossfadeId: string): void {
+  void changeAudioDocument(documentId, "Remove Crossfade (Убрать кроссфейд)", (state) => {
+    const before = state.crossfades.length;
+    state.crossfades = state.crossfades.filter((item) => item.id !== crossfadeId);
+    return state.crossfades.length !== before;
   });
 }
 
