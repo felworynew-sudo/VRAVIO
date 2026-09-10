@@ -156,6 +156,12 @@ interface ShellState {
    * the gizmo itself renders from RasterWorkspace.tsx, a different component tree than the panel
    * the menu can live in, the same cross-tree reason `editingMaskLayerIdByDocument` exists). */
   scene3dOrbitLayerIdByDocument: Record<string, string | null>;
+  /** Same idea, for "Cast Shadow" — which 3D layer, if any, currently shows the ground-plane
+   * tilt/distance sliders (Scene3DGroundGizmo.tsx). A separate field rather than reusing the
+   * orbit one: the two are different modes on the same layer and only one should show at a time,
+   * but "rotate, then also configure the shadow without losing either's own state" is a real
+   * sequence a document could be in mid-session. */
+  scene3dGroundLayerIdByDocument: Record<string, string | null>;
   maskForegroundIsWhiteByDocument: Record<string, boolean>;
   viewports: Record<string, DocumentViewport>;
   foregroundColor: string;
@@ -181,6 +187,7 @@ interface ShellState {
   setSelectedLayers(documentId: string, layerIds: string[]): void;
   setEditingMask(documentId: string, layerId: string | null): void;
   setScene3DOrbitLayer(documentId: string, layerId: string | null): void;
+  setScene3DGroundLayer(documentId: string, layerId: string | null): void;
   setMaskForegroundWhite(documentId: string, white: boolean): void;
   swapMaskColors(documentId: string): void;
   setToolOption(toolId: string, optionId: string, value: string | number | boolean): void;
@@ -216,7 +223,7 @@ const createHistory = (memoryBudgetMb: number) => {
 };
 
 export const useShellStore = create<ShellState>((set) => ({
-  documentIds: [], activeDocumentId: null, mruOrder: [], activeToolByDocument: {}, selectedLayerIdsByDocument: {}, editingMaskLayerIdByDocument: {}, maskForegroundIsWhiteByDocument: {}, scene3dOrbitLayerIdByDocument: {}, viewports: {}, foregroundColor: "#000000", backgroundColor: "#ffffff", toolOptions: {}, paletteOpen: false, selectionEdgesHidden: false, settingsOpen: false,
+  documentIds: [], activeDocumentId: null, mruOrder: [], activeToolByDocument: {}, selectedLayerIdsByDocument: {}, editingMaskLayerIdByDocument: {}, maskForegroundIsWhiteByDocument: {}, scene3dOrbitLayerIdByDocument: {}, scene3dGroundLayerIdByDocument: {}, viewports: {}, foregroundColor: "#000000", backgroundColor: "#ffffff", toolOptions: {}, paletteOpen: false, selectionEdgesHidden: false, settingsOpen: false,
   theme: readPreference("vravio.theme", ["dark", "light", "contrast", "ps-dark"] as const, "dark"),
   language: readPreference("vravio.language", ["en", "ru", "uk", "es", "de", "ja", "zh"] as const, "ru"),
   preferences: readPreferences(),
@@ -288,14 +295,16 @@ export const useShellStore = create<ShellState>((set) => ({
     const editingMaskLayerIdByDocument = { ...state.editingMaskLayerIdByDocument };
     const maskForegroundIsWhiteByDocument = { ...state.maskForegroundIsWhiteByDocument };
     const scene3dOrbitLayerIdByDocument = { ...state.scene3dOrbitLayerIdByDocument };
+    const scene3dGroundLayerIdByDocument = { ...state.scene3dGroundLayerIdByDocument };
     delete viewports[id];
-    delete editingMaskLayerIdByDocument[id]; delete maskForegroundIsWhiteByDocument[id]; delete scene3dOrbitLayerIdByDocument[id];
-    return { documentIds, mruOrder, activeDocumentId, viewports, editingMaskLayerIdByDocument, maskForegroundIsWhiteByDocument, scene3dOrbitLayerIdByDocument };
+    delete editingMaskLayerIdByDocument[id]; delete maskForegroundIsWhiteByDocument[id]; delete scene3dOrbitLayerIdByDocument[id]; delete scene3dGroundLayerIdByDocument[id];
+    return { documentIds, mruOrder, activeDocumentId, viewports, editingMaskLayerIdByDocument, maskForegroundIsWhiteByDocument, scene3dOrbitLayerIdByDocument, scene3dGroundLayerIdByDocument };
   }),
   setTool: (documentId, toolId) => set((state) => ({ activeToolByDocument: { ...state.activeToolByDocument, [documentId]: toolId } })),
   setSelectedLayers: (documentId, layerIds) => set((state) => ({ selectedLayerIdsByDocument: { ...state.selectedLayerIdsByDocument, [documentId]: layerIds } })),
   setEditingMask: (documentId, layerId) => set((state) => ({ editingMaskLayerIdByDocument: { ...state.editingMaskLayerIdByDocument, [documentId]: layerId } })),
   setScene3DOrbitLayer: (documentId, layerId) => set((state) => ({ scene3dOrbitLayerIdByDocument: { ...state.scene3dOrbitLayerIdByDocument, [documentId]: layerId } })),
+  setScene3DGroundLayer: (documentId, layerId) => set((state) => ({ scene3dGroundLayerIdByDocument: { ...state.scene3dGroundLayerIdByDocument, [documentId]: layerId } })),
   setMaskForegroundWhite: (documentId, white) => set((state) => ({ maskForegroundIsWhiteByDocument: { ...state.maskForegroundIsWhiteByDocument, [documentId]: white } })),
   swapMaskColors: (documentId) => set((state) => ({ maskForegroundIsWhiteByDocument: { ...state.maskForegroundIsWhiteByDocument, [documentId]: !state.maskForegroundIsWhiteByDocument[documentId] } })),
   setToolOption: (toolId, optionId, value) => set((state) => ({ toolOptions: { ...state.toolOptions, [toolId]: { ...(state.toolOptions[toolId] ?? {}), [optionId]: value } } })),

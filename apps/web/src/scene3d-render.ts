@@ -6,6 +6,7 @@ import { TextGeometry } from "three/addons/geometries/TextGeometry.js";
 import { layerContentBounds, layerDocumentPixels, type RasterDocumentState, type RasterLayer, type Scene3DLayerData } from "@vravio/env-raster";
 import type { AssetId } from "@vravio/kernel";
 import { applyLighting, centerAndFit, createScene3D, readPixelsRgba } from "./three3d";
+import { applyGroundPlane } from "./scene3d-ground";
 import { kernel } from "./kernel";
 
 const fontCache = new Map<string, ReturnType<FontLoader["loadAsync"]>>();
@@ -153,6 +154,9 @@ export async function renderScene3DLayerPixels(data: Scene3DLayerData, document:
   scene3d.scene.add(rig);
   centerAndFit(rig, scene3d.camera);
   applyLighting(scene3d, data.lighting, 500);
+  // After centerAndFit, not before: the ground plane sits at the rig's own
+  // bounding-box bottom, which centerAndFit is what actually settles.
+  applyGroundPlane(scene3d, rig, data.ground);
   const pixels = readPixelsRgba(scene3d.renderer, scene3d.scene, scene3d.camera, document.width, document.height);
   scene3d.dispose();
   return pixels;

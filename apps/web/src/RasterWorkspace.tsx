@@ -9,6 +9,7 @@ import { kernel } from "./kernel";
 import { convertLayerToScene3D, importModelAsLayer } from "./scene3d-commands";
 import { harmonizeLayer } from "./harmonize-commands";
 import { Scene3DOrbitGizmo } from "./Scene3DOrbitGizmo";
+import { Scene3DGroundGizmo } from "./Scene3DGroundGizmo";
 import { rasterToolById } from "./environments/raster/tools/registry";
 import type { PaintTarget, ToolContext, ToolPointer } from "./environments/raster/tools/types";
 import { applyWarpPreset, commitPending, empty as moveToolEmpty, pendingBounds, startPendingTransform, type MoveState } from "./environments/raster/tools/definitions/move";
@@ -521,10 +522,17 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   // contract `move.tsx`'s own transform frame already keeps.
   const orbitGizmoLayerId = useShellStore((shell) => shell.scene3dOrbitLayerIdByDocument[document.id] ?? null);
   const setScene3DOrbitLayer = useShellStore((shell) => shell.setScene3DOrbitLayer);
+  // "Cast Shadow" — the ground-plane tilt/distance sliders (Scene3DGroundGizmo.tsx). Mutually
+  // exclusive with the orbit gizmo above (opening one closes the other, in the menu handler
+  // below): both are full-canvas live-render overlays for the same layer, and showing both at
+  // once would mean two persistent THREE sessions fighting over the same visible pixels.
+  const groundGizmoLayerId = useShellStore((shell) => shell.scene3dGroundLayerIdByDocument[document.id] ?? null);
+  const setScene3DGroundLayer = useShellStore((shell) => shell.setScene3DGroundLayer);
   useEffect(() => {
     if (orbitGizmoLayerId && (activeToolId !== "raster.move" || activeLayer3D?.id !== orbitGizmoLayerId)) setScene3DOrbitLayer(document.id, null);
+    if (groundGizmoLayerId && (activeToolId !== "raster.move" || activeLayer3D?.id !== groundGizmoLayerId)) setScene3DGroundLayer(document.id, null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orbitGizmoLayerId, activeToolId, activeLayer3D?.id, document.id]);
+  }, [orbitGizmoLayerId, groundGizmoLayerId, activeToolId, activeLayer3D?.id, document.id]);
   const documentOriginX = workspaceSize.width / 2 + viewport.panX - state.width * viewport.zoom / 2, documentOriginY = workspaceSize.height / 2 + viewport.panY - state.height * viewport.zoom / 2;
   const { updateBrushCursor, onPointerLeave: onBrushCursorLeave, brushOptions, tipRoundness, overlay: brushCursorOverlay } = useBrushCursor({
     state, viewport, toolOptions, activeToolId, brushLike, canvasPixels, workspaceRef, sourcePointRef, cloneOffsetRef, preciseCursor, documentOriginX, documentOriginY,
@@ -558,7 +566,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       the workspace element, so a point past the canvas edge already came out as the document
       coordinate it is (negative, or past the width) rather than being clamped or lost.
     */}
-    <div ref={pointerFieldRef} className="raster-pointer-field" style={dynamicCursor ? { cursor: dynamicCursor } : undefined} onPointerEnter={updateBrushCursor} onPointerLeave={() => { onBrushCursorLeave(); setDynamicCursor(undefined); }} onPointerDown={handlePointerDown} onPointerMove={(event) => { updateBrushCursor(event); handlePointerMove(event); }} onPointerUp={finishGesture} onPointerCancel={finishGesture} onContextMenu={(event) => { if (selectionLike) { onSelectionContextMenu(event); return; } if (activeToolId === "raster.move" && (toolStates["raster.move"] as MoveState | undefined)?.pending) { onTransformContextMenu(event); return; } if (activeToolId === "raster.move" && (canConvertToScene3D || canHarmonize) && activeLayerForConvert) { scene3dMenu.open(event, [...(canConvertToScene3D ? [{ label: text(language, "Convert to 3D", "Преобразовать в 3D"), onSelect: () => void convertLayerToScene3D(document.id, activeLayerForConvert.id) }] : []), ...(canHarmonize ? [{ label: text(language, "Rotate 3D Object", "Повернуть 3D объект"), onSelect: () => setScene3DOrbitLayer(document.id, activeLayerForConvert.id) }, { label: text(language, "Harmonize with Scene", "Гармонизировать со сценой"), onSelect: () => void harmonizeLayer(document.id, activeLayerForConvert.id) }] : [])]); return; } event.preventDefault(); if (!brushLike) return; const rect = workspaceRef.current?.getBoundingClientRect(); if (rect) setBrushPopup({ left: Math.min(event.clientX - rect.left, rect.width - 300), top: Math.min(event.clientY - rect.top, rect.height - 430), detailed: false }); }} />
+    <div ref={pointerFieldRef} className="raster-pointer-field" style={dynamicCursor ? { cursor: dynamicCursor } : undefined} onPointerEnter={updateBrushCursor} onPointerLeave={() => { onBrushCursorLeave(); setDynamicCursor(undefined); }} onPointerDown={handlePointerDown} onPointerMove={(event) => { updateBrushCursor(event); handlePointerMove(event); }} onPointerUp={finishGesture} onPointerCancel={finishGesture} onContextMenu={(event) => { if (selectionLike) { onSelectionContextMenu(event); return; } if (activeToolId === "raster.move" && (toolStates["raster.move"] as MoveState | undefined)?.pending) { onTransformContextMenu(event); return; } if (activeToolId === "raster.move" && (canConvertToScene3D || canHarmonize) && activeLayerForConvert) { scene3dMenu.open(event, [...(canConvertToScene3D ? [{ label: text(language, "Convert to 3D", "Преобразовать в 3D"), onSelect: () => void convertLayerToScene3D(document.id, activeLayerForConvert.id) }] : []), ...(canHarmonize ? [{ label: text(language, "Rotate 3D Object", "Повернуть 3D объект"), onSelect: () => { setScene3DGroundLayer(document.id, null); setScene3DOrbitLayer(document.id, activeLayerForConvert.id); } }, { label: text(language, "Cast Shadow…", "Настроить тень…"), onSelect: () => { setScene3DOrbitLayer(document.id, null); setScene3DGroundLayer(document.id, activeLayerForConvert.id); } }, { label: text(language, "Harmonize with Scene", "Гармонизировать со сценой"), onSelect: () => void harmonizeLayer(document.id, activeLayerForConvert.id) }] : [])]); return; } event.preventDefault(); if (!brushLike) return; const rect = workspaceRef.current?.getBoundingClientRect(); if (rect) setBrushPopup({ left: Math.min(event.clientX - rect.left, rect.width - 300), top: Math.min(event.clientY - rect.top, rect.height - 430), detailed: false }); }} />
     <div className="raster-stage" style={stageStyle}>
       <canvas ref={canvasRef} className={brushLike ? "brush-cursor-canvas" : ""} width={state.width} height={state.height} />
       {/* Whatever the active catalogue tool draws over the canvas. */}
@@ -586,6 +594,8 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       live and asked for it to come off).
     */}
     {activeToolId === "raster.move" && activeLayer3D && orbitGizmoLayerId === activeLayer3D.id && <Scene3DOrbitGizmo documentId={document.id} document={state} layer={activeLayer3D} zoom={viewport.zoom} documentOriginX={documentOriginX} documentOriginY={documentOriginY} onClose={() => setScene3DOrbitLayer(document.id, null)}/>}
+    {/* Scene3DGroundGizmo: the ground-plane tilt/distance sliders for "Cast Shadow" — same entry door as the orbit gizmo above, mutually exclusive with it. */}
+    {activeToolId === "raster.move" && activeLayer3D && groundGizmoLayerId === activeLayer3D.id && <Scene3DGroundGizmo documentId={document.id} document={state} layer={activeLayer3D} zoom={viewport.zoom} documentOriginX={documentOriginX} documentOriginY={documentOriginY} onClose={() => setScene3DGroundLayer(document.id, null)}/>}
     {preferences.showGuides && guideOverlay}
     {preferences.showRulers && rulers}
     {brushPopup && brushLike && activeToolId && <RasterBrushTipPopup activeToolId={activeToolId} brushOptions={brushOptions} position={brushPopup} detailed={brushPopup.detailed} onToggleDetailed={() => setBrushPopup({ ...brushPopup, detailed: !brushPopup.detailed })} onClose={() => setBrushPopup(null)} setToolOption={setToolOption}/>}

@@ -8,7 +8,7 @@ import { RasterWorkspace } from "./RasterWorkspace";
 import { VectorWorkspace } from "./VectorWorkspace";
 import { AudioWorkspace } from "./AudioWorkspace";
 import { VideoWorkspace } from "./VideoWorkspace";
-import { appendLayer, appendRasterGroup, compositeRasterDocument, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, createRasterLayerMaskFromSelection, isRasterDocumentState, layerDocumentPixels, punchSelectionIntoMask, rasterLayerDescendantIds, rasterLayerRows, renderLayerEffects, setLayerPixels, dropPositionInRow, dropTargetForRow, placeLayer, toggleLayerLink, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerEffects, type RasterLayerMask } from "@vravio/env-raster";
+import { appendLayer, appendRasterGroup, compositeRasterDocument, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, createRasterLayerMaskFromSelection, defaultScene3DGround, isRasterDocumentState, layerDocumentPixels, punchSelectionIntoMask, rasterLayerDescendantIds, rasterLayerRows, renderLayerEffects, setLayerPixels, dropPositionInRow, dropTargetForRow, placeLayer, toggleLayerLink, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerEffects, type RasterLayerMask } from "@vravio/env-raster";
 import { kernel } from "./kernel";
 import { EnvironmentIcon } from "./EnvironmentIcon";
 import { localized, text } from "./i18n";
@@ -223,6 +223,8 @@ function Scene3DProperties({ documentId, layer, language }: { documentId: string
   };
   const commitLighting = (patch: Partial<typeof data.lighting>) => commit({ lighting: { ...data.lighting, ...patch } });
   const commitSource = (patch: Partial<typeof data.source>) => commit({ source: { ...data.source, ...patch } as typeof data.source });
+  const ground = data.ground ?? { ...defaultScene3DGround, distance: data.size * 0.3 };
+  const commitGround = (patch: Partial<typeof ground>) => commit({ ground: { ...ground, ...patch } });
   return <div className="dock-panel-body property-stack scene3d-properties">
     <strong>{text(language, "3D Layer", "3D-слой")}</strong>
     {data.source.kind === "text" && <>
@@ -247,6 +249,15 @@ function Scene3DProperties({ documentId, layer, language }: { documentId: string
     <label>{text(language, "Light Intensity", "Яркость света")}<input type="range" min={0} max={4} step={0.1} value={data.lighting.directionalIntensity} onChange={(event) => commitLighting({ directionalIntensity: event.target.valueAsNumber })}/><output>{data.lighting.directionalIntensity}</output></label>
     <label>{text(language, "Light Color", "Цвет света")}<input type="color" value={data.lighting.directionalColor} onChange={(event) => commitLighting({ directionalColor: event.target.value })}/></label>
     <label>{text(language, "Ambient Intensity", "Рассеянный свет")}<input type="range" min={0} max={2} step={0.05} value={data.lighting.ambientIntensity} onChange={(event) => commitLighting({ ambientIntensity: event.target.valueAsNumber })}/><output>{data.lighting.ambientIntensity}</output></label>
+    <strong>{text(language, "Ground Shadow", "Тень на поверхность")}</strong>
+    <label className="export-check"><input type="checkbox" checked={ground.enabled} onChange={(event) => commitGround({ enabled: event.target.checked })}/>{text(language, "Cast onto an invisible plane", "Отбрасывать на невидимую поверхность")}</label>
+    {ground.enabled && <>
+      {/* Numeric fallback for the same tilt/distance the on-canvas "Cast Shadow…" sliders (Scene3DGroundGizmo.tsx) drag live — either door commits through the same updateScene3DLayer call. */}
+      <label>{text(language, "Surface Tilt", "Наклон поверхности")}<input type="range" min={0} max={90} value={ground.tiltX} onChange={(event) => commitGround({ tiltX: event.target.valueAsNumber })}/><output>{Math.round(ground.tiltX)}°</output></label>
+      <label>{text(language, "Surface Distance", "Расстояние до поверхности")}<input type="range" min={0} max={Math.max(ground.distance * 2, data.size)} value={ground.distance} onChange={(event) => commitGround({ distance: event.target.valueAsNumber })}/><output>{Math.round(ground.distance)}</output></label>
+      <label>{text(language, "Shadow Opacity", "Непрозрачность тени")}<input type="range" min={0} max={100} value={ground.opacity} onChange={(event) => commitGround({ opacity: event.target.valueAsNumber })}/><output>{Math.round(ground.opacity)}%</output></label>
+      <label>{text(language, "Shadow Softness", "Мягкость тени")}<input type="range" min={0} max={20} value={ground.softness} onChange={(event) => commitGround({ softness: event.target.valueAsNumber })}/><output>{Math.round(ground.softness)}</output></label>
+    </>}
     {data.source.kind === "model" && <button className="secondary-action" onClick={() => { const input = window.document.createElement("input"); input.type = "file"; input.accept = ".obj,.glb,.gltf"; input.onchange = () => { const file = input.files?.[0]; if (file) void importModelAsLayer(documentId, file); }; input.click(); }}>{text(language, "Replace Model…", "Заменить модель…")}</button>}
   </div>;
 }
@@ -470,6 +481,7 @@ function LayersPanel() {
   const editingMaskLayerId = useShellStore((state) => activeDocumentId ? state.editingMaskLayerIdByDocument[activeDocumentId] ?? null : null);
   const setEditingMask = useShellStore((state) => state.setEditingMask);
   const setScene3DOrbitLayer = useShellStore((state) => state.setScene3DOrbitLayer);
+  const setScene3DGroundLayer = useShellStore((state) => state.setScene3DGroundLayer);
   const setTool = useShellStore((state) => state.setTool);
   useEffect(() => {
     const open = () => { const current = activeDocumentId ? kernel.documents.get<RasterDocumentState>(activeDocumentId) : null; if (current && isRasterDocumentState(current.state)) setStyleLayerId(current.state.activeLayerId); };
@@ -600,7 +612,8 @@ function LayersPanel() {
         // tool is active (it sits under that tool's own transform frame),
         // so choosing it from here has to switch tools too, or the click
         // would silently do nothing.
-        ...(layer.kind === "3d" ? [{ label: text(language, "Rotate 3D Object", "Повернуть 3D объект"), onSelect: () => { setTool(active.id, "raster.move"); setScene3DOrbitLayer(active.id, layer.id); } }] : []),
+        ...(layer.kind === "3d" ? [{ label: text(language, "Rotate 3D Object", "Повернуть 3D объект"), onSelect: () => { setTool(active.id, "raster.move"); setScene3DGroundLayer(active.id, null); setScene3DOrbitLayer(active.id, layer.id); } }] : []),
+        ...(layer.kind === "3d" ? [{ label: text(language, "Cast Shadow…", "Настроить тень…"), onSelect: () => { setTool(active.id, "raster.move"); setScene3DOrbitLayer(active.id, null); setScene3DGroundLayer(active.id, layer.id); } }] : []),
         ...(layer.kind === "3d" ? [{ label: text(language, "Harmonize with Scene", "Гармонизировать со сценой"), onSelect: () => void harmonizeLayer(active.id, layer.id) }] : []),
         item("layer.mergeDown"),
         item("layer.mergeVisible"),

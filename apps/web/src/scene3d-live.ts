@@ -1,7 +1,8 @@
 import * as THREE from "three";
-import type { RasterDocumentState, Scene3DLayerData } from "@vravio/env-raster";
-import { applyLighting, centerAndFit, createScene3D } from "./three3d";
+import type { RasterDocumentState, Scene3DGround, Scene3DLayerData } from "@vravio/env-raster";
+import { applyLighting, centerAndFit, createScene3D, type Scene3D } from "./three3d";
 import { buildGeometrySource } from "./scene3d-render";
+import { applyGroundPlane } from "./scene3d-ground";
 
 /**
  * A persistent live-render session for one interactive rotation drag — the
@@ -34,17 +35,24 @@ export interface LiveScene3DSession {
    * no geometry rebuild, no `readPixels`, just a bounding-box recompute and one GPU draw call. */
   render(): void;
   setRotation(rotationX: number, rotationY: number, rotationZ: number): void;
+  /** Rebuilds the ground plane and shadow-camera setup for a new tilt/distance/opacity/softness
+   * — see `scene3d-ground.ts`'s own doc comment. Removing the previous plane first, rather than
+   * just repositioning it, is deliberate: `enabled: false` (or switching the whole feature off
+   * mid-session) has to actually remove the shadow, not leave a zero-opacity plane still
+   * consuming a shadow-map render pass every frame. */
+  setGround(ground: Scene3DGround | undefined): void;
   dispose(): void;
 }
 
 export async function beginLiveScene3D(canvas: HTMLCanvasElement, data: Scene3DLayerData, document: RasterDocumentState): Promise<LiveScene3DSession> {
   const object = await buildGeometrySource(data, document);
-  const scene3d = createScene3D(canvas, document.width, document.height);
+  const scene3d: Scene3D = createScene3D(canvas, document.width, document.height);
   const rig = new THREE.Group();
   rig.add(object);
   scene3d.scene.add(rig);
   applyLighting(scene3d, data.lighting, 500);
   let disposed = false;
+  let groundPlane: THREE.Mesh | null = null;
   const render = () => {
     if (disposed) return;
     centerAndFit(rig, scene3d.camera);
@@ -55,31 +63,39 @@ export async function beginLiveScene3D(canvas: HTMLCanvasElement, data: Scene3DL
     rig.rotation.set(rotationX * Math.PI / 180, rotationY * Math.PI / 180, rotationZ * Math.PI / 180);
     render();
   };
+  const setGround = (ground: Scene3DGround | undefined) => {
+    if (disposed) return;
+    if (groundPlane) { scene3d.scene.remove(groundPlane); groundPlane.geometry.dispose(); (groundPlane.material as THREE.Material).dispose(); groundPlane = null; }
+    groundPlane = applyGroundPlane(scene3d, rig, ground);
+    render();
+  };
   setRotation(data.rotationX, data.rotationY, data.rotationZ);
   return {
     scene: scene3d.scene, camera: scene3d.camera, renderer: scene3d.renderer, rig,
-    render, setRotation,
+    render, setRotation, setGround,
     dispose: () => { disposed = true; scene3d.dispose(); },
   };
 }
 
 /**
  * A bounded track's arithmetic — a linear ["-------o------"](the owner's own drawing) whose knob
- * position is an *absolute* reading of a value across [-180°, 180°], the same range the Properties
- * panel's own rotation sliders use. No longer used for the 3D object's own rotation (replaced by
- * the Blender-style orbit gizmo, `Scene3DOrbitGizmo.tsx` — the owner tried the linear-slider
- * version live and asked for it to come off), but the same bounded-track control is reused for the
- * ground plane's tilt. Kept pure and separate from whichever component wires it up (this
- * codebase's own convention — the tool state-machine math in `move.tsx` is pure functions, the
- * JSX around it is thin) so the mapping is unit-testable without a DOM.
+ * position is an *absolute* reading of a value across `[min, max]`. Originally the 3D object's
+ * own rotation, fixed at [-180°, 180°] (replaced by the Blender-style orbit gizmo,
+ * `Scene3DOrbitGizmo.tsx` — the owner tried the linear-slider version live and asked for it to
+ * come off); generalized to an arbitrary range for the ground plane's tilt and distance sliders
+ * (`Scene3DGroundGizmo.tsx`), which need different bounds than a rotation does. Kept pure and
+ * separate from whichever component wires it up (this codebase's own convention — the tool
+ * state-machine math in `move.tsx` is pure functions, the JSX around it is thin) so the mapping
+ * is unit-testable without a DOM.
  */
-export function rotationFromTrackOffset(offset: number, trackLength: number): number {
-  if (trackLength <= 0) return 0;
+export function valueFromTrackOffset(offset: number, trackLength: number, min: number, max: number): number {
+  if (trackLength <= 0) return min;
   const fraction = Math.max(0, Math.min(1, offset / trackLength));
-  return Math.round(fraction * 360 - 180);
+  return min + fraction * (max - min);
 }
 
-export function trackOffsetFromRotation(rotation: number, trackLength: number): number {
-  const clamped = Math.max(-180, Math.min(180, rotation));
-  return ((clamped + 180) / 360) * trackLength;
+export function trackOffsetFromValue(value: number, trackLength: number, min: number, max: number): number {
+  if (max <= min) return 0;
+  const clamped = Math.max(min, Math.min(max, value));
+  return ((clamped - min) / (max - min)) * trackLength;
 }

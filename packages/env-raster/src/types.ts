@@ -54,6 +54,38 @@ export type Scene3DSource =
   | { kind: "model"; assetId: string; fileName: string }
   | { kind: "extrude"; sourceLayerId: string; depth: number };
 
+/**
+ * An invisible surface a 3D layer's own shadow falls onto — the owner's own
+ * request: "как-то реально обозначить невидимой плоскостью где находится
+ * этот стол, чтобы на него могла откинуться тень как в 3D пространстве"
+ * (mark, with an invisible plane, where a table in the background actually
+ * is, so the object can cast a shadow onto it like it would in real 3D
+ * space). Deliberately not a full single-view camera calibration (solving a
+ * ground plane's true 3D orientation from a photo needs a known focal
+ * length/sensor size this project has no source for) — `tiltX`/`distance`
+ * are the two knobs a live shadow preview can be *dragged into place* with,
+ * matching the table's own perspective by eye, which is both simpler to
+ * reason about and more convenient than a numeric calibration dialog would
+ * be: what you see while dragging is exactly what commits.
+ */
+export interface Scene3DGround {
+  enabled: boolean;
+  /** Degrees the plane tilts away from the camera around X — 0 is
+   * face-on (a wall), 90 is a floor seen from directly above. */
+  tiltX: number;
+  /** How far below the object's own centered origin the plane sits, in
+   * the same units as `Scene3DLayerData.size`. */
+  distance: number;
+  /** 0–100, the shadow's own darkness where it falls. */
+  opacity: number;
+  /** 0–20-ish, the shadow edge's blur radius — a bare point light has a
+   * hard-edged shadow at 0, larger values read as a bigger/softer light
+   * source (an overcast sky, a big window) the way a real shadow would. */
+  softness: number;
+}
+
+export const defaultScene3DGround: Scene3DGround = { enabled: false, tiltX: 65, distance: 60, opacity: 55, softness: 6 };
+
 export interface Scene3DLayerData {
   source: Scene3DSource;
   size: number;
@@ -64,6 +96,10 @@ export interface Scene3DLayerData {
   rotationY: number;
   rotationZ: number;
   lighting: Scene3DLighting;
+  /** Absent on every layer created before this field existed — `structuredClone` already
+   * carries it through undo snapshots once present, the same as every other optional layer
+   * property in this project; a layer with no `ground` renders exactly as it always has. */
+  ground?: Scene3DGround;
 }
 
 export interface RasterTextPath { start: { x: number; y: number }; control: { x: number; y: number }; end: { x: number; y: number }; flip?: boolean }
