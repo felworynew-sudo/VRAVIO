@@ -25,9 +25,18 @@ const vector: readonly WorkspacePreset[] = [
   { id: "essentials", label: { en: "Essentials", ru: "Основное" }, panels: ["properties", "layers", "history", "color"] },
   { id: "illustration", label: { en: "Illustration", ru: "Иллюстрация" }, panels: ["properties", "layers", "palette", "symbols", "color", "artboards"] },
 ];
+// Audio gained a real Inspector (`properties`) after this file was first written with empty
+// panel lists for both media kinds — found live: `panels: []` here isn't "no opinion, ask
+// `readVisiblePanelIds`" the way `undefined` would be, it's a *specific, empty* list that wins
+// over the catalogue's own defaults (`preset?.panels ?? […]` only falls through on
+// null/undefined), so the side dock silently never got anything, an empty docked group sitting
+// on screen at its full stored width for a panel that was never actually missing, it just wasn't
+// asked for. Video still has no genuinely useful docked panel of its own — its clip inspector is
+// inline in the timeline strip (docs/master-plan.md §33.3), so an empty list there is still the
+// deliberate choice this file's own top comment describes, not the same bug.
 const audio: readonly WorkspacePreset[] = [
-  { id: "essentials", label: { en: "Audio Essentials", ru: "Основное аудио" }, panels: [] },
-  { id: "editing", label: { en: "Audio Editing", ru: "Монтаж аудио" }, panels: [] },
+  { id: "essentials", label: { en: "Audio Essentials", ru: "Основное аудио" }, panels: ["properties"] },
+  { id: "editing", label: { en: "Audio Editing", ru: "Монтаж аудио" }, panels: ["properties"] },
 ];
 const video: readonly WorkspacePreset[] = [
   { id: "essentials", label: { en: "Video Essentials", ru: "Основное видео" }, panels: [] },

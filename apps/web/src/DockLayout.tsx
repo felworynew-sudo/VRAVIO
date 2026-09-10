@@ -1345,10 +1345,18 @@ function createDefaultLayout(api: DockviewReadyEvent["api"], language: Language,
   // vertically, which made it impossible to drag Layers below Properties.
   // Grid groups retain native Photoshop-like tab grouping and can be split
   // above/below by both drag-and-drop and the panel menu.
+  // Skip the side group entirely when nothing would go in it — creating it first and hoping a
+  // later cleanup pass notices it's empty (`onDidLayoutChange`'s own check, below) is a real
+  // fallback for a layout that *becomes* empty after the fact (the user closing a panel), but for
+  // the very first layout of a session it left an empty docked group sitting at its full stored
+  // width, found live on both Audio and Video's default preset before its own panel list bug was
+  // fixed (`workspace-presets.ts`) — no group ever created here means nothing to clean up later.
+  const visible = new Set(panelIds);
+  const initialPanels = windowsFor(kind).filter((panel) => visible.has(panel.id));
+  if (initialPanels.length === 0) return;
   const sideGroup = api.addGroup({ id: "right-panels", referenceGroup: viewportGroup, direction: "right", initialWidth: 280 });
   sideGroup.api.setHeaderPosition("top");
-  const visible = new Set(panelIds);
-  for (const panel of windowsFor(kind)) if (visible.has(panel.id)) api.addPanel({ id: panel.id, component: panel.component, title: windowTitle(panel, language), position: { referenceGroup: sideGroup.id, direction: "within" } });
+  for (const panel of initialPanels) api.addPanel({ id: panel.id, component: panel.component, title: windowTitle(panel, language), position: { referenceGroup: sideGroup.id, direction: "within" } });
 }
 
 export function DockLayout() {
