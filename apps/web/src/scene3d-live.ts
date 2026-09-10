@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { RasterDocumentState, Scene3DGround, Scene3DLayerData } from "@vravio/env-raster";
-import { applyLighting, centerAndFit, createScene3D, type Scene3D } from "./three3d";
+import { applyLighting, centerAndFit, createScene3D, type LightingSettings, type Scene3D } from "./three3d";
 import { buildGeometrySource } from "./scene3d-render";
 import { applyGroundPlane } from "./scene3d-ground";
 
@@ -35,6 +35,11 @@ export interface LiveScene3DSession {
    * no geometry rebuild, no `readPixels`, just a bounding-box recompute and one GPU draw call. */
   render(): void;
   setRotation(rotationX: number, rotationY: number, rotationZ: number): void;
+  /** Retunes the ambient/directional rig in place — the mini live preview (`Scene3DMiniPreview.tsx`)
+   * needs this so the owner's own light-azimuth/elevation/intensity dials can retune a light that
+   * is already part of a running session, the same way `setRotation` retunes the object without
+   * rebuilding anything else. */
+  setLighting(lighting: LightingSettings): void;
   /** Rebuilds the ground plane and shadow-camera setup for a new tilt/distance/opacity/softness
    * — see `scene3d-ground.ts`'s own doc comment. Removing the previous plane first, rather than
    * just repositioning it, is deliberate: `enabled: false` (or switching the whole feature off
@@ -90,6 +95,11 @@ export async function beginLiveScene3D(canvas: HTMLCanvasElement, data: Scene3DL
     rig.rotation.set(rotationX * Math.PI / 180, rotationY * Math.PI / 180, rotationZ * Math.PI / 180);
     render();
   };
+  const setLighting = (lighting: LightingSettings) => {
+    if (disposed) return;
+    applyLighting(scene3d, lighting, 500);
+    render();
+  };
   const setGround = (ground: Scene3DGround | undefined) => {
     if (disposed) return;
     if (groundPlane) { scene3d.scene.remove(groundPlane); groundPlane.geometry.dispose(); (groundPlane.material as THREE.Material).dispose(); groundPlane = null; }
@@ -99,7 +109,7 @@ export async function beginLiveScene3D(canvas: HTMLCanvasElement, data: Scene3DL
   setRotation(data.rotationX, data.rotationY, data.rotationZ);
   return {
     scene: scene3d.scene, camera: scene3d.camera, renderer: scene3d.renderer, rig,
-    render, setRotation, setGround,
+    render, setRotation, setLighting, setGround,
     dispose: () => { disposed = true; scene3d.dispose(); },
   };
 }

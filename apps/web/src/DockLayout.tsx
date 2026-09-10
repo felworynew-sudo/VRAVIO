@@ -38,6 +38,8 @@ import { useCloseOnOutsideClick } from "./useCloseOnOutsideClick";
 import { WORKSPACE_LAYOUT_STORAGE_KEY, WORKSPACE_PRESET_EVENT, selectedWorkspacePreset, workspacePresetById, type WorkspacePresetDetail } from "./workspace-presets";
 import { pickCommands } from "./commands/surface";
 import { convertLayerToScene3D, importModelAsLayer, updateScene3DLayer } from "./scene3d-commands";
+import { AngleDial } from "./AngleDial";
+import { Scene3DMiniPreview } from "./Scene3DMiniPreview";
 import type { ReversibleOperation } from "@vravio/kernel";
 import { AppearancePanel } from "./environments/vector/AppearancePanel";
 import { GeometryModifiersPanel } from "./environments/vector/GeometryModifiersPanel";
@@ -90,7 +92,7 @@ function InspectorPanel({ params }: IDockviewPanelProps<{ kind?: string }>) {
       const definition = rasterAdjustmentById.get(adjustment.kind);
       if (definition) { const index = rasterState.layers.findIndex((item) => item.id === layer.id), pixels = compositeRasterDocument({ ...rasterState, layers: rasterState.layers.slice(0, Math.max(0, index)) }); return <div className="dock-panel-body property-stack adjustment-properties"><header><img src={iconUrl(definition.icon)} alt=""/><strong>{language === "ru" ? definition.name.ru : definition.name.en}</strong></header><definition.Editor value={adjustment} language={language} histogram={luminanceHistogram(pixels)} onChange={(next) => { const before = adjustment, targetId = layer.id; const write = (value: typeof adjustment) => kernel.documents.update<RasterDocumentState>(document.id, (state) => { const current = state.layers.find((item) => item.id === targetId); if (current?.adjustment) current.adjustment = value; }); write(next); const history = kernel.historyByDocument.get(document.id); if (history) void history.record(mergeableEdit(`Adjustment: ${language === "ru" ? definition.name.ru : definition.name.en}`, () => write(before), () => write(next)), true); }}/></div>; }
     }
-    if (layer?.kind === "3d" && layer.scene3d) return <Scene3DProperties documentId={document.id} layer={layer} language={language} />;
+    if (layer?.kind === "3d" && layer.scene3d) return <Scene3DProperties documentId={document.id} document={rasterState} layer={layer} language={language} />;
   }
   if (document && isVectorDocumentState(document.state)) {
     const vectorState = document.state;
@@ -200,7 +202,7 @@ function AudioInspector({ documentId, state, language }: { documentId: string; s
  * elevation) dragged within the same animation frame both read the same still-stale `data` —
  * the first commit hasn't landed yet — so a shallow merge would drop whichever field's own
  * patch got overwritten by the other's freshly-spread-but-incomplete `lighting` object. */
-function Scene3DProperties({ documentId, layer, language }: { documentId: string; layer: RasterLayer; language: Language }) {
+function Scene3DProperties({ documentId, document, layer, language }: { documentId: string; document: RasterDocumentState; layer: RasterLayer; language: Language }) {
   const data = layer.scene3d!;
   const pendingRef = useRef<{ frame: number; patch: Partial<typeof data> } | null>(null);
   const commit = (patch: Partial<typeof data>) => {
@@ -239,17 +241,28 @@ function Scene3DProperties({ documentId, layer, language }: { documentId: string
       <label>{text(language, "Metalness", "Металличность")}<input type="range" min={0} max={1} step={0.05} value={data.metalness} onChange={(event) => commit({ metalness: event.target.valueAsNumber })}/><output>{data.metalness}</output></label>
       <label>{text(language, "Roughness", "Шероховатость")}<input type="range" min={0} max={1} step={0.05} value={data.roughness} onChange={(event) => commit({ roughness: event.target.valueAsNumber })}/><output>{data.roughness}</output></label>
     </>}
-    <label>{text(language, "Rotate X", "Вращение X")}<input type="range" min={-180} max={180} value={data.rotationX} onChange={(event) => commit({ rotationX: event.target.valueAsNumber })}/><output>{data.rotationX}°</output></label>
-    <label>{text(language, "Rotate Y", "Вращение Y")}<input type="range" min={-180} max={180} value={data.rotationY} onChange={(event) => commit({ rotationY: event.target.valueAsNumber })}/><output>{data.rotationY}°</output></label>
-    <label>{text(language, "Rotate Z", "Вращение Z")}<input type="range" min={-180} max={180} value={data.rotationZ} onChange={(event) => commit({ rotationZ: event.target.valueAsNumber })}/><output>{data.rotationZ}°</output></label>
+    {/* The owner's own sketch: a mini live preview in the middle, rotation dials to its left,
+        light dials to its right — Scene3DMiniPreview.tsx and AngleDial.tsx are the two pieces
+        this needed that did not exist anywhere in the app yet (a persistent-session panel
+        preview; a generic drag-a-ring-to-set-a-value control, generalizing the brush tip's own
+        angle handle rather than becoming a second copy of the same trig). */}
+    <div className="scene3d-properties-cluster">
+      <div className="scene3d-dial-column">
+        <div className="scene3d-dial-row"><AngleDial value={data.rotationX} min={-180} max={180} onChange={(value) => commit({ rotationX: value })} title={text(language, "Rotate X", "Вращение X")}/><span>X</span><output>{Math.round(data.rotationX)}°</output></div>
+        <div className="scene3d-dial-row"><AngleDial value={data.rotationY} min={-180} max={180} onChange={(value) => commit({ rotationY: value })} title={text(language, "Rotate Y", "Вращение Y")}/><span>Y</span><output>{Math.round(data.rotationY)}°</output></div>
+        <div className="scene3d-dial-row"><AngleDial value={data.rotationZ} min={-180} max={180} onChange={(value) => commit({ rotationZ: value })} title={text(language, "Rotate Z", "Вращение Z")}/><span>Z</span><output>{Math.round(data.rotationZ)}°</output></div>
+      </div>
+      <Scene3DMiniPreview document={document} data={data}/>
+      <div className="scene3d-dial-column">
+        <div className="scene3d-dial-row"><AngleDial value={data.lighting.azimuth} min={-180} max={180} onChange={(value) => commitLighting({ azimuth: value })} title={text(language, "Light Azimuth", "Свет: азимут")}/><span>⟳</span><output>{Math.round(data.lighting.azimuth)}°</output></div>
+        <div className="scene3d-dial-row"><AngleDial value={data.lighting.elevation} min={0} max={90} onChange={(value) => commitLighting({ elevation: value })} title={text(language, "Light Elevation", "Свет: высота")}/><span>↕</span><output>{Math.round(data.lighting.elevation)}°</output></div>
+        <div className="scene3d-dial-row"><AngleDial value={data.lighting.directionalIntensity} min={0} max={4} onChange={(value) => commitLighting({ directionalIntensity: value })} title={text(language, "Light Intensity", "Яркость света")}/><span>💡</span><output>{data.lighting.directionalIntensity.toFixed(1)}</output></div>
+      </div>
+    </div>
+    <label className="export-check"><input type="checkbox" checked={ground.enabled} onChange={(event) => commitGround({ enabled: event.target.checked })}/>{text(language, "Shadow on surface", "Тень на поверхность")}</label>
     <strong>{text(language, "Lighting", "Освещение")}</strong>
-    <label>{text(language, "Light Azimuth", "Свет: азимут")}<input type="range" min={-180} max={180} value={data.lighting.azimuth} onChange={(event) => commitLighting({ azimuth: event.target.valueAsNumber })}/><output>{data.lighting.azimuth}°</output></label>
-    <label>{text(language, "Light Elevation", "Свет: высота")}<input type="range" min={0} max={90} value={data.lighting.elevation} onChange={(event) => commitLighting({ elevation: event.target.valueAsNumber })}/><output>{data.lighting.elevation}°</output></label>
-    <label>{text(language, "Light Intensity", "Яркость света")}<input type="range" min={0} max={4} step={0.1} value={data.lighting.directionalIntensity} onChange={(event) => commitLighting({ directionalIntensity: event.target.valueAsNumber })}/><output>{data.lighting.directionalIntensity}</output></label>
     <label>{text(language, "Light Color", "Цвет света")}<input type="color" value={data.lighting.directionalColor} onChange={(event) => commitLighting({ directionalColor: event.target.value })}/></label>
     <label>{text(language, "Ambient Intensity", "Рассеянный свет")}<input type="range" min={0} max={2} step={0.05} value={data.lighting.ambientIntensity} onChange={(event) => commitLighting({ ambientIntensity: event.target.valueAsNumber })}/><output>{data.lighting.ambientIntensity}</output></label>
-    <strong>{text(language, "Ground Shadow", "Тень на поверхность")}</strong>
-    <label className="export-check"><input type="checkbox" checked={ground.enabled} onChange={(event) => commitGround({ enabled: event.target.checked })}/>{text(language, "Cast onto an invisible plane", "Отбрасывать на невидимую поверхность")}</label>
     {ground.enabled && <>
       {/* Numeric fallback for tiltX/distance — tiltZ has no slider here (only the on-canvas point-placement flow, Scene3DGroundPointsGizmo.tsx, sets it), matching the owner's own request to keep this panel plain until a redesigned one replaces it. Either door commits through the same updateScene3DLayer call. */}
       <label>{text(language, "Surface Tilt", "Наклон поверхности")}<input type="range" min={0} max={90} value={ground.tiltX} onChange={(event) => commitGround({ tiltX: event.target.valueAsNumber })}/><output>{Math.round(ground.tiltX)}°</output></label>
