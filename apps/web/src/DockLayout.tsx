@@ -38,7 +38,6 @@ import { useCloseOnOutsideClick } from "./useCloseOnOutsideClick";
 import { WORKSPACE_LAYOUT_STORAGE_KEY, WORKSPACE_PRESET_EVENT, selectedWorkspacePreset, workspacePresetById, type WorkspacePresetDetail } from "./workspace-presets";
 import { pickCommands } from "./commands/surface";
 import { convertLayerToScene3D, importModelAsLayer, updateScene3DLayer } from "./scene3d-commands";
-import { harmonizeLayer } from "./harmonize-commands";
 import type { ReversibleOperation } from "@vravio/kernel";
 import { AppearancePanel } from "./environments/vector/AppearancePanel";
 import { GeometryModifiersPanel } from "./environments/vector/GeometryModifiersPanel";
@@ -601,12 +600,6 @@ function LayersPanel() {
         // operation is, and offering it for any non-group layer costs nothing
         // extra to show, the same way "Экструдировать слой в 3D" already does.
         ...(layer.kind === "text" || layer.kind === "pixel" || layer.kind === "shape" ? [{ label: text(language, "Convert to 3D", "Преобразовать в 3D"), onSelect: () => void convertLayerToScene3D(active.id, layer.id) }] : []),
-        // Owner's own request: harmonize a 3D layer with its surroundings,
-        // reachable by right-click. Reinhard color transfer (harmonize.ts's
-        // own doc comment explains why a classic algorithm and not a neural
-        // model right now), matching its Lab statistics to the composited
-        // scene around it — the same "Harmonize" the master-plan names,
-        // powered by a technique that needs no trained weights.
         // "Rotate 3D Object" opens the same Blender-style gizmo the canvas
         // menu does (RasterWorkspace.tsx) — it only renders while the Move
         // tool is active (it sits under that tool's own transform frame),
@@ -614,7 +607,10 @@ function LayersPanel() {
         // would silently do nothing.
         ...(layer.kind === "3d" ? [{ label: text(language, "Rotate 3D Object", "Повернуть 3D объект"), onSelect: () => { setTool(active.id, "raster.move"); setScene3DGroundLayer(active.id, null); setScene3DOrbitLayer(active.id, layer.id); } }] : []),
         ...(layer.kind === "3d" ? [{ label: text(language, "Cast Shadow…", "Настроить тень…"), onSelect: () => { setTool(active.id, "raster.move"); setScene3DOrbitLayer(active.id, null); setScene3DGroundLayer(active.id, layer.id); } }] : []),
-        ...(layer.kind === "3d" ? [{ label: text(language, "Harmonize with Scene", "Гармонизировать со сценой"), onSelect: () => void harmonizeLayer(active.id, layer.id) }] : []),
+        // Harmonize moved off the right-click menu, to Изображение ▸ Коррекция ▸ Быстрая
+        // гармонизация (adjustments.ts's `quickHarmonizeCommand`) — the owner's own
+        // reclassification of it from a 3D-only scene tweak to a general one-shot filter any
+        // layer can use, which no longer fits a menu scoped to `layer.kind === "3d"`.
         item("layer.mergeDown"),
         item("layer.mergeVisible"),
         // Owner's own request: right-clicking a layer should offer Invert directly. The command

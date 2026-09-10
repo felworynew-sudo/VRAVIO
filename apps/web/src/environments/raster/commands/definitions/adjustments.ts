@@ -5,6 +5,7 @@ import { CATEGORY_IMAGE } from "../../../../commands/categories";
 import type { LocalizedText } from "../../../../i18n";
 import type { CommandDefinition } from "../../../../commands/types";
 import { changeRasterDocument } from "../document-edits";
+import { quickHarmonizeLayer } from "../../../../harmonize-commands";
 
 /**
  * The five destructive adjustments that open a dialog.
@@ -94,12 +95,45 @@ const invertCommand: CommandDefinition = {
   },
 };
 
+/**
+ * Изображение ▸ Коррекция ▸ Быстрая гармонизация — see
+ * `harmonize-commands.ts`'s own doc comment on `quickHarmonizeLayer` for why
+ * this applies immediately with no dialog rather than joining the five
+ * `adjustment(...)` entries above: those open a live-preview editor for a
+ * non-destructive adjustment layer, which a one-shot color-statistics match
+ * has no equivalent of. Enabled for any real layer (not only `kind:
+ * "pixel"` the way `adjustmentEnabled` requires) because the command
+ * rasterizes a non-pixel layer itself, with the user's own confirmation,
+ * rather than staying disabled until that happens through some other door.
+ */
+const quickHarmonizeEnabled = ({ activeDocumentId }: { activeDocumentId?: string | null }): boolean => {
+  const document = kernel.documents.get<RasterDocumentState>(activeDocumentId ?? "");
+  if (!document || !isRasterDocumentState(document.state)) return false;
+  const layer = document.state.layers.find((item) => item.id === document.state.activeLayerId);
+  return Boolean(layer && layer.kind !== "group");
+};
+
+const quickHarmonizeCommand: CommandDefinition = {
+  id: "image.adjustment.quickHarmonize",
+  label: { en: "Quick Harmonization", ru: "Быстрая гармонизация" },
+  category: CATEGORY_IMAGE,
+  surfaces: ["menu", "palette"],
+  isEnabled: quickHarmonizeEnabled,
+  execute: ({ activeDocumentId }) => {
+    if (!activeDocumentId) return;
+    const document = kernel.documents.get<RasterDocumentState>(activeDocumentId);
+    const layerId = document && isRasterDocumentState(document.state) ? document.state.activeLayerId : null;
+    if (layerId) void quickHarmonizeLayer(activeDocumentId, layerId);
+  },
+};
+
 const commands: readonly CommandDefinition[] = [
   adjustment("levels", { en: "Levels…", ru: "Уровни…" }, "Mod+L"),
   adjustment("curves", { en: "Curves…", ru: "Кривые…" }, "Mod+M"),
   adjustment("hueSaturation", { en: "Hue/Saturation…", ru: "Цветовой тон/Насыщенность…" }, "Mod+U"),
   adjustment("colorBalance", { en: "Color Balance…", ru: "Цветовой баланс…" }, "Mod+B"),
   invertCommand,
+  quickHarmonizeCommand,
 ];
 
 export default commands;

@@ -600,7 +600,13 @@ export function App() {
           ...(active?.kind === "raster" || active?.kind === "vector" ? [["Free Transform (Свободная трансформация)", "Ctrl+T", () => window.dispatchEvent(new Event("vravio-transform-start"))] as MainMenuItem] : []),
         ]}/>
         {active?.kind === "raster" && <Menu label="Image (Изображение)" language={store.language} open={openMenu === "image"} onToggle={() => setOpenMenu(openMenu === "image" ? null : "image")} items={[
-          { label: "Adjustments (Коррекция)", items: rasterAdjustments.map((definition) => [`${definition.name.en}… (${definition.name.ru}…)`, definition.shortcut ?? "", () => openImageAdjustment(definition), !activeRasterState || activeRasterState.layers.find((layer) => layer.id === activeRasterState.activeLayerId)?.kind !== "pixel"] as MainMenuItem) },
+          { label: "Adjustments (Коррекция)", items: [
+            ...rasterAdjustments.map((definition) => [`${definition.name.en}… (${definition.name.ru}…)`, definition.shortcut ?? "", () => openImageAdjustment(definition), !activeRasterState || activeRasterState.layers.find((layer) => layer.id === activeRasterState.activeLayerId)?.kind !== "pixel"] as MainMenuItem),
+            // A one-shot filter, not one of the dialog-opening adjustments above — see
+            // `quickHarmonizeCommand`'s own comment in `adjustments.ts` for why it applies
+            // immediately instead of joining that list's `openImageAdjustment` calls.
+            ["Quick Harmonization (Быстрая гармонизация)", "", () => void kernel.commands.execute("image.adjustment.quickHarmonize", activeCommandContext()), !activeRasterState || activeRasterState.layers.find((layer) => layer.id === activeRasterState.activeLayerId)?.kind === "group"] as MainMenuItem,
+          ] },
           // One command with a `ratio` argument, one entry per ratio it offers:
           // adding a fourth used to mean a fourth hand-wired menu line.
           { label: "Smart Crop (Умное кадрирование)", items: Object.keys(smartCropRatios).map((ratio) => [ratio, "", () => { void kernel.commands.execute("image.smartCrop", activeCommandContext(), { ratio }); }, !active || !isRasterDocumentState(active.state)] as MainMenuItem) },

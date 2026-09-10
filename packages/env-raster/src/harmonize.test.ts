@@ -107,4 +107,46 @@ describe("harmonizeToReference", () => {
     expect(out[2]).toBe(pixels[2]);
     expect(out[3]).toBe(0);
   });
+
+  /**
+   * The owner's own complaint ("наш вариант плохо работает"): the original,
+   * single-statistic Reinhard match moves every pixel by the same amount, so
+   * an object with real internal contrast (not a flat color swatch, unlike
+   * every test above) comes out flattened — its own local detail displaced
+   * exactly as far as the overall color cast was. The multi-scale rewrite
+   * (`harmonize.ts`'s own doc comment, after Sunkavalli et al. 2010) matches
+   * only a blurred low-frequency band and adds the original detail back
+   * untouched, so a textured layer should keep its own internal contrast
+   * even as its overall cast moves toward the reference.
+   */
+  function checkerboardBuffer(dark: number, light: number, squareSize: number, w = 64, h = 64): Uint8ClampedArray {
+    const pixels = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < h; y += 1) {
+      for (let x = 0; x < w; x += 1) {
+        const on = (Math.floor(x / squareSize) + Math.floor(y / squareSize)) % 2 === 0;
+        const value = on ? light : dark;
+        const index = (y * w + x) * 4;
+        pixels[index] = value; pixels[index + 1] = value; pixels[index + 2] = value; pixels[index + 3] = 255;
+      }
+    }
+    return pixels;
+  }
+
+  it("keeps a textured layer's own local contrast instead of flattening it toward the reference's flat color", () => {
+    const w = 64, h = 64;
+    const pixels = checkerboardBuffer(40, 210, 8, w, h); // strong dark/light checker texture
+    const source = computeLabStats(pixels, w, h)!;
+    const reference = computeLabStats(solidBuffer(140, 140, 140, w, h), w, h)!; // flat mid-gray reference
+
+    const out = harmonizeToReference(pixels, w, h, source, reference, 1, { x: 0, y: 0, width: w, height: h });
+
+    // Two adjacent checker squares' own centres, well inside the buffer, away from any edge:
+    // (24, 24) and (32, 24) sit one square apart (squareSize 8), landing on opposite parity.
+    const darkIndex = (24 * w + 32) * 4, lightIndex = (24 * w + 24) * 4;
+    const contrastBefore = Math.abs(pixels[lightIndex]! - pixels[darkIndex]!);
+    const contrastAfter = Math.abs(out[lightIndex]! - out[darkIndex]!);
+    // A plain global mean/std match would shrink this close to zero (both squares pulled toward
+    // the same flat reference value); the multi-scale version keeps most of the original swing.
+    expect(contrastAfter).toBeGreaterThan(contrastBefore * 0.5);
+  });
 });

@@ -92,35 +92,122 @@ export function computeLabStats(pixels: Uint8ClampedArray, width: number, height
   };
 }
 
+/** Separable box blur over a single float plane, edges clamped to the plane's own bounds
+ *  (not the document's) — the same technique `camera-raw-filter.ts`'s own private `boxBlur`
+ *  uses for its texture/clarity passes, reimplemented here single-channel because this module
+ *  blurs a small cropped Lab plane, not a whole-document interleaved RGB buffer, and re-exporting
+ *  the other one under the same name would collide with `selection.ts`'s own unrelated
+ *  (Uint8ClampedArray mask) `boxBlur` at the package's `export *` boundary. */
+function boxBlurPlane(source: Float32Array, width: number, height: number, radius: number): Float32Array {
+  if (radius < 1) return source.slice();
+  const output = new Float32Array(source.length), horizontal = new Float32Array(source.length);
+  const r = Math.max(1, Math.round(radius)), diameter = r * 2 + 1;
+  const clampX = (x: number) => Math.max(0, Math.min(width - 1, x));
+  for (let y = 0; y < height; y += 1) {
+    let sum = 0;
+    for (let dx = -r; dx <= r; dx += 1) sum += source[y * width + clampX(dx)]!;
+    for (let x = 0; x < width; x += 1) {
+      horizontal[y * width + x] = sum / diameter;
+      sum += source[y * width + clampX(x + r + 1)]! - source[y * width + clampX(x - r)]!;
+    }
+  }
+  const clampY = (y: number) => Math.max(0, Math.min(height - 1, y));
+  for (let x = 0; x < width; x += 1) {
+    let sum = 0;
+    for (let dy = -r; dy <= r; dy += 1) sum += horizontal[clampY(dy) * width + x]!;
+    for (let y = 0; y < height; y += 1) {
+      output[y * width + x] = sum / diameter;
+      sum += horizontal[clampY(y + r + 1) * width + x]! - horizontal[clampY(y - r) * width + x]!;
+    }
+  }
+  return output;
+}
+
+/** Three box-blur passes approximate a Gaussian well (the standard trick for a cheap large-radius
+ *  blur) — this is the module's own low-frequency band of a multi-scale decomposition, see
+ *  `harmonizeToReference`'s own comment. */
+function lowFrequencyPlane(source: Float32Array, width: number, height: number, radius: number): Float32Array {
+  return boxBlurPlane(boxBlurPlane(boxBlurPlane(source, width, height, radius), width, height, radius), width, height, radius);
+}
+
 /**
- * Reinhard transfer: shifts `pixels`' own opaque-pixel Lab statistics onto
- * `reference`'s, per channel, then blends the result back toward the
- * original by `1 - strength` — matching the master-plan's own "Strength
- * 100%" slider. Writes into a copy; `pixels` itself is never mutated (this
- * project's own convention for anything a history step has to be able to
- * undo — see CLAUDE.md §4 on the door a `before` snapshot has to stay
- * behind).
+ * Multi-scale Reinhard transfer — a one-band simplification of Sunkavalli et
+ * al.'s "Multi-scale Image Harmonization" (SIGGRAPH 2010): the owner
+ * reported the plain single-statistic version below performed badly, and
+ * the reason a global mean/std match washes out is exactly the problem that
+ * paper names — moving every pixel by the same amount matches the *color
+ * cast*, but it also flattens whatever local contrast and texture the layer
+ * actually had, since detail is just as displaced as the cast is. Sunkavalli's
+ * own fix decomposes both images into a Laplacian pyramid and matches
+ * statistics band by band, so texture stays put and only the broad,
+ * low-frequency lighting/color cast — the actual mismatch a composited layer
+ * has with its new background — gets corrected. This keeps that same split
+ * to one band instead of a full pyramid: a heavily blurred low-frequency
+ * plane per Lab channel carries the "what color/light is this object sitting
+ * in" signal, matched to `reference`'s statistics the same way the old
+ * single-band version matched the whole layer; the leftover
+ * (`original - lowFrequency`) detail plane is added back completely
+ * unchanged, so edges, texture and noise never move.
+ *
+ * Writes into a copy; `pixels` itself is never mutated (this project's own
+ * convention for anything a history step has to be able to undo — see
+ * CLAUDE.md §4 on the door a `before` snapshot has to stay behind).
  *
  * A source channel with near-zero spread (`std` close to 0 — a flat-colored
  * layer, or a single-pixel sliver) would blow the ratio up toward infinity;
  * guarded by leaving that channel's *offset* only (mean-matched, not
  * variance-stretched) rather than producing a wildly saturated result out
  * of a division by near-zero.
+ *
+ * `bounds` scopes the blur to the layer's own opaque footprint (defaulting
+ * to the whole buffer when omitted, e.g. in tests that already pass a
+ * document-sized solid buffer): blurring the full document buffer would let
+ * the transparent pixels surrounding a layer bleed a black, zero-alpha
+ * fringe into the low-frequency plane right at the layer's own edge.
  */
-export function harmonizeToReference(pixels: Uint8ClampedArray, width: number, height: number, source: LabStats, reference: LabStats, strength: number): Uint8ClampedArray {
+export function harmonizeToReference(pixels: Uint8ClampedArray, width: number, height: number, source: LabStats, reference: LabStats, strength: number, bounds?: { x: number; y: number; width: number; height: number }): Uint8ClampedArray {
   const amount = Math.max(0, Math.min(1, strength));
   const out = pixels.slice();
   if (amount <= 0) return out;
+
+  const left = Math.max(0, Math.floor(bounds?.x ?? 0)), top = Math.max(0, Math.floor(bounds?.y ?? 0));
+  const right = Math.min(width, Math.ceil(bounds ? bounds.x + bounds.width : width)), bottom = Math.min(height, Math.ceil(bounds ? bounds.y + bounds.height : height));
+  const w = right - left, h = bottom - top;
+  if (w <= 0 || h <= 0) return out;
+
+  const l = new Float32Array(w * h), a = new Float32Array(w * h), b = new Float32Array(w * h);
+  const opaque = new Uint8Array(w * h);
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const index = ((top + y) * width + (left + x)) * 4;
+      if (out[index + 3] === 0) continue;
+      const [lv, av, bv] = rgbToLab(out[index]!, out[index + 1]!, out[index + 2]!);
+      const i = y * w + x;
+      l[i] = lv; a[i] = av; b[i] = bv; opaque[i] = 1;
+    }
+  }
+
+  // Big enough to isolate broad lighting/color cast, small enough to still respond to the
+  // layer's own actual footprint rather than one fixed radius for every object size.
+  const radius = Math.max(2, Math.round(Math.max(w, h) * 0.12));
+  const lowL = lowFrequencyPlane(l, w, h, radius), lowA = lowFrequencyPlane(a, w, h, radius), lowB = lowFrequencyPlane(b, w, h, radius);
+
   const ratio = (channel: LabStats["l"], target: LabStats["l"]) => channel.std > 1e-3 ? target.std / channel.std : 1;
   const rL = ratio(source.l, reference.l), rA = ratio(source.a, reference.a), rB = ratio(source.b, reference.b);
-  for (let index = 0; index < out.length; index += 4) {
-    if (out[index + 3] === 0) continue;
-    const [l, a, b] = rgbToLab(out[index]!, out[index + 1]!, out[index + 2]!);
-    const nl = (l - source.l.mean) * rL + reference.l.mean;
-    const na = (a - source.a.mean) * rA + reference.a.mean;
-    const nb = (b - source.b.mean) * rB + reference.b.mean;
-    const [r, g, bl] = labToRgb(l + (nl - l) * amount, a + (na - a) * amount, b + (nb - b) * amount);
-    out[index] = Math.round(r); out[index + 1] = Math.round(g); out[index + 2] = Math.round(bl);
+
+  for (let y = 0; y < h; y += 1) {
+    for (let x = 0; x < w; x += 1) {
+      const i = y * w + x;
+      if (!opaque[i]) continue;
+      const detailL = l[i]! - lowL[i]!, detailA = a[i]! - lowA[i]!, detailB = b[i]! - lowB[i]!;
+      const matchedLowL = (lowL[i]! - source.l.mean) * rL + reference.l.mean;
+      const matchedLowA = (lowA[i]! - source.a.mean) * rA + reference.a.mean;
+      const matchedLowB = (lowB[i]! - source.b.mean) * rB + reference.b.mean;
+      const nl = matchedLowL + detailL, na = matchedLowA + detailA, nb = matchedLowB + detailB;
+      const index = ((top + y) * width + (left + x)) * 4;
+      const [r, g, bl] = labToRgb(l[i]! + (nl - l[i]!) * amount, a[i]! + (na - a[i]!) * amount, b[i]! + (nb - b[i]!) * amount);
+      out[index] = Math.round(r); out[index + 1] = Math.round(g); out[index + 2] = Math.round(bl);
+    }
   }
   return out;
 }
