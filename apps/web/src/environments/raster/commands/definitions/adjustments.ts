@@ -73,8 +73,19 @@ const invertCommand: CommandDefinition = {
       void changeRasterDocument(activeDocumentId, "Invert Layer Mask (Инвертировать маску слоя)", (current) => {
         const layer = current.layers.find((item) => item.id === maskLayerId);
         if (!layer || layer.kind === "group" || !layer.mask) return false;
-        const pixels = layer.mask.pixels;
-        for (let index = 0; index < pixels.length; index += 1) pixels[index] = 255 - pixels[index]!;
+        // A new array, not the old one edited in place — render.ts's own
+        // `opaqueBounds` (and anything else that caches against a pixel
+        // buffer's identity) assumes "buffers are replaced rather than
+        // written in place" and answers a mutated-in-place buffer with
+        // whatever it cached before the edit. Found live: the mask visibly
+        // inverted only after some unrelated interaction forced a fresh
+        // render, not on the edit itself — a stale cache reading the old
+        // content through an identity that never changed, same class of bug
+        // `setLayerPixels` exists to rule out for a layer's own pixels
+        // (CLAUDE.md §4's "единственная дверь").
+        const inverted = new Uint8ClampedArray(layer.mask.pixels.length);
+        for (let index = 0; index < inverted.length; index += 1) inverted[index] = 255 - layer.mask.pixels[index]!;
+        layer.mask.pixels = inverted;
         return true;
       });
       return;
