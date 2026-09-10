@@ -174,20 +174,32 @@ export class VideoCompositor {
   }
 
   /**
-   * Starts continuous playback from `fromFrame`. The master clock is wall-clock elapsed time
-   * (`performance.now()`), not any one clip's own `<video>` element — several elements can be
-   * playing across tracks at once, so none of them alone is a fair reference clock. Each active
-   * element is left to decode forward in real time once seeked and started; drift past
-   * `DRIFT_TOLERANCE_SECONDS` (a decode hiccup, a paused tab tab-switch) triggers a hard reseek
-   * rather than letting the picture silently fall out of sync with the master clock.
+   * Starts continuous playback from `fromFrame` at `rate` (1 = normal forward speed, the J/K/L
+   * shuttle transport's own convention — `VideoWorkspace.tsx` calls this with 2/4/8 for repeated
+   * L presses and -1/-2/-4/-8 for repeated J presses). The master clock is wall-clock elapsed
+   * time (`performance.now()`) scaled by `rate`, not any one clip's own `<video>` element —
+   * several elements can be playing across tracks at once, so none of them alone is a fair
+   * reference clock. Forward playback (`rate > 0`) lets each active element decode natively via
+   * `HTMLMediaElement.playbackRate`, same as before; drift past `DRIFT_TOLERANCE_SECONDS` (a
+   * decode hiccup, a paused tab tab-switch) triggers a hard reseek. Reverse (`rate < 0`) has no
+   * native browser equivalent — `<video>` cannot decode backwards — so it is simulated by seeking
+   * every active element to the master clock's computed position each tick without ever calling
+   * `.play()`; the picture updates once per animation frame rather than decoding continuously, and
+   * carries no audio, which is what every consumer browser NLE's own J-shuttle does for the same
+   * reason.
    */
-  play(state: VideoDocumentState, fromFrame: number): void {
+  play(state: VideoDocumentState, fromFrame: number, rate = 1): void {
     this.pause();
     this.#playing = true;
     this.#playStartPerf = performance.now();
     this.#playStartFrame = fromFrame;
     this.#frameRate = state.frameRate;
     const durationFrames = state.tracks.reduce((end, track) => track.clips.reduce((trackEnd, clip) => Math.max(trackEnd, clip.startFrame + clip.durationFrames), end), 0);
+    const reverse = rate < 0;
+    // Native `HTMLMediaElement.playbackRate` is unreliable much past 4x in most engines (audio
+    // is muted here anyway above that), so forward shuttle speeds beyond it fall back to the same
+    // seek-stepping reverse uses rather than risking a silently-stuck element.
+    const nativePlayback = !reverse && Math.abs(rate) <= 4;
 
     const previouslyActive = new Set<string>();
     // Only a clip whose `.play()` has actually resolved gets unmuted — otherwise the very next
@@ -201,13 +213,20 @@ export class VideoCompositor {
     const tick = () => {
       if (!this.#playing) return;
       const elapsedSeconds = (performance.now() - this.#playStartPerf) / 1000;
-      const frame = this.#playStartFrame + Math.round(elapsedSeconds * this.#frameRate);
+      const rawFrame = this.#playStartFrame + Math.round(elapsedSeconds * this.#frameRate * rate);
+      if (rawFrame >= durationFrames) { this.#currentFrame = durationFrames; this.pause(); this.#onFrame?.(durationFrames); this.#onEnded?.(); return; }
+      // The reverse-shuttle floor only applies once the clock has actually run backwards past 0 —
+      // checking `reverse` here (not just `rawFrame <= 0`) matters because a *forward* play from
+      // `fromFrame === 0` computes `rawFrame === 0` on its very first tick too, and that must not
+      // be mistaken for having shuttled off the front of the timeline (found live: L from the
+      // playhead's start position ended playback before a single frame advanced).
+      if (reverse && rawFrame <= 0) { this.#currentFrame = 0; this.pause(); this.#onFrame?.(0); this.#onEnded?.(); return; }
+      const frame = Math.max(0, rawFrame);
       this.#currentFrame = frame;
-      if (frame >= durationFrames) { this.#currentFrame = durationFrames; this.pause(); this.#onFrame?.(durationFrames); this.#onEnded?.(); return; }
       this.#onFrame?.(frame);
 
       const visual = visualHitsAt(state.tracks, frame);
-      const audio = audioHitsAt(state.tracks, frame);
+      const audio = nativePlayback ? audioHitsAt(state.tracks, frame) : [];
       const activeIds = new Set([...visual, ...audio].map((hit) => hit.clip.id));
       this.#gc(activeIds);
 
@@ -218,6 +237,14 @@ export class VideoCompositor {
         const seekTo = (hit.clip.offsetFrames + (frame - hit.clip.startFrame)) / hit.clip.sourceFrameRate;
         const shouldHearThis = wantsAudio.has(hit.clip.id);
         if (shouldHearThis) element.volume = Math.max(0, Math.min(1, hit.track.volume));
+
+        if (!nativePlayback) {
+          // Reverse shuttle (or an extreme forward speed): pure seek-and-paint, no decode-ahead.
+          element.pause();
+          if (Math.abs(element.currentTime - seekTo) > 1 / hit.clip.sourceFrameRate) element.currentTime = seekTo;
+          continue;
+        }
+        element.playbackRate = Math.abs(rate) || 1;
         if (isNewlyActive) {
           element.currentTime = seekTo;
           // Browsers allow autoplay unconditionally only for muted media — starting muted and

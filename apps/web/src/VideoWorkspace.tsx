@@ -52,6 +52,7 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
   const [pixelsPerSecond, setPixelsPerSecond] = useState(DEFAULT_PIXELS_PER_SECOND);
   const [playheadFrame, setPlayheadFrame] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [shuttleRate, setShuttleRate] = useState(1);
   const [splitMode, setSplitMode] = useState(false);
   const [rippleMode, setRippleMode] = useState(false);
   const [snapMode, setSnapMode] = useState(true);
@@ -90,16 +91,46 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
 
   // Plays every track's active clip in real time, compositing continuously — a real master
   // clock (`VideoCompositor`'s own wall-clock timer), not any single clip's playback rate. Stops
-  // automatically once the playhead passes the last clip on the timeline.
-  const startPlayback = useCallback(() => {
+  // automatically once the playhead passes the last clip on the timeline (forward) or frame 0
+  // (reverse shuttle). `rate` is the J/K/L shuttle speed — 1 for the plain transport button.
+  const startPlayback = useCallback((rate = 1) => {
     compositor().onFrame((frame) => setPlayheadFrame(frame));
-    compositor().onEnded(() => { setIsPlaying(false); setPlayheadFrame(0); });
-    compositor().play(state, playheadFrame);
+    // A reverse shuttle running off the front of the timeline stops at frame 0 rather than
+    // resetting to it — `onEnded` fires there too (`VideoCompositor.play`'s own reverse-floor
+    // branch), and forward `onEnded` resetting the playhead to 0 would be wrong for that case.
+    compositor().onEnded(() => { setIsPlaying(false); setShuttleRate(1); });
+    compositor().play(state, playheadFrame, rate);
+    setShuttleRate(rate);
     setIsPlaying(true);
   }, [state, playheadFrame]);
 
-  const togglePlay = () => { if (isPlaying) stopPlayback(); else startPlayback(); };
+  const togglePlay = () => { if (isPlaying) stopPlayback(); else startPlayback(1); };
   const stopToStart = () => { stopPlayback(); setPlayheadFrame(0); };
+
+  // J/K/L shuttle transport (Premiere/Resolve convention): L steps forward through 1x/2x/4x/8x on
+  // repeated presses, J the mirror in reverse, K stops. Ignored while a text field has focus, and
+  // only for the workspace's own active document — the same guard `VectorWorkspace.tsx`'s own
+  // keydown handler uses so a shortcut meant for one open document doesn't also fire in another.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (useShellStore.getState().activeDocumentId !== document.id) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable) return;
+      if (event.key !== "j" && event.key !== "J" && event.key !== "k" && event.key !== "K" && event.key !== "l" && event.key !== "L") return;
+      event.preventDefault();
+      const key = event.key.toLowerCase();
+      if (key === "k") { stopPlayback(); setShuttleRate(1); return; }
+      if (key === "l") {
+        const next = isPlaying && shuttleRate > 0 ? Math.min(8, shuttleRate * 2) : 1;
+        startPlayback(next);
+        return;
+      }
+      const next = isPlaying && shuttleRate < 0 ? Math.max(-8, shuttleRate * 2) : -1;
+      startPlayback(next);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [document.id, isPlaying, shuttleRate, startPlayback, stopPlayback]);
 
   const onRulerClick = (event: React.MouseEvent<HTMLDivElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -211,10 +242,11 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
     </header>
     <div className="video-transport">
       <div className="media-control-group" aria-label={text(language, "Transport", "Транспорт")}>
-        <button className="media-icon-button" onClick={togglePlay} title={text(language, "Play/Pause", "Играть/Пауза")} aria-label={text(language, "Play/Pause", "Играть/Пауза")}>{isPlaying ? "Ⅱ" : "▶"}</button>
+        <button className="media-icon-button" onClick={togglePlay} title={text(language, "Play/Pause · Shuttle: J reverse, K stop, L forward — repeat J/L to speed up", "Играть/Пауза · Транспорт: J назад, K стоп, L вперёд — повтор J/L ускоряет")} aria-label={text(language, "Play/Pause", "Играть/Пауза")}>{isPlaying ? "Ⅱ" : "▶"}</button>
         <button className="media-icon-button" onClick={stopToStart} title={text(language, "Stop", "Стоп")} aria-label={text(language, "Stop", "Стоп")}>■</button>
       </div>
       <span className="video-time">{formatTime(playheadFrame / frameRate)} / {formatTime(durationFrames / frameRate)}</span>
+      {isPlaying && shuttleRate !== 1 && <span className="video-shuttle-rate" title={text(language, "J/K/L shuttle speed", "Скорость J/K/L")}>{shuttleRate > 0 ? `${shuttleRate}×` : `◀${-shuttleRate}×`}</span>}
       {state.selection && <button data-role="trash" onClick={() => deleteSelectedClips(document.id, rippleMode)}>{text(language, "Delete Clip", "Удалить клип")}</button>}
     </div>
     <div className="media-edit-toolbar" aria-label={text(language, "Timeline tools", "Инструменты таймлайна")}>

@@ -304,6 +304,7 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .video-transport button.active,.video-workspace .media-edit-toolbar button.active{background:color-mix(in srgb,var(--video) 30%,var(--surface2));border-color:var(--video)}
 .video-workspace .media-control-group button.active{border-color:var(--video)!important;background:color-mix(in srgb,var(--video) 30%,var(--surface2))!important}
 .video-transport-sep{width:1px;height:18px;background:var(--border)}
+.video-shuttle-rate{font-size:11px;font-weight:600;color:var(--video);border:1px solid var(--video);border-radius:var(--radius-sm);padding:1px 6px;white-space:nowrap}
 .video-body{flex:1;min-height:0;display:grid;grid-template-columns:220px minmax(0,1fr);grid-template-rows:auto 1fr;overflow:hidden}
 .video-preview{grid-column:1;grid-row:1;box-sizing:border-box;padding:8px;border-right:1px solid var(--border);border-bottom:1px solid var(--border);background:#000;display:flex;align-items:center;justify-content:center}
 .video-preview canvas{max-width:100%;max-height:180px;object-fit:contain}
