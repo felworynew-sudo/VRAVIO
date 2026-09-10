@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DataStore } from "@svar-ui/filemanager-store";
-import { bridgeIdFor, type BridgeEntry } from "./filesystem";
+import { bridgeIdFor, browserFiles, createBridgeFileSystemProvider, type BridgeEntry } from "./filesystem";
 
 /**
  * The file manager is upstream code, so the only honest test of "will it show our entries" is to
@@ -50,5 +50,59 @@ describe("what the file manager makes of the entries Bridge hands it", () => {
     const store = storeWith(listing("/"));
     store.in.exec("provide-data", { id: "/Desktop", data: listing("/Desktop") });
     expect(childrenOf(store, "/Desktop")).toEqual(["/Desktop/Desktop", "/Desktop/Documents", "/Desktop/portrait.png"]);
+  });
+
+  /**
+   * The web build's own version of the exact same bug the comment above
+   * documents for desktop — found live, "Открыть папку" on the web build's
+   * own home screen: picking a folder showed it in the tree, but opening it
+   * always showed empty, at every depth. `TauriFileSystemProvider.list`
+   * marks every folder entry `lazy: true`, which is what tells the file
+   * manager to actually ask for a folder's children when it is opened
+   * (`request-data`) instead of treating "no children handed over yet" as
+   * "this folder has none" — `BrowserFileSystemProvider.setFiles` built its
+   * own folder entries without that flag, so a folder more than one level
+   * deep (any `webkitdirectory` pick has at least one) was silently
+   * unopenable, even though `list()` already had the right children ready
+   * the moment they were asked for.
+   */
+  describe("BrowserFileSystemProvider — a real webkitdirectory pick", () => {
+    function pickedFolder(): File[] {
+      const bytes = new Uint8Array([1, 2, 3]);
+      const make = (relativePath: string): File => {
+        const file = new File([bytes], relativePath.split("/").pop()!, { type: "image/png" });
+        Object.defineProperty(file, "webkitRelativePath", { value: relativePath });
+        return file;
+      };
+      return [make("MyFolder/a.png"), make("MyFolder/sub/b.png")];
+    }
+
+    it("marks a folder from a real picked file list as lazy — the exact flag missing before this fix", async () => {
+      const provider = browserFiles(createBridgeFileSystemProvider())!;
+      provider.setFiles(pickedFolder());
+      const root = await provider.list("/");
+      const folderEntry = root.find((entry) => entry.type === "folder");
+      expect(folderEntry?.lazy).toBe(true);
+    });
+
+    it("opening a picked folder actually shows its children, not an empty listing", async () => {
+      const provider = browserFiles(createBridgeFileSystemProvider())!;
+      provider.setFiles(pickedFolder());
+      const store = new DataStore();
+      const root = await provider.list("/");
+      store.init({ data: root.map((entry) => ({ ...entry })) });
+      const folderEntry = root.find((entry) => entry.type === "folder")!;
+      expect(folderEntry.lazy).toBe(true);
+      const children = await provider.list(folderEntry.id);
+      store.in.exec("provide-data", { id: folderEntry.id, data: children.map((entry) => ({ ...entry })) });
+      expect(childrenOf(store, folderEntry.id).sort()).toEqual(["/MyFolder/a.png", "/MyFolder/sub"]);
+    });
+
+    it("goes two levels deep just as cleanly", async () => {
+      const provider = browserFiles(createBridgeFileSystemProvider())!;
+      provider.setFiles(pickedFolder());
+      const sub = await provider.list("/MyFolder/sub");
+      expect(sub.map((entry) => entry.id)).toEqual(["/MyFolder/sub/b.png"]);
+    });
   });
 });

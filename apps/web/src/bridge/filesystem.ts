@@ -88,7 +88,16 @@ class BrowserFileSystemProvider extends BaseProvider {
       this.info.set(id, { Size: formatSize(file.size), Count: extensionOf(file.name).toUpperCase() || "FILE" });
       result.push({ id, value: file.name, type: "file", date: new Date(file.lastModified), size: file.size });
     }
-    for (const id of folders) result.push({ id, value: nameFromPath(id), type: "folder" });
+    // `lazy: true` is what makes the file manager emit `request-data` when a
+    // folder is opened, the exact fix already made for `TauriFileSystemProvider`
+    // below (see that provider's own comment) — missed here, so opening any
+    // folder more than one level deep (a `webkitdirectory` pick always has at
+    // least one) showed empty every time, even though `list()` already had
+    // the right children waiting. Every entry here already sits in memory
+    // (no async fetch needed the way Tauri's own disk read is), but SVAR
+    // still gates the request on this flag regardless of how fast the
+    // provider actually answers it.
+    for (const id of folders) result.push({ id, value: nameFromPath(id), type: "folder", lazy: true });
     this.entries = result;
   }
 
