@@ -119,7 +119,7 @@ type MoveDrag =
    * (`renderWorkingRegion`), so a rectangle that does not cover where the *last* frame drew leaves
    * that drawing on screen. Patchy computes the same union from the same two positions
    * (`moving_layers_dirty_region(old_delta, new_delta)`, canvas_widget_move.cpp). */
-  | { kind: "move"; pointerId: number; from: Point; current: Point; previous?: Point; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean; fromOrigin?: boolean; float?: FloatingPixels; linkedBase?: readonly { layerId: string; basePixels: Uint8ClampedArray }[] }
+  | { kind: "move"; pointerId: number; from: Point; current: Point; previous?: Point; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean; fromOrigin?: boolean; float?: FloatingPixels; linkedBase?: readonly { layerId: string; basePixels: Uint8ClampedArray }[]; baseLive?: PendingTransform["live"] }
   | { kind: "scale"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; session: TransformSession; handleX: -1 | 0 | 1; handleY: -1 | 0 | 1; dx: number; dy: number; text?: PendingTextTransform }
   | { kind: "rotate"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; session: TransformSession; center: Point; startAngle: number; baseRotation: number; dx: number; dy: number; handleX: -1 | 1; handleY: -1 | 1; text?: PendingTextTransform }
   | { kind: "quad"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; quadOrigin: { pixels: Uint8ClampedArray; bounds: RasterRect; selection: PixelSelection | null }; baseCorners: readonly [Point, Point, Point, Point]; handleIndex: number; mode: QuadTransformMode }
@@ -468,6 +468,15 @@ function beginMoveDrag(context: ToolContext<MoveState>, pointer: ToolPointer, pe
       ...(origin ? { fromOrigin: true } : {}),
       ...(linkedBase ? { linkedBase } : {}),
       ...(float ? { float } : {}),
+      // A scale (or rotate) left the session in "described, not resampled" mode — see
+      // `PendingTransform.live`'s own doc comment. Carried through so this move-drag can shift
+      // that description's own target rect instead of quietly reverting to `basePixels` at its
+      // original, un-scaled size: without this, `basePixels` here is always re-materialised from
+      // `next.before` (the pristine layer the whole session started from, deliberately, to avoid
+      // compounding one drag's resample into the next) — right for avoiding that compounding, but
+      // it knows nothing about a still-uncommitted scale, so a move started right after one threw
+      // the scale away. The reported "shrink resets the moment you start dragging".
+      ...(next?.live ? { baseLive: next.live } : {}),
     },
   });
 }
@@ -525,6 +534,15 @@ function applyDragFrame(context: ToolContext<MoveState>, drag: MoveDrag, interpo
   if (drag.text) {
     const start = drag.text.targetBounds;
     return { before: drag.before, layerId: drag.before.activeLayerId, dx, dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: drag.rotation, text: { ...drag.text, targetBounds: { ...start, x: start.x + deltaX, y: start.y + deltaY } } };
+  }
+  // A scale or rotate was still pending (uncommitted, "described not resampled") when this move
+  // began — shift its own target rect by this drag's own delta and keep describing it, the same
+  // "content is a rect, not resampled pixels, until commit" contract the scale/rotate branches
+  // above already keep. Falling through to the raw-pixel translate below would silently discard
+  // whatever scale/rotation was still only described, never actually applied to `basePixels`.
+  if (drag.baseLive) {
+    const target = { ...drag.baseLive.target, x: drag.baseLive.target.x + deltaX, y: drag.baseLive.target.y + deltaY };
+    return { before: drag.before, layerId: drag.before.activeLayerId, dx, dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: drag.rotation, live: { source: drag.baseLive.source, target, rotation: drag.baseLive.rotation } };
   }
   const shiftX = drag.float || drag.fromOrigin ? dx : deltaX;
   const shiftY = drag.float || drag.fromOrigin ? dy : deltaY;
