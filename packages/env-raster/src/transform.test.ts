@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createRectangleSelection } from "./selection";
-import { punchSelectionIntoMask } from "./transform";
+import { fillSelectionInMask, punchSelectionIntoMask } from "./transform";
 
 /**
  * Delete on a mask being edited, with a pixel selection active, has to punch
@@ -39,5 +39,26 @@ describe("punchSelectionIntoMask", () => {
     const selection = createRectangleSelection(width, height, 0, 0, 2, 1);
     punchSelectionIntoMask(pixels, width, height, selection);
     expect(Array.from(pixels)).toEqual([255, 255]);
+  });
+});
+
+/**
+ * Alt/Ctrl+Backspace filling white or black while editing a mask — the
+ * general painter `punchSelectionIntoMask` above now delegates to.
+ */
+describe("fillSelectionInMask", () => {
+  it("paints toward the target value over the selection, leaves the rest alone", () => {
+    const width = 3, height = 1;
+    const pixels = new Uint8ClampedArray([0, 0, 0]);
+    const selection = createRectangleSelection(width, height, 1, 0, 2, 1);
+    const result = fillSelectionInMask(pixels, width, height, selection, 255);
+    expect(Array.from(result)).toEqual([0, 255, 0]);
+  });
+
+  it("fills the whole mask when there is no selection", () => {
+    const width = 2, height = 1;
+    const pixels = new Uint8ClampedArray([10, 200]);
+    const result = fillSelectionInMask(pixels, width, height, null, 0);
+    expect(Array.from(result)).toEqual([0, 0]);
   });
 });

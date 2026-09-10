@@ -445,6 +445,14 @@ function LayersPanel() {
     if (!activeDocumentId || !editingMaskLayerId) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Delete" && event.key !== "Backspace") return;
+      // Bare Delete/Backspace only — Alt+Delete/Mod+Delete are the catalogue's
+      // own `edit.fillForeground`/`edit.fillBackground` (fill-shortcuts.ts),
+      // bound through the kernel keymap rather than this raw listener. Both
+      // listeners see the same keydown (the comment on `layer.clear` already
+      // covers why this one exists at all instead of going through the
+      // catalogue), so without this guard holding Alt or Mod while editing a
+      // mask would punch a hole *and* fill it in the same keypress.
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
       const target = event.target as HTMLElement | null;
       if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable) return;
       event.preventDefault();

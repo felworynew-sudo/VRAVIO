@@ -568,12 +568,34 @@ export function clearSelectedPixels(
 }
 
 /**
+ * Blends a layer mask's single-channel value toward `target` over a
+ * selection (or the whole mask, with none active) — the mask equivalent of
+ * `fillSelectedPixels` (fill.ts), which does the same per-channel lerp for a
+ * layer's RGBA. One door for "paint this value here, this much" on a mask,
+ * whether the caller is a hotkey punching a hole (`punchSelectionIntoMask`
+ * below), Alt/Ctrl+Backspace filling white or black while editing a mask, or
+ * the Fill dialog's own opacity slider scaling how far it goes.
+ */
+export function fillSelectionInMask(
+  pixels: Uint8ClampedArray, width: number, height: number,
+  selection: PixelSelection | null, target: number, opacity = 1,
+): Uint8ClampedArray {
+  const result = pixels.slice();
+  const strength = Math.max(0, Math.min(1, opacity));
+  if (strength <= 0) return result;
+  for (let index = 0; index < width * height; index += 1) {
+    const coverage = (selection ? selection.mask[index]! / 255 : 1) * strength;
+    if (coverage <= 0) continue;
+    result[index] = Math.round(result[index]! + (target - result[index]!) * coverage);
+  }
+  return result;
+}
+
+/**
  * Punches a hole in a layer mask over the active selection — Delete/Backspace
  * while editing a mask, with a selection active. Photoshop paints the
  * selection black on the mask (hides it) rather than deleting the mask
- * itself; a mask has no alpha channel to clear, only its own single-channel
- * value, so this scales each masked pixel toward 0 by the selection's
- * coverage instead of reusing `liftSelection`'s RGBA math.
+ * itself.
  *
  * A null selection is not this function's business — the caller (Delete
  * without a selection, mask "selected" via its thumbnail) removes the whole
@@ -582,17 +604,7 @@ export function clearSelectedPixels(
 export function punchSelectionIntoMask(
   pixels: Uint8ClampedArray, width: number, height: number, selection: PixelSelection,
 ): Uint8ClampedArray {
-  const result = pixels.slice();
-  const left = Math.max(0, Math.floor(selection.bounds.x)), top = Math.max(0, Math.floor(selection.bounds.y));
-  const right = Math.min(width, Math.ceil(selection.bounds.x + selection.bounds.width));
-  const bottom = Math.min(height, Math.ceil(selection.bounds.y + selection.bounds.height));
-  for (let y = top; y < bottom; y += 1) for (let x = left; x < right; x += 1) {
-    const index = y * width + x;
-    const coverage = selection.mask[index]! / 255;
-    if (coverage <= 0) continue;
-    result[index] = Math.round(result[index]! * (1 - coverage));
-  }
-  return result;
+  return fillSelectionInMask(pixels, width, height, selection, 0);
 }
 
 /**

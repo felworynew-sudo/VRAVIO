@@ -29,6 +29,11 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   // Stage 11: copy/cut/paste, the first users of the platform's clipboard port.
   "edit.copy|Mod+C||Edit",
   "edit.cut|Mod+X||Edit",
+  // Photoshop's Fill hotkeys, reported live by the owner: Alt/Ctrl+Delete
+  // painting Foreground/Background over a selection, mask-aware when a mask
+  // is being edited (fill-shortcuts.ts).
+  "edit.fillBackground|Mod+Delete||Edit",
+  "edit.fillForeground|Alt+Delete||Edit",
   "edit.freeTransform|Mod+T||Edit",
   "edit.pasteInPlace|Mod+Shift+V||Edit",
   "edit.paste|Mod+V||Edit",
