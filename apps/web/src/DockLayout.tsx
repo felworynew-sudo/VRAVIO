@@ -72,11 +72,17 @@ const PANEL_RAIL_LABELS_EVENT = "vravio-panel-rail-labels-change";
 const GRID_RAIL_MIN_WIDTH = 35;
 const GRID_RAIL_LABELS_MIN_WIDTH = 132;
 const GRID_EXPANDED_MIN_WIDTH = 220;
-// информация.txt: panels need a real minimum size — text and controls must not get clipped
-// by dragging a group narrower/shorter than they can read. Height gets its own, smaller floor
-// since panels split above/below (Layers under Properties, say) are usually wider than tall.
-const GRID_EXPANDED_MIN_HEIGHT = 120;
-const GRID_EXPANDED_CONSTRAINTS = { minimumWidth: GRID_EXPANDED_MIN_WIDTH, minimumHeight: GRID_EXPANDED_MIN_HEIGHT };
+// информация.txt: panels need a real minimum size — text must not get clipped by dragging a
+// group narrower than it can read. Only ever applied via `setConstraints` on an already-
+// mounted group, in direct response to a real user click (the collapse/expand toggle below,
+// and the equivalent in the CLEAN_CANVAS_EVENT handler) — never inline on `addGroup`, and
+// never in the same tick a group is created. Found live: passing `constraints` at creation
+// time (or even a `requestAnimationFrame`-deferred `setConstraints` right after) corrupts
+// Dockview's own fresh-layout width distribution — reproduced on the vector environment's
+// default 4-panel preset specifically, which grew the panel group to ~850px while the canvas
+// shrank to ~380px. Raster's own 6-panel default happened not to trigger it, so this was
+// nearly shipped verified against only the environment that looked fine first.
+const GRID_EXPANDED_MIN_WIDTH_CONSTRAINTS = { minimumWidth: GRID_EXPANDED_MIN_WIDTH };
 const EMPTY_LAYER_SELECTION: string[] = [];
 /** The shell owns the Tab shortcut; DockLayout owns the actual edge dock. */
 export const CLEAN_CANVAS_EVENT = "vravio-clean-canvas";
@@ -1446,9 +1452,17 @@ function PanelHeaderActions({ api, containerApi, activePanel, group }: IDockview
     const currentIsPanelGroup = api.location.type === "grid" && !group.panels.some((panel) => panel.id === "viewport");
     const existingPanelGroup = containerApi.groups.find((candidate) => candidate.api.location.type === "grid" && !candidate.panels.some((panel) => panel.id === "viewport"));
     const referenceGroup = currentIsPanelGroup ? group : existingPanelGroup;
+    // No `constraints` here: passing one inline to `addGroup` (or even via a same-frame
+    // follow-up `setConstraints`) on a group that's still in its very first layout pass
+    // corrupts Dockview's own width distribution — found live on the vector environment's
+    // default 4-panel layout, which grew to ~850px while the canvas shrank to ~380px, and
+    // reproduced identically here. The two toggle-driven `setConstraints` calls below (see
+    // `toggleCollapsed`/`CLEAN_CANVAS_EVENT`) are safe because they run long after their
+    // group's first layout has already settled, on a real user click — never in the same tick
+    // a group is created.
     const target = referenceGroup
-      ? containerApi.addGroup({ referenceGroup, direction, initialHeight: 300, constraints: GRID_EXPANDED_CONSTRAINTS })
-      : containerApi.addGroup({ referenceGroup: canvasGroup, direction: "right", initialWidth: 280, constraints: GRID_EXPANDED_CONSTRAINTS });
+      ? containerApi.addGroup({ referenceGroup, direction, initialHeight: 300 })
+      : containerApi.addGroup({ referenceGroup: canvasGroup, direction: "right", initialWidth: 280 });
     target.api.setHeaderPosition("top");
     activePanel.api.moveTo({ group: target });
     if (referenceGroup) target.api.setSize({ height: 300 }); else target.api.setSize({ width: 280 });
@@ -1470,7 +1484,7 @@ function PanelHeaderActions({ api, containerApi, activePanel, group }: IDockview
       if (collapsed) {
         group.element.classList.remove("vravio-grid-rail");
         api.setHeaderPosition("top");
-        api.setConstraints(GRID_EXPANDED_CONSTRAINTS);
+        api.setConstraints(GRID_EXPANDED_MIN_WIDTH_CONSTRAINTS);
         api.setSize({ width: 280 });
         setCollapsed(false);
       } else {
@@ -1552,9 +1566,21 @@ function createDefaultLayout(api: DockviewReadyEvent["api"], language: Language,
   const visible = new Set(panelIds);
   const initialPanels = windowsFor(kind).filter((panel) => visible.has(panel.id));
   if (initialPanels.length === 0) return;
-  const sideGroup = api.addGroup({ id: "right-panels", referenceGroup: viewportGroup, direction: "right", initialWidth: 280, constraints: GRID_EXPANDED_CONSTRAINTS });
+  // No `constraints` at creation — see the comment on the other `addGroup` calls in this
+  // file for why (corrupts Dockview's fresh-layout width distribution; reproduced live on
+  // the vector environment's default preset specifically). The group still gets a real floor
+  // the moment a user actually collapses/expands it (`toggleCollapsed`), which is the only
+  // point a group this size is at any real risk of being dragged narrow enough to clip.
+  const sideGroup = api.addGroup({ id: "right-panels", referenceGroup: viewportGroup, direction: "right", initialWidth: 280 });
   sideGroup.api.setHeaderPosition("top");
   for (const panel of initialPanels) api.addPanel({ id: panel.id, component: panel.component, title: windowTitle(panel, language), position: { referenceGroup: sideGroup.id, direction: "within" } });
+  // `initialWidth` alone was not landing on a fresh two-group grid split — found live on both
+  // raster and vector's own default layout, each settling at an even 50/50 split of the whole
+  // workspace width instead of the requested 280px side column (reproducible on a cold
+  // server, no saved layout, no prior session state). An explicit `setSize` after the split
+  // exists is the same fix already relied on elsewhere in this file for exactly this kind of
+  // Dockview sizing gap.
+  sideGroup.api.setSize({ width: 280 });
 }
 
 export function DockLayout() {
@@ -1606,7 +1632,7 @@ export function DockLayout() {
         if (!groupId) {
           const viewportGroup = api.getPanel("viewport")?.api.group;
           if (!viewportGroup) return;
-          const group = api.addGroup({ id: "right-panels", referenceGroup: viewportGroup, direction: "right", initialWidth: 280, constraints: GRID_EXPANDED_CONSTRAINTS });
+          const group = api.addGroup({ id: "right-panels", referenceGroup: viewportGroup, direction: "right", initialWidth: 280 });
           group.api.setHeaderPosition("top");
           groupId = group.id;
         }
@@ -1639,7 +1665,7 @@ export function DockLayout() {
       } else {
         groupElement?.classList.remove("vravio-grid-rail");
         group.api.setHeaderPosition("top");
-        group.api.setConstraints(GRID_EXPANDED_CONSTRAINTS);
+        group.api.setConstraints(GRID_EXPANDED_MIN_WIDTH_CONSTRAINTS);
         group.api.setSize({ width: 280 });
       }
     };
@@ -1689,7 +1715,7 @@ export function DockLayout() {
         if (!groupId) {
           const viewportGroup = event.api.getPanel("viewport")?.api.group;
           if (!viewportGroup) continue;
-          const group = event.api.addGroup({ id: "right-panels", referenceGroup: viewportGroup, direction: "right", initialWidth: 280, constraints: GRID_EXPANDED_CONSTRAINTS });
+          const group = event.api.addGroup({ id: "right-panels", referenceGroup: viewportGroup, direction: "right", initialWidth: 280 });
           group.api.setHeaderPosition("top");
           groupId = group.id;
         }
