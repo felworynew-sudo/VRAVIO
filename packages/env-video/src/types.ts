@@ -133,6 +133,28 @@ export interface VideoMarker {
  * track, the same import-then-place split every NLE donor makes and VRAVIO's own earlier
  * "import lands straight on the timeline" shortcut didn't.
  */
+/** How the blend weight moves from 0 to 1 across a transition's own duration — the same small,
+ * fixed taxonomy every donor NLE offers for a basic dissolve (a real curve editor is a follow-up,
+ * not this pass). */
+export type VideoTransitionCurve = "linear" | "easeIn" | "easeOut" | "easeInOut";
+
+/**
+ * A crossfade between two *adjacent* clips on the same track — an object with its own
+ * duration/curve, not a filter hidden on one of the two clips (docs/master-plan.md §33.3: "Переход
+ * — это объект между клипами... а не фильтр"). Adding one overlaps `rightClipId` (and everything
+ * after it on the track) leftward by `durationFrames` — `video-commands.ts`'s `addTransition` is
+ * the one door that creates this overlap and this record together, so a transition never exists
+ * without the overlap it depends on, or vice versa.
+ */
+export interface VideoTransition {
+  readonly id: string;
+  readonly trackId: string;
+  readonly leftClipId: string;
+  readonly rightClipId: string;
+  durationFrames: number;
+  curve: VideoTransitionCurve;
+}
+
 export interface VideoBinItem {
   readonly id: string;
   name: string;
@@ -158,6 +180,7 @@ export interface VideoDocumentState {
   selection: VideoSelection | null;
   markers: VideoMarker[];
   bin: VideoBinItem[];
+  transitions: VideoTransition[];
 }
 
 export interface VideoDocumentOptions {

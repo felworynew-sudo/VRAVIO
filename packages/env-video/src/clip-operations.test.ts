@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createVideoClip } from "./document";
-import { applyCropEdge, applyLeftTrim, applyRightTrim, canSplitAt, constrainBoundaryTrim, constrainClipDrag, rippleShift, snapFrame, splitClip } from "./clip-operations";
+import { createVideoClip, createVideoTransition } from "./document";
+import {
+  applyCropEdge, applyLeftTrim, applyRightTrim, applyTransitionCurve, canSplitAt, constrainBoundaryTrim, constrainClipDrag, rippleShift,
+  snapFrame, splitClip, transitionBlendAt,
+} from "./clip-operations";
 
 function clipAt(start: number, duration: number, offset = 0, sourceDuration = duration + 1000): ReturnType<typeof createVideoClip> {
   return createVideoClip("asset", duration, sourceDuration, 30, { startFrame: start, offsetFrames: offset });
@@ -216,5 +219,49 @@ describe("snapFrame", () => {
 
   it("is exact at the threshold boundary itself", () => {
     expect(snapFrame(110, [100], 10)).toBe(100);
+  });
+});
+
+describe("applyTransitionCurve", () => {
+  it("linear is the identity, clamped to [0,1]", () => {
+    expect(applyTransitionCurve("linear", 0)).toBe(0);
+    expect(applyTransitionCurve("linear", 0.5)).toBe(0.5);
+    expect(applyTransitionCurve("linear", 1)).toBe(1);
+    expect(applyTransitionCurve("linear", -1)).toBe(0);
+    expect(applyTransitionCurve("linear", 2)).toBe(1);
+  });
+
+  it("every curve starts at 0 and ends at 1", () => {
+    for (const curve of ["linear", "easeIn", "easeOut", "easeInOut"] as const) {
+      expect(applyTransitionCurve(curve, 0)).toBeCloseTo(0, 10);
+      expect(applyTransitionCurve(curve, 1)).toBeCloseTo(1, 10);
+    }
+  });
+
+  it("easeIn starts slower than linear, easeOut starts faster", () => {
+    expect(applyTransitionCurve("easeIn", 0.5)).toBeLessThan(0.5);
+    expect(applyTransitionCurve("easeOut", 0.5)).toBeGreaterThan(0.5);
+  });
+
+  it("easeInOut is symmetric around the midpoint", () => {
+    expect(applyTransitionCurve("easeInOut", 0.5)).toBeCloseTo(0.5, 10);
+  });
+});
+
+describe("transitionBlendAt", () => {
+  const transition = createVideoTransition("track-1", "left-clip", "right-clip", 30, "linear");
+
+  it("is 0 at the very start of the overlap and 1 at the very end", () => {
+    expect(transitionBlendAt(transition, 100, 130, 100)).toBe(0);
+    expect(transitionBlendAt(transition, 100, 130, 130)).toBe(1);
+  });
+
+  it("is 0.5 at the midpoint for a linear curve", () => {
+    expect(transitionBlendAt(transition, 100, 130, 115)).toBe(0.5);
+  });
+
+  it("honors the transition's own curve", () => {
+    const eased = createVideoTransition("track-1", "left-clip", "right-clip", 30, "easeIn");
+    expect(transitionBlendAt(eased, 100, 130, 115)).toBeLessThan(0.5);
   });
 });

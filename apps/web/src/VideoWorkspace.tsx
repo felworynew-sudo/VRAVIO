@@ -8,10 +8,11 @@ import { kernel } from "./kernel";
 import { useShellStore } from "./store";
 import { text } from "./i18n";
 import {
-  addClipEffect, addVideoMarker, addVideoTrack, changeVideoDocument, commitVideoDrag, deleteSelectedClips, importToBin,
+  addClipEffect, addTransition, addVideoMarker, addVideoTrack, changeVideoDocument, commitVideoDrag, deleteSelectedClips, importToBin,
   insertBinItemToTimeline, moveVideoMarker, previewClipEffectParam, previewMoveClip, previewTrimClip, removeBinItem, removeClipEffect,
-  removeVideoMarker, removeVideoTrack, renameVideoMarker, reorderClipEffect, resetClipTransform, setClipCrop, setClipEffectEnabled,
-  setClipParamAtPlayhead, setSelection, setTrackHidden, setTrackLocked, setTrackMuted, setTrackVolume, splitClipAt, toggleClipKeyframeAtPlayhead,
+  removeTransition, removeVideoMarker, removeVideoTrack, renameVideoMarker, reorderClipEffect, resetClipTransform, setClipCrop,
+  setClipEffectEnabled, setClipParamAtPlayhead, setSelection, setTrackHidden, setTrackLocked, setTrackMuted, setTrackVolume, splitClipAt,
+  toggleClipKeyframeAtPlayhead,
 } from "./video-commands";
 import { probeVideoMetadata } from "./videoImport";
 import { assetUrl, VideoCompositor } from "./videoCompositor";
@@ -448,20 +449,35 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
         </div>
         <div className="video-tracks" style={{ width: timelineWidthPx }} onPointerMove={onDragMove} onPointerUp={onDragEnd}>
           <div className="video-playhead video-playhead-body" style={{ left: playheadFrame * pxPerFrame }} />
-          {state.tracks.map((track) => <div key={track.id} className="video-track-lane" data-track-kind={track.kind} style={{ height: TRACK_HEIGHT }} onClick={() => setSelection(document.id, null, [])}>
-            {track.clips.map((clip) => {
-              const selected = state.selection?.trackId === track.id && state.selection.clipIds.includes(clip.id);
-              const left = clip.startFrame * pxPerFrame, width = Math.max(4, clip.durationFrames * pxPerFrame);
-              return <div key={clip.id} className={`video-clip${selected ? " selected" : ""}`} data-track-kind={track.kind} style={{ left, width, height: TRACK_HEIGHT - 6 }}
-                onPointerDown={(event) => beginDrag(event, "move", track, clip)}
-                onClick={(event) => { event.stopPropagation(); onClipClick(track, clip, event); }}>
-                <div className="video-clip-trim video-clip-trim-left" style={{ width: TRIM_HANDLE_PX }} onPointerDown={(event) => beginDrag(event, "trim-left", track, clip)} />
-                <span className="video-clip-name">{clip.name}</span>
-                <span className="video-clip-duration">{formatTime(clip.durationFrames / frameRate)}</span>
-                <div className="video-clip-trim video-clip-trim-right" style={{ width: TRIM_HANDLE_PX }} onPointerDown={(event) => beginDrag(event, "trim-right", track, clip)} />
-              </div>;
-            })}
-          </div>)}
+          {state.tracks.map((track) => {
+            const sortedClips = [...track.clips].sort((a, b) => a.startFrame - b.startFrame);
+            return <div key={track.id} className="video-track-lane" data-track-kind={track.kind} style={{ height: TRACK_HEIGHT }} onClick={() => setSelection(document.id, null, [])}>
+              {track.clips.map((clip) => {
+                const selected = state.selection?.trackId === track.id && state.selection.clipIds.includes(clip.id);
+                const left = clip.startFrame * pxPerFrame, width = Math.max(4, clip.durationFrames * pxPerFrame);
+                return <div key={clip.id} className={`video-clip${selected ? " selected" : ""}`} data-track-kind={track.kind} style={{ left, width, height: TRACK_HEIGHT - 6 }}
+                  onPointerDown={(event) => beginDrag(event, "move", track, clip)}
+                  onClick={(event) => { event.stopPropagation(); onClipClick(track, clip, event); }}>
+                  <div className="video-clip-trim video-clip-trim-left" style={{ width: TRIM_HANDLE_PX }} onPointerDown={(event) => beginDrag(event, "trim-left", track, clip)} />
+                  <span className="video-clip-name">{clip.name}</span>
+                  <span className="video-clip-duration">{formatTime(clip.durationFrames / frameRate)}</span>
+                  <div className="video-clip-trim video-clip-trim-right" style={{ width: TRIM_HANDLE_PX }} onPointerDown={(event) => beginDrag(event, "trim-right", track, clip)} />
+                </div>;
+              })}
+              {track.kind === "video" && sortedClips.slice(0, -1).map((clip, index) => {
+                const next = sortedClips[index + 1]!;
+                const touching = clip.startFrame + clip.durationFrames === next.startFrame;
+                const existing = state.transitions.find((item) => item.trackId === track.id && item.leftClipId === clip.id && item.rightClipId === next.id);
+                if (!touching && !existing) return null; // not adjacent and no transition already connecting them
+                const left = next.startFrame * pxPerFrame;
+                return <div key={`transition-${clip.id}`} className={`video-transition-marker${existing ? " active" : ""}`} style={{ left }} onClick={(event) => event.stopPropagation()}>
+                  {existing
+                    ? <button onClick={() => removeTransition(document.id, existing.id)} title={text(language, "Remove transition", "Убрать переход")}>⧖</button>
+                    : <button onClick={() => addTransition(document.id, track.id, clip.id, next.id, Math.round(0.5 * frameRate))} title={text(language, "Add crossfade (0.5s)", "Добавить кроссфейд (0.5с)")}>+</button>}
+                </div>;
+              })}
+            </div>;
+          })}
         </div>
       </div>
     </div>

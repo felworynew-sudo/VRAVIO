@@ -1,5 +1,5 @@
-import { destRectFor, effectiveClipValue, sourceRectFor, timelineDurationFrames, videoClipFilterString, type VideoDocumentState } from "@vravio/env-video";
-import { assetUrl, audioHitsAt, visualHitsAt } from "./videoCompositor";
+import { destRectFor, effectiveClipValue, sourceRectFor, timelineDurationFrames, transitionBlendAt, videoClipFilterString, type VideoDocumentState } from "@vravio/env-video";
+import { assetUrl, audioHitsAt, visualHitsAt, type ActiveHit } from "./videoCompositor";
 
 /**
  * Renders a video document to a delivery file by actually playing it once, in real time, while
@@ -130,22 +130,38 @@ export async function exportVideoDocument(state: VideoDocumentState, onProgress?
 
       ctx.fillStyle = "#000";
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      for (const hit of visual) {
+      // Same keyframe/effect/transition resolution as the live compositor's own `#paint` —
+      // exported video must match what the transport played, not silently drop the animation,
+      // effect stack, or crossfades the way an earlier version of `mixdownAudioDocument` dropped
+      // live audio effects (fixed in `docs/master-plan.md` §33.5's export-parity commit; this is
+      // that same class of bug for video, caught before shipping rather than after). Normally one
+      // hit per track; exactly two only where a `VideoTransition` overlaps two clips.
+      const drawHit = (hit: ActiveHit, opacityMultiplier: number) => {
         const element = pool.get(hit.clip.id);
-        if (!element || element.readyState < 2) continue;
+        if (!element || element.readyState < 2) return;
         const clip = hit.clip;
-        // Same keyframe/effect resolution as the live compositor's own `#paint` — exported video
-        // must match what the transport played, not silently drop the animation and effect
-        // stack the way an earlier version of `mixdownAudioDocument` dropped live audio effects
-        // (fixed in `docs/master-plan.md` §33.5's export-parity commit; this is that same class
-        // of bug for video, caught before shipping rather than after).
         const effective = { x: effectiveClipValue(clip, "x", frame), y: effectiveClipValue(clip, "y", frame), scale: effectiveClipValue(clip, "scale", frame) };
-        const opacity = effectiveClipValue(clip, "opacity", frame);
+        const opacity = effectiveClipValue(clip, "opacity", frame) * opacityMultiplier;
+        if (opacity <= 0) return;
         const source = sourceRectFor(clip);
         const dest = destRectFor(effective, source, state.width, state.height);
         ctx.globalAlpha = Math.max(0, Math.min(1, opacity));
         ctx.filter = clip.effects.length ? videoClipFilterString(clip.effects) : "none";
         ctx.drawImage(element, source.sx, source.sy, source.sw, source.sh, dest.dx, dest.dy, dest.dw, dest.dh);
+      };
+      const hitsByTrack = new Map<string, ActiveHit[]>();
+      for (const hit of visual) { const list = hitsByTrack.get(hit.track.id); if (list) list.push(hit); else hitsByTrack.set(hit.track.id, [hit]); }
+      for (const track of state.tracks) {
+        const hits = hitsByTrack.get(track.id);
+        if (!hits || hits.length === 0) continue;
+        if (hits.length === 1) { drawHit(hits[0]!, 1); continue; }
+        const [left, right] = [...hits].sort((a, b) => a.clip.startFrame - b.clip.startFrame);
+        const transition = state.transitions.find((item) => item.trackId === track.id && item.leftClipId === left!.clip.id && item.rightClipId === right!.clip.id);
+        if (!transition) { for (const hit of hits) drawHit(hit, 1); continue; }
+        const overlapEnd = left!.clip.startFrame + left!.clip.durationFrames;
+        const blend = transitionBlendAt(transition, right!.clip.startFrame, overlapEnd, frame);
+        drawHit(left!, 1 - blend);
+        drawHit(right!, blend);
       }
       ctx.globalAlpha = 1;
       ctx.filter = "none";

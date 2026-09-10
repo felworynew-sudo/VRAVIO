@@ -10,7 +10,7 @@
  * caller (`video-commands.ts` in apps/web) applies the returned delta or split result to a
  * cloned document state.
  */
-import type { VideoClip } from "./types";
+import type { VideoClip, VideoTransition, VideoTransitionCurve } from "./types";
 import { createVideoClip } from "./document";
 
 export const DEFAULT_MIN_DURATION_FRAMES_AT = (frameRate: number): number => Math.max(1, Math.floor(0.1 * frameRate));
@@ -174,4 +174,32 @@ export function snapFrame(candidateFrame: number, targets: readonly number[], th
     if (distance <= closestDistance) { closest = target; closestDistance = distance; }
   }
   return closest;
+}
+
+/** Maps a linear 0..1 transition progress to the eased 0..1 blend weight for `curve` — the same
+ * small set of named curves every donor NLE's transition Inspector offers. `easeInOut` is a
+ * cosine ease (`(1-cos(πt))/2`), the standard smooth S-curve; `easeIn`/`easeOut` are its quadratic
+ * cousins, cheap and visually indistinguishable from the fancier variants at transition lengths
+ * short enough for a cut (well under a second, typically). */
+export function applyTransitionCurve(curve: VideoTransitionCurve, t: number): number {
+  const clamped = Math.max(0, Math.min(1, t));
+  switch (curve) {
+    case "linear": return clamped;
+    case "easeIn": return clamped * clamped;
+    case "easeOut": return 1 - (1 - clamped) * (1 - clamped);
+    case "easeInOut": return (1 - Math.cos(Math.PI * clamped)) / 2;
+  }
+}
+
+/**
+ * The eased 0 (all left clip) .. 1 (all right clip) blend weight for `transition` at absolute
+ * timeline `frame` — 0 before the overlap starts, 1 once it ends, interpolated by the
+ * transition's own curve in between. `rightClip` is the transition's own `rightClipId` clip
+ * (its current `startFrame` is the overlap's start; the left clip's own `startFrame +
+ * durationFrames`, computed by the caller, is the overlap's end).
+ */
+export function transitionBlendAt(transition: VideoTransition, rightClipStartFrame: number, overlapEndFrame: number, frame: number): number {
+  const span = Math.max(1, overlapEndFrame - rightClipStartFrame);
+  const t = (frame - rightClipStartFrame) / span;
+  return applyTransitionCurve(transition.curve, t);
 }

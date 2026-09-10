@@ -1,4 +1,4 @@
-import { destRectFor, effectiveClipValue, sourceRectFor, videoClipFilterString, type VideoClip, type VideoDocumentState, type VideoTrack } from "@vravio/env-video";
+import { destRectFor, effectiveClipValue, sourceRectFor, transitionBlendAt, videoClipFilterString, type VideoClip, type VideoDocumentState, type VideoTrack } from "@vravio/env-video";
 import type { AssetId } from "@vravio/kernel";
 import { kernel } from "./kernel";
 
@@ -21,16 +21,18 @@ export function assetUrl(assetId: string): Promise<string> {
 
 export interface ActiveHit { readonly track: VideoTrack; readonly clip: VideoClip; }
 
-/** Every video-kind clip covering `frame`, one per non-hidden video track, in track order
- * (index 0 first) — the compositor draws them in this order, so a later entry in
- * `VideoDocumentState.tracks` paints over an earlier one, the same bottom-to-top convention
- * raster layers use (`VideoTrack`'s own doc comment). */
+/** Every video-kind clip covering `frame`, in track order (index 0 first, so later tracks paint
+ * over earlier ones — `VideoTrack`'s own doc comment) — normally one hit per non-hidden video
+ * track, but exactly two where a `VideoTransition` has overlapped a clip's start with the
+ * previous clip's own end (`video-commands.ts`'s `addTransition` is the only door that creates
+ * such an overlap, so two hits on the same track always means a transition's own overlap, never
+ * an ordinary editing accident). `#paint` is the one that turns a same-track pair into a blend
+ * rather than the caller sorting that out itself. */
 export function visualHitsAt(tracks: readonly VideoTrack[], frame: number): ActiveHit[] {
   const hits: ActiveHit[] = [];
   for (const track of tracks) {
     if (track.kind !== "video" || track.hidden) continue;
-    const clip = track.clips.find((item) => frame >= item.startFrame && frame < item.startFrame + item.durationFrames);
-    if (clip) hits.push({ track, clip });
+    for (const clip of track.clips) if (frame >= clip.startFrame && frame < clip.startFrame + clip.durationFrames) hits.push({ track, clip });
   }
   return hits;
 }
@@ -166,6 +168,27 @@ export class VideoCompositor {
     this.#paint(state, visual);
   }
 
+  /** Draws one hit's own current frame, `opacityMultiplier` folded into its own (possibly
+   * keyframed) opacity — 1 outside a transition, the transition's own eased blend weight for
+   * either side of one. */
+  #drawHit(ctx: CanvasRenderingContext2D, state: VideoDocumentState, hit: ActiveHit, opacityMultiplier: number): void {
+    const element = this.#pool.get(hit.clip.id);
+    if (!element || element.readyState < 2) return; // HAVE_CURRENT_DATA — nothing decoded yet
+    const clip = hit.clip;
+    // Keyframed transform/opacity resolve against the absolute timeline frame this paint is
+    // for (`effectiveClipValue` falls back to the flat field when a parameter has no
+    // keyframes) — `destRectFor` only needs x/y/scale, so a small object carrying just those
+    // three resolved numbers stands in for the clip without mutating it.
+    const effective = { x: effectiveClipValue(clip, "x", this.#currentFrame), y: effectiveClipValue(clip, "y", this.#currentFrame), scale: effectiveClipValue(clip, "scale", this.#currentFrame) };
+    const opacity = effectiveClipValue(clip, "opacity", this.#currentFrame) * opacityMultiplier;
+    if (opacity <= 0) return;
+    const source = sourceRectFor(clip);
+    const dest = destRectFor(effective, source, state.width, state.height);
+    ctx.globalAlpha = Math.max(0, Math.min(1, opacity));
+    ctx.filter = clip.effects.length ? videoClipFilterString(clip.effects) : "none";
+    ctx.drawImage(element, source.sx, source.sy, source.sw, source.sh, dest.dx, dest.dy, dest.dw, dest.dh);
+  }
+
   #paint(state: VideoDocumentState, visual: readonly ActiveHit[]): void {
     const canvas = this.#canvas;
     if (!canvas) return;
@@ -175,21 +198,25 @@ export class VideoCompositor {
     if (!ctx) return;
     ctx.fillStyle = "#000";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    for (const hit of visual) {
-      const element = this.#pool.get(hit.clip.id);
-      if (!element || element.readyState < 2) continue; // HAVE_CURRENT_DATA — nothing decoded yet
-      const clip = hit.clip;
-      // Keyframed transform/opacity resolve against the absolute timeline frame this paint is
-      // for (`effectiveClipValue` falls back to the flat field when a parameter has no
-      // keyframes) — `destRectFor` only needs x/y/scale, so a small object carrying just those
-      // three resolved numbers stands in for the clip without mutating it.
-      const effective = { x: effectiveClipValue(clip, "x", this.#currentFrame), y: effectiveClipValue(clip, "y", this.#currentFrame), scale: effectiveClipValue(clip, "scale", this.#currentFrame) };
-      const opacity = effectiveClipValue(clip, "opacity", this.#currentFrame);
-      const source = sourceRectFor(clip);
-      const dest = destRectFor(effective, source, state.width, state.height);
-      ctx.globalAlpha = Math.max(0, Math.min(1, opacity));
-      ctx.filter = clip.effects.length ? videoClipFilterString(clip.effects) : "none";
-      ctx.drawImage(element, source.sx, source.sy, source.sw, source.sh, dest.dx, dest.dy, dest.dw, dest.dh);
+
+    // Normally one hit per track; exactly two only where a `VideoTransition` has overlapped a
+    // clip's start with the previous clip's own end (`visualHitsAt`'s own doc comment) — grouped
+    // here so a same-track pair blends by the connecting transition's curve instead of one
+    // simply painting over the other.
+    const hitsByTrack = new Map<string, ActiveHit[]>();
+    for (const hit of visual) { const list = hitsByTrack.get(hit.track.id); if (list) list.push(hit); else hitsByTrack.set(hit.track.id, [hit]); }
+
+    for (const track of state.tracks) {
+      const hits = hitsByTrack.get(track.id);
+      if (!hits || hits.length === 0) continue;
+      if (hits.length === 1) { this.#drawHit(ctx, state, hits[0]!, 1); continue; }
+      const [left, right] = [...hits].sort((a, b) => a.clip.startFrame - b.clip.startFrame);
+      const transition = state.transitions.find((item) => item.trackId === track.id && item.leftClipId === left!.clip.id && item.rightClipId === right!.clip.id);
+      if (!transition) { for (const hit of hits) this.#drawHit(ctx, state, hit, 1); continue; }
+      const overlapEnd = left!.clip.startFrame + left!.clip.durationFrames;
+      const blend = transitionBlendAt(transition, right!.clip.startFrame, overlapEnd, this.#currentFrame);
+      this.#drawHit(ctx, state, left!, 1 - blend);
+      this.#drawHit(ctx, state, right!, blend);
     }
     ctx.globalAlpha = 1;
     ctx.filter = "none";

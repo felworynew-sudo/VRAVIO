@@ -353,6 +353,10 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .video-clip-trim{position:absolute;top:0;bottom:0;cursor:ew-resize;z-index:2}
 .video-clip-trim-left{left:0}
 .video-clip-trim-right{right:0}
+.video-transition-marker{position:absolute;top:3px;bottom:3px;width:16px;margin-left:-8px;z-index:4;display:flex;align-items:center;justify-content:center}
+.video-transition-marker button{width:16px;height:16px;padding:0;border:1px solid color-mix(in srgb,var(--video) 65%,var(--border));border-radius:50%;background:var(--surface2);color:var(--muted);font-size:9px;line-height:1;cursor:pointer;opacity:.35}
+.video-transition-marker:hover button{opacity:1}
+.video-transition-marker.active button{opacity:1;background:color-mix(in srgb,var(--video) 45%,var(--surface2));color:var(--text);border-color:var(--video)}
 .video-playhead{position:absolute;top:0;bottom:0;width:1px;background:var(--video);pointer-events:none;z-index:3}
 .video-playhead-body{position:absolute}
 .audio-automation-point:hover{fill:var(--focus)}

@@ -1,7 +1,7 @@
 import {
   applyCropEdge, applyLeftTrim, applyRightTrim, canSplitAt, cloneVideoState, constrainBoundaryTrim, constrainClipDrag,
-  createVideoBinItem, createVideoClip, createVideoClipEffect, createVideoKeyframe, createVideoMarker, createVideoTrack,
-  effectiveClipValue, rippleShift, splitClip, type VideoDocumentState, type VideoEffectId, type VideoKeyframeableParam,
+  createVideoBinItem, createVideoClip, createVideoClipEffect, createVideoKeyframe, createVideoMarker, createVideoTrack, createVideoTransition,
+  effectiveClipValue, rippleShift, splitClip, type VideoDocumentState, type VideoEffectId, type VideoKeyframeableParam, type VideoTransitionCurve,
 } from "@vravio/env-video";
 import type { AssetId } from "@vravio/kernel";
 import { kernel } from "./kernel";
@@ -404,6 +404,53 @@ export function toggleClipKeyframeAtPlayhead(documentId: string, trackId: string
   const existing = clip.keyframes[param]?.find((kf) => Math.abs(kf.frameOnTimeline - frameOnTimeline) < 1);
   if (existing) { removeClipKeyframe(documentId, trackId, clipId, param, existing.id); return; }
   setClipKeyframe(documentId, trackId, clipId, param, frameOnTimeline, effectiveClipValue(clip, param, frameOnTimeline));
+}
+
+// --- Transitions (crossfade between two adjacent clips, docs/master-plan.md §33.3's own
+// "Переход — это объект между клипами... а не фильтр") -------------------------------------
+
+/**
+ * Creates a crossfade between `leftClipId` and `rightClipId` on `trackId`. The two clips must be
+ * exactly adjacent (the right clip's `startFrame` equal to the left clip's own end) — a
+ * transition is not a drag target, it connects a specific existing cut point. Overlaps the right
+ * clip (and every later clip on the track, so nothing else on the timeline moves) leftward by
+ * `durationFrames`, clamped to at most either clip's own length: `rippleShift` from
+ * `clip-operations.ts` already shifts "this clip and everything after it," so calling it with
+ * `fromFrame` set to the right clip's own (pre-shift) start does exactly the overlap this needs
+ * in one pass, the same helper ripple-delete/ripple-trim already use for the opposite direction.
+ */
+export function addTransition(documentId: string, trackId: string, leftClipId: string, rightClipId: string, durationFrames: number, curve: VideoTransitionCurve = "linear"): void {
+  void changeVideoDocument(documentId, "Add Transition (Добавить переход)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    const left = track?.clips.find((item) => item.id === leftClipId);
+    const right = track?.clips.find((item) => item.id === rightClipId);
+    if (!track || !left || !right) return false;
+    if (right.startFrame !== left.startFrame + left.durationFrames) return false; // not adjacent
+    const clamped = Math.max(1, Math.min(durationFrames, left.durationFrames, right.durationFrames));
+    track.clips = rippleShift(track.clips, right.startFrame, -clamped);
+    state.transitions.push(createVideoTransition(trackId, leftClipId, rightClipId, clamped, curve));
+    return true;
+  });
+}
+
+/** Removes a transition's own record without restoring the overlap it created — the clips stay
+ * where the transition left them, the same "the edit already happened" choice a hard delete of
+ * the transition object makes in every donor NLE; undo is what reverses the overlap, not this. */
+export function removeTransition(documentId: string, transitionId: string): void {
+  void changeVideoDocument(documentId, "Remove Transition (Убрать переход)", (state) => {
+    const before = state.transitions.length;
+    state.transitions = state.transitions.filter((item) => item.id !== transitionId);
+    return state.transitions.length !== before;
+  });
+}
+
+export function setTransitionCurve(documentId: string, transitionId: string, curve: VideoTransitionCurve): void {
+  void changeVideoDocument(documentId, "Transition Curve (Кривая перехода)", (state) => {
+    const transition = state.transitions.find((item) => item.id === transitionId);
+    if (!transition || transition.curve === curve) return false;
+    transition.curve = curve;
+    return true;
+  });
 }
 
 export function addVideoMarker(documentId: string, frameAt: number, name?: string): void {

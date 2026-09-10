@@ -1,4 +1,7 @@
-import type { VideoBinItem, VideoClip, VideoClipEffect, VideoDocumentOptions, VideoDocumentState, VideoKeyframe, VideoKeyframeableParam, VideoMarker, VideoTrack } from "./types";
+import type {
+  VideoBinItem, VideoClip, VideoClipEffect, VideoDocumentOptions, VideoDocumentState, VideoKeyframe, VideoKeyframeableParam, VideoMarker,
+  VideoTrack, VideoTransition, VideoTransitionCurve,
+} from "./types";
 import { videoEffectDefaults, type VideoEffectId } from "./effects";
 
 export function createVideoTrack(kind: "video" | "audio", name?: string): VideoTrack {
@@ -79,7 +82,7 @@ export function createVideoDocument(options: VideoDocumentOptions = {}): VideoDo
   return {
     kind: "video", schemaVersion: 1,
     frameRate: options.frameRate ?? 30, width: options.width ?? 1920, height: options.height ?? 1080,
-    tracks: [track], activeTrackId: track.id, selection: null, markers: [], bin: [],
+    tracks: [track], activeTrackId: track.id, selection: null, markers: [], bin: [], transitions: [],
   };
 }
 
@@ -100,6 +103,10 @@ export function createVideoBinItem(assetId: string, name: string, kind: "video" 
   };
 }
 
+export function createVideoTransition(trackId: string, leftClipId: string, rightClipId: string, durationFrames: number, curve: VideoTransitionCurve = "linear"): VideoTransition {
+  return { id: crypto.randomUUID(), trackId, leftClipId, rightClipId, durationFrames: Math.max(1, Math.floor(durationFrames)), curve };
+}
+
 export function isVideoDocumentState(value: unknown): value is VideoDocumentState {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Partial<VideoDocumentState>;
@@ -114,6 +121,7 @@ export function isVideoDocumentState(value: unknown): value is VideoDocumentStat
 export function migrateVideoDocumentState(state: VideoDocumentState): VideoDocumentState {
   if (!Array.isArray(state.markers)) state.markers = [];
   if (!Array.isArray(state.bin)) state.bin = [];
+  if (!Array.isArray(state.transitions)) state.transitions = [];
   for (const track of state.tracks) {
     if (typeof track.hidden !== "boolean") track.hidden = false;
     if (typeof track.volume !== "number") track.volume = 1;
@@ -152,6 +160,7 @@ export function cloneVideoState(state: VideoDocumentState): VideoDocumentState {
     selection: state.selection ? { trackId: state.selection.trackId, clipIds: [...state.selection.clipIds] } : null,
     markers: state.markers.map((marker) => ({ ...marker })),
     bin: state.bin.map((item) => ({ ...item })),
+    transitions: state.transitions.map((transition) => ({ ...transition })),
   };
 }
 
