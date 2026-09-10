@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { selectionBounds, selectionBrushStrokeSegment, unionRect, type PixelSelection, type RasterRect } from "@vravio/env-raster";
+import { fillEnclosedHoles, selectionBounds, selectionBrushStrokeSegment, unionRect, type PixelSelection, type RasterRect } from "@vravio/env-raster";
 import type { RasterToolDefinition, ToolContext } from "../types";
 
 /**
@@ -28,6 +28,9 @@ interface Stroke {
   readonly before: PixelSelection | null;
   /** Full document-sized working copy of the selection mask, mutated dab by dab. */
   working: Uint8ClampedArray;
+  /** Where the gesture began — compared against where it ends, to tell a closed loop from an
+   * open stroke (see onGestureEnd's own comment). */
+  readonly start: { x: number; y: number };
   pending: { x: number; y: number };
   /**
    * Coalesces the live tint into one repaint per animation frame, exactly
@@ -102,7 +105,7 @@ const selectionBrush: RasterToolDefinition<SelectionBrushState> = {
     const roundness = Number(options.roundness ?? 100);
     const mode = pointer.altKey ? "subtract" : "add";
 
-    const stroke: Stroke = { pointerId: pointer.pointerId, before, working, pending: pointer.point, frameDirty: null };
+    const stroke: Stroke = { pointerId: pointer.pointerId, before, working, start: pointer.point, pending: pointer.point, frameDirty: null };
     selectionBrushStrokeSegment(working, width, height, pointer.point.x, pointer.point.y, pointer.point.x, pointer.point.y, size, hardness, roundness, 0, mode);
     context.setState({ stroke });
     scheduleFramePaint(context, stroke, pointer.point.x, pointer.point.y, size / 2 + 2);
@@ -138,15 +141,30 @@ const selectionBrush: RasterToolDefinition<SelectionBrushState> = {
     // already up.
     flushFramePaint(context, stroke);
     const { width, height } = context.document;
-    const bounds = selectionBounds(stroke.working, width, height);
-    const after: PixelSelection | null = bounds.width && bounds.height ? { mask: stroke.working, bounds } : null;
+    // Photoshop's own lasso behaviour, ported to a paint-based selection:
+    // land the stroke's own release back near where it started, and the
+    // loop reads as closed — its enclosed interior selects too, not just
+    // the ring the brush actually painted over. Only for a stroke that
+    // ended adding (Alt held at release means the last thing drawn was a
+    // subtraction, and "fill the hole" is not the natural reading of
+    // closing a loop while erasing).
+    const size = Number(context.options.size ?? 40);
+    const closesLoop = !pointer.altKey && Math.hypot(pointer.point.x - stroke.start.x, pointer.point.y - stroke.start.y) <= Math.max(size, 12);
+    const working = closesLoop ? fillEnclosedHoles(stroke.working, width, height) : stroke.working;
+    const bounds = selectionBounds(working, width, height);
+    // Only when the fill actually changed something on screen: the ordinary
+    // (non-closing) path already has the exactly-right tint on screen from
+    // the live drag (see the note below), and repainting it again here would
+    // just be wasted work, not a correctness fix.
+    if (closesLoop) paintTint(context, working, bounds);
+    const after: PixelSelection | null = bounds.width && bounds.height ? { mask: working, bounds } : null;
     // Deliberately no `previewWithLayerHidden(null)` here: the tint already
-    // on screen is byte-for-byte what `after` is about to become (same
-    // `stroke.working` array), so clearing it now and waiting for the async
-    // `commitSelection` below to land and re-derive the same picture would
-    // only buy a visible flash — the exact "glitch on completion" this was
-    // built to avoid. Nothing needs to change on screen; only the document's
-    // own selection and history need to catch up, in the background.
+    // on screen is byte-for-byte what `after` is about to become, so
+    // clearing it now and waiting for the async `commitSelection` below to
+    // land and re-derive the same picture would only buy a visible flash —
+    // the exact "glitch on completion" this was built to avoid. Nothing
+    // else needs to change on screen; only the document's own selection and
+    // history need to catch up, in the background.
     void context.commitSelection(stroke.before, after, "Selection Brush (Кисть выделения)");
   },
 

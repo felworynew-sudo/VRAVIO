@@ -252,6 +252,42 @@ export function createContiguousColorSelection(pixels: Uint8ClampedArray, width:
   return { mask, bounds: selectionBounds(mask, width, height) };
 }
 
+/**
+ * Fills every unselected pixel that a closed loop shuts off from the
+ * canvas's own edge — Photoshop's own lasso behaviour when a drag closes
+ * back on its start point, ported here for the Selection Brush (the owner's
+ * own request: paint a ring, and the hole in the middle selects too, not
+ * just the ring itself).
+ *
+ * The method is the standard one for this — flood-fill from every border
+ * pixel through unselected (0) pixels, the same `Uint8Array` visited +
+ * `Int32Array` queue BFS `createContiguousColorSelection` above already
+ * uses, just seeded from the four edges instead of one click point. Whatever
+ * that flood never reaches is, by definition, walled off by selected
+ * pixels on every side — an enclosed hole — and gets filled solid. Any
+ * nonzero mask value counts as a wall, including a brush's own
+ * partially-covered soft edge: a faint edge still closes the ring.
+ */
+export function fillEnclosedHoles(mask: Uint8ClampedArray, width: number, height: number): Uint8ClampedArray {
+  if (width <= 0 || height <= 0) return mask.slice();
+  const result = mask.slice();
+  const visited = new Uint8Array(width * height), queue = new Int32Array(width * height);
+  let head = 0, tail = 0;
+  const enqueue = (index: number) => { if (!visited[index] && result[index] === 0) { visited[index] = 1; queue[tail++] = index; } };
+  for (let x = 0; x < width; x += 1) { enqueue(x); enqueue((height - 1) * width + x); }
+  for (let y = 0; y < height; y += 1) { enqueue(y * width); enqueue(y * width + width - 1); }
+  while (head < tail) {
+    const pixel = queue[head++]!;
+    const px = pixel % width, py = Math.floor(pixel / width);
+    if (px > 0) enqueue(pixel - 1);
+    if (px + 1 < width) enqueue(pixel + 1);
+    if (py > 0) enqueue(pixel - width);
+    if (py + 1 < height) enqueue(pixel + width);
+  }
+  for (let index = 0; index < result.length; index += 1) if (!visited[index] && result[index] === 0) result[index] = 255;
+  return result;
+}
+
 export function combineSelections(current: PixelSelection | null, incoming: PixelSelection, width: number, height: number, mode: SelectionCombineMode): PixelSelection | null {
   if (!current || mode === "replace") return incoming.bounds.width && incoming.bounds.height ? { mask: incoming.mask.slice(), bounds: { ...incoming.bounds } } : null;
   const mask = new Uint8ClampedArray(width * height);
