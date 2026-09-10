@@ -1337,6 +1337,20 @@ function PanelHeaderActions({ api, containerApi, activePanel, group }: IDockview
   </div>;
 }
 
+/**
+ * The global invariant: `right-panels` never sits on screen holding zero panels. Every code path
+ * that can leave it empty — a preset whose panel list is `[]` (`workspace-presets.ts`), a
+ * restored layout saved before that preset bug was fixed, the user closing the group's last tab
+ * via its own × or the Window menu — funnels through here rather than each carrying its own
+ * "is it empty now" check. Called once after `onReady` builds or restores a layout, and on every
+ * `onDidLayoutChange` after that, so no future call site that mutates this group can reintroduce
+ * the bug by forgetting its own cleanup.
+ */
+function removeEmptySideGroup(api: DockviewReadyEvent["api"]): void {
+  const sideGroup = api.getGroup("right-panels");
+  if (sideGroup && sideGroup.panels.length === 0) api.removeGroup(sideGroup);
+}
+
 function createDefaultLayout(api: DockviewReadyEvent["api"], language: Language, kind: EnvironmentKind, panelIds: readonly string[]): void {
   const viewportGroup = api.addGroup({ direction: "left", hideHeader: true });
   api.addPanel({ id: "viewport", component: "viewport", title: text(language, "Canvas", "Холст"), position: { referenceGroup: viewportGroup, direction: "within" } });
@@ -1502,25 +1516,16 @@ export function DockLayout() {
       // or horizontally lays out the label.
       for (const group of event.api.groups) if (group.api.location.type === "edge") group.api.setHeaderPosition(group.api.isCollapsed() ? group.api.location.position : "top");
       // A layout saved before a panel's own `defaultVisible` changed (History, found live
-      // claiming half the screen with nothing in it) can restore with `right-panels` already
-      // empty — the reconciliation loop above only *adds* newly-catalogued panels, it never had
-      // a reason to remove a group nothing populated. Same check `onDidLayoutChange` below runs
-      // on every later change; this is the one-time catch-up for whatever a stale save already
-      // left behind.
-      const restoredSideGroup = event.api.getGroup("right-panels");
-      if (restoredSideGroup && restoredSideGroup.panels.length === 0) event.api.removeGroup(restoredSideGroup);
+      // claiming half the screen with nothing in it) — or before `workspace-presets.ts`'s empty
+      // panel lists were fixed — can restore with `right-panels` already empty. The
+      // reconciliation loop above only *adds* newly-catalogued panels, it never had a reason to
+      // remove a group nothing populated; `removeEmptySideGroup` is the global invariant's own
+      // one-time catch-up for whatever a stale save already left behind, the same check
+      // `onDidLayoutChange` below enforces on every later change.
+      removeEmptySideGroup(event.api);
     }
     event.api.onDidLayoutChange(() => {
-      // Closing a group's last panel (the user closing "История" with nothing else docked next
-      // to it, found live: the *group* stayed — an empty splitter still claiming its stored
-      // width, sometimes half the screen from an earlier resize) leaves a group with zero
-      // panels. Dockview does not remove that group on its own; without this, the space it
-      // reserved for tabs that no longer exist just sits there empty. `right-panels` is the only
-      // group this codebase ever creates and removes dynamically (`createDefaultLayout`, the
-      // reconciliation loop above, `PANEL_REQUEST_EVENT`'s own handler) — checked by id, not by
-      // "any empty group," so a legitimate empty edge group elsewhere is never touched by this.
-      const sideGroup = event.api.getGroup("right-panels");
-      if (sideGroup && sideGroup.panels.length === 0) event.api.removeGroup(sideGroup);
+      removeEmptySideGroup(event.api);
       localStorage.setItem(storageKey, JSON.stringify(event.api.toJSON()));
       // Only the environment the dock is actually showing. Filtering the open
       // panels by "does this environment have a panel with that id" looks
