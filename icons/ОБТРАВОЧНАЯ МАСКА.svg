@@ -1,4 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-  <path fill="#e7e9ee" d="M5 4h14v5H5zM5 15h14v5H5z" opacity=".38"/>
-  <path fill="none" stroke="#e7e9ee" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M12 7v8m0 0-3-3m3 3 3-3"/>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="_Слой_1" data-name="Слой_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 24 24">
+  <!-- Generator: Adobe Illustrator 30.7.0, SVG Export Plug-In . SVG Version: 2.1.4 Build 114)  -->
+  <defs>
+    <style>
+      .st0 {
+        fill: #e7e9ee;
+      }
+    </style>
+  </defs>
+  <rect class="st0" x="3.3" y="2.8" width="17.4" height="6.2"/>
+  <rect class="st0" x="3.3" y="15" width="17.4" height="6.2"/>
+  <polygon class="st0" points="12 10.2 8.3 10.2 12 13.9 15.7 10.2 12 10.2"/>
 </svg>

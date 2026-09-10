@@ -1,18 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg id="_Слой_1" data-name="Слой 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 249.78 248.85">
+<svg id="_Слой_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 249.8 248.9">
+  <!-- Generator: Adobe Illustrator 30.7.0, SVG Export Plug-In . SVG Version: 2.1.4 Build 114)  -->
   <defs>
     <style>
-      .cls-1 {
+      .st0 {
         fill: #fff;
-      }
-
-      .cls-2 {
-        fill: #7f7f7f;
-        opacity: .87;
       }
     </style>
   </defs>
-  <rect class="cls-1" x="132.83" y="23.2" width="4.63" height="214.66"/>
-  <polygon class="cls-1" points="49.67 179.57 49.67 130.54 49.67 71.46 103.73 125.52 49.67 179.57"/>
-  <polygon class="cls-2" points="219.84 179.57 219.84 130.54 219.84 71.46 165.79 125.52 219.84 179.57"/>
+  <rect class="st0" x="17.8" y="121.7" width="214.7" height="4.6" transform="translate(249.1 -1.1) rotate(90)"/>
+  <polygon class="st0" points="200.6 178.1 200.6 129 200.6 69.9 146.5 124 200.6 178.1"/>
+  <path class="st0" d="M61.4,96.5l27.5,27.5-27.5,27.5v-55h0ZM50.4,69.9v108.1l54.1-54.1-54.1-54.1h0Z"/>
 </svg>

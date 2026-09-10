@@ -1,4 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-  <path fill="#e7e9ee" d="M4 4h5v5H4zM14 4h5v5h-5zM9 9h5v5H9zM19 9h1v5h-1zM4 14h5v5H4zM14 14h5v5h-5z"/>
-  <rect x="4" y="4" width="16" height="16" fill="none" stroke="#e7e9ee" stroke-width="1.6"/>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="_Слой_1" data-name="Слой_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 24 24">
+  <!-- Generator: Adobe Illustrator 30.7.0, SVG Export Plug-In . SVG Version: 2.1.4 Build 114)  -->
+  <defs>
+    <style>
+      .st0 {
+        fill: #e7e9ee;
+      }
+
+      .st1 {
+        fill: none;
+        stroke: #e7e9ee;
+        stroke-width: 1.6px;
+      }
+    </style>
+  </defs>
+  <path class="st0" d="M4,4h5.1v5.1h-5.1v-5.1ZM14.2,4h5.1v5.1h-5.1v-5.1ZM9.1,9.1h5.1v5.1h-5.1v-5.1ZM19.3,9.1h1v5.1h-1v-5.1ZM4,14.2h5.1v5.1h-5.1v-5.1ZM14.2,14.2h5.1v5.1h-5.1v-5.1Z"/>
+  <rect class="st1" x="4" y="4" width="16" height="16"/>
 </svg>

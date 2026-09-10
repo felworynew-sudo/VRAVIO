@@ -1,5 +1,25 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-  <path d="m12 3.5 8.5 4.4-8.5 4.4-8.5-4.4Z" fill="none" stroke="#e7e9ee" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="m4.4 12.4 7.6 3.9 7.6-3.9" fill="none" stroke="#e7e9ee" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="m4.4 16.6 7.6 3.9 7.6-3.9" fill="none" stroke="#e7e9ee" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="_Слой_1" data-name="Слой_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 24 24">
+  <!-- Generator: Adobe Illustrator 30.7.0, SVG Export Plug-In . SVG Version: 2.1.4 Build 114)  -->
+  <defs>
+    <style>
+      .st0 {
+        fill: #e7e9ee;
+      }
+
+      .st0, .st1 {
+        stroke: #e7e9ee;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 1.8px;
+      }
+
+      .st1 {
+        fill: none;
+      }
+    </style>
+  </defs>
+  <path class="st0" d="M12,3.5l8.5,4.4-8.5,4.4L3.5,7.9,12,3.5Z"/>
+  <path class="st1" d="M4.4,12.4l7.6,3.9,7.6-3.9"/>
+  <path class="st1" d="M4.4,16.6l7.6,3.9,7.6-3.9"/>
 </svg>
