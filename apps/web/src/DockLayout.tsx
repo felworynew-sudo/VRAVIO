@@ -1454,7 +1454,13 @@ function PanelHeaderActions({ api, containerApi, activePanel, group }: IDockview
     api.setHeaderPosition(api.location.position);
     requestAnimationFrame(() => { api.collapse(); setCollapsed(true); });
   };
+  // Order matches the Photoshop reference (информация.txt point 2): the collapse chevron
+  // (>>) sits directly after the tab strip, then a divider, then the panel's own ☰ menu —
+  // not menu-before-chevron as this rendered previously.
   return <div className="panel-header-actions">
+    {collapsed && <button className="panel-rail-labels" onClick={toggleRailLabels} title={railLabels ? text(language, "Icons only", "Только значки") : text(language, "Icons and names", "Значки и названия")} aria-label={railLabels ? text(language, "Show icons only", "Показать только значки") : text(language, "Show icons and names", "Показать значки и названия")}><i aria-hidden="true" style={{ "--panel-rail-mask": `url("${iconUrl(railLabels ? "/ПАНЕЛИ-БЕЗ-ПОДПИСЕЙ.svg" : "/ПАНЕЛИ-С-ПОДПИСЯМИ.svg")}")` } as CSSProperties}/></button>}
+    {(api.location.type === "edge" || api.location.type === "grid") && <button className="panel-collapse" onClick={toggleCollapsed} title={collapsed ? text(language, "Expand panels", "Развернуть панели") : text(language, "Collapse to icons", "Свернуть в значки")} aria-label={collapsed ? text(language, "Expand panels", "Развернуть панели") : text(language, "Collapse panels", "Свернуть панели")}><i aria-hidden="true" style={{ "--panel-collapse-mask": `url("${iconUrl(collapsed ? "/РАЗВЕРНУТЬ-ПАНЕЛИ.svg" : "/СВЕРНУТЬ-ПАНЕЛИ.svg")}")` } as CSSProperties}/></button>}
+    {!collapsed && <span className="panel-header-divider" aria-hidden="true"/>}
     {!collapsed && <div className="panel-menu-wrap">
       <button className="panel-menu-trigger" onClick={() => setMenuOpen((value) => !value)} title={text(language, "Panel menu", "Меню панели")} aria-label={text(language, "Panel menu", "Меню панели")} aria-expanded={menuOpen}><i aria-hidden="true" style={{ "--panel-menu-mask": `url("${iconUrl("/МЕНЮ-ПАНЕЛИ.svg")}")` } as CSSProperties}/></button>
       {menuOpen && <div className="panel-menu" role="menu">
@@ -1468,8 +1474,6 @@ function PanelHeaderActions({ api, containerApi, activePanel, group }: IDockview
         {activePanel && <button role="menuitem" onClick={hideActivePanel}>{text(language, "Hide panel", "Скрыть панель")}</button>}
       </div>}
     </div>}
-    {collapsed && <button className="panel-rail-labels" onClick={toggleRailLabels} title={railLabels ? text(language, "Icons only", "Только значки") : text(language, "Icons and names", "Значки и названия")} aria-label={railLabels ? text(language, "Show icons only", "Показать только значки") : text(language, "Show icons and names", "Показать значки и названия")}><i aria-hidden="true" style={{ "--panel-rail-mask": `url("${iconUrl(railLabels ? "/ПАНЕЛИ-БЕЗ-ПОДПИСЕЙ.svg" : "/ПАНЕЛИ-С-ПОДПИСЯМИ.svg")}")` } as CSSProperties}/></button>}
-    {(api.location.type === "edge" || api.location.type === "grid") && <button className="panel-collapse" onClick={toggleCollapsed} title={collapsed ? text(language, "Expand panels", "Развернуть панели") : text(language, "Collapse to icons", "Свернуть в значки")} aria-label={collapsed ? text(language, "Expand panels", "Развернуть панели") : text(language, "Collapse panels", "Свернуть панели")}><i aria-hidden="true" style={{ "--panel-collapse-mask": `url("${iconUrl(collapsed ? "/РАЗВЕРНУТЬ-ПАНЕЛИ.svg" : "/СВЕРНУТЬ-ПАНЕЛИ.svg")}")` } as CSSProperties}/></button>}
   </div>;
 }
 
