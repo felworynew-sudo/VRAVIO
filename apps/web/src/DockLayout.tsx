@@ -23,6 +23,8 @@ import { windowTitle } from "./windows/types";
 import { PANEL_REQUEST_EVENT, persistVisiblePanelIds, readVisiblePanelIds, type PanelVisibilityDetail } from "./windows/runtime";
 import { addPaletteColor, clearGuides, deleteArtboard, duplicateArtboard, isVectorDocumentState, listSymbols, rearrangeArtboardsGrid, renameArtboard, renamePaletteColor, reorderArtboard, removePaletteColor, setArtboardBleed, setRulerMode, shapeBounds, updateShape, vectorShapeRows, type Artboard, type VectorDocumentState, type VectorShape } from "@vravio/env-vector";
 import { colorToCss, cssToColor, type EnvironmentKind } from "@vravio/kernel";
+import { cloneAudioState, isAudioDocumentState, type AudioDocumentState, type FadeType } from "@vravio/env-audio";
+import { commitAudioDrag, previewMoveClip, setClipFade, setClipGain } from "./audio-commands";
 import { vectorTextMeasurer } from "./vector-text-metrics";
 import { changeVectorDocument, createSymbolFromActiveSelection, deleteActiveVectorShapes, detachActiveVectorInstance, duplicateActiveVectorShape, groupActiveVectorShapes, placeVectorSymbolInstance, redefineSymbolFromActiveSelection, reorderActiveVectorShape, ungroupActiveVectorGroup } from "./vector-commands";
 import { validateIccProfile } from "./vector-color-wasm";
@@ -128,7 +130,60 @@ function InspectorPanel({ params }: IDockviewPanelProps<{ kind?: string }>) {
     }
     return <div className="dock-panel-body"><p className="panel-hint">{text(language, "Select a shape to see its properties.", "Выберите фигуру, чтобы увидеть её свойства.")}</p></div>;
   }
+  if (document && isAudioDocumentState(document.state)) return <AudioInspector documentId={document.id} state={document.state} language={language} />;
   return <div className="dock-panel-body"><p className="panel-hint">{text(language, "Selection-aware properties will appear here.", "Здесь будут отображаться свойства текущего выделения.")}</p><dl><dt>{text(language, "Selection", "Выделение")}</dt><dd>{text(language, "None", "Нет")}</dd><dt>{text(language, "Environment", "Среда")}</dt><dd>{String(params.kind ?? text(language, "Automatic", "Автоматически"))}</dd></dl></div>;
+}
+
+/**
+ * The audio Inspector — Ardour's editor-mixer-strip idea, scaled to what a clip actually needs
+ * numerically edited rather than dragged: nothing here duplicates a track header control
+ * (name/mute/solo/FX toggle/volume/pan sliders already live in `AudioWorkspace.tsx`'s own track
+ * headers) or the inline FX chain strip that toggling a track's "FX" button already opens —
+ * this shows exactly what neither of those does: a selected clip's exact numeric position,
+ * gain and fades, or, with nothing selected, the project's own format.
+ */
+function AudioInspector({ documentId, state, language }: { documentId: string; state: AudioDocumentState; language: Language }) {
+  const track = state.selection ? state.tracks.find((item) => item.id === state.selection!.trackId) : undefined;
+  const clip = track && state.selection?.clipIds.length === 1 ? track.clips.find((item) => item.id === state.selection!.clipIds[0]) : undefined;
+  if (!track || !clip) return <div className="dock-panel-body property-stack">
+    <strong>{text(language, "Project", "Проект")}</strong>
+    <dl><dt>{text(language, "Sample rate", "Частота дискретизации")}</dt><dd>{state.sampleRate.toLocaleString()} Hz</dd>
+      <dt>{text(language, "Channels", "Каналы")}</dt><dd>{state.channels === 1 ? text(language, "Mono", "Моно") : text(language, "Stereo", "Стерео")}</dd>
+      <dt>{text(language, "Bit depth", "Разрядность")}</dt><dd>{state.bitDepth}-bit</dd>
+      <dt>{text(language, "Tracks", "Дорожек")}</dt><dd>{state.tracks.length}</dd></dl>
+    <p className="panel-hint">{text(language, "Select a single clip to see its properties.", "Выберите один клип, чтобы увидеть его свойства.")}</p>
+  </div>;
+
+  const sr = state.sampleRate;
+  const toSeconds = (samples: number) => samples / sr;
+  const setStartSeconds = (seconds: number) => {
+    const targetSample = Math.max(0, Math.round(seconds * sr));
+    const before = cloneAudioState(state);
+    previewMoveClip(documentId, track.id, clip.id, targetSample - clip.startSample);
+    commitAudioDrag(documentId, "Move Clip (Переместить клип)", before);
+  };
+  const setGain = (gain: number) => setClipGain(documentId, track.id, clip.id, gain);
+  const setFade = (edge: "in" | "out", seconds: number, fadeType?: FadeType) => setClipFade(documentId, track.id, clip.id, edge, Math.round(seconds * sr), fadeType);
+  const fadeTypes: { value: FadeType; en: string; ru: string }[] = [
+    { value: "linear", en: "Linear", ru: "Линейный" }, { value: "exponential", en: "Exponential", ru: "Экспоненциальный" },
+    { value: "sCurve", en: "S-Curve", ru: "S-кривая" }, { value: "logarithmic", en: "Logarithmic", ru: "Логарифмический" },
+  ];
+
+  return <div className="dock-panel-body property-stack">
+    <strong>{clip.name}</strong>
+    <label>{text(language, "Name", "Имя")}<input value={clip.name} onChange={(event) => void (async () => { const before = cloneAudioState(state); const next = event.target.value; kernel.documents.update<AudioDocumentState>(documentId, (draft) => { const found = draft.tracks.find((t) => t.id === track.id)?.clips.find((c) => c.id === clip.id); if (found) found.name = next; }); commitAudioDrag(documentId, "Rename Clip (Переименовать клип)", before); })()} /></label>
+    <div className="parameter-pair">
+      <label>{text(language, "Start", "Начало")}<input type="number" step="0.001" min={0} value={Number(toSeconds(clip.startSample).toFixed(3))} onChange={(event) => setStartSeconds(event.target.valueAsNumber)} /></label>
+      <label>{text(language, "Duration", "Длительность")}<input type="number" step="0.001" value={Number(toSeconds(clip.durationSamples).toFixed(3))} readOnly title={text(language, "Drag a clip's edge on the timeline to trim it", "Потяните край клипа на таймлайне, чтобы обрезать")} /></label>
+    </div>
+    <label>{text(language, "Gain", "Громкость")}<input type="range" min={0} max={2} step={0.01} value={clip.gain} onChange={(event) => setGain(event.target.valueAsNumber)} /><output>{clip.gain.toFixed(2)}×</output></label>
+    <strong>{text(language, "Fades", "Фейды")}</strong>
+    <label>{text(language, "Fade type", "Тип фейда")}<select value={clip.fadeType} onChange={(event) => setFade("in", toSeconds(clip.fadeInSamples), event.target.value as FadeType)}>{fadeTypes.map((entry) => <option key={entry.value} value={entry.value}>{text(language, entry.en, entry.ru)}</option>)}</select></label>
+    <div className="parameter-pair">
+      <label>{text(language, "Fade in (s)", "Появление (с)")}<input type="number" step="0.001" min={0} value={Number(toSeconds(clip.fadeInSamples).toFixed(3))} onChange={(event) => setFade("in", event.target.valueAsNumber)} /></label>
+      <label>{text(language, "Fade out (s)", "Затухание (с)")}<input type="number" step="0.001" min={0} value={Number(toSeconds(clip.fadeOutSamples).toFixed(3))} onChange={(event) => setFade("out", event.target.valueAsNumber)} /></label>
+    </div>
+  </div>;
 }
 
 /** Properties panel for a persistent 3D layer: rotation, lighting and (source-dependent)
@@ -1407,6 +1462,30 @@ export function DockLayout() {
       // already gets reconciled against the live catalogue elsewhere (readVisiblePanelIds/
       // persistVisiblePanelIds); titles did not, so this brings them into line too.
       if (kind) for (const panel of event.api.panels) { const definition = windowById(kind, panel.id); if (definition) panel.api.setTitle(windowTitle(definition, language)); }
+      // Panel *presence* was believed reconciled elsewhere (readVisiblePanelIds), and was not:
+      // that function only feeds `createDefaultLayout`, the `!restored` branch above — a
+      // *restored* layout trusts fromJSON's panel list completely, so a panel the catalogue
+      // gained after this layout was last saved (a new definitions/*.ts file, same as a brand
+      // new environment gaining its first Inspector) never actually appears, no matter what
+      // readVisiblePanelIds computes. Found live: `environments/audio/windows/definitions/
+      // properties.ts` existed, `readVisiblePanelIds("audio")` correctly returned it, and the
+      // panel still never rendered until this loop existed. Same add-a-panel call the
+      // `PANEL_REQUEST_EVENT` handler below already uses for the same reason.
+      const existingIds = new Set(event.api.panels.map((panel) => panel.id));
+      for (const id of readVisiblePanelIds(kind)) {
+        if (existingIds.has(id)) continue;
+        const definition = windowById(kind, id);
+        if (!definition) continue;
+        let groupId = event.api.getGroup("right-panels")?.id;
+        if (!groupId) {
+          const viewportGroup = event.api.getPanel("viewport")?.api.group;
+          if (!viewportGroup) continue;
+          const group = event.api.addGroup({ id: "right-panels", referenceGroup: viewportGroup, direction: "right", initialWidth: 280 });
+          group.api.setHeaderPosition("top");
+          groupId = group.id;
+        }
+        event.api.addPanel({ id: definition.id, component: definition.component, title: windowTitle(definition, language), position: { referenceGroup: groupId, direction: "within" } });
+      }
       // Layouts saved by the earlier implementation can contain an expanded
       // edge group with a left/right header. That produces the vertical text
       // the Photoshop references explicitly avoid. Normalise the header from

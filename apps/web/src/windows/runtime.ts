@@ -22,16 +22,47 @@ export const PANEL_CHANGED_EVENT = "vravio-panel-visibility-changed";
 
 export interface PanelVisibilityDetail { readonly kind: string; readonly id: string; readonly visible: boolean }
 
+const knownKey = (kind: EnvironmentKind | string): string => `vravio.${kind}-panels.known`;
+
 function defaults(kind: EnvironmentKind | string): Set<string> {
   return new Set(windowsFor(kind).filter((definition) => definition.defaultVisible).map((definition) => definition.id));
 }
 
-export function readVisiblePanelIds(kind: EnvironmentKind | string): Set<string> {
+function readIdArray(key: string): Set<string> | null {
   try {
-    const value = JSON.parse(localStorage.getItem(storageKey(kind)) ?? "null") as unknown;
+    const value = JSON.parse(localStorage.getItem(key) ?? "null") as unknown;
     if (Array.isArray(value)) return new Set(value.filter((id): id is string => typeof id === "string"));
-  } catch { /* invalid layouts fall back to defaults */ }
-  return defaults(kind);
+  } catch { /* invalid layouts fall back to null */ }
+  return null;
+}
+
+/**
+ * Reconciles a saved layout with the current catalogue — CLAUDE.md §4's own rule, written down
+ * after a panel that fell out of a group (or a new tool that never joined one) went unseen by
+ * anyone who had already saved a layout: "new joins, vanished drops, and the reconciliation is
+ * its own thing to test, because live it only shows up releases later."
+ *
+ * The stored *visible* list alone cannot tell "the user hid this" apart from "this panel did not
+ * exist yet" — both look like "absent from the list". A second, separate record of every id this
+ * browser has ever seen for the kind is what tells them apart: an id missing from *that* one is
+ * genuinely new and adopts its own `defaultVisible`, while an id present in it but missing from
+ * the visible list was a deliberate hide and stays hidden.
+ */
+export function readVisiblePanelIds(kind: EnvironmentKind | string): Set<string> {
+  const catalogue = windowsFor(kind);
+  const catalogueIds = new Set(catalogue.map((definition) => definition.id));
+  const stored = readIdArray(storageKey(kind));
+  if (!stored) return defaults(kind);
+
+  const known = readIdArray(knownKey(kind)) ?? stored;
+  const reconciled = new Set([...stored].filter((id) => catalogueIds.has(id))); // drop vanished panels
+  for (const definition of catalogue) if (!known.has(definition.id) && definition.defaultVisible) reconciled.add(definition.id); // adopt new ones' own default
+
+  // Persisted immediately so the diff against `known` never runs twice for the same panel —
+  // the second read would otherwise see it as "already known" and skip adopting its default.
+  localStorage.setItem(storageKey(kind), JSON.stringify([...reconciled]));
+  localStorage.setItem(knownKey(kind), JSON.stringify([...catalogueIds]));
+  return reconciled;
 }
 
 export function persistVisiblePanelIds(kind: EnvironmentKind | string, ids: Iterable<string>): void {

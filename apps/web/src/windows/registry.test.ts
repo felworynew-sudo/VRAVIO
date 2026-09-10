@@ -45,12 +45,13 @@ describe("window catalogues", () => {
   });
 
   it("discovers the media panels audio and video actually declare", () => {
-    // One each, and it is History. The version of this test that arrived with the Bridge work
-    // asked for `["properties", "tracks", "history", "assets"]`, but no such definitions exist —
-    // not under `environments/audio/windows/`, not under `environments/video/`, not anywhere in
-    // the source. It was red in the copy it came from too. A catalogue test that names panels
-    // nobody wrote measures a wish, not the catalogue.
-    expect(windowsFor("audio").map((panel) => panel.id)).toEqual(["history"]);
+    // Audio gained a real Inspector (docs/master-plan.md §33.2's "правая колонка" — clip
+    // start/gain/fades, or project format with nothing selected) during the Audio donor pass;
+    // video has not yet. The version of this test that arrived with the Bridge work asked for
+    // `["properties", "tracks", "history", "assets"]` for both, but no such definitions existed
+    // then — not under `environments/audio/windows/`, not under `environments/video/`. A
+    // catalogue test that names panels nobody wrote measures a wish, not the catalogue.
+    expect(windowsFor("audio").map((panel) => panel.id)).toEqual(["properties", "history"]);
     expect(windowsFor("video").map((panel) => panel.id)).toEqual(["history"]);
   });
 
