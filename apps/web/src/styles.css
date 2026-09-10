@@ -110,6 +110,21 @@ select{-webkit-appearance:none;appearance:none;background-image:linear-gradient(
    tooltip (`title`) and comes back as horizontal text when the dock expands.
    Override writing mode on both our custom tab and the expand button so SVGs
    remain upright even though their Dockview parent is vertical. */
+/* информация.txt: vertical text is never acceptable, anywhere. Dockview's own base
+   stylesheet sets `writing-mode:vertical-rl` on `.dv-tabs-container-vertical` itself (it's
+   the rotate-to-a-side-rail mechanism), which rotates glyphs, not just layout flow — and
+   that inherits into every descendant. The two rules below (keyed off our own
+   `.vravio-grid-rail`/`.dv-edge-collapsed` classes) un-rotate it for the sizes those classes
+   are actually applied, but a group can render with a vertical tab strip (`setHeaderPosition`
+   flips to "right" synchronously, before the class/size that pairs with it) without either
+   class present yet — found live moving a panel to an edge dock via "Закрепить справа" and
+   collapsing it: header rotated, but Dockview's own `api.collapse()` never reached the edge
+   group's own collapse bookkeeping, so `.dv-edge-collapsed` stayed off and nothing undid the
+   rotation. Rather than chase every path that can produce that gap, this blanket rule is the
+   actual guarantee: it un-rotates `.panel-tab` (and, since `writing-mode` inherits, its own
+   `<span>`) for *any* vertical tab strip, unconditionally, regardless of which collapse class
+   did or didn't make it onto the group in time. */
+.dv-tabs-container-vertical .panel-tab{writing-mode:horizontal-tb}
 .dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-and-actions-container{width:35px}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-container-vertical .panel-tab{display:grid;place-items:center;width:34px;height:42px;min-width:34px;min-height:42px;padding:0;writing-mode:horizontal-tb}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-container-vertical .panel-tab span{display:none!important}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .panel-collapse{writing-mode:horizontal-tb}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .panel-collapse i{transform:none}
 .dock-host[data-panel-rail-labels="true"] .dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-and-actions-container{width:132px}.dock-host[data-panel-rail-labels="true"] .dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-container-vertical .panel-tab{display:flex;justify-content:flex-start;width:131px;min-width:131px;padding:0 10px}.dock-host[data-panel-rail-labels="true"] .dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-container-vertical .panel-tab span{display:block!important;max-width:94px}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .panel-rail-labels{writing-mode:horizontal-tb}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .panel-rail-labels i{transform:none}
 /* A collapsed tab click previews the live panel beside its rail without
