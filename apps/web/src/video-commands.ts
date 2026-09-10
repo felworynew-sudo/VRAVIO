@@ -1,6 +1,7 @@
 import {
   applyCropEdge, applyLeftTrim, applyRightTrim, canSplitAt, cloneVideoState, constrainBoundaryTrim, constrainClipDrag,
-  createVideoBinItem, createVideoClip, createVideoMarker, createVideoTrack, rippleShift, splitClip, type VideoDocumentState,
+  createVideoBinItem, createVideoClip, createVideoClipEffect, createVideoKeyframe, createVideoMarker, createVideoTrack,
+  effectiveClipValue, rippleShift, splitClip, type VideoDocumentState, type VideoEffectId, type VideoKeyframeableParam,
 } from "@vravio/env-video";
 import type { AssetId } from "@vravio/kernel";
 import { kernel } from "./kernel";
@@ -255,14 +256,15 @@ export function insertBinItemToTimeline(documentId: string, binItemId: string, t
 /** Position/scale/opacity — the OpenCut Classic checklist's `transform` item
  * (docs/master-plan.md §9.1). `patch` is applied over the clip's current values, so a caller
  * changing just one field (a single slider) doesn't need to read the others first. */
-export function setClipTransform(documentId: string, trackId: string, clipId: string, patch: Partial<Pick<VideoDocumentState["tracks"][number]["clips"][number], "x" | "y" | "scale" | "opacity">>): void {
-  void changeVideoDocument(documentId, "Transform Clip (Трансформировать клип)", (state) => {
+/** Resets x/y/scale/opacity to their defaults and clears every keyframe on those four
+ * parameters — resetting only the flat fields while keyframes stayed would look like nothing
+ * happened, since a keyframed parameter's effective value ignores its own flat field entirely. */
+export function resetClipTransform(documentId: string, trackId: string, clipId: string): void {
+  void changeVideoDocument(documentId, "Reset Transform (Сбросить трансформацию)", (state) => {
     const clip = state.tracks.find((item) => item.id === trackId)?.clips.find((item) => item.id === clipId);
     if (!clip) return false;
-    if (patch.x !== undefined) clip.x = patch.x;
-    if (patch.y !== undefined) clip.y = patch.y;
-    if (patch.scale !== undefined) clip.scale = Math.max(0.05, patch.scale);
-    if (patch.opacity !== undefined) clip.opacity = Math.max(0, Math.min(1, patch.opacity));
+    clip.x = 0; clip.y = 0; clip.scale = 1; clip.opacity = 1;
+    clip.keyframes = {};
     return true;
   });
 }
@@ -275,6 +277,133 @@ export function setClipCrop(documentId: string, trackId: string, clipId: string,
     track.clips[clipIndex] = applyCropEdge(track.clips[clipIndex]!, edge, value);
     return true;
   });
+}
+
+// --- Effect stack (non-destructive, docs/master-plan.md §33.3's "Эффекты" panel) -----------
+
+export function addClipEffect(documentId: string, trackId: string, clipId: string, effectId: VideoEffectId): void {
+  void changeVideoDocument(documentId, "Add Effect (Добавить эффект)", (state) => {
+    const clip = state.tracks.find((item) => item.id === trackId)?.clips.find((item) => item.id === clipId);
+    if (!clip) return false;
+    clip.effects.push(createVideoClipEffect(effectId));
+    return true;
+  });
+}
+
+export function removeClipEffect(documentId: string, trackId: string, clipId: string, effectInstanceId: string): void {
+  void changeVideoDocument(documentId, "Remove Effect (Убрать эффект)", (state) => {
+    const clip = state.tracks.find((item) => item.id === trackId)?.clips.find((item) => item.id === clipId);
+    if (!clip) return false;
+    const before = clip.effects.length;
+    clip.effects = clip.effects.filter((effect) => effect.id !== effectInstanceId);
+    return clip.effects.length !== before;
+  });
+}
+
+export function setClipEffectEnabled(documentId: string, trackId: string, clipId: string, effectInstanceId: string, enabled: boolean): void {
+  void changeVideoDocument(documentId, enabled ? "Enable Effect (Включить эффект)" : "Bypass Effect (Обойти эффект)", (state) => {
+    const effect = state.tracks.find((item) => item.id === trackId)?.clips.find((item) => item.id === clipId)?.effects.find((item) => item.id === effectInstanceId);
+    if (!effect) return false;
+    effect.enabled = enabled;
+    return true;
+  });
+}
+
+/** Live-drag preview for a slider inside one effect's params — writes straight to the document
+ * on every input event; the caller commits one history step at drag-end via
+ * `commitVideoDrag`/`changeVideoDocument`'s own pattern (see `AudioWorkspace.tsx`'s equivalent
+ * live-fader handling for the same reason: one undo step per drag, not one per pixel moved). */
+export function previewClipEffectParam(documentId: string, trackId: string, clipId: string, effectInstanceId: string, paramId: string, value: number): void {
+  kernel.documents.update<VideoDocumentState>(documentId, (state) => {
+    const effect = state.tracks.find((item) => item.id === trackId)?.clips.find((item) => item.id === clipId)?.effects.find((item) => item.id === effectInstanceId);
+    if (effect) effect.params[paramId] = value;
+  });
+}
+
+export function reorderClipEffect(documentId: string, trackId: string, clipId: string, effectInstanceId: string, direction: "up" | "down"): void {
+  void changeVideoDocument(documentId, "Reorder Effects (Изменить порядок эффектов)", (state) => {
+    const clip = state.tracks.find((item) => item.id === trackId)?.clips.find((item) => item.id === clipId);
+    if (!clip) return false;
+    const index = clip.effects.findIndex((effect) => effect.id === effectInstanceId);
+    const target = direction === "up" ? index - 1 : index + 1;
+    if (index === -1 || target < 0 || target >= clip.effects.length) return false;
+    const list = clip.effects;
+    [list[index], list[target]] = [list[target]!, list[index]!];
+    return true;
+  });
+}
+
+// --- Keyframes (x/y/scale/opacity, docs/master-plan.md §33.3's `keyframes` timeline item) ---
+
+/** Adds or updates a keyframe for `param` at `frameOnTimeline` to `value` — a caller passing the
+ * parameter's own *current effective value* at that frame (rather than some other number)
+ * matches every donor NLE's "toggle the stopwatch" behavior: turning on keyframing for a static
+ * value first pins down what it already was, so nothing visibly jumps the instant it's turned
+ * on. Snaps onto an existing keyframe within one frame rather than creating a near-duplicate. */
+export function setClipKeyframe(documentId: string, trackId: string, clipId: string, param: VideoKeyframeableParam, frameOnTimeline: number, value: number): void {
+  void changeVideoDocument(documentId, "Set Keyframe (Задать ключевой кадр)", (state) => {
+    const clip = state.tracks.find((item) => item.id === trackId)?.clips.find((item) => item.id === clipId);
+    if (!clip) return false;
+    const list = clip.keyframes[param] ?? (clip.keyframes[param] = []);
+    const existing = list.find((kf) => Math.abs(kf.frameOnTimeline - frameOnTimeline) < 1);
+    if (existing) { existing.value = value; } else { list.push(createVideoKeyframe(frameOnTimeline, value)); }
+    list.sort((a, b) => a.frameOnTimeline - b.frameOnTimeline);
+    return true;
+  });
+}
+
+export function removeClipKeyframe(documentId: string, trackId: string, clipId: string, param: VideoKeyframeableParam, keyframeId: string): void {
+  void changeVideoDocument(documentId, "Delete Keyframe (Удалить ключевой кадр)", (state) => {
+    const clip = state.tracks.find((item) => item.id === trackId)?.clips.find((item) => item.id === clipId);
+    const list = clip?.keyframes[param];
+    if (!clip || !list) return false;
+    const before = list.length;
+    clip.keyframes[param] = list.filter((kf) => kf.id !== keyframeId);
+    return clip.keyframes[param]!.length !== before;
+  });
+}
+
+/** Clears every keyframe for `param`, reverting the clip to its flat static value — the "turn
+ * off the stopwatch" action. The flat field itself is left at whatever it last was (usually the
+ * value the playhead was sitting on), not reset to a default. */
+export function clearClipKeyframes(documentId: string, trackId: string, clipId: string, param: VideoKeyframeableParam): void {
+  void changeVideoDocument(documentId, "Clear Keyframes (Очистить ключевые кадры)", (state) => {
+    const clip = state.tracks.find((item) => item.id === trackId)?.clips.find((item) => item.id === clipId);
+    if (!clip || !clip.keyframes[param]?.length) return false;
+    delete clip.keyframes[param];
+    return true;
+  });
+}
+
+/**
+ * Sets `param` at the playhead: writes a new/updated keyframe there if the parameter is already
+ * keyframed, otherwise just sets the flat field — the single entry point `VideoWorkspace.tsx`'s
+ * Inspector sliders call regardless of whether keyframing is on for that field, so the caller
+ * never has to branch on it itself.
+ */
+export function setClipParamAtPlayhead(documentId: string, trackId: string, clipId: string, param: VideoKeyframeableParam, frameOnTimeline: number, value: number): void {
+  const document = kernel.documents.get<VideoDocumentState>(documentId);
+  const clip = document?.state.tracks.find((item) => item.id === trackId)?.clips.find((item) => item.id === clipId);
+  if (!clip) return;
+  if (clip.keyframes[param]?.length) { setClipKeyframe(documentId, trackId, clipId, param, frameOnTimeline, value); return; }
+  void changeVideoDocument(documentId, "Transform Clip (Трансформировать клип)", (state) => {
+    const target = state.tracks.find((item) => item.id === trackId)?.clips.find((item) => item.id === clipId);
+    if (!target) return false;
+    target[param] = param === "scale" ? Math.max(0.05, value) : param === "opacity" ? Math.max(0, Math.min(1, value)) : value;
+    return true;
+  });
+}
+
+/** Toggles keyframing for `param` at the playhead: if a keyframe already sits there (within one
+ * frame), removes it; otherwise adds one carrying the parameter's current effective value at
+ * that frame — the "stopwatch diamond" button's own click behavior. */
+export function toggleClipKeyframeAtPlayhead(documentId: string, trackId: string, clipId: string, param: VideoKeyframeableParam, frameOnTimeline: number): void {
+  const document = kernel.documents.get<VideoDocumentState>(documentId);
+  const clip = document?.state.tracks.find((item) => item.id === trackId)?.clips.find((item) => item.id === clipId);
+  if (!clip) return;
+  const existing = clip.keyframes[param]?.find((kf) => Math.abs(kf.frameOnTimeline - frameOnTimeline) < 1);
+  if (existing) { removeClipKeyframe(documentId, trackId, clipId, param, existing.id); return; }
+  setClipKeyframe(documentId, trackId, clipId, param, frameOnTimeline, effectiveClipValue(clip, param, frameOnTimeline));
 }
 
 export function addVideoMarker(documentId: string, frameAt: number, name?: string): void {

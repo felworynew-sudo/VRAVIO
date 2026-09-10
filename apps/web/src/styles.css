@@ -313,6 +313,21 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .video-clip-inspector input[type=range]{width:100px;accent-color:var(--video)}
 .video-clip-inspector input[type=number]{width:56px;padding:2px 5px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface3);color:var(--text)}
 .video-clip-inspector button{padding:4px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface3);color:var(--text);cursor:pointer}
+.video-keyframe-toggle{padding:0 4px!important;border:0!important;background:transparent!important;color:var(--muted);font-size:12px;cursor:pointer}
+.video-keyframe-toggle.active{color:var(--video)}
+.video-effects-panel{flex:0 0 auto;max-height:220px;overflow-y:auto;display:flex;flex-direction:column;gap:6px;padding:6px 10px;border-bottom:1px solid var(--border);background:color-mix(in srgb,var(--video) 6%,var(--surface2))}
+.video-effects-add{display:flex;align-items:center;gap:8px}
+.video-effects-add strong{font-size:11px;color:var(--text)}
+.video-effects-add select{height:22px;padding:0 4px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface3);color:var(--text);font-size:10px}
+.video-effect-row{display:flex;flex-direction:column;gap:4px;padding:5px 7px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2)}
+.video-effect-row.bypassed{opacity:.55}
+.video-effect-header{display:flex;align-items:center;gap:6px}
+.video-effect-header span{flex:1;font-size:10.5px;color:var(--text);font-weight:600}
+.video-effect-header button{width:20px;height:20px;padding:0;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface3);color:var(--muted);font-size:10px;cursor:pointer;line-height:1}
+.video-effect-header button.active{background:color-mix(in srgb,var(--video) 30%,var(--surface3));color:var(--text);border-color:var(--video)}
+.video-effect-param{display:grid;grid-template-columns:1fr 2fr auto;align-items:center;gap:6px;font-size:9.5px;color:var(--muted)}
+.video-effect-param input[type=range]{width:100%;accent-color:var(--video)}
+.video-effect-param output{min-width:28px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text)}
 .video-track-headers{grid-column:1;grid-row:2;min-width:0;overflow-y:auto;border-right:1px solid var(--border);background:var(--surface)}
 .video-ruler-spacer{height:26px;border-bottom:1px solid var(--border)}
 .video-track-header{box-sizing:border-box;display:flex;flex-direction:column;gap:3px;padding:6px 8px;border-bottom:1px solid var(--border)}

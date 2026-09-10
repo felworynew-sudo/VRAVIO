@@ -1,4 +1,4 @@
-import { destRectFor, sourceRectFor, timelineDurationFrames, type VideoDocumentState } from "@vravio/env-video";
+import { destRectFor, effectiveClipValue, sourceRectFor, timelineDurationFrames, videoClipFilterString, type VideoDocumentState } from "@vravio/env-video";
 import { assetUrl, audioHitsAt, visualHitsAt } from "./videoCompositor";
 
 /**
@@ -133,12 +133,22 @@ export async function exportVideoDocument(state: VideoDocumentState, onProgress?
       for (const hit of visual) {
         const element = pool.get(hit.clip.id);
         if (!element || element.readyState < 2) continue;
-        const source = sourceRectFor(hit.clip);
-        const dest = destRectFor(hit.clip, source, state.width, state.height);
-        ctx.globalAlpha = Math.max(0, Math.min(1, hit.clip.opacity));
+        const clip = hit.clip;
+        // Same keyframe/effect resolution as the live compositor's own `#paint` — exported video
+        // must match what the transport played, not silently drop the animation and effect
+        // stack the way an earlier version of `mixdownAudioDocument` dropped live audio effects
+        // (fixed in `docs/master-plan.md` §33.5's export-parity commit; this is that same class
+        // of bug for video, caught before shipping rather than after).
+        const effective = { x: effectiveClipValue(clip, "x", frame), y: effectiveClipValue(clip, "y", frame), scale: effectiveClipValue(clip, "scale", frame) };
+        const opacity = effectiveClipValue(clip, "opacity", frame);
+        const source = sourceRectFor(clip);
+        const dest = destRectFor(effective, source, state.width, state.height);
+        ctx.globalAlpha = Math.max(0, Math.min(1, opacity));
+        ctx.filter = clip.effects.length ? videoClipFilterString(clip.effects) : "none";
         ctx.drawImage(element, source.sx, source.sy, source.sw, source.sh, dest.dx, dest.dy, dest.dw, dest.dh);
       }
       ctx.globalAlpha = 1;
+      ctx.filter = "none";
 
       onProgress?.({ frame, durationFrames });
       frame += 1;

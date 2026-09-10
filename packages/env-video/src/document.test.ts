@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { cloneVideoState, createVideoClip, createVideoDocument, createVideoTrack, findClip, findTrack, isVideoDocumentState, migrateVideoDocumentState, timelineDurationFrames } from "./document";
+import {
+  cloneVideoState, createVideoClip, createVideoClipEffect, createVideoDocument, createVideoKeyframe, createVideoTrack,
+  effectiveClipValue, evaluateKeyframedValue, findClip, findTrack, isVideoDocumentState, migrateVideoDocumentState, timelineDurationFrames,
+} from "./document";
 
 describe("createVideoDocument", () => {
   it("starts with one empty video track and sane defaults", () => {
@@ -124,5 +127,83 @@ describe("isVideoDocumentState migrates on the way in", () => {
     delete (state.tracks[0] as { hidden?: unknown }).hidden;
     expect(isVideoDocumentState(state)).toBe(true);
     expect(state.tracks[0]!.hidden).toBe(false);
+  });
+});
+
+describe("evaluateKeyframedValue", () => {
+  it("falls back to the static value when there are no keyframes", () => {
+    expect(evaluateKeyframedValue(undefined, 50, 42)).toBe(42);
+    expect(evaluateKeyframedValue([], 50, 42)).toBe(42);
+  });
+
+  it("holds the first keyframe's value before it", () => {
+    const keyframes = [createVideoKeyframe(10, 100), createVideoKeyframe(20, 200)];
+    expect(evaluateKeyframedValue(keyframes, 0, -1)).toBe(100);
+    expect(evaluateKeyframedValue(keyframes, 10, -1)).toBe(100);
+  });
+
+  it("holds the last keyframe's value after it", () => {
+    const keyframes = [createVideoKeyframe(10, 100), createVideoKeyframe(20, 200)];
+    expect(evaluateKeyframedValue(keyframes, 20, -1)).toBe(200);
+    expect(evaluateKeyframedValue(keyframes, 999, -1)).toBe(200);
+  });
+
+  it("interpolates linearly between two keyframes", () => {
+    const keyframes = [createVideoKeyframe(0, 0), createVideoKeyframe(10, 100)];
+    expect(evaluateKeyframedValue(keyframes, 5, -1)).toBe(50);
+    expect(evaluateKeyframedValue(keyframes, 2, -1)).toBe(20);
+  });
+
+  it("interpolates correctly regardless of input order", () => {
+    const keyframes = [createVideoKeyframe(10, 100), createVideoKeyframe(0, 0)];
+    expect(evaluateKeyframedValue(keyframes, 5, -1)).toBe(50);
+  });
+
+  it("picks the right segment across three or more keyframes", () => {
+    const keyframes = [createVideoKeyframe(0, 0), createVideoKeyframe(10, 100), createVideoKeyframe(20, 0)];
+    expect(evaluateKeyframedValue(keyframes, 5, -1)).toBe(50);
+    expect(evaluateKeyframedValue(keyframes, 15, -1)).toBe(50);
+    expect(evaluateKeyframedValue(keyframes, 10, -1)).toBe(100);
+  });
+});
+
+describe("effectiveClipValue", () => {
+  it("uses the flat field when the parameter has no keyframes", () => {
+    const clip = createVideoClip("asset-1", 100, 100, 30, {});
+    clip.opacity = 0.5;
+    expect(effectiveClipValue(clip, "opacity", 999)).toBe(0.5);
+  });
+
+  it("uses keyframed interpolation when the parameter has keyframes", () => {
+    const clip = createVideoClip("asset-1", 100, 100, 30, {});
+    clip.opacity = 1; // flat value ignored once keyframed
+    clip.keyframes.opacity = [createVideoKeyframe(0, 0), createVideoKeyframe(100, 1)];
+    expect(effectiveClipValue(clip, "opacity", 50)).toBe(0.5);
+  });
+});
+
+describe("createVideoClipEffect", () => {
+  it("seeds params from the catalog's own defaults and starts enabled", () => {
+    const effect = createVideoClipEffect("brightness");
+    expect(effect.effectId).toBe("brightness");
+    expect(effect.enabled).toBe(true);
+    expect(effect.params.amount).toBe(100);
+  });
+});
+
+describe("cloneVideoState deep-clones effects and keyframes", () => {
+  it("mutating a clone's clip effects/keyframes does not bleed into the original", () => {
+    const state = createVideoDocument();
+    const clip = createVideoClip("asset-1", 100, 100, 30, {});
+    clip.effects.push(createVideoClipEffect("blur"));
+    clip.keyframes.x = [createVideoKeyframe(0, 0)];
+    state.tracks[0]!.clips.push(clip);
+
+    const clone = cloneVideoState(state);
+    clone.tracks[0]!.clips[0]!.effects[0]!.params.pixels = 99;
+    clone.tracks[0]!.clips[0]!.keyframes.x![0]!.value = 999;
+
+    expect(state.tracks[0]!.clips[0]!.effects[0]!.params.pixels).not.toBe(99);
+    expect(state.tracks[0]!.clips[0]!.keyframes.x![0]!.value).not.toBe(999);
   });
 });

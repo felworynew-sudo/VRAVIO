@@ -1,3 +1,5 @@
+import type { VideoEffectId } from "./effects";
+
 /**
  * Positions and lengths are in frames at the document's own `frameRate`, not seconds — the same
  * reasoning `@vravio/env-audio`'s own `AudioClip` gives for samples (docs/master-plan.md §9.2):
@@ -7,6 +9,30 @@
  * video editor's playhead snaps to frame boundaries in the first place — there is no such thing
  * as "half a frame" once the material is rendered.
  */
+
+/** One insert in a clip's non-destructive effect stack — the video-side counterpart to
+ * `AudioTrackEffect`, applied in array order as CSS/Canvas2D `filter` fragments
+ * (`effects.ts`'s `videoEffectCssFragment`) during compositing, never baked into the source. */
+export interface VideoClipEffect {
+  readonly id: string;
+  readonly effectId: VideoEffectId;
+  params: Record<string, number>;
+  enabled: boolean;
+}
+
+/** One keyframe on a single animatable parameter — `frameOnTimeline` is an absolute timeline
+ * position (not clip-relative), the same frame unit every other timeline position in this file
+ * uses, so a keyframe still lines up correctly after a clip's `startFrame` moves without needing
+ * to be re-expressed. Only the four transform parameters are keyframeable for this pass — enough
+ * to animate a pan/zoom/fade, the OpenCut Classic checklist's own `keyframes` item
+ * (docs/master-plan.md §9.1) — not an arbitrary-parameter system yet. */
+export interface VideoKeyframe {
+  readonly id: string;
+  frameOnTimeline: number;
+  value: number;
+}
+
+export type VideoKeyframeableParam = "x" | "y" | "scale" | "opacity";
 
 export interface VideoClip {
   readonly id: string;
@@ -55,6 +81,14 @@ export interface VideoClip {
   cropTop: number;
   cropRight: number;
   cropBottom: number;
+  /** Non-destructive effect stack, applied in order — `effects.ts`'s catalog, the video-side
+   * counterpart to a track's `AudioTrackEffect[]`. Empty for the overwhelming majority of clips
+   * that have none, same as an audio track's own `effects` array usually is. */
+  effects: VideoClipEffect[];
+  /** Keyframes per animatable parameter, absolute timeline frames — absent (or an empty array)
+   * for a parameter with no animation, in which case the flat `x`/`y`/`scale`/`opacity` field
+   * above is what's used, the same "no keyframes yet" default every donor NLE starts a clip in. */
+  keyframes: Partial<Record<VideoKeyframeableParam, VideoKeyframe[]>>;
 }
 
 export interface VideoTrack {

@@ -1,4 +1,5 @@
-import type { VideoBinItem, VideoClip, VideoDocumentOptions, VideoDocumentState, VideoMarker, VideoTrack } from "./types";
+import type { VideoBinItem, VideoClip, VideoClipEffect, VideoDocumentOptions, VideoDocumentState, VideoKeyframe, VideoKeyframeableParam, VideoMarker, VideoTrack } from "./types";
+import { videoEffectDefaults, type VideoEffectId } from "./effects";
 
 export function createVideoTrack(kind: "video" | "audio", name?: string): VideoTrack {
   return {
@@ -32,7 +33,45 @@ export function createVideoClip(assetId: string, durationFrames: number, sourceD
     gain: options.gain ?? 1,
     x: 0, y: 0, scale: 1, opacity: 1,
     cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0,
+    effects: [], keyframes: {},
   };
+}
+
+export function createVideoClipEffect(effectId: VideoEffectId): VideoClipEffect {
+  return { id: crypto.randomUUID(), effectId, params: videoEffectDefaults(effectId), enabled: true };
+}
+
+export function createVideoKeyframe(frameOnTimeline: number, value: number): VideoKeyframe {
+  return { id: crypto.randomUUID(), frameOnTimeline: Math.max(0, Math.round(frameOnTimeline)), value };
+}
+
+/** Linear interpolation between the two keyframes surrounding `frame`; holds the nearest
+ * keyframe's value before the first or after the last, same convention audio automation lanes
+ * use. Falls back to `staticValue` when the parameter has no keyframes at all — the "not
+ * animated" case is not a one-keyframe special case, it is simply absent. */
+export function evaluateKeyframedValue(keyframes: readonly VideoKeyframe[] | undefined, frame: number, staticValue: number): number {
+  if (!keyframes || keyframes.length === 0) return staticValue;
+  const sorted = [...keyframes].sort((a, b) => a.frameOnTimeline - b.frameOnTimeline);
+  if (frame <= sorted[0]!.frameOnTimeline) return sorted[0]!.value;
+  const last = sorted[sorted.length - 1]!;
+  if (frame >= last.frameOnTimeline) return last.value;
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const left = sorted[i]!, right = sorted[i + 1]!;
+    if (frame >= left.frameOnTimeline && frame <= right.frameOnTimeline) {
+      if (right.frameOnTimeline === left.frameOnTimeline) return right.value;
+      const t = (frame - left.frameOnTimeline) / (right.frameOnTimeline - left.frameOnTimeline);
+      return left.value + (right.value - left.value) * t;
+    }
+  }
+  return staticValue;
+}
+
+/** The clip's own effective value for a keyframeable parameter at an absolute timeline `frame` —
+ * what the compositor actually renders with, and what the Inspector shows when scrubbing.
+ * `param` selects both the keyframe list and the flat fallback field, so a caller never has to
+ * duplicate that mapping. */
+export function effectiveClipValue(clip: VideoClip, param: VideoKeyframeableParam, frame: number): number {
+  return evaluateKeyframedValue(clip.keyframes[param], frame, clip[param]);
 }
 
 export function createVideoDocument(options: VideoDocumentOptions = {}): VideoDocumentState {
@@ -89,6 +128,8 @@ export function migrateVideoDocumentState(state: VideoDocumentState): VideoDocum
       if (typeof clip.cropBottom !== "number") clip.cropBottom = 0;
       if (typeof clip.sourceWidth !== "number") clip.sourceWidth = 0;
       if (typeof clip.sourceHeight !== "number") clip.sourceHeight = 0;
+      if (!Array.isArray(clip.effects)) clip.effects = [];
+      if (!clip.keyframes || typeof clip.keyframes !== "object") clip.keyframes = {};
     }
   }
   return state;
@@ -103,7 +144,11 @@ export function migrateVideoDocumentState(state: VideoDocumentState): VideoDocum
 export function cloneVideoState(state: VideoDocumentState): VideoDocumentState {
   return {
     ...state,
-    tracks: state.tracks.map((track) => ({ ...track, clips: track.clips.map((clip) => ({ ...clip })) })),
+    tracks: state.tracks.map((track) => ({ ...track, clips: track.clips.map((clip) => ({
+      ...clip,
+      effects: clip.effects.map((effect) => ({ ...effect, params: { ...effect.params } })),
+      keyframes: Object.fromEntries(Object.entries(clip.keyframes).map(([param, list]) => [param, list!.map((kf) => ({ ...kf }))])),
+    })) })),
     selection: state.selection ? { trackId: state.selection.trackId, clipIds: [...state.selection.clipIds] } : null,
     markers: state.markers.map((marker) => ({ ...marker })),
     bin: state.bin.map((item) => ({ ...item })),

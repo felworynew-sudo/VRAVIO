@@ -1,4 +1,4 @@
-import { destRectFor, sourceRectFor, type VideoClip, type VideoDocumentState, type VideoTrack } from "@vravio/env-video";
+import { destRectFor, effectiveClipValue, sourceRectFor, videoClipFilterString, type VideoClip, type VideoDocumentState, type VideoTrack } from "@vravio/env-video";
 import type { AssetId } from "@vravio/kernel";
 import { kernel } from "./kernel";
 
@@ -112,7 +112,20 @@ export class VideoCompositor {
       // created element stays black forever whenever nothing else happens to trigger another
       // render in the meantime (a static scrub position, an otherwise-idle document) — the
       // paused case never gets a second chance the way every following rAF tick gives playback.
-      element.addEventListener("loadeddata", () => { if (!this.#playing && this.#lastRenderState) this.#paint(this.#lastRenderState, visualHitsAt(this.#lastRenderState.tracks, this.#currentFrame)); }, { once: true });
+      const repaintIfPaused = () => { if (!this.#playing && this.#lastRenderState) this.#paint(this.#lastRenderState, visualHitsAt(this.#lastRenderState.tracks, this.#currentFrame)); };
+      element.addEventListener("loadeddata", repaintIfPaused, { once: true });
+      // Setting `currentTime` (`renderFrame`'s own seek, right before it calls `#paint`) can
+      // drop `readyState` below `HAVE_CURRENT_DATA` while the browser re-buffers for the new
+      // position, even on an element that was already fully loaded — `#paint`'s own
+      // `readyState < 2` guard then skips drawing this element for that call, and nothing
+      // retries once the seek actually finishes, since `loadeddata` above only ever fires once
+      // per element's lifetime. A persistent (not `{ once: true }`) `seeked` listener closes that
+      // gap: every completed seek gets its own repaint chance while paused, the same guarantee
+      // `loadeddata` gives the very first frame. Found live: scrubbing the playhead to a new
+      // position showed nothing at all past the first frame, even though the playhead and
+      // effective keyframe values in the Inspector kept advancing correctly — only the actual
+      // pixels never caught up.
+      element.addEventListener("seeked", repaintIfPaused);
       void assetUrl(clip.assetId).then((url) => { if (element!.src !== url) element!.src = url; }).catch(() => {});
     }
     return element;
@@ -165,12 +178,21 @@ export class VideoCompositor {
     for (const hit of visual) {
       const element = this.#pool.get(hit.clip.id);
       if (!element || element.readyState < 2) continue; // HAVE_CURRENT_DATA — nothing decoded yet
-      const source = sourceRectFor(hit.clip);
-      const dest = destRectFor(hit.clip, source, state.width, state.height);
-      ctx.globalAlpha = Math.max(0, Math.min(1, hit.clip.opacity));
+      const clip = hit.clip;
+      // Keyframed transform/opacity resolve against the absolute timeline frame this paint is
+      // for (`effectiveClipValue` falls back to the flat field when a parameter has no
+      // keyframes) — `destRectFor` only needs x/y/scale, so a small object carrying just those
+      // three resolved numbers stands in for the clip without mutating it.
+      const effective = { x: effectiveClipValue(clip, "x", this.#currentFrame), y: effectiveClipValue(clip, "y", this.#currentFrame), scale: effectiveClipValue(clip, "scale", this.#currentFrame) };
+      const opacity = effectiveClipValue(clip, "opacity", this.#currentFrame);
+      const source = sourceRectFor(clip);
+      const dest = destRectFor(effective, source, state.width, state.height);
+      ctx.globalAlpha = Math.max(0, Math.min(1, opacity));
+      ctx.filter = clip.effects.length ? videoClipFilterString(clip.effects) : "none";
       ctx.drawImage(element, source.sx, source.sy, source.sw, source.sh, dest.dx, dest.dy, dest.dw, dest.dh);
     }
     ctx.globalAlpha = 1;
+    ctx.filter = "none";
   }
 
   /**

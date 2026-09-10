@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { VravioDocument } from "@vravio/kernel";
 import {
-  applyCropEdge, cloneVideoState, isVideoDocumentState, snapFrame, timelineDurationFrames, type VideoClip, type VideoDocumentState, type VideoTrack,
+  applyCropEdge, cloneVideoState, effectiveClipValue, isVideoDocumentState, snapFrame, timelineDurationFrames, videoEffectCatalog,
+  type VideoClip, type VideoDocumentState, type VideoEffectId, type VideoKeyframeableParam, type VideoTrack,
 } from "@vravio/env-video";
 import { kernel } from "./kernel";
 import { useShellStore } from "./store";
 import { text } from "./i18n";
 import {
-  addVideoMarker, addVideoTrack, changeVideoDocument, commitVideoDrag, deleteSelectedClips, importToBin, insertBinItemToTimeline, moveVideoMarker,
-  previewMoveClip, previewTrimClip, removeBinItem, removeVideoMarker, removeVideoTrack, renameVideoMarker, setClipCrop, setClipTransform, setSelection,
-  setTrackHidden, setTrackLocked, setTrackMuted, setTrackVolume, splitClipAt,
+  addClipEffect, addVideoMarker, addVideoTrack, changeVideoDocument, commitVideoDrag, deleteSelectedClips, importToBin,
+  insertBinItemToTimeline, moveVideoMarker, previewClipEffectParam, previewMoveClip, previewTrimClip, removeBinItem, removeClipEffect,
+  removeVideoMarker, removeVideoTrack, renameVideoMarker, reorderClipEffect, resetClipTransform, setClipCrop, setClipEffectEnabled,
+  setClipParamAtPlayhead, setSelection, setTrackHidden, setTrackLocked, setTrackMuted, setTrackVolume, splitClipAt, toggleClipKeyframeAtPlayhead,
 } from "./video-commands";
 import { probeVideoMetadata } from "./videoImport";
 import { assetUrl, VideoCompositor } from "./videoCompositor";
@@ -76,7 +78,16 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
   const snapThresholdFrames = Math.max(1, Math.round(SNAP_THRESHOLD_PX / pxPerFrame));
 
   const compositor = () => (compositorRef.current ??= new VideoCompositor());
-  useEffect(() => { if (canvasRef.current) compositor().attachCanvas(canvasRef.current); }, []);
+  // Switching between two *video* documents (clicking a different video tab) doesn't remount
+  // this component — React sees the same `VideoWorkspace` component type at the same position
+  // in the tree and reuses the fiber, only updating props, since nothing here keys the element
+  // on `document.id`. So the dispose-on-document-change effect below nulls `compositorRef`, but
+  // without this effect also depending on `document.id`, the freshly (lazily) recreated
+  // compositor next render never gets `attachCanvas` called on it — same symptom as the
+  // Program/Source mount bug fixed above, different trigger. Found live: a second video document
+  // opened in the same tab stayed solid black forever, timecode and frame math still advancing
+  // correctly, because the new compositor instance's `#canvas` was simply never set.
+  useEffect(() => { if (canvasRef.current) compositor().attachCanvas(canvasRef.current); }, [document.id]);
   useEffect(() => () => { compositorRef.current?.dispose(); compositorRef.current = null; }, [document.id]);
 
   const stopPlayback = useCallback(() => {
@@ -240,6 +251,19 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
     insertBinItemToTimeline(document.id, sourceBinItem.id, state.selection?.trackId, playheadFrame, sourceInFrame, sourceOutFrame);
   };
 
+  /** The Inspector's own "stopwatch diamond" per transform field — ◆ (filled, accented) when a
+   * keyframe sits exactly at the playhead, ◇ (hollow but still accented) when the parameter is
+   * keyframed elsewhere, plain when it isn't keyframed at all. Clicking toggles a keyframe at
+   * the playhead; the field next to it always shows/edits the *effective* (interpolated) value,
+   * so scrubbing past a keyframed parameter shows what will actually render, not a stale static
+   * number. */
+  const keyframeToggle = (trackId: string, clipId: string, clip: VideoClip, param: VideoKeyframeableParam) => {
+    const list = clip.keyframes[param];
+    const hasHere = !!list?.some((kf) => Math.abs(kf.frameOnTimeline - playheadFrame) < 1);
+    const hasAny = !!list?.length;
+    return <button className={`video-keyframe-toggle${hasAny ? " active" : ""}`} onClick={() => toggleClipKeyframeAtPlayhead(document.id, trackId, clipId, param, playheadFrame)} title={text(language, "Toggle keyframe at playhead", "Ключевой кадр в плейхеде")}>{hasHere ? "◆" : "◇"}</button>;
+  };
+
   const exportVideo = async () => {
     if (exportProgress) return;
     stopPlayback();
@@ -304,9 +328,38 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
       <strong>{text(language, "Audio timeline", "Аудиодорожки")}</strong>
       <span>{text(language, "Audio clips and tracks use amber; mute and volume remain available in each track header.", "Аудиоклипы и дорожки отмечены янтарным; заглушение и громкость доступны в заголовке каждой дорожки.")}</span>
     </section>}
-    {workspaceMode === "effects" && <section className="video-workspace-strip" aria-label={text(language, "Clip inspector", "Инспектор клипа")}>
-      <strong>{text(language, "Clip inspector", "Инспектор клипа")}</strong>
-      <span>{selectedClip ? text(language, "Transform and crop controls for the selected clip are shown below.", "Ниже показаны параметры трансформации и кропа выбранного клипа.") : text(language, "Select one video clip to edit its transform and crop.", "Выберите один видеоклип для изменения трансформации и кропа.")}</span>
+    {workspaceMode === "effects" && <section className="video-effects-panel" aria-label={text(language, "Effect stack", "Стек эффектов")}>
+      {!selectedClip
+        ? <span className="video-bin-empty">{text(language, "Select one video clip to edit its effect stack.", "Выберите один видеоклип, чтобы редактировать его стек эффектов.")}</span>
+        : <>
+            <div className="video-effects-add">
+              <strong>{text(language, "Effects", "Эффекты")}</strong>
+              <select value="" onChange={(event) => { if (event.target.value) addClipEffect(document.id, selectedTrack!.id, selectedClip.id, event.target.value as VideoEffectId); }}>
+                <option value="">{text(language, "+ Add effect…", "+ Добавить эффект…")}</option>
+                {videoEffectCatalog.map((effect) => <option key={effect.id} value={effect.id}>{effect.name}</option>)}
+              </select>
+            </div>
+            {selectedClip.effects.length === 0
+              ? <span className="video-bin-empty">{text(language, "No effects on this clip yet.", "На этом клипе пока нет эффектов.")}</span>
+              : selectedClip.effects.map((effect, index) => {
+                  const definition = videoEffectCatalog.find((item) => item.id === effect.effectId);
+                  return <div key={effect.id} className={`video-effect-row${effect.enabled ? "" : " bypassed"}`}>
+                    <div className="video-effect-header">
+                      <button className={effect.enabled ? "active" : ""} onClick={() => setClipEffectEnabled(document.id, selectedTrack!.id, selectedClip.id, effect.id, !effect.enabled)} title={text(language, "Bypass", "Обойти")}>👁</button>
+                      <span>{definition?.name ?? effect.effectId}</span>
+                      <button disabled={index === 0} onClick={() => reorderClipEffect(document.id, selectedTrack!.id, selectedClip.id, effect.id, "up")} title={text(language, "Move up", "Выше")}>↑</button>
+                      <button disabled={index === selectedClip.effects.length - 1} onClick={() => reorderClipEffect(document.id, selectedTrack!.id, selectedClip.id, effect.id, "down")} title={text(language, "Move down", "Ниже")}>↓</button>
+                      <button onClick={() => removeClipEffect(document.id, selectedTrack!.id, selectedClip.id, effect.id)} title={text(language, "Remove effect", "Убрать эффект")}>×</button>
+                    </div>
+                    {definition?.parameters.map((param) => <label key={param.id} className="video-effect-param">
+                      <span>{param.name}</span>
+                      <input type="range" min={param.min} max={param.max} step={param.step} value={effect.params[param.id] ?? param.value}
+                        onChange={(event) => previewClipEffectParam(document.id, selectedTrack!.id, selectedClip.id, effect.id, param.id, event.target.valueAsNumber)} />
+                      <output>{effect.params[param.id] ?? param.value}</output>
+                    </label>)}
+                  </div>;
+                })}
+          </>}
     </section>}
     {workspaceMode === "export" && <section className="video-export-panel" aria-label={text(language, "Export", "Экспорт")}>
       <div><strong>{text(language, "Export timeline", "Экспорт таймлайна")}</strong><span>{state.width}×{state.height} · {frameRate} fps · WebM</span></div>
@@ -315,16 +368,16 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
     </section>}
 
     {selectedClip && selectedTrack?.kind === "video" && <div className="video-clip-inspector" aria-label={text(language, "Selected clip properties", "Свойства выбранного клипа")}>
-      <label><span>{text(language, "X", "X")}</span><input type="number" step={1} value={Math.round(selectedClip.x)} onChange={(event) => setClipTransform(document.id, selectedTrack.id, selectedClip.id, { x: event.target.valueAsNumber || 0 })} /></label>
-      <label><span>{text(language, "Y", "Y")}</span><input type="number" step={1} value={Math.round(selectedClip.y)} onChange={(event) => setClipTransform(document.id, selectedTrack.id, selectedClip.id, { y: event.target.valueAsNumber || 0 })} /></label>
-      <label><span>{text(language, "Scale", "Масштаб")}</span><input type="range" min={0.05} max={3} step={0.01} value={selectedClip.scale} onChange={(event) => setClipTransform(document.id, selectedTrack.id, selectedClip.id, { scale: event.target.valueAsNumber })} /></label>
-      <label><span>{text(language, "Opacity", "Прозрачность")}</span><input type="range" min={0} max={1} step={0.01} value={selectedClip.opacity} onChange={(event) => setClipTransform(document.id, selectedTrack.id, selectedClip.id, { opacity: event.target.valueAsNumber })} /></label>
+      <label>{keyframeToggle(selectedTrack.id, selectedClip.id, selectedClip, "x")}<span>{text(language, "X", "X")}</span><input type="number" step={1} value={Math.round(effectiveClipValue(selectedClip, "x", playheadFrame))} onChange={(event) => setClipParamAtPlayhead(document.id, selectedTrack.id, selectedClip.id, "x", playheadFrame, event.target.valueAsNumber || 0)} /></label>
+      <label>{keyframeToggle(selectedTrack.id, selectedClip.id, selectedClip, "y")}<span>{text(language, "Y", "Y")}</span><input type="number" step={1} value={Math.round(effectiveClipValue(selectedClip, "y", playheadFrame))} onChange={(event) => setClipParamAtPlayhead(document.id, selectedTrack.id, selectedClip.id, "y", playheadFrame, event.target.valueAsNumber || 0)} /></label>
+      <label>{keyframeToggle(selectedTrack.id, selectedClip.id, selectedClip, "scale")}<span>{text(language, "Scale", "Масштаб")}</span><input type="range" min={0.05} max={3} step={0.01} value={effectiveClipValue(selectedClip, "scale", playheadFrame)} onChange={(event) => setClipParamAtPlayhead(document.id, selectedTrack.id, selectedClip.id, "scale", playheadFrame, event.target.valueAsNumber)} /></label>
+      <label>{keyframeToggle(selectedTrack.id, selectedClip.id, selectedClip, "opacity")}<span>{text(language, "Opacity", "Прозрачность")}</span><input type="range" min={0} max={1} step={0.01} value={effectiveClipValue(selectedClip, "opacity", playheadFrame)} onChange={(event) => setClipParamAtPlayhead(document.id, selectedTrack.id, selectedClip.id, "opacity", playheadFrame, event.target.valueAsNumber)} /></label>
       <span className="video-transport-sep" />
       <label><span>{text(language, "Crop L", "Кроп Л")}</span><input type="range" min={0} max={0.9} step={0.01} value={selectedClip.cropLeft} onChange={(event) => setClipCrop(document.id, selectedTrack.id, selectedClip.id, "left", event.target.valueAsNumber)} /></label>
       <label><span>{text(language, "Crop T", "Кроп В")}</span><input type="range" min={0} max={0.9} step={0.01} value={selectedClip.cropTop} onChange={(event) => setClipCrop(document.id, selectedTrack.id, selectedClip.id, "top", event.target.valueAsNumber)} /></label>
       <label><span>{text(language, "Crop R", "Кроп П")}</span><input type="range" min={0} max={0.9} step={0.01} value={selectedClip.cropRight} onChange={(event) => setClipCrop(document.id, selectedTrack.id, selectedClip.id, "right", event.target.valueAsNumber)} /></label>
       <label><span>{text(language, "Crop B", "Кроп Н")}</span><input type="range" min={0} max={0.9} step={0.01} value={selectedClip.cropBottom} onChange={(event) => setClipCrop(document.id, selectedTrack.id, selectedClip.id, "bottom", event.target.valueAsNumber)} /></label>
-      <button onClick={() => setClipTransform(document.id, selectedTrack.id, selectedClip.id, { x: 0, y: 0, scale: 1, opacity: 1 })}>{text(language, "Reset transform", "Сбросить трансформацию")}</button>
+      <button onClick={() => resetClipTransform(document.id, selectedTrack.id, selectedClip.id)}>{text(language, "Reset transform", "Сбросить трансформацию")}</button>
     </div>}
 
     <div className="video-body">
