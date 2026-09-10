@@ -522,21 +522,35 @@ export function App() {
       <strong className={active ? "brand compact" : "brand full"}><img src={active ? `${import.meta.env.BASE_URL}логотип цветная плашка.svg` : `${import.meta.env.BASE_URL}логотип белый.svg`} alt="VRAVIO" /></strong>
       <button className="home-button" onClick={() => store.showHome()} aria-label={text(store.language, "Home", "Главная")} title={text(store.language, "Home", "Главная")}><i style={{ "--icon-mask": `url("${import.meta.env.BASE_URL}ГЛАВНАЯ.svg")` } as CSSProperties}/></button>
       <nav aria-label={store.language === "ru" ? "Главное меню" : "Main menu"}>
+        {/* Image/SVG-specific entries (Import…, Import SVG, Export…, Export as SVG, Print…) only
+            show for the environments they actually mean something in — raster/vector. Found
+            live: these sat in every environment's File menu regardless, greyed out for Audio/
+            Video rather than simply absent, which read as "these belong here but are broken"
+            instead of "these don't apply here." Audio/Video each already have their own real
+            Import/Export in their own toolbar, not a gap this menu needs to fill. */}
         <Menu label="File (Файл)" language={store.language} open={openMenu === "file"} onToggle={() => setOpenMenu(openMenu === "file" ? null : "file")} items={[
           ["New… (Новый…)", "Ctrl+N", () => store.requestNewDocument("raster")],
           ["Open… (Открыть…)", "Ctrl+O", () => openImageRef.current?.click()],
-          ["Import… (Импортировать…)", "", () => openImageRef.current?.click()],
-          ["Import SVG as Vector… (Импортировать SVG как вектор…)", "", () => importSvgAsVectorRef.current?.click()],
+          ...(active?.kind === "raster" || active?.kind === "vector" ? [["Import… (Импортировать…)", "", () => openImageRef.current?.click()] as MainMenuItem] : []),
+          ...(active?.kind === "vector" ? [["Import SVG as Vector… (Импортировать SVG как вектор…)", "", () => importSvgAsVectorRef.current?.click()] as MainMenuItem] : []),
           ["Save (Сохранить)", "Ctrl+S", () => void saveProject(), !active],
           ["Save As… (Сохранить как…)", "Ctrl+Shift+S", () => void saveProject(), !active],
           ["Save a Copy… (Сохранить копию…)", "Ctrl+Alt+S", () => void saveProject(false), !active],
-          ["Export… (Экспортировать…)", "Ctrl+Shift+E", () => setExportOpen(true), !active || !isRasterDocumentState(active.state)],
-          ["Export as SVG… (Экспортировать в SVG…)", "", exportActiveVectorAsSvg, !active || !isVectorDocumentState(active.state)],
-          ["Print… (Печать…)", "Ctrl+P", () => setPrintOpen(true), !active || !isRasterDocumentState(active.state)],
+          ...(active?.kind === "raster" ? [["Export… (Экспортировать…)", "Ctrl+Shift+E", () => setExportOpen(true), !isRasterDocumentState(active.state)] as MainMenuItem] : []),
+          ...(active?.kind === "vector" ? [["Export as SVG… (Экспортировать в SVG…)", "", exportActiveVectorAsSvg, !isVectorDocumentState(active.state)] as MainMenuItem] : []),
+          ...(active?.kind === "raster" ? [["Print… (Печать…)", "Ctrl+P", () => setPrintOpen(true), !isRasterDocumentState(active.state)] as MainMenuItem] : []),
           ["Settings… (Настройки…)", "", () => store.setSettingsOpen(true)],
           ["Close (Закрыть)", "Ctrl+W", () => active && store.closeDocument(active.id), !active],
         ]}/>
-        <Menu label="Edit (Правка)" language={store.language} open={openMenu === "edit"} onToggle={() => setOpenMenu(openMenu === "edit" ? null : "edit")} items={[["Undo (Отменить)", "Ctrl+Z", () => void kernel.commands.execute("edit.undo", activeCommandContext())], ["Redo (Повторить)", "Ctrl+Shift+Z", () => void kernel.commands.execute("edit.redo", activeCommandContext())], ["Free Transform (Свободная трансформация)", "Ctrl+T", () => window.dispatchEvent(new Event("vravio-transform-start"))]]}/>
+        <Menu label="Edit (Правка)" language={store.language} open={openMenu === "edit"} onToggle={() => setOpenMenu(openMenu === "edit" ? null : "edit")} items={[
+          ["Undo (Отменить)", "Ctrl+Z", () => void kernel.commands.execute("edit.undo", activeCommandContext())],
+          ["Redo (Повторить)", "Ctrl+Shift+Z", () => void kernel.commands.execute("edit.redo", activeCommandContext())],
+          // Free Transform is raster/vector's own interactive transform tool
+          // (`vravio-transform-start`) — meaningless for Audio/Video, which have their own
+          // transform controls (clip keyframes, the Video Inspector's x/y/scale fields) already
+          // reachable in their own workspace, not through this menu at all.
+          ...(active?.kind === "raster" || active?.kind === "vector" ? [["Free Transform (Свободная трансформация)", "Ctrl+T", () => window.dispatchEvent(new Event("vravio-transform-start"))] as MainMenuItem] : []),
+        ]}/>
         {active?.kind === "raster" && <Menu label="Image (Изображение)" language={store.language} open={openMenu === "image"} onToggle={() => setOpenMenu(openMenu === "image" ? null : "image")} items={[
           { label: "Adjustments (Коррекция)", items: rasterAdjustments.map((definition) => [`${definition.name.en}… (${definition.name.ru}…)`, definition.shortcut ?? "", () => openImageAdjustment(definition), !activeRasterState || activeRasterState.layers.find((layer) => layer.id === activeRasterState.activeLayerId)?.kind !== "pixel"] as MainMenuItem) },
           // One command with a `ratio` argument, one entry per ratio it offers:
