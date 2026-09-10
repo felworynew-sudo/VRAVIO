@@ -8,11 +8,11 @@ import { kernel } from "./kernel";
 import { useShellStore } from "./store";
 import { text } from "./i18n";
 import {
-  addClipEffect, addTransition, addVideoMarker, addVideoTrack, changeVideoDocument, commitVideoDrag, deleteSelectedClips, importToBin,
-  insertBinItemToTimeline, moveVideoMarker, previewClipEffectParam, previewMoveClip, previewTrimClip, removeBinItem, removeClipEffect,
-  removeTransition, removeVideoMarker, removeVideoTrack, renameVideoMarker, reorderClipEffect, resetClipTransform, setClipCrop,
-  setClipEffectEnabled, setClipParamAtPlayhead, setSelection, setTrackHidden, setTrackLocked, setTrackMuted, setTrackVolume, splitClipAt,
-  toggleClipKeyframeAtPlayhead,
+  addClipEffect, addTitleClip, addTransition, addVideoMarker, addVideoTrack, changeVideoDocument, commitVideoDrag, deleteSelectedClips,
+  importToBin, insertBinItemToTimeline, moveVideoMarker, previewClipEffectParam, previewMoveClip, previewTrimClip, removeBinItem,
+  removeClipEffect, removeTransition, removeVideoMarker, removeVideoTrack, renameVideoMarker, reorderClipEffect, resetClipTransform,
+  setClipCrop, setClipEffectEnabled, setClipParamAtPlayhead, setSelection, setTitleStyle, setTitleText, setTrackHidden, setTrackLocked,
+  setTrackMuted, setTrackVolume, splitClipAt, toggleClipKeyframeAtPlayhead,
 } from "./video-commands";
 import { probeVideoMetadata } from "./videoImport";
 import { assetUrl, VideoCompositor } from "./videoCompositor";
@@ -317,6 +317,7 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
       <div className="media-project-actions">
         <button onClick={() => addVideoTrack(document.id, "video")}>{text(language, "+ Video", "+ Видео")}</button>
         <button onClick={() => addVideoTrack(document.id, "audio")}>{text(language, "+ Audio", "+ Аудио")}</button>
+        <button onClick={() => addTitleClip(document.id, state.selection?.trackId, playheadFrame, text(language, "Title", "Титр"), Math.round(2 * frameRate))} title={text(language, "Add a title clip at the playhead", "Добавить титр в плейхед")}>{text(language, "+ Title", "+ Титр")}</button>
         <button onClick={() => fileInputRef.current?.click()}>{text(language, "Import…", "Импорт…")}</button>
         <input ref={fileInputRef} type="file" accept="video/*,audio/*" multiple hidden onChange={(event) => { void importFiles(event.target.files); event.target.value = ""; }} />
         <button disabled={!!exportProgress} onClick={() => void exportVideo()} title={text(language, "Export renders the timeline in real time (capture, not an instant offline encode) — takes as long as the video itself", "Экспорт рендерит таймлайн в реальном времени (захват, а не мгновенный офлайн-рендер) — займёт столько же, сколько сам ролик")}>
@@ -332,6 +333,8 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
     {workspaceMode === "effects" && <section className="video-effects-panel" aria-label={text(language, "Effect stack", "Стек эффектов")}>
       {!selectedClip
         ? <span className="video-bin-empty">{text(language, "Select one video clip to edit its effect stack.", "Выберите один видеоклип, чтобы редактировать его стек эффектов.")}</span>
+        : selectedClip.title
+        ? <span className="video-bin-empty">{text(language, "Title clips don't support the effect stack yet — edit text and style on the Клип panel above.", "Титры пока не поддерживают стек эффектов — текст и стиль редактируются в панели «Клип» выше.")}</span>
         : <>
             <div className="video-effects-add">
               <strong>{text(language, "Effects", "Эффекты")}</strong>
@@ -374,10 +377,21 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
       <label>{keyframeToggle(selectedTrack.id, selectedClip.id, selectedClip, "scale")}<span>{text(language, "Scale", "Масштаб")}</span><input type="range" min={0.05} max={3} step={0.01} value={effectiveClipValue(selectedClip, "scale", playheadFrame)} onChange={(event) => setClipParamAtPlayhead(document.id, selectedTrack.id, selectedClip.id, "scale", playheadFrame, event.target.valueAsNumber)} /></label>
       <label>{keyframeToggle(selectedTrack.id, selectedClip.id, selectedClip, "opacity")}<span>{text(language, "Opacity", "Прозрачность")}</span><input type="range" min={0} max={1} step={0.01} value={effectiveClipValue(selectedClip, "opacity", playheadFrame)} onChange={(event) => setClipParamAtPlayhead(document.id, selectedTrack.id, selectedClip.id, "opacity", playheadFrame, event.target.valueAsNumber)} /></label>
       <span className="video-transport-sep" />
-      <label><span>{text(language, "Crop L", "Кроп Л")}</span><input type="range" min={0} max={0.9} step={0.01} value={selectedClip.cropLeft} onChange={(event) => setClipCrop(document.id, selectedTrack.id, selectedClip.id, "left", event.target.valueAsNumber)} /></label>
-      <label><span>{text(language, "Crop T", "Кроп В")}</span><input type="range" min={0} max={0.9} step={0.01} value={selectedClip.cropTop} onChange={(event) => setClipCrop(document.id, selectedTrack.id, selectedClip.id, "top", event.target.valueAsNumber)} /></label>
-      <label><span>{text(language, "Crop R", "Кроп П")}</span><input type="range" min={0} max={0.9} step={0.01} value={selectedClip.cropRight} onChange={(event) => setClipCrop(document.id, selectedTrack.id, selectedClip.id, "right", event.target.valueAsNumber)} /></label>
-      <label><span>{text(language, "Crop B", "Кроп Н")}</span><input type="range" min={0} max={0.9} step={0.01} value={selectedClip.cropBottom} onChange={(event) => setClipCrop(document.id, selectedTrack.id, selectedClip.id, "bottom", event.target.valueAsNumber)} /></label>
+      {selectedClip.title
+        ? <>
+            <input className="video-title-text" value={selectedClip.title.text} placeholder={text(language, "Title text", "Текст титра")} onChange={(event) => setTitleText(document.id, selectedTrack.id, selectedClip.id, event.target.value)} />
+            <label><span>{text(language, "Size", "Размер")}</span><input type="range" min={12} max={200} step={1} value={selectedClip.title.fontSize} onChange={(event) => setTitleStyle(document.id, selectedTrack.id, selectedClip.id, { fontSize: event.target.valueAsNumber })} /></label>
+            <label><span>{text(language, "Color", "Цвет")}</span><input type="color" value={selectedClip.title.color} onChange={(event) => setTitleStyle(document.id, selectedTrack.id, selectedClip.id, { color: event.target.value })} /></label>
+            <div className="media-control-group">
+              {(["left", "center", "right"] as const).map((align) => <button key={align} className={selectedClip.title!.align === align ? "active" : ""} onClick={() => setTitleStyle(document.id, selectedTrack.id, selectedClip.id, { align })}>{align === "left" ? "⯇" : align === "right" ? "⯈" : "≡"}</button>)}
+            </div>
+          </>
+        : <>
+            <label><span>{text(language, "Crop L", "Кроп Л")}</span><input type="range" min={0} max={0.9} step={0.01} value={selectedClip.cropLeft} onChange={(event) => setClipCrop(document.id, selectedTrack.id, selectedClip.id, "left", event.target.valueAsNumber)} /></label>
+            <label><span>{text(language, "Crop T", "Кроп В")}</span><input type="range" min={0} max={0.9} step={0.01} value={selectedClip.cropTop} onChange={(event) => setClipCrop(document.id, selectedTrack.id, selectedClip.id, "top", event.target.valueAsNumber)} /></label>
+            <label><span>{text(language, "Crop R", "Кроп П")}</span><input type="range" min={0} max={0.9} step={0.01} value={selectedClip.cropRight} onChange={(event) => setClipCrop(document.id, selectedTrack.id, selectedClip.id, "right", event.target.valueAsNumber)} /></label>
+            <label><span>{text(language, "Crop B", "Кроп Н")}</span><input type="range" min={0} max={0.9} step={0.01} value={selectedClip.cropBottom} onChange={(event) => setClipCrop(document.id, selectedTrack.id, selectedClip.id, "bottom", event.target.valueAsNumber)} /></label>
+          </>}
       <button onClick={() => resetClipTransform(document.id, selectedTrack.id, selectedClip.id)}>{text(language, "Reset transform", "Сбросить трансформацию")}</button>
     </div>}
 

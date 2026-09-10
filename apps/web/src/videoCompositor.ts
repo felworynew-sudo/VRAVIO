@@ -39,12 +39,14 @@ export function visualHitsAt(tracks: readonly VideoTrack[], frame: number): Acti
 
 /** Every clip (video or audio track, visual or not) covering `frame` on a track that is not
  * muted — what should actually be making sound this instant. A video track's own clip
- * contributes its embedded audio unless that track is muted, same as an `"audio"` track's clip. */
+ * contributes its embedded audio unless that track is muted, same as an `"audio"` track's clip. A
+ * title clip (`clip.title` set) has no asset and thus no sound — excluded here the same way it's
+ * excluded from every asset-decode path, not just skipped later at the point of use. */
 export function audioHitsAt(tracks: readonly VideoTrack[], frame: number): ActiveHit[] {
   const hits: ActiveHit[] = [];
   for (const track of tracks) {
     if (track.muted) continue;
-    const clip = track.clips.find((item) => frame >= item.startFrame && frame < item.startFrame + item.durationFrames);
+    const clip = track.clips.find((item) => !item.title && frame >= item.startFrame && frame < item.startFrame + item.durationFrames);
     if (clip) hits.push({ track, clip });
   }
   return hits;
@@ -160,7 +162,7 @@ export class VideoCompositor {
       const seekTo = (hit.clip.offsetFrames + (frame - hit.clip.startFrame)) / hit.clip.sourceFrameRate;
       if (Math.abs(element.currentTime - seekTo) > 1 / hit.clip.sourceFrameRate) element.currentTime = seekTo;
     }
-    for (const hit of visual) if (!audio.some((item) => item.clip.id === hit.clip.id)) {
+    for (const hit of visual) if (!hit.clip.title && !audio.some((item) => item.clip.id === hit.clip.id)) {
       const element = this.#ensureElement(hit.clip);
       const seekTo = (hit.clip.offsetFrames + (frame - hit.clip.startFrame)) / hit.clip.sourceFrameRate;
       if (Math.abs(element.currentTime - seekTo) > 1 / hit.clip.sourceFrameRate) element.currentTime = seekTo;
@@ -170,10 +172,10 @@ export class VideoCompositor {
 
   /** Draws one hit's own current frame, `opacityMultiplier` folded into its own (possibly
    * keyframed) opacity — 1 outside a transition, the transition's own eased blend weight for
-   * either side of one. */
+   * either side of one. A title clip (`clip.title` set) has no decoded element to sample — its
+   * text is drawn directly, still honoring the same keyframed x/y/scale/opacity every other clip
+   * gets, so a title can be positioned/faded exactly like a normal clip. */
   #drawHit(ctx: CanvasRenderingContext2D, state: VideoDocumentState, hit: ActiveHit, opacityMultiplier: number): void {
-    const element = this.#pool.get(hit.clip.id);
-    if (!element || element.readyState < 2) return; // HAVE_CURRENT_DATA — nothing decoded yet
     const clip = hit.clip;
     // Keyframed transform/opacity resolve against the absolute timeline frame this paint is
     // for (`effectiveClipValue` falls back to the flat field when a parameter has no
@@ -182,6 +184,22 @@ export class VideoCompositor {
     const effective = { x: effectiveClipValue(clip, "x", this.#currentFrame), y: effectiveClipValue(clip, "y", this.#currentFrame), scale: effectiveClipValue(clip, "scale", this.#currentFrame) };
     const opacity = effectiveClipValue(clip, "opacity", this.#currentFrame) * opacityMultiplier;
     if (opacity <= 0) return;
+
+    if (clip.title) {
+      const dest = destRectFor(effective, { sx: 0, sy: 0, sw: state.width, sh: state.height }, state.width, state.height);
+      ctx.globalAlpha = Math.max(0, Math.min(1, opacity));
+      ctx.filter = "none";
+      ctx.fillStyle = clip.title.color;
+      ctx.font = `${clip.title.fontSize * (dest.dw / state.width)}px ${clip.title.fontFamily}`;
+      ctx.textAlign = clip.title.align;
+      ctx.textBaseline = "middle";
+      const textX = clip.title.align === "left" ? dest.dx : clip.title.align === "right" ? dest.dx + dest.dw : dest.dx + dest.dw / 2;
+      ctx.fillText(clip.title.text, textX, dest.dy + dest.dh / 2);
+      return;
+    }
+
+    const element = this.#pool.get(hit.clip.id);
+    if (!element || element.readyState < 2) return; // HAVE_CURRENT_DATA — nothing decoded yet
     const source = sourceRectFor(clip);
     const dest = destRectFor(effective, source, state.width, state.height);
     ctx.globalAlpha = Math.max(0, Math.min(1, opacity));
@@ -281,6 +299,7 @@ export class VideoCompositor {
 
       const wantsAudio = new Set(audio.map((hit) => hit.clip.id));
       for (const hit of [...visual, ...audio.filter((item) => !visual.some((v) => v.clip.id === item.clip.id))]) {
+        if (hit.clip.title) continue; // no asset to decode/seek for a title clip
         const element = this.#ensureElement(hit.clip);
         const isNewlyActive = !previouslyActive.has(hit.clip.id);
         const seekTo = (hit.clip.offsetFrames + (frame - hit.clip.startFrame)) / hit.clip.sourceFrameRate;

@@ -1,6 +1,6 @@
 import type {
   VideoBinItem, VideoClip, VideoClipEffect, VideoDocumentOptions, VideoDocumentState, VideoKeyframe, VideoKeyframeableParam, VideoMarker,
-  VideoTrack, VideoTransition, VideoTransitionCurve,
+  VideoTitleContent, VideoTrack, VideoTransition, VideoTransitionCurve,
 } from "./types";
 import { videoEffectDefaults, type VideoEffectId } from "./effects";
 
@@ -38,6 +38,28 @@ export function createVideoClip(assetId: string, durationFrames: number, sourceD
     cropLeft: 0, cropTop: 0, cropRight: 0, cropBottom: 0,
     effects: [], keyframes: {},
   };
+}
+
+export interface CreateVideoTitleClipOptions {
+  readonly startFrame?: number;
+  readonly fontFamily?: string;
+  readonly fontSize?: number;
+  readonly color?: string;
+  readonly align?: VideoTitleContent["align"];
+}
+
+/** A title clip — no `assetId`, its own text rendered directly (`VideoClip.title`'s own doc
+ * comment on why this isn't the raster text engine). `durationFrames` is otherwise a normal
+ * timeline length; `sourceDurationFrames`/`sourceFrameRate` are set equal to it so trim math that
+ * reads them (crop, split, ripple) still has sane bounds even though there is no real source to
+ * trim into. */
+export function createVideoTitleClip(text: string, durationFrames: number, options: CreateVideoTitleClipOptions = {}): VideoClip {
+  const clip = createVideoClip("", durationFrames, durationFrames, 30, { name: "Title (Титр)", startFrame: options.startFrame ?? 0 });
+  clip.title = {
+    text, fontFamily: options.fontFamily ?? "sans-serif", fontSize: options.fontSize ?? 64,
+    color: options.color ?? "#ffffff", align: options.align ?? "center",
+  };
+  return clip;
 }
 
 export function createVideoClipEffect(effectId: VideoEffectId): VideoClipEffect {
@@ -156,6 +178,7 @@ export function cloneVideoState(state: VideoDocumentState): VideoDocumentState {
       ...clip,
       effects: clip.effects.map((effect) => ({ ...effect, params: { ...effect.params } })),
       keyframes: Object.fromEntries(Object.entries(clip.keyframes).map(([param, list]) => [param, list!.map((kf) => ({ ...kf }))])),
+      ...(clip.title ? { title: { ...clip.title } } : {}),
     })) })),
     selection: state.selection ? { trackId: state.selection.trackId, clipIds: [...state.selection.clipIds] } : null,
     markers: state.markers.map((marker) => ({ ...marker })),

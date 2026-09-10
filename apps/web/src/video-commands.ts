@@ -1,7 +1,8 @@
 import {
   applyCropEdge, applyLeftTrim, applyRightTrim, canSplitAt, cloneVideoState, constrainBoundaryTrim, constrainClipDrag,
-  createVideoBinItem, createVideoClip, createVideoClipEffect, createVideoKeyframe, createVideoMarker, createVideoTrack, createVideoTransition,
-  effectiveClipValue, rippleShift, splitClip, type VideoDocumentState, type VideoEffectId, type VideoKeyframeableParam, type VideoTransitionCurve,
+  createVideoBinItem, createVideoClip, createVideoClipEffect, createVideoKeyframe, createVideoMarker, createVideoTitleClip, createVideoTrack,
+  createVideoTransition, effectiveClipValue, rippleShift, splitClip, type VideoDocumentState, type VideoEffectId, type VideoKeyframeableParam,
+  type VideoTitleContent, type VideoTransitionCurve,
 } from "@vravio/env-video";
 import type { AssetId } from "@vravio/kernel";
 import { kernel } from "./kernel";
@@ -179,6 +180,40 @@ export function removeVideoTrack(documentId: string, trackId: string): void {
     state.tracks = state.tracks.filter((track) => track.id !== trackId);
     if (state.activeTrackId === trackId) state.activeTrackId = state.tracks[0]!.id;
     return state.tracks.length !== before;
+  });
+}
+
+/**
+ * Adds a title clip at `atFrame` — a new video track if `trackId` is omitted, the same
+ * new-track-when-unspecified convention `insertBinItemToTimeline` already uses. Titles never
+ * collision-check against existing clips on the target track (matching that same precedent) —
+ * the caller picks a sensible frame, usually the playhead on an empty or selected track.
+ */
+export function addTitleClip(documentId: string, trackId: string | undefined, atFrame: number, text: string, durationFrames: number): void {
+  void changeVideoDocument(documentId, "Add Title (Добавить титр)", (state) => {
+    const track = trackId ? state.tracks.find((item) => item.id === trackId) : createVideoTrack("video", "Titles (Титры)");
+    if (!track) return false;
+    if (!trackId) state.tracks.push(track);
+    track.clips.push(createVideoTitleClip(text, durationFrames, { startFrame: atFrame }));
+    return true;
+  });
+}
+
+export function setTitleText(documentId: string, trackId: string, clipId: string, text: string): void {
+  void changeVideoDocument(documentId, "Edit Title Text (Изменить текст титра)", (state) => {
+    const clip = state.tracks.find((item) => item.id === trackId)?.clips.find((item) => item.id === clipId);
+    if (!clip?.title || clip.title.text === text) return false;
+    clip.title.text = text;
+    return true;
+  });
+}
+
+export function setTitleStyle(documentId: string, trackId: string, clipId: string, patch: Partial<Pick<VideoTitleContent, "fontFamily" | "fontSize" | "color" | "align">>): void {
+  void changeVideoDocument(documentId, "Style Title (Стиль титра)", (state) => {
+    const clip = state.tracks.find((item) => item.id === trackId)?.clips.find((item) => item.id === clipId);
+    if (!clip?.title) return false;
+    Object.assign(clip.title, patch);
+    return true;
   });
 }
 

@@ -34,12 +34,36 @@ export interface VideoKeyframe {
 
 export type VideoKeyframeableParam = "x" | "y" | "scale" | "opacity";
 
+/**
+ * A title clip's own text content — a lightweight built-in renderer (`CanvasRenderingContext2D`
+ * `fillText`, applied where `VideoClip.title` is set), not VRAVIO's raster text engine: that
+ * engine lives inside `@vravio/env-raster`, and the kernel's own environment boundary
+ * (docs/master-plan.md §35) keeps environments from depending on each other, so Video cannot
+ * reach into Raster for it without breaking that boundary first. Honestly scoped as its own
+ * simple renderer rather than claimed to be "the same text engine" docs/master-plan.md §33.3's
+ * own prose describes — richer typography (multi-run formatting, paths, the raster engine's own
+ * layout features) is a later, larger architectural decision (share text layout through the
+ * kernel, or accept two renderers), not this pass's problem to solve.
+ */
+export interface VideoTitleContent {
+  text: string;
+  fontFamily: string;
+  fontSize: number;
+  color: string;
+  align: "left" | "center" | "right";
+}
+
 export interface VideoClip {
   readonly id: string;
   name: string;
   /** Reference into the shared asset store — a clip never carries its own decoded video here,
-   * the same "asset, not a copy" rule raster layers and audio clips follow. */
+   * the same "asset, not a copy" rule raster layers and audio clips follow. Empty for a title
+   * clip (`title` set below) — a title has no source asset, it renders its own text directly. */
   assetId: string;
+  /** Present only on a title clip — when set, the compositor renders this text instead of
+   * decoding `assetId` (which is `""` for a title clip; every asset-decode/seek path skips a
+   * clip with `title` set entirely, never attempting to resolve an asset that doesn't exist). */
+  title?: VideoTitleContent;
   /** Position on the timeline, in frames at the document's frame rate. */
   startFrame: number;
   /** Length on the timeline, in frames at the document's frame rate. */

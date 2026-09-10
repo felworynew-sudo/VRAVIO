@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  cloneVideoState, createVideoClip, createVideoClipEffect, createVideoDocument, createVideoKeyframe, createVideoTrack,
+  cloneVideoState, createVideoClip, createVideoClipEffect, createVideoDocument, createVideoKeyframe, createVideoTitleClip, createVideoTrack,
   effectiveClipValue, evaluateKeyframedValue, findClip, findTrack, isVideoDocumentState, migrateVideoDocumentState, timelineDurationFrames,
 } from "./document";
 
@@ -205,5 +205,37 @@ describe("cloneVideoState deep-clones effects and keyframes", () => {
 
     expect(state.tracks[0]!.clips[0]!.effects[0]!.params.pixels).not.toBe(99);
     expect(state.tracks[0]!.clips[0]!.keyframes.x![0]!.value).not.toBe(999);
+  });
+});
+
+describe("createVideoTitleClip", () => {
+  it("has no assetId and carries its own text content", () => {
+    const clip = createVideoTitleClip("Hello", 90, { startFrame: 30 });
+    expect(clip.assetId).toBe("");
+    expect(clip.startFrame).toBe(30);
+    expect(clip.durationFrames).toBe(90);
+    expect(clip.title).toBeDefined();
+    expect(clip.title!.text).toBe("Hello");
+    expect(clip.title!.align).toBe("center");
+  });
+
+  it("honors style overrides", () => {
+    const clip = createVideoTitleClip("Hi", 30, { fontSize: 32, color: "#ff0000", align: "left" });
+    expect(clip.title!.fontSize).toBe(32);
+    expect(clip.title!.color).toBe("#ff0000");
+    expect(clip.title!.align).toBe("left");
+  });
+});
+
+describe("cloneVideoState deep-clones title content", () => {
+  it("mutating a clone's title does not bleed into the original", () => {
+    const state = createVideoDocument();
+    const titleClip = createVideoTitleClip("Original", 90);
+    state.tracks[0]!.clips.push(titleClip);
+
+    const clone = cloneVideoState(state);
+    clone.tracks[0]!.clips[0]!.title!.text = "Changed";
+
+    expect(state.tracks[0]!.clips[0]!.title!.text).toBe("Original");
   });
 });

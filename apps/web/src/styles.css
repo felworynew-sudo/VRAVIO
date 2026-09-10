@@ -312,6 +312,7 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .video-clip-inspector label{display:flex;align-items:center;gap:6px;white-space:nowrap}
 .video-clip-inspector input[type=range]{width:100px;accent-color:var(--video)}
 .video-clip-inspector input[type=number]{width:56px;padding:2px 5px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface3);color:var(--text)}
+.video-title-text{min-width:160px;padding:3px 7px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface3);color:var(--text)}
 .video-clip-inspector button{padding:4px 10px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface3);color:var(--text);cursor:pointer}
 .video-keyframe-toggle{padding:0 4px!important;border:0!important;background:transparent!important;color:var(--muted);font-size:12px;cursor:pointer}
 .video-keyframe-toggle.active{color:var(--video)}

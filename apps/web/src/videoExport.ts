@@ -105,6 +105,7 @@ export async function exportVideoDocument(state: VideoDocumentState, onProgress?
       }
 
       for (const hit of [...visual, ...audio.filter((item) => !visual.some((v) => v.clip.id === item.clip.id))]) {
+        if (hit.clip.title) continue; // no asset to decode for a title clip
         const element = await ensureElement(hit.clip.id, hit.clip.assetId);
         const seekTo = (hit.clip.offsetFrames + (frame - hit.clip.startFrame)) / hit.clip.sourceFrameRate;
         const needsAudio = wantsAudio.has(hit.clip.id);
@@ -137,12 +138,24 @@ export async function exportVideoDocument(state: VideoDocumentState, onProgress?
       // that same class of bug for video, caught before shipping rather than after). Normally one
       // hit per track; exactly two only where a `VideoTransition` overlaps two clips.
       const drawHit = (hit: ActiveHit, opacityMultiplier: number) => {
-        const element = pool.get(hit.clip.id);
-        if (!element || element.readyState < 2) return;
         const clip = hit.clip;
         const effective = { x: effectiveClipValue(clip, "x", frame), y: effectiveClipValue(clip, "y", frame), scale: effectiveClipValue(clip, "scale", frame) };
         const opacity = effectiveClipValue(clip, "opacity", frame) * opacityMultiplier;
         if (opacity <= 0) return;
+        if (clip.title) {
+          const dest = destRectFor(effective, { sx: 0, sy: 0, sw: state.width, sh: state.height }, state.width, state.height);
+          ctx.globalAlpha = Math.max(0, Math.min(1, opacity));
+          ctx.filter = "none";
+          ctx.fillStyle = clip.title.color;
+          ctx.font = `${clip.title.fontSize * (dest.dw / state.width)}px ${clip.title.fontFamily}`;
+          ctx.textAlign = clip.title.align;
+          ctx.textBaseline = "middle";
+          const textX = clip.title.align === "left" ? dest.dx : clip.title.align === "right" ? dest.dx + dest.dw : dest.dx + dest.dw / 2;
+          ctx.fillText(clip.title.text, textX, dest.dy + dest.dh / 2);
+          return;
+        }
+        const element = pool.get(hit.clip.id);
+        if (!element || element.readyState < 2) return;
         const source = sourceRectFor(clip);
         const dest = destRectFor(effective, source, state.width, state.height);
         ctx.globalAlpha = Math.max(0, Math.min(1, opacity));
