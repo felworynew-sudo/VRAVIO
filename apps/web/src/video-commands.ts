@@ -1,6 +1,6 @@
 import {
   applyCropEdge, applyLeftTrim, applyRightTrim, canSplitAt, cloneVideoState, constrainBoundaryTrim, constrainClipDrag,
-  createVideoClip, createVideoTrack, rippleShift, splitClip, type VideoDocumentState,
+  createVideoClip, createVideoMarker, createVideoTrack, rippleShift, splitClip, type VideoDocumentState,
 } from "@vravio/env-video";
 import type { AssetId } from "@vravio/kernel";
 import { kernel } from "./kernel";
@@ -227,5 +227,42 @@ export function setClipCrop(documentId: string, trackId: string, clipId: string,
     if (!track || clipIndex === -1) return false;
     track.clips[clipIndex] = applyCropEdge(track.clips[clipIndex]!, edge, value);
     return true;
+  });
+}
+
+export function addVideoMarker(documentId: string, frameAt: number, name?: string): void {
+  void changeVideoDocument(documentId, "Add Marker (Добавить маркер)", (state) => {
+    const marker = createVideoMarker(name ?? `Marker ${state.markers.length + 1} (Маркер ${state.markers.length + 1})`, frameAt);
+    state.markers.push(marker);
+    state.markers.sort((a, b) => a.frameAt - b.frameAt);
+    return true;
+  });
+}
+
+export function renameVideoMarker(documentId: string, markerId: string, name: string): void {
+  void changeVideoDocument(documentId, "Rename Marker (Переименовать маркер)", (state) => {
+    const marker = state.markers.find((item) => item.id === markerId);
+    if (!marker || marker.name === name) return false;
+    marker.name = name;
+    return true;
+  });
+}
+
+export function removeVideoMarker(documentId: string, markerId: string): void {
+  void changeVideoDocument(documentId, "Delete Marker (Удалить маркер)", (state) => {
+    const before = state.markers.length;
+    state.markers = state.markers.filter((item) => item.id !== markerId);
+    return state.markers.length !== before;
+  });
+}
+
+export function moveVideoMarker(documentId: string, markerId: string, frameAt: number): void {
+  const document = kernel.documents.get<VideoDocumentState>(documentId);
+  if (!document) return;
+  const marker = document.state.markers.find((item) => item.id === markerId);
+  if (!marker) return;
+  kernel.documents.update<VideoDocumentState>(documentId, (current) => {
+    const found = current.markers.find((item) => item.id === markerId);
+    if (found) found.frameAt = Math.max(0, Math.round(frameAt));
   });
 }

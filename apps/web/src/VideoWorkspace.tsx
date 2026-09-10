@@ -1,14 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { VravioDocument } from "@vravio/kernel";
 import {
-  applyCropEdge, isVideoDocumentState, snapFrame, timelineDurationFrames, type VideoClip, type VideoDocumentState, type VideoTrack,
+  applyCropEdge, cloneVideoState, isVideoDocumentState, snapFrame, timelineDurationFrames, type VideoClip, type VideoDocumentState, type VideoTrack,
 } from "@vravio/env-video";
 import { kernel } from "./kernel";
 import { useShellStore } from "./store";
 import { text } from "./i18n";
 import {
-  addClipFromAsset, addVideoTrack, changeVideoDocument, commitVideoDrag, deleteSelectedClips, previewMoveClip, previewTrimClip,
-  removeVideoTrack, setClipCrop, setClipTransform, setSelection, setTrackHidden, setTrackLocked, setTrackMuted, setTrackVolume, splitClipAt,
+  addClipFromAsset, addVideoMarker, addVideoTrack, changeVideoDocument, commitVideoDrag, deleteSelectedClips, moveVideoMarker,
+  previewMoveClip, previewTrimClip, removeVideoMarker, removeVideoTrack, renameVideoMarker, setClipCrop, setClipTransform, setSelection,
+  setTrackHidden, setTrackLocked, setTrackMuted, setTrackVolume, splitClipAt,
 } from "./video-commands";
 import { probeVideoMetadata } from "./videoImport";
 import { VideoCompositor } from "./videoCompositor";
@@ -59,6 +60,7 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
   const compositorRef = useRef<VideoCompositor | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const markerDragRef = useRef<{ markerId: string; before: VideoDocumentState } | null>(null);
 
   if (!isVideoDocumentState(document.state)) return <div className="workspace-error">Invalid video document state</div>;
   const state = document.state;
@@ -284,6 +286,17 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
         <div className="video-ruler" style={{ width: timelineWidthPx }} onClick={onRulerClick}>
           {Array.from({ length: Math.ceil(timelineWidthPx / pixelsPerSecond) + 1 }, (_, second) => <span key={second} className="video-ruler-tick" style={{ left: second * pixelsPerSecond }}>{formatTime(second)}</span>)}
           <div className="video-playhead" style={{ left: playheadFrame * pxPerFrame }} />
+        </div>
+        <div className="audio-marker-lane" style={{ width: timelineWidthPx }} onDoubleClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); addVideoMarker(document.id, Math.max(0, Math.round((event.clientX - rect.left) / pxPerFrame))); }} title={text(language, "Double-click to add a marker", "Двойной клик — добавить маркер")}>
+          {state.markers.map((marker) => <div key={marker.id} className="audio-marker-flag" style={{ left: marker.frameAt * pxPerFrame }}
+            onPointerDown={(event) => { event.stopPropagation(); markerDragRef.current = { markerId: marker.id, before: cloneVideoState(state) }; event.currentTarget.setPointerCapture(event.pointerId); }}
+            onPointerMove={(event) => { const drag = markerDragRef.current; if (!drag || drag.markerId !== marker.id) return; const rect = event.currentTarget.parentElement!.getBoundingClientRect(); moveVideoMarker(document.id, marker.id, (event.clientX - rect.left) / pxPerFrame); }}
+            onPointerUp={() => { const drag = markerDragRef.current; if (!drag) return; markerDragRef.current = null; commitVideoDrag(document.id, "Move Marker (Переместить маркер)", drag.before); }}
+            onDoubleClick={(event) => { event.stopPropagation(); const next = window.prompt(text(language, "Marker name", "Имя маркера"), marker.name); if (next !== null && next.trim()) renameVideoMarker(document.id, marker.id, next.trim()); }}
+            title={`${marker.name} — ${formatTime(marker.frameAt / frameRate)}`}>
+            <span>{marker.name}</span>
+            <button className="audio-marker-delete" onClick={(event) => { event.stopPropagation(); removeVideoMarker(document.id, marker.id); }} title={text(language, "Delete marker", "Удалить маркер")}>×</button>
+          </div>)}
         </div>
         <div className="video-tracks" style={{ width: timelineWidthPx }} onPointerMove={onDragMove} onPointerUp={onDragEnd}>
           <div className="video-playhead video-playhead-body" style={{ left: playheadFrame * pxPerFrame }} />

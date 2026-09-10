@@ -1,4 +1,4 @@
-import type { VideoClip, VideoDocumentOptions, VideoDocumentState, VideoTrack } from "./types";
+import type { VideoClip, VideoDocumentOptions, VideoDocumentState, VideoMarker, VideoTrack } from "./types";
 
 export function createVideoTrack(kind: "video" | "audio", name?: string): VideoTrack {
   return {
@@ -40,8 +40,12 @@ export function createVideoDocument(options: VideoDocumentOptions = {}): VideoDo
   return {
     kind: "video", schemaVersion: 1,
     frameRate: options.frameRate ?? 30, width: options.width ?? 1920, height: options.height ?? 1080,
-    tracks: [track], activeTrackId: track.id, selection: null,
+    tracks: [track], activeTrackId: track.id, selection: null, markers: [],
   };
+}
+
+export function createVideoMarker(name: string, frameAt: number): VideoMarker {
+  return { id: crypto.randomUUID(), name, frameAt: Math.max(0, Math.floor(frameAt)) };
 }
 
 export function isVideoDocumentState(value: unknown): value is VideoDocumentState {
@@ -56,6 +60,7 @@ export function isVideoDocumentState(value: unknown): value is VideoDocumentStat
  * persisted before a field existed restores with it added, rather than failing
  * `isVideoDocumentState` (and thus refusing to open) the moment a field is missing. */
 export function migrateVideoDocumentState(state: VideoDocumentState): VideoDocumentState {
+  if (!Array.isArray(state.markers)) state.markers = [];
   for (const track of state.tracks) {
     if (typeof track.hidden !== "boolean") track.hidden = false;
     if (typeof track.volume !== "number") track.volume = 1;
@@ -86,6 +91,7 @@ export function cloneVideoState(state: VideoDocumentState): VideoDocumentState {
     ...state,
     tracks: state.tracks.map((track) => ({ ...track, clips: track.clips.map((clip) => ({ ...clip })) })),
     selection: state.selection ? { trackId: state.selection.trackId, clipIds: [...state.selection.clipIds] } : null,
+    markers: state.markers.map((marker) => ({ ...marker })),
   };
 }
 

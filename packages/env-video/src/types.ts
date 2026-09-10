@@ -83,6 +83,15 @@ export interface VideoSelection {
   readonly clipIds: readonly string[];
 }
 
+/** A named point on the timeline — the same role Kdenlive/Premiere's own "marker" plays: a scene
+ * cut reference, a sync point, a note to come back to. `frameAt` in the document's own frame
+ * rate, same unit every other timeline position in this file uses. */
+export interface VideoMarker {
+  readonly id: string;
+  name: string;
+  frameAt: number;
+}
+
 export interface VideoDocumentState {
   kind: "video";
   schemaVersion: 1;
@@ -93,6 +102,7 @@ export interface VideoDocumentState {
   tracks: VideoTrack[];
   activeTrackId: string;
   selection: VideoSelection | null;
+  markers: VideoMarker[];
 }
 
 export interface VideoDocumentOptions {

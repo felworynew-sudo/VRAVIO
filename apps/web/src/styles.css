@@ -284,6 +284,8 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .audio-marker-flag::before{content:"";position:absolute;left:0;top:0;bottom:0;width:2px;background:var(--audio)}
 .audio-marker-delete{display:none;width:11px;height:11px;padding:0;border:0;border-radius:50%;background:var(--danger);color:var(--accent-ink);font-size:8px;line-height:1;cursor:pointer}
 .audio-marker-flag:hover .audio-marker-delete{display:block}
+.video-workspace .audio-marker-flag{background:color-mix(in srgb,var(--video) 55%,var(--surface2))}
+.video-workspace .audio-marker-flag::before{background:var(--video)}
 .audio-tracks{position:relative}
 .audio-track-lane{position:relative;box-sizing:border-box;border-bottom:1px solid var(--border)}
 .audio-clip{position:absolute;top:3px;box-sizing:border-box;display:flex;align-items:flex-start;border:1px solid color-mix(in srgb,var(--audio) 65%,var(--border));border-radius:var(--radius-sm);background:color-mix(in srgb,var(--audio) 16%,var(--surface2));overflow:hidden;cursor:grab;user-select:none}
