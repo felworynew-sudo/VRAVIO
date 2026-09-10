@@ -200,6 +200,28 @@ describe("patch tool", () => {
     expect(worstError(pixels, 32, 32, 6.5, 8)).toBeLessThanOrEqual(2);
   });
 
+  it("takes a fractional drag offset (a real pointer position, not a whole number) without going black", () => {
+    // The pointer's own document-space position is a float — every real drag
+    // hands this a non-integer offset, and none of the other cases in this
+    // file do (all whole numbers), which is exactly how a fractional offset
+    // turning every patch into a solid black square (found live, reported by
+    // the owner: "просто заливает свое выделение черным цветом") went
+    // unnoticed until it shipped. `sourcePixels[fractionalIndex]` on a
+    // Uint8ClampedArray reads undefined, not a rounded neighbour.
+    const pixels = canvas();
+    addBlemish(pixels, 32, 32, 5);
+    const size = 20, originX = 22, originY = 22;
+
+    createPatchRegion(pixels, W, H, roundMask(size, size, originX, originY, 32, 32, 7), size, size, originX, originY, 14.37, 0.62, 1);
+
+    let black = 0;
+    for (let index = 0; index < pixels.length; index += 4) if (pixels[index] === 0 && pixels[index + 1] === 0 && pixels[index + 2] === 0) black += 1;
+    expect(black).toBe(0);
+    let red = 0;
+    for (let index = 0; index < pixels.length; index += 4) if (pixels[index]! > 150 && pixels[index + 1]! < 60) red += 1;
+    expect(red).toBe(0);
+  });
+
   it("repairs a rectangular selection, which fills its own bounds", () => {
     const pixels = canvas();
     addBlemish(pixels, 32, 32, 6);

@@ -28,6 +28,19 @@ export function createPatchRegion(
   const interior = new Uint8Array(regionWidth * regionHeight);
   const offsets = new Int16Array(regionWidth * regionHeight * 3);
 
+  // The drag offset arrives as document-space float coordinates (the pointer's
+  // own sub-pixel position, scaled back out of the zoom) — every caller in
+  // this codebase passes one straight through. `destX + sourceOffsetX` below
+  // is a *pixel index*, and a fractional index into a typed array is not a
+  // rounding no-op the way it would be on a plain array: `Uint8ClampedArray`
+  // has no property at a non-integer key, so `sourcePixels[fractionalIndex]`
+  // silently reads `undefined`, every arithmetic use of that turns into NaN,
+  // and NaN assigned back into a `Uint8ClampedArray` clamps to 0 — a patch
+  // that only ever painted solid black, reported live by the owner ("просто
+  // заливает свое выделение черным цветом"). Every existing test drove this
+  // with whole-number offsets, which is exactly why none of them caught it.
+  const dx = Math.round(sourceOffsetX), dy = Math.round(sourceOffsetY);
+
   // Source mode fixes the selection in place and reads from the dragged-to
   // spot (`destX = regionOriginX + lx`, the region's own rectangle). Destination
   // mode swaps which side is fixed and which is read — the *content* moves to
@@ -40,8 +53,8 @@ export function createPatchRegion(
   // this shift fixes: found live, reported by the owner as "не по тем
   // принципам" against Photoshop's own Destination ("образец... тащится туда
   // куда ты его тащишь").
-  const destOriginX = mode === "source" ? regionOriginX : regionOriginX + sourceOffsetX;
-  const destOriginY = mode === "source" ? regionOriginY : regionOriginY + sourceOffsetY;
+  const destOriginX = mode === "source" ? regionOriginX : regionOriginX + dx;
+  const destOriginY = mode === "source" ? regionOriginY : regionOriginY + dy;
 
   for (let ly = 0; ly < regionHeight; ly++) {
     // Offsets are gathered across the whole region rectangle: the cells the
@@ -53,8 +66,8 @@ export function createPatchRegion(
       const destY = destOriginY + ly;
       if (destX < 0 || destX >= canvasWidth || destY < 0 || destY >= canvasHeight) continue;
 
-      const srcX = mode === "source" ? destX + sourceOffsetX : destX - sourceOffsetX;
-      const srcY = mode === "source" ? destY + sourceOffsetY : destY - sourceOffsetY;
+      const srcX = mode === "source" ? destX + dx : destX - dx;
+      const srcY = mode === "source" ? destY + dy : destY - dy;
 
       if (
         srcX < 0 ||
@@ -84,8 +97,8 @@ export function createPatchRegion(
       const destX = destOriginX + lx;
       const destY = destOriginY + ly;
 
-      const srcX = mode === "source" ? destX + sourceOffsetX : destX - sourceOffsetX;
-      const srcY = mode === "source" ? destY + sourceOffsetY : destY - sourceOffsetY;
+      const srcX = mode === "source" ? destX + dx : destX - dx;
+      const srcY = mode === "source" ? destY + dy : destY - dy;
 
       if (
         srcX < 0 ||
