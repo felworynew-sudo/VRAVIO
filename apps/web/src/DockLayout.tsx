@@ -76,16 +76,55 @@ const EMPTY_LAYER_SELECTION: string[] = [];
 /** The shell owns the Tab shortcut; DockLayout owns the actual edge dock. */
 export const CLEAN_CANVAS_EVENT = "vravio-clean-canvas";
 
+/**
+ * The Photoshop reference (информация.txt point "панели... занимают такую же высоту что и
+ * тулбар") docks the document-tab strip, the tool options bar and the status bar to the
+ * *canvas column specifically* — they never span the full window width the way `.toolbar`'s
+ * own dedicated grid row did, which is exactly why the side panels used to stop short of the
+ * toolbar's full height: `App.tsx`'s outer CSS grid gave `.toolbar` its own row spanning
+ * menu-to-bottom, but boxed everything else (including the dock host, panels and all) into
+ * the single `workspace` row sandwiched between the tabs/options/status rows.
+ *
+ * The fix is App.tsx's tabs/options/status JSX staying exactly where it is — same component,
+ * same local state, nothing re-plumbed — but rendered through a portal into slots that live
+ * *inside* `ViewportPanel`'s own DOM, so their width tracks the canvas column instead of the
+ * whole app. `ViewportPanel` mounts once per environment switch (a fresh Dockview panel
+ * instance each time, since it isn't restored via `fromJSON` params — those don't survive
+ * `JSON.stringify`, being callbacks), so a plain module-level registry + subscriber hook is
+ * simpler and more robust here than threading refs through Dockview's own panel `params`.
+ */
+export interface CanvasChromeSlots { readonly top: HTMLDivElement | null; readonly bottom: HTMLDivElement | null }
+const EMPTY_CHROME_SLOTS: CanvasChromeSlots = { top: null, bottom: null };
+let canvasChromeSlots: CanvasChromeSlots = EMPTY_CHROME_SLOTS;
+const canvasChromeSlotListeners = new Set<(slots: CanvasChromeSlots) => void>();
+function setCanvasChromeSlot(name: keyof CanvasChromeSlots, node: HTMLDivElement | null): void {
+  canvasChromeSlots = { ...canvasChromeSlots, [name]: node };
+  for (const listener of canvasChromeSlotListeners) listener(canvasChromeSlots);
+}
+export function useCanvasChromeSlots(): CanvasChromeSlots {
+  const [slots, setSlots] = useState(canvasChromeSlots);
+  useEffect(() => {
+    canvasChromeSlotListeners.add(setSlots);
+    return () => { canvasChromeSlotListeners.delete(setSlots); };
+  }, []);
+  return slots;
+}
+
 function ViewportPanel() {
   const documents = useDocuments();
   const activeDocumentId = useShellStore((state) => state.activeDocumentId);
   const active = documents.find((document) => document.id === activeDocumentId) ?? null;
 
-  if (!active) return null;
-  if (active.kind === "raster") return <RasterWorkspace document={active} />;
-  if (active.kind === "vector") return <VectorWorkspace document={active} />;
-  if (active.kind === "audio") return <AudioWorkspace document={active} />;
-  return <VideoWorkspace document={active} />;
+  const workspace = !active ? null
+    : active.kind === "raster" ? <RasterWorkspace document={active} />
+    : active.kind === "vector" ? <VectorWorkspace document={active} />
+    : active.kind === "audio" ? <AudioWorkspace document={active} />
+    : <VideoWorkspace document={active} />;
+  return <div className="viewport-chrome">
+    <div className="viewport-chrome-top" ref={(node) => setCanvasChromeSlot("top", node)}/>
+    <div className="viewport-chrome-canvas">{workspace}</div>
+    <div className="viewport-chrome-bottom" ref={(node) => setCanvasChromeSlot("bottom", node)}/>
+  </div>;
 }
 
 function InspectorPanel({ params }: IDockviewPanelProps<{ kind?: string }>) {

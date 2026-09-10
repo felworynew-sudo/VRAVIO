@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import { WARP_PRESETS, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
 import { maskToRgba, rgbaToMask } from "./raster-pixel-buffers";
 import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
 import { withBusyPainted } from "./busy";
 import { interfacePaletteForTheme, useShellStore, type Language } from "./store";
 import type { EnvironmentKind, RenderBackend } from "@vravio/kernel";
-import { CLEAN_CANVAS_EVENT, DockLayout } from "./DockLayout";
+import { CLEAN_CANVAS_EVENT, DockLayout, useCanvasChromeSlots } from "./DockLayout";
 import { environmentMeta } from "./environment";
 import { toolById, toolsFor, type ToolDefinition, type ToolOption } from "./tools";
 import { smartCropRatios } from "./environments/raster/commands/definitions/smart-crop";
@@ -63,6 +64,7 @@ export function App() {
   ensureCommandsRegistered();
   const store = useShellStore();
   const documents = useDocuments();
+  const chromeSlots = useCanvasChromeSlots();
   const [query, setQuery] = useState("");
   const [openToolGroup, setOpenToolGroup] = useState<string | null>(null);
   const [openMenu, setOpenMenu] = useState<string | null>(null);
@@ -588,7 +590,7 @@ export function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [store, active]);
 
-  return <div className="app" data-theme={store.theme} data-home={!active} data-clean-canvas={cleanCanvas || undefined} data-has-toolbar={active?.kind === "raster" || active?.kind === "vector"} style={themeStyle}>
+  return <div className="app" data-theme={store.theme} data-clean-canvas={cleanCanvas || undefined} data-has-toolbar={active?.kind === "raster" || active?.kind === "vector"} style={themeStyle}>
     <header className="menu-bar">
       <strong className={active ? "brand compact" : "brand full"}><img src={active ? `${import.meta.env.BASE_URL}логотип цветная плашка.svg` : `${import.meta.env.BASE_URL}логотип белый.svg`} alt="VRAVIO" /></strong>
       <button className="home-button" onClick={() => store.showHome()} aria-label={text(store.language, "Home", "Главная")} title={text(store.language, "Home", "Главная")}><i style={{ "--icon-mask": `url("${import.meta.env.BASE_URL}ГЛАВНАЯ.svg")` } as CSSProperties}/></button>
@@ -743,27 +745,34 @@ export function App() {
       {active.kind === "raster" && <ColorWells foreground={effectiveForegroundColor} background={effectiveBackgroundColor} monochrome={Boolean(editingMaskLayerId)} onForeground={(color) => editingMaskLayerId ? store.setMaskForegroundWhite(active.id, color.toLowerCase() !== "#000000") : store.setForegroundColor(color)} onBackground={(color) => editingMaskLayerId ? store.setMaskForegroundWhite(active.id, color.toLowerCase() === "#000000") : store.setBackgroundColor(color)} onSwap={() => editingMaskLayerId ? store.swapMaskColors(active.id) : store.swapColors()} onReset={() => editingMaskLayerId ? store.setMaskForegroundWhite(active.id, false) : store.resetColors()} />}
     </aside>}
 
-    {documents.length > 0 && <div className="document-tabs" role="tablist" aria-label="Documents (Документы)">
-      {documents.map((document) => <div className="tab-wrap" key={document.id} data-kind={document.kind} data-linked={document.provenance ? "" : undefined}>
-        <button role="tab" aria-selected={document.id === store.activeDocumentId} onClick={() => store.activateDocument(document.id)}>
-          <EnvironmentIcon kind={document.kind} className="tab-environment-icon" />{localized(document.name, store.language)}
-          {(document.dirty || document.id === store.activeDocumentId) && <i className={`tab-save-state${document.dirty ? " dirty" : ""}`} title={document.dirty ? text(store.language, "Modified", "Изменён") : text(store.language, "Saved", "Сохранено")} aria-label={document.dirty ? text(store.language, "Modified", "Изменён") : text(store.language, "Saved", "Сохранено")} style={document.dirty ? undefined : { "--icon-mask": `url("${import.meta.env.BASE_URL}СОХРАНЕНО.svg")` } as CSSProperties}/>} 
-          {/* A tab opened out of another keeps its own result when the parent
-              undoes, so the two can end up showing different pictures. Nothing
-              else on screen would say why. */}
-          {kernel.roundtrip.isOutOfSync(document.id) && <b className="tab-out-of-sync" title={store.language === "ru" ? "Исходный документ показывает не то, что вы применили. Примените ещё раз, чтобы отдать текущую версию." : "The parent document is not showing what you applied. Apply again to send the current version."}>↑</b>}
-        </button>
-        <button className="tab-close" aria-label={`Close ${document.name}`} onClick={() => store.closeDocument(document.id)}>×</button>
-      </div>)}
-    </div>}
+    {/* информация.txt: docked side panels must reach the same full height as `.toolbar`,
+        which the document tabs / options bar / status bar can no longer box in — matching
+        Photoshop, they dock to the canvas column specifically. Same JSX, same local state as
+        before; only *where* it renders moved, through a portal into DockLayout.tsx's
+        `viewport-chrome` slots (see its own comment for why a portal over prop-drilling). */}
+    {chromeSlots.top && createPortal(<>
+      {documents.length > 0 && <div className="document-tabs" role="tablist" aria-label="Documents (Документы)">
+        {documents.map((document) => <div className="tab-wrap" key={document.id} data-kind={document.kind} data-linked={document.provenance ? "" : undefined}>
+          <button role="tab" aria-selected={document.id === store.activeDocumentId} onClick={() => store.activateDocument(document.id)}>
+            <EnvironmentIcon kind={document.kind} className="tab-environment-icon" />{localized(document.name, store.language)}
+            {(document.dirty || document.id === store.activeDocumentId) && <i className={`tab-save-state${document.dirty ? " dirty" : ""}`} title={document.dirty ? text(store.language, "Modified", "Изменён") : text(store.language, "Saved", "Сохранено")} aria-label={document.dirty ? text(store.language, "Modified", "Изменён") : text(store.language, "Saved", "Сохранено")} style={document.dirty ? undefined : { "--icon-mask": `url("${import.meta.env.BASE_URL}СОХРАНЕНО.svg")` } as CSSProperties}/>}
+            {/* A tab opened out of another keeps its own result when the parent
+                undoes, so the two can end up showing different pictures. Nothing
+                else on screen would say why. */}
+            {kernel.roundtrip.isOutOfSync(document.id) && <b className="tab-out-of-sync" title={store.language === "ru" ? "Исходный документ показывает не то, что вы применили. Примените ещё раз, чтобы отдать текущую версию." : "The parent document is not showing what you applied. Apply again to send the current version."}>↑</b>}
+          </button>
+          <button className="tab-close" aria-label={`Close ${document.name}`} onClick={() => store.closeDocument(document.id)}>×</button>
+        </div>)}
+      </div>}
 
-    {(active?.kind === "raster" || active?.kind === "vector") && <OptionsBar language={store.language} tool={activeTool} pixelsPerInch={isRasterDocumentState(active.state) ? active.state.resolution : undefined} values={activeTool ? { ...(store.toolOptions[activeTool.id] ?? {}), ...(activeTool.options.some((option) => option.id === "color") ? { color: effectiveForegroundColor } : {}) } : {}} transform={transformMetrics} onTransformCommit={() => window.dispatchEvent(new Event("vravio-transform-commit"))} onTransformCancel={() => window.dispatchEvent(new Event("vravio-transform-cancel"))} scene3d={scene3dTransformMetrics} onScene3DCommit={() => window.dispatchEvent(new Event("vravio-scene3d-transform-commit"))} onScene3DCancel={() => window.dispatchEvent(new Event("vravio-scene3d-transform-cancel"))} scene3dGround={scene3dGroundMetrics} onScene3DGroundCommit={() => window.dispatchEvent(new Event("vravio-scene3d-ground-commit"))} onScene3DGroundCancel={() => window.dispatchEvent(new Event("vravio-scene3d-ground-cancel"))} onChange={(id, value) => { if (!activeTool) return; store.setToolOption(activeTool.id, id, value); if (id === "color") { if (editingMaskLayerId) store.setMaskForegroundWhite(active.id, String(value).toLowerCase() !== "#000000"); else store.setForegroundColor(String(value)); } }} alignSelectionCount={isRasterDocumentState(active.state) ? (selectedLayerIds.length || 1) : 0} onAlign={(edge) => alignOrDistributeLayers("align", edge)} onDistribute={(edge) => alignOrDistributeLayers("distribute", edge)} smartGuides={store.preferences.smartGuides} snapToGrid={store.preferences.snapToGrid} onToggleSmartGuides={(smartGuides) => store.updatePreferences({ smartGuides })} onToggleSnapToGrid={(snapToGrid) => store.updatePreferences({ snapToGrid })} />}
+      {(active?.kind === "raster" || active?.kind === "vector") && <OptionsBar language={store.language} tool={activeTool} pixelsPerInch={isRasterDocumentState(active.state) ? active.state.resolution : undefined} values={activeTool ? { ...(store.toolOptions[activeTool.id] ?? {}), ...(activeTool.options.some((option) => option.id === "color") ? { color: effectiveForegroundColor } : {}) } : {}} transform={transformMetrics} onTransformCommit={() => window.dispatchEvent(new Event("vravio-transform-commit"))} onTransformCancel={() => window.dispatchEvent(new Event("vravio-transform-cancel"))} scene3d={scene3dTransformMetrics} onScene3DCommit={() => window.dispatchEvent(new Event("vravio-scene3d-transform-commit"))} onScene3DCancel={() => window.dispatchEvent(new Event("vravio-scene3d-transform-cancel"))} scene3dGround={scene3dGroundMetrics} onScene3DGroundCommit={() => window.dispatchEvent(new Event("vravio-scene3d-ground-commit"))} onScene3DGroundCancel={() => window.dispatchEvent(new Event("vravio-scene3d-ground-cancel"))} onChange={(id, value) => { if (!activeTool) return; store.setToolOption(activeTool.id, id, value); if (id === "color") { if (editingMaskLayerId) store.setMaskForegroundWhite(active.id, String(value).toLowerCase() !== "#000000"); else store.setForegroundColor(String(value)); } }} alignSelectionCount={isRasterDocumentState(active.state) ? (selectedLayerIds.length || 1) : 0} onAlign={(edge) => alignOrDistributeLayers("align", edge)} onDistribute={(edge) => alignOrDistributeLayers("distribute", edge)} smartGuides={store.preferences.smartGuides} snapToGrid={store.preferences.snapToGrid} onToggleSmartGuides={(smartGuides) => store.updatePreferences({ smartGuides })} onToggleSnapToGrid={(snapToGrid) => store.updatePreferences({ snapToGrid })} />}
+    </>, chromeSlots.top)}
 
     <main className="workspace">
       {active ? <DockLayout /> : <HomeScreen language={store.language} requestNewDocument={store.requestNewDocument} openFile={openBridgeFile} />}
       {active && <ContextualBar documentId={active.id} state={active.state} language={store.language} visible={store.preferences.contextualBar} />}
     </main>
-    {active && <footer className="status-bar"><span>{resolveLabel(environmentMeta[active.kind].label, store.language)}</span><span>{isAudioDocumentState(active.state) ? `${(active.state.sampleRate / 1000).toLocaleString()} kHz · ${active.state.channels === 1 ? text(store.language, "Mono", "Моно") : text(store.language, "Stereo", "Стерео")} · ${active.state.bitDepth} bit` : isVideoDocumentState(active.state) ? `${active.state.width}×${active.state.height} · ${active.state.frameRate} fps` : `${Math.round((store.viewports[active.id]?.zoom ?? 1) * 100)}% · sRGB · ${renderBackend ?? "detecting"}`}</span></footer>}
+    {chromeSlots.bottom && active && createPortal(<footer className="status-bar"><span>{resolveLabel(environmentMeta[active.kind].label, store.language)}</span><span>{isAudioDocumentState(active.state) ? `${(active.state.sampleRate / 1000).toLocaleString()} kHz · ${active.state.channels === 1 ? text(store.language, "Mono", "Моно") : text(store.language, "Stereo", "Стерео")} · ${active.state.bitDepth} bit` : isVideoDocumentState(active.state) ? `${active.state.width}×${active.state.height} · ${active.state.frameRate} fps` : `${Math.round((store.viewports[active.id]?.zoom ?? 1) * 100)}% · sRGB · ${renderBackend ?? "detecting"}`}</span></footer>, chromeSlots.bottom)}
     {store.preferences.showPerformanceOverlay && <PerformanceOverlay documentId={active?.id ?? null} />}
 
     {store.paletteOpen && <div className="dialog-backdrop" onMouseDown={() => store.setPaletteOpen(false)}>
