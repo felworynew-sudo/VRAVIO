@@ -92,6 +92,9 @@ importers:
         specifier: 5.0.15
         version: 5.0.15(@types/react@19.2.18)(react@19.2.8)
     devDependencies:
+      '@svar-ui/filemanager-store':
+        specifier: 2.6.0
+        version: 2.6.0
       '@types/react':
         specifier: ^19.2.0
         version: 19.2.18

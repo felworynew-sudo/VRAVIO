@@ -37,6 +37,7 @@
     "zustand": "5.0.15"
   },
   "devDependencies": {
+    "@svar-ui/filemanager-store": "2.6.0",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",
     "@types/three": "0.185.4",

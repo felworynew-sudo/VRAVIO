@@ -6,6 +6,8 @@ export type BridgeEntry = {
   type: "file" | "folder";
   date?: Date;
   size?: number;
+  /** A folder whose contents are read only when it is opened — see `TauriFileSystemProvider.list`. */
+  lazy?: boolean;
 };
 
 export interface BridgeFileSystemProvider {
@@ -101,31 +103,58 @@ class BrowserFileSystemProvider extends BaseProvider {
   async read(path: string): Promise<File | null> { return this.files.get(path) ?? null; }
 }
 
+/**
+ * A path as the file manager wants it: rooted at `/`, separated by `/`.
+ *
+ * SVAR does not carry a parent field — it derives one from the id itself:
+ * `parseId` takes `id.lastIndexOf("/")`, calls what is before it the parent and what is after it
+ * the name, and its root node is literally `"/"` ("My files"). A native Windows path
+ * (`C:\Users\...`) has no `/` in it at all, so the parent came out as the id minus its last
+ * character, no node by that name existed, and every entry was dropped on the floor: the desktop
+ * build showed an empty "My files" and no error, because nothing had failed — the tree simply had
+ * nowhere to put anything. Found by reading the store's own `parseId`, after the packaged app
+ * showed a file manager with no files in it.
+ */
+export function bridgeIdFor(parentId: string, name: string): string {
+  return parentId === "/" ? `/${name}` : `${parentId}/${name}`;
+}
+
 class TauriFileSystemProvider extends BaseProvider {
   readonly kind = "desktop" as const;
   private homePath: string | null = null;
+  /** Bridge id to the real path on disk. The two are never the same string on Windows. */
+  private readonly nativePaths = new Map<string, string>([]);
 
   private async root(): Promise<string> {
     if (this.homePath) return this.homePath;
     const { homeDir } = await import("@tauri-apps/api/path");
     this.homePath = await homeDir();
+    this.nativePaths.set("/", this.homePath);
     return this.homePath;
   }
 
   async list(path?: string): Promise<BridgeEntry[]> {
-    const directory = path || await this.root();
+    const home = await this.root();
+    const parentId = path || "/";
+    const directory = this.nativePaths.get(parentId) ?? home;
     const [{ readDir, stat }, { join }] = await Promise.all([import("@tauri-apps/plugin-fs"), import("@tauri-apps/api/path")]);
     const entries = await readDir(directory);
     const result = await Promise.all(entries.filter((entry) => !entry.isSymlink).map(async (entry) => {
-      const id = await join(directory, entry.name);
-      const metadata = await stat(id);
+      const native = await join(directory, entry.name);
+      const id = bridgeIdFor(parentId, entry.name);
+      this.nativePaths.set(id, native);
+      // A folder whose contents are unknown until asked for: `lazy` is what makes the file
+      // manager emit `request-data` when it is opened. Without it the folder opens empty and the
+      // adapter is never asked to read it, which looks exactly like an empty folder.
       const type = entry.isDirectory ? "folder" : "file";
-      this.info.set(id, { Size: type === "folder" ? "—" : formatSize(metadata.size ?? 0), Count: type === "folder" ? "Folder" : (extensionOf(entry.name).toUpperCase() || "FILE") });
-      const date = metadata.mtime ? new Date(metadata.mtime) : null;
+      const metadata = await stat(native).catch(() => null);
+      this.info.set(id, { Size: type === "folder" ? "—" : formatSize(metadata?.size ?? 0), Count: type === "folder" ? "Folder" : (extensionOf(entry.name).toUpperCase() || "FILE") });
+      const date = metadata?.mtime ? new Date(metadata.mtime) : null;
       return {
         id, value: entry.name, type,
+        ...(type === "folder" ? { lazy: true } : {}),
         ...(date ? { date } : {}),
-        ...(metadata.size !== undefined ? { size: metadata.size } : {}),
+        ...(metadata?.size !== undefined ? { size: metadata.size } : {}),
       } satisfies BridgeEntry;
     }));
     return result.sort(sortEntries);
@@ -134,8 +163,9 @@ class TauriFileSystemProvider extends BaseProvider {
   async read(path: string): Promise<File | null> {
     try {
       const [{ readFile }, { basename }] = await Promise.all([import("@tauri-apps/plugin-fs"), import("@tauri-apps/api/path")]);
-      const bytes = await readFile(path);
-      return new File([bytes], await basename(path), { type: mimeFor(path) });
+      const native = this.nativePaths.get(path) ?? path;
+      const bytes = await readFile(native);
+      return new File([bytes], await basename(native), { type: mimeFor(native) });
     } catch { return null; }
   }
 }
