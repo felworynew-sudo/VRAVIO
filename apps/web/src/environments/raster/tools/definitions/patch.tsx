@@ -14,8 +14,10 @@ import { locksRefuse } from "../lock-guard";
  * in `RasterWorkspace.tsx` for this one caller after `marquee`/`lasso`
  * moved into the catalogue). A tool has no way to reach another tool's host
  * refs, so this is its own small lasso tracker rather than a shared one —
- * deliberately not the full `marquee-selection.tsx` machinery: the old
- * fallback never read Shift/Alt/Space either, always plain "replace".
+ * deliberately not the full `marquee-selection.tsx` machinery (no Space-drag
+ * reposition, no drag-inside-to-move): the owner's own request was only for
+ * Shift/Alt to combine with an existing selection the way Lasso's own does,
+ * not for the rest of that tool's own gesture vocabulary.
  */
 
 interface FallbackLasso {
@@ -42,7 +44,7 @@ interface Stroke {
   readonly compositeSnapshot: Uint8ClampedArray | null;
 }
 
-interface PatchState {
+export interface PatchState {
   readonly fallbackLasso: FallbackLasso | null;
   readonly stroke: Stroke | null;
 }
@@ -116,7 +118,12 @@ const patch: RasterToolDefinition<PatchState> = {
     if (context.paintTarget.kind === "mask") return;
     if (locksRefuse(context, "paint", "raster.patch")) return;
     context.capturePointer(pointer.pointerId);
-    if (!context.selection) {
+    // No selection yet, or Shift/Alt held — draw a new lasso instead of starting a patch drag,
+    // the same rule `marquee-selection.tsx`'s own lasso already follows for a click that lands
+    // inside its current selection (Shift/Alt held always means "a fresh shape to combine", never
+    // "move what's already there"). Without this, Patch could only ever draw a first selection
+    // with nothing existing yet — there was no way to add more, the way Lasso already lets you.
+    if (!context.selection || pointer.shiftKey || pointer.altKey) {
       context.setState({ fallbackLasso: { pointerId: pointer.pointerId, points: [pointer.point] }, stroke: null });
       return;
     }
@@ -134,8 +141,23 @@ const patch: RasterToolDefinition<PatchState> = {
     }
     const stroke = state.stroke;
     if (!stroke || stroke.pointerId !== pointer.pointerId) return;
-    applyPatch(context, stroke, pointer.point, false);
-    context.schedulePreview(stroke.working, "pixels", context.paintTarget.layerId, null);
+    // Only the target point is recorded synchronously here — `applyPatch` itself runs a real
+    // (if scaled-down) multigrid solve, and `RasterWorkspace.tsx`'s own pointer-move handler
+    // calls every catalogue tool once per *coalesced* native event, not once per animation
+    // frame: a fast drag can coalesce a dozen samples between paints, and running a full solve
+    // for each of them — the previous version did — blocks the main thread for that many solves
+    // in a row before the browser can even show a frame. That is the reported "hangs, keeps
+    // overwriting": not a correctness bug (each solve was still a real one, from `stroke.before`,
+    // same as always), just so much backed-up synchronous work that several stale results paint
+    // in a burst once it finally catches up, reading as flicker. `scheduleWork` (this project's
+    // own "coalesce to the next frame, run only the latest" queue, already used by tools with a
+    // per-frame side effect) collapses that whole backlog to exactly one solve per real frame,
+    // always against whichever point turns out to be latest by the time it actually runs.
+    stroke.pending = pointer.point;
+    context.scheduleWork(() => {
+      applyPatch(context, stroke, stroke.pending, false);
+      context.schedulePreview(stroke.working, "pixels", context.paintTarget.layerId, null);
+    });
   },
 
   onGestureEnd(context, pointer) {
@@ -153,7 +175,11 @@ const patch: RasterToolDefinition<PatchState> = {
       if (travelled < 2) return;
       const feather = Number(context.options.feather ?? 0);
       const incoming = createPolygonSelection(context.document.width, context.document.height, points, feather);
-      const combined = combineSelections(context.selection, incoming, context.document.width, context.document.height, "replace");
+      // Shift/Alt read the same way `marquee-selection.tsx`'s own lasso does — this fallback
+      // draws the identical shape (a freehand polygon), so it should combine with an existing
+      // selection the identical way, not the one fixed "replace" it used to be stuck on.
+      const mode = pointer.shiftKey && pointer.altKey ? "intersect" : pointer.shiftKey ? "add" : pointer.altKey ? "subtract" : "replace";
+      const combined = combineSelections(context.selection, incoming, context.document.width, context.document.height, mode);
       void context.commitSelection(context.selection, combined, "Patch Selection (Выделение заплаткой)");
       return;
     }

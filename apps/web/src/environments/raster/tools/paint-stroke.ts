@@ -38,6 +38,10 @@ interface Stroke {
    * sample would get a dab of its own regardless of the brush's spacing. See
    * `accumulateStrokeSegment`, which owns the explanation. */
   spacingCarry: number;
+  /** Set the moment Shift is first seen held mid-drag (and cleared the moment it is released) —
+   * see `constrainToAxis`'s own comment for why the axis and anchor are decided once, here,
+   * rather than re-read every sample. */
+  axisLock: { readonly axis: "x" | "y"; readonly anchor: Point } | null;
   /**
    * How much of the stroke has reached each pixel, 0..255.
    *
@@ -119,6 +123,35 @@ function layStroke(context: ToolContext<PaintStrokeState>, config: PaintStrokeCo
   compositeCoverage(stroke.working, stroke.before, stroke.coverage, context.document.width, context.document.height, region, resolveColor(context, config), erase);
 }
 
+/**
+ * Photoshop's own Shift-while-dragging habit: hold it partway through a
+ * freehand stroke and the brush snaps to a straight horizontal or vertical
+ * line from wherever it was at that instant, for as long as Shift stays
+ * down. Decided once, the moment Shift is first seen held (`stroke.pending`
+ * at that instant becomes the anchor whichever coordinate a locked axis
+ * pins), not re-read every sample — re-deciding on each move would let the
+ * axis itself wobble between X and Y as the raw input jitters around the
+ * 45° boundary, instead of committing to one reading the way an actual
+ * modifier key press does.
+ *
+ * This is a different Shift habit from the click-then-Shift-click straight
+ * line a few lines up in `onPointerDown` — that one is a discrete two-click
+ * edit with no drag in progress at all; this is a continuous drag that
+ * happens to have Shift held partway through it.
+ */
+function constrainToAxis(stroke: Stroke, pointer: ToolPointer): Point {
+  if (!pointer.shiftKey) { stroke.axisLock = null; return pointer.point; }
+  if (!stroke.axisLock) {
+    const dx = pointer.point.x - stroke.pending.x, dy = pointer.point.y - stroke.pending.y;
+    // Too little movement yet to tell which axis the drag actually favours — deciding on
+    // sub-pixel jitter would lock onto whichever direction the mouse happened to twitch in.
+    if (Math.hypot(dx, dy) < 2) return pointer.point;
+    stroke.axisLock = { axis: Math.abs(dx) >= Math.abs(dy) ? "y" : "x", anchor: stroke.pending };
+  }
+  const { axis, anchor } = stroke.axisLock;
+  return axis === "y" ? { ...pointer.point, y: anchor.y } : { ...pointer.point, x: anchor.x };
+}
+
 /** Extends the stroke to `point`, mutating it in place — see the note on the
  * interface above for why this does not go through `setState`. */
 function appendPoint(context: ToolContext<PaintStrokeState>, config: PaintStrokeConfig, stroke: Stroke, point: Point): void {
@@ -192,7 +225,7 @@ export function createPaintStrokeTool(config: PaintStrokeConfig): RasterToolDefi
       }
 
       const coverage = new Uint8ClampedArray(context.document.width * context.document.height);
-      const stroke: Stroke = { pointerId: pointer.pointerId, before, working, coverage, curveStart: pointer.point, pending: pointer.point, dirty: null, strokeBounds: null, spacingCarry: 0, target: context.paintTarget.kind, layerId: context.paintTarget.layerId };
+      const stroke: Stroke = { pointerId: pointer.pointerId, before, working, coverage, curveStart: pointer.point, pending: pointer.point, dirty: null, strokeBounds: null, spacingCarry: 0, axisLock: null, target: context.paintTarget.kind, layerId: context.paintTarget.layerId };
       paintDab(context, config, coverage, pointer.point);
       const pad = Number(context.options.size ?? 24) / 2 + 2;
       const first = unionRect(null, pointer.point.x, pointer.point.y, pointer.point.x, pointer.point.y, pad);
@@ -205,7 +238,7 @@ export function createPaintStrokeTool(config: PaintStrokeConfig): RasterToolDefi
     onPointerMove(context, pointer) {
       const stroke = context.state.stroke;
       if (!stroke || stroke.pointerId !== pointer.pointerId) return;
-      appendPoint(context, config, stroke, pointer.point);
+      appendPoint(context, config, stroke, constrainToAxis(stroke, pointer));
       context.schedulePreview(stroke.working, stroke.target, stroke.layerId, stroke.dirty);
       stroke.dirty = null;
     },
@@ -213,7 +246,7 @@ export function createPaintStrokeTool(config: PaintStrokeConfig): RasterToolDefi
     onGestureEnd(context, pointer) {
       const stroke = context.state.stroke;
       if (!stroke || stroke.pointerId !== pointer.pointerId) return;
-      appendPoint(context, config, stroke, pointer.point);
+      appendPoint(context, config, stroke, constrainToAxis(stroke, pointer));
       // The curve lags half a step behind the raw input by construction
       // (`appendPoint` always ends on a midpoint) — this closes the last
       // gap so the stroke visibly reaches where the pointer was released.

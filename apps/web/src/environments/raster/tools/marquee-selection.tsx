@@ -41,6 +41,13 @@ interface DrawState {
    * slides by how far the pointer has moved since — not by an accumulating
    * per-frame delta, which would drift. */
   spaceAnchor: Point | null;
+  /** Whether Shift/Alt are down *right now*, refreshed on every pointer move — unlike `mode`
+   * (captured once, at drag start, since the two keys mean something different there: which
+   * selection combine op this drag is), the square/from-centre reading has to track the keys
+   * live, or holding Shift only partway through a drag would never square up the preview until
+   * release — see `Overlay`'s own comment on why it needs these two booleans at all. */
+  shiftKey: boolean;
+  altKey: boolean;
 }
 
 export interface MarqueeState {
@@ -88,7 +95,7 @@ export function createMarqueeTool(id: string, kind: MarqueeKind): RasterToolDefi
       // from-centre — so the mode is captured here rather than looked up
       // when the drag ends.
       const mode = pointer.shiftKey && pointer.altKey ? "intersect" : pointer.shiftKey ? "add" : pointer.altKey ? "subtract" : (String(context.options.mode ?? "replace") as SelectionCombineMode);
-      context.setState({ drag: null, draw: { pointerId: pointer.pointerId, from: pointer.point, current: pointer.point, points: [pointer.point], mode, spaceAnchor: null } });
+      context.setState({ drag: null, draw: { pointerId: pointer.pointerId, from: pointer.point, current: pointer.point, points: [pointer.point], mode, spaceAnchor: null, shiftKey: pointer.shiftKey, altKey: pointer.altKey } });
     },
 
     onPointerMove(context, pointer) {
@@ -104,11 +111,11 @@ export function createMarqueeTool(id: string, kind: MarqueeKind): RasterToolDefi
         if (context.spaceHeld) {
           const anchor = draw.spaceAnchor ?? pointer.point;
           const dx = pointer.point.x - anchor.x, dy = pointer.point.y - anchor.y;
-          context.setState({ drag: null, draw: { ...draw, from: { x: draw.from.x + dx, y: draw.from.y + dy }, current: { x: draw.current.x + dx, y: draw.current.y + dy }, spaceAnchor: pointer.point } });
+          context.setState({ drag: null, draw: { ...draw, from: { x: draw.from.x + dx, y: draw.from.y + dy }, current: { x: draw.current.x + dx, y: draw.current.y + dy }, spaceAnchor: pointer.point, shiftKey: pointer.shiftKey, altKey: pointer.altKey } });
           return;
         }
         const points = kind === "lasso" ? appendLassoPoint(draw.points, pointer.point) : draw.points;
-        context.setState({ drag: null, draw: { ...draw, current: pointer.point, points, spaceAnchor: null } });
+        context.setState({ drag: null, draw: { ...draw, current: pointer.point, points, spaceAnchor: null, shiftKey: pointer.shiftKey, altKey: pointer.altKey } });
       }
     },
 
@@ -165,7 +172,13 @@ export function createMarqueeTool(id: string, kind: MarqueeKind): RasterToolDefi
           const left = Math.min(...xs), top = Math.min(...ys);
           return { x: left, y: top, width: Math.max(1, Math.max(...xs) - left), height: Math.max(1, Math.max(...ys) - top) };
         })()
-        : marqueeRect(draw.from.x, draw.from.y, draw.current.x, draw.current.y);
+        // `{ square, fromCentre }` here, not the default `{}` this used to call with — without
+        // it the live marching-ants preview stayed a plain unconstrained rectangle for the whole
+        // drag no matter how Shift/Alt were held, only snapping to a square/circle-from-centre
+        // shape at the very last frame (`shapeFrom`, called at `onGestureEnd`, already read the
+        // same two options correctly) — the preview and the shape it committed visibly disagreed
+        // the entire time the pointer was still down.
+        : marqueeRect(draw.from.x, draw.from.y, draw.current.x, draw.current.y, { square: draw.shiftKey, fromCentre: draw.altKey });
       if (rect.width <= 0 || rect.height <= 0) return null;
 
       // The same marching ants the committed selection gets: in Photoshop the shape being
