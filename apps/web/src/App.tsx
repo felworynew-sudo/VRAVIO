@@ -489,7 +489,24 @@ export function App() {
       const key = physicalShortcutKey(event);
       const target = event.target as HTMLElement | null;
       const editing = target?.tagName === "INPUT" || target?.tagName === "SELECT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
-      const mappedCommand = kernel.keymap.resolve(event, active ? ["global", active.kind] : ["global"]);
+      const scopes = active ? ["global", active.kind] : ["global"];
+      let mappedCommand = kernel.keymap.resolve(event, scopes);
+      // Photoshop treats a bare Backspace as Delete's alias on Windows — the
+      // owner's own reference table: "Backspace — то же самое, что Delete в
+      // большинстве случаев". Left unbound (the catalogue carries one shortcut
+      // per command, and Delete already holds that slot for `layer.clear` —
+      // see its own comment on why Backspace isn't just bound there too), a
+      // bare Backspace with focus outside any input falls straight through to
+      // the browser's native default action: navigate back, which an SPA
+      // "handles" by silently reloading and restoring whatever the last
+      // autosave snapshot happens to be — found live, chasing what looked
+      // like a random document swap. Resolved by retrying as Delete's own
+      // binding rather than a second copy of it, so the two can never drift
+      // apart; modified Backspace (Alt/Ctrl+Backspace) is untouched; those are
+      // Fill's own separate bindings (fill-shortcuts.ts).
+      if (!mappedCommand && event.key === "Backspace" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        mappedCommand = kernel.keymap.resolve({ code: "Delete", key: "Delete", ctrlKey: false, metaKey: false, altKey: false, shiftKey: event.shiftKey }, scopes);
+      }
       if ((!editing || mappedCommand === "view.commandPalette") && mappedCommand) {
         event.preventDefault();
         void kernel.commands.execute(mappedCommand, { ...activeCommandContext(), shiftKey: event.shiftKey });

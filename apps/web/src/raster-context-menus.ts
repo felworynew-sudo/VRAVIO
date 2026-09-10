@@ -4,6 +4,8 @@ import type { ToolContext } from "./environments/raster/tools/types";
 import { useContextMenu } from "./ContextMenu";
 import { text } from "./i18n";
 import type { Language } from "./store";
+import { activeCommandContext } from "./commands";
+import { kernel } from "./kernel";
 
 /**
  * The two right-click menus that belong to a gesture already in progress
@@ -39,10 +41,24 @@ export function useRasterContextMenus(params: {
       { value: "subtract", english: "Subtract from Selection", russian: "Вычесть из выделения" },
       { value: "intersect", english: "Intersect with Selection", russian: "Пересечь с выделением" },
     ];
-    selectionContextMenu.open(event, modes.map((entry) => ({
-      label: (currentMode === entry.value ? "✓ " : "") + text(language, entry.english, entry.russian),
-      onSelect: () => setToolOption(activeToolId, "mode", entry.value),
-    })));
+    selectionContextMenu.open(event, [
+      ...modes.map((entry) => ({
+        label: (currentMode === entry.value ? "✓ " : "") + text(language, entry.english, entry.russian),
+        onSelect: () => setToolOption(activeToolId, "mode", entry.value),
+      })),
+      // Same door as Delete/Backspace with a selection active — `layer.clear`,
+      // not a copy of `clearSelectedPixels` called straight from here, so a
+      // future change to what "clear" means (confirmation, mask-awareness,
+      // whatever comes next) only has one place to land rather than two that
+      // could drift.
+      {
+        label: text(language, "Delete Selection", "Удалить выделенное"),
+        onSelect: () => void kernel.commands.execute("layer.clear", activeCommandContext()),
+        separatorBefore: true,
+        disabled: !state.selection,
+        danger: true,
+      },
+    ]);
   };
 
   // The transform tool's own right-click menu: Photoshop's Edit > Transform submodes, offered
