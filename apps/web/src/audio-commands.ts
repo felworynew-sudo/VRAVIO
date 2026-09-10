@@ -373,6 +373,15 @@ export function setSendEnabled(documentId: string, trackId: string, sendId: stri
   });
 }
 
+export function setSendPre(documentId: string, trackId: string, sendId: string, pre: boolean): void {
+  void changeAudioDocument(documentId, pre ? "Pre-fader Send (Досылка до фейдера)" : "Post-fader Send (Досылка после фейдера)", (state) => {
+    const send = state.tracks.find((item) => item.id === trackId)?.sends.find((item) => item.id === sendId);
+    if (!send || send.pre === pre) return false;
+    send.pre = pre;
+    return true;
+  });
+}
+
 export function moveMarker(documentId: string, markerId: string, sampleTime: number): void {
   const document = kernel.documents.get<AudioDocumentState>(documentId);
   if (!document) return;

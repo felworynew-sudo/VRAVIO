@@ -70,23 +70,26 @@ function scheduleAudioGraph(context: BaseAudioContext, master: AudioNode, state:
       panner.connect(analyser);
       analysersOut.set(track.id, analyser);
     }
-    // Sends tap the same post-fader signal already headed to master — `AudioSend.pre`'s own
-    // doc comment (packages/env-audio/src/types.ts) names pre-fader tapping as this feature's
-    // next slice, not silently assumed done.
+    // Inserts sit before the fader/pan, the same channel-strip order every mixer uses — an
+    // effect shapes the raw signal, volume/pan happen after. `preFaderTap` (unity gain) is the
+    // point right after inserts and before the fader — a send with `pre: true` reads from here
+    // instead of `panner`, the actual difference between pre- and post-fader: a pre-fader send's
+    // level stays constant as the channel fader moves, a post-fader send rides the fader with it.
+    const preFaderTap = context.createGain();
+    const insertChain = buildLiveEffectChain(context, track.effects, track.effectAutomation, { fromSample, sampleRate, now });
+    const clipDestination = insertChain ? insertChain.input : preFaderTap;
+    if (insertChain) insertChain.output.connect(preFaderTap);
+    preFaderTap.connect(trackGain);
+
     for (const send of track.sends) {
       if (!send.enabled) continue;
       const busInput = busInputs.get(send.busId);
       if (!busInput) continue;
       const sendGain = context.createGain();
       sendGain.gain.value = send.level;
-      panner.connect(sendGain);
+      (send.pre ? preFaderTap : panner).connect(sendGain);
       sendGain.connect(busInput);
     }
-    // Inserts sit before the fader/pan, the same channel-strip order every mixer uses —
-    // an effect shapes the raw signal, volume/pan happen after.
-    const insertChain = buildLiveEffectChain(context, track.effects, track.effectAutomation, { fromSample, sampleRate, now });
-    const clipDestination = insertChain ? insertChain.input : trackGain;
-    if (insertChain) insertChain.output.connect(trackGain);
 
     for (const clip of track.clips) {
       const clipEnd = clip.startSample + clip.durationSamples;

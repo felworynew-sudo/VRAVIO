@@ -749,10 +749,11 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .audio-master-meter span{color:var(--muted);font-size:10px;white-space:nowrap}
 .audio-master-meter .audio-meter{flex:1;height:12px}
 .audio-mixer-sends{display:flex;flex-direction:column;gap:3px}
-.audio-mixer-send{display:grid;grid-template-columns:24px 1fr 14px;align-items:center;gap:3px}
+.audio-mixer-send{display:grid;grid-template-columns:24px 1fr 22px 14px;align-items:center;gap:3px}
 .audio-mixer-send button{width:24px;height:16px;padding:0;border:1px solid var(--border);border-radius:3px;background:var(--surface3);color:var(--muted);font-size:8px;cursor:pointer}
 .audio-mixer-send button.active{border-color:var(--audio);color:var(--text)}
 .audio-mixer-send input{accent-color:var(--audio)}
+.audio-mixer-send-pre{width:22px!important;font-size:7px!important}
 .audio-mixer-send-remove{color:var(--muted)!important;cursor:pointer}
 .audio-mixer-sends select{width:100%;height:18px;padding:0 2px;border:1px solid var(--border);border-radius:3px;background:var(--surface3);color:var(--muted);font-size:8.5px}
 .audio-mixer-sep{flex:0 0 1px;align-self:stretch;background:var(--border);margin:4px 2px}

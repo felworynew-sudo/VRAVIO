@@ -18,7 +18,7 @@ import {
   moveMarker, previewMoveClip, previewTrimClip, punchInRecording, removeAudioTrack, removeBus, removeEffectParamAutomationPoint,
   removeMarker, removeSend, removeTrackEffect, removeTrackVolumeAutomationPoint, renameBus, renameMarker, setBusMuted, setBusPan, setBusSoloed,
   setBusVolume, setClipFade, setEffectParamAutomationPoint, setClipGain, setLoopEnabled, setLoopRegion, setSelection, setSendEnabled,
-  setSendLevel, setTempo, setTimeSignature, setTrackEffectEnabled, setTrackEffectParam, setTrackMuted, setTrackPan, setTrackSoloed,
+  setSendLevel, setSendPre, setTempo, setTimeSignature, setTrackEffectEnabled, setTrackEffectParam, setTrackMuted, setTrackPan, setTrackSoloed,
   setTrackVolume, setTrackVolumeAutomationPoint, splitClipAt,
 } from "./audio-commands";
 import { decodeAudioFileToWav, startMicrophoneRecording, type AudioRecorder } from "./audioImport";
@@ -683,6 +683,7 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
             {track.sends.map((send) => { const bus = state.buses.find((item) => item.id === send.busId); return <div className="audio-mixer-send" key={send.id}>
               <button className={send.enabled ? "active" : ""} onClick={() => setSendEnabled(document.id, track.id, send.id, !send.enabled)} title={bus?.name}>{bus?.name.slice(0, 3) ?? "—"}</button>
               <input type="range" min={0} max={1.5} step={0.01} value={send.level} onChange={(event) => setSendLevel(document.id, track.id, send.id, event.target.valueAsNumber)} aria-label={text(language, "Send level", "Уровень посыла")} />
+              <button className={`audio-mixer-send-pre${send.pre ? " active" : ""}`} onClick={() => setSendPre(document.id, track.id, send.id, !send.pre)} title={text(language, "Pre-fader: the send's level stays fixed as the channel fader moves. Post-fader: it rides the fader.", "До фейдера: уровень посыла не зависит от фейдера канала. После фейдера: следует за ним.")}>{send.pre ? "Pre" : "Post"}</button>
               <button className="audio-mixer-send-remove" onClick={() => removeSend(document.id, track.id, send.id)} title={text(language, "Remove send", "Удалить посыл")}>×</button>
             </div>; })}
             {state.buses.some((bus) => !track.sends.some((send) => send.busId === bus.id)) && <select value="" onChange={(event) => { if (event.target.value) addSend(document.id, track.id, event.target.value); }}>
