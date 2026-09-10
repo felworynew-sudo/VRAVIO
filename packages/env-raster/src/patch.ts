@@ -1,4 +1,5 @@
 import { solveHealMembrane } from "./heal_membrane";
+import { boxBlur } from "./selection";
 
 export interface PatchRegion {
   mask: Uint8ClampedArray;
@@ -20,11 +21,27 @@ export function createPatchRegion(
   sourceOffsetX: number,
   sourceOffsetY: number,
   opacity: number,
-  mode: "source" | "destination" = "source"
+  mode: "source" | "destination" = "source",
+  sweepScale = 1
 ): void {
   const sourcePixels = pixels.slice();
   const interior = new Uint8Array(regionWidth * regionHeight);
   const offsets = new Int16Array(regionWidth * regionHeight * 3);
+
+  // Source mode fixes the selection in place and reads from the dragged-to
+  // spot (`destX = regionOriginX + lx`, the region's own rectangle). Destination
+  // mode swaps which side is fixed and which is read — the *content* moves to
+  // the drop point, not just the direction the membrane samples from — so the
+  // whole write/solve rectangle has to shift by the drag offset, not merely the
+  // read formula inside it. Getting this wrong (leaving destX anchored at
+  // regionOriginX for both modes, only flipping the ± on srcX) makes
+  // Destination read from the mirror side while still painting over the
+  // original selection — never actually relocating anything, which is the bug
+  // this shift fixes: found live, reported by the owner as "не по тем
+  // принципам" against Photoshop's own Destination ("образец... тащится туда
+  // куда ты его тащишь").
+  const destOriginX = mode === "source" ? regionOriginX : regionOriginX + sourceOffsetX;
+  const destOriginY = mode === "source" ? regionOriginY : regionOriginY + sourceOffsetY;
 
   for (let ly = 0; ly < regionHeight; ly++) {
     // Offsets are gathered across the whole region rectangle: the cells the
@@ -32,19 +49,12 @@ export function createPatchRegion(
     // its surroundings without a seam. Gathering them only inside the selection
     // left the boundary at zero, and a membrane with zero boundary is zero.
     for (let lx = 0; lx < regionWidth; lx++) {
-      const destX = regionOriginX + lx;
-      const destY = regionOriginY + ly;
+      const destX = destOriginX + lx;
+      const destY = destOriginY + ly;
       if (destX < 0 || destX >= canvasWidth || destY < 0 || destY >= canvasHeight) continue;
 
-      let srcX: number;
-      let srcY: number;
-      if (mode === "source") {
-        srcX = destX + sourceOffsetX;
-        srcY = destY + sourceOffsetY;
-      } else {
-        srcX = destX - sourceOffsetX;
-        srcY = destY - sourceOffsetY;
-      }
+      const srcX = mode === "source" ? destX + sourceOffsetX : destX - sourceOffsetX;
+      const srcY = mode === "source" ? destY + sourceOffsetY : destY - sourceOffsetY;
 
       if (
         srcX < 0 ||
@@ -65,24 +75,17 @@ export function createPatchRegion(
     }
   }
 
-  solveHealMembrane(interior, regionWidth, regionHeight, offsets);
+  solveHealMembrane(interior, regionWidth, regionHeight, offsets, sweepScale);
 
   for (let ly = 0; ly < regionHeight; ly++) {
     for (let lx = 0; lx < regionWidth; lx++) {
       if (regionMask[ly * regionWidth + lx] === 0) continue;
 
-      const destX = regionOriginX + lx;
-      const destY = regionOriginY + ly;
+      const destX = destOriginX + lx;
+      const destY = destOriginY + ly;
 
-      let srcX: number;
-      let srcY: number;
-      if (mode === "source") {
-        srcX = destX + sourceOffsetX;
-        srcY = destY + sourceOffsetY;
-      } else {
-        srcX = destX - sourceOffsetX;
-        srcY = destY - sourceOffsetY;
-      }
+      const srcX = mode === "source" ? destX + sourceOffsetX : destX - sourceOffsetX;
+      const srcY = mode === "source" ? destY + sourceOffsetY : destY - sourceOffsetY;
 
       if (
         srcX < 0 ||
@@ -137,7 +140,8 @@ export function patchFromSelection(
   sourceOffsetY: number,
   opacity: number,
   mode: "source" | "destination" = "source",
-  feather = 0
+  feather = 0,
+  sweepScale = 1
 ): void {
   if (!selectionMask) return;
 
@@ -160,8 +164,17 @@ export function patchFromSelection(
     if (canvasX >= 0 && canvasX < canvasWidth && canvasY >= 0 && canvasY < canvasHeight) localMask[y * regionWidth + x] = selectionMask[canvasY * canvasWidth + canvasX]!;
   }
 
+  // The same box-blur `createRectangleSelection`/`createEllipseSelection`
+  // already feather a plain selection with (selection.ts) — one feather
+  // curve app-wide, not a second one that looks and costs differently just
+  // because this caller is the patch tool. The patch tool's own hand-rolled
+  // nearest-empty-cell search this replaced was O(width×height×radius²): a
+  // 300×300 repair at a 40px feather measured ~2 seconds per drag frame,
+  // there to be measured because the patch preview re-solves on every
+  // pointer move (patch.bench.test.ts) — this scan happens once per frame a
+  // real drag renders, not once per gesture.
   let effectiveMask: Uint8ClampedArray<ArrayBufferLike> = localMask;
-  if (feather > 0) effectiveMask = featherMask(localMask, regionWidth, regionHeight, feather);
+  if (feather > 0) effectiveMask = boxBlur(localMask, regionWidth, regionHeight, Math.max(0, Math.round(feather)));
 
   createPatchRegion(
     pixels,
@@ -175,41 +188,7 @@ export function patchFromSelection(
     sourceOffsetX,
     sourceOffsetY,
     opacity,
-    mode
+    mode,
+    sweepScale
   );
-}
-
-function featherMask(
-  mask: Uint8ClampedArray,
-  width: number,
-  height: number,
-  radius: number
-): Uint8ClampedArray {
-  const result = new Uint8ClampedArray(mask);
-  const temp = new Float32Array(width * height);
-
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      let minDist = Infinity;
-      const val = mask[y * width + x]! / 255;
-      if (val === 0) continue;
-
-      for (let fy = Math.max(0, y - Math.ceil(radius)); fy <= Math.min(height - 1, y + Math.ceil(radius)); fy++) {
-        for (let fx = Math.max(0, x - Math.ceil(radius)); fx <= Math.min(width - 1, x + Math.ceil(radius)); fx++) {
-          if (mask[fy * width + fx] === 0) {
-            const d = Math.hypot(fx - x, fy - y);
-            minDist = Math.min(minDist, d);
-          }
-        }
-      }
-
-      const factor = minDist >= radius ? 1 : minDist / radius;
-      temp[y * width + x] = val * factor;
-    }
-  }
-
-  for (let i = 0; i < width * height; i++) {
-    result[i] = Math.round(Math.max(0, Math.min(255, temp[i]!)));
-  }
-  return result;
 }

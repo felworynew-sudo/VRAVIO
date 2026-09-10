@@ -51,9 +51,24 @@ export function solveHealMembrane(
   interior: Uint8Array,
   width: number,
   height: number,
-  offsetsRgb: Int16Array
+  offsetsRgb: Int16Array,
+  /**
+   * Scales how many relaxation sweeps each level gets, 0–1. The multigrid
+   * V-cycle converges in a handful of sweeps per level plus a longer settle
+   * at the coarsest one; a live drag preview (patch.tsx's own onPointerMove,
+   * re-solving on every frame — found costing ~100ms+ on a large repair,
+   * patch.bench.test.ts) does not need that settle to have fully finished
+   * before the next frame throws it away, only to look right while the
+   * pointer is still moving. The commit on release always solves at 1
+   * (this parameter's default), so what actually lands in the document is
+   * never the cut-rate version.
+   */
+  sweepScale = 1
 ): void {
   if (width <= 0 || height <= 0) return;
+  const scale = Math.max(0.1, Math.min(1, sweepScale));
+  const coarsestSweeps = Math.max(40, Math.round(COARSEST_SWEEPS * scale));
+  const levelSweeps = Math.max(4, Math.round(LEVEL_SWEEPS * scale));
   const cells = width * height;
 
   const levels: Level[] = [];
@@ -140,7 +155,7 @@ export function solveHealMembrane(
         }
       }
     }
-    const sweeps = level + 1 === levels.length ? COARSEST_SWEEPS : LEVEL_SWEEPS;
+    const sweeps = level + 1 === levels.length ? coarsestSweeps : levelSweeps;
     for (let iter = 0; iter < sweeps; iter++) sweep(current);
   }
 

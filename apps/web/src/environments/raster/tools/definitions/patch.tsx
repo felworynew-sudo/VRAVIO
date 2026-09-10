@@ -1,4 +1,4 @@
-import { combineSelections, createPolygonSelection, patchFromSelection, selectionOutlinePath, type Point } from "@vravio/env-raster";
+import { combineSelections, copyHealedRegion, createPolygonSelection, patchFromSelection, selectionOutlinePath, type Point } from "@vravio/env-raster";
 import { MarchingAnts } from "../../../../marching-ants";
 import type { RasterToolDefinition, ToolContext } from "../types";
 import { locksRefuse } from "../lock-guard";
@@ -29,6 +29,17 @@ interface Stroke {
   working: Uint8ClampedArray;
   curveStart: Point;
   pending: Point;
+  /**
+   * The merged document, sampled once at pointer-down when "Sample all
+   * layers" is on — not re-sampled per frame. Nothing else is painting
+   * while a patch drag is in progress, so what the other layers contribute
+   * cannot change mid-drag; recomputing `compositePixels()` (`ToolContext`'s
+   * own doc: "Expensive; called only when asked for") on every pointer move
+   * would pay a whole-document composite per frame for content that never
+   * moves, the one thing a tool whose whole point is a live drag preview
+   * cannot afford.
+   */
+  readonly compositeSnapshot: Uint8ClampedArray | null;
 }
 
 interface PatchState {
@@ -38,16 +49,61 @@ interface PatchState {
 
 const empty: PatchState = { fallbackLasso: null, stroke: null };
 
-function applyPatch(context: ToolContext<PatchState>, stroke: Stroke, to: Point): void {
+/**
+ * How much of the multigrid solve's own sweep budget a live drag frame gets —
+ * `solveHealMembrane`'s own `sweepScale` (heal_membrane.ts). The membrane
+ * still converges close to the same result well under full sweeps; a live
+ * preview only has to look right while the pointer is moving, not match the
+ * committed pixels bit for bit. `final` (onGestureEnd, onDeactivate) always
+ * solves at 1 — what actually lands in the document is never the cut-rate
+ * version.
+ */
+const PREVIEW_SWEEP_SCALE = 0.3;
+
+function applyPatch(context: ToolContext<PatchState>, stroke: Stroke, to: Point, final: boolean): void {
   const selection = context.selection;
   if (!selection) return;
   const offsetX = to.x - stroke.curveStart.x, offsetY = to.y - stroke.curveStart.y;
   const options = context.options;
+  const { width, height } = context.document;
+  const opacity = Number(options.opacity ?? 100) / 100;
+  const mode = (options.mode as "source" | "destination") ?? "source";
+  const feather = Number(options.feather ?? 0);
+  const sweepScale = final ? 1 : PREVIEW_SWEEP_SCALE;
   // Each frame patches the original, not the previous frame's result. Left
   // to accumulate, dragging a patch a hundred pixels applied it a hundred
   // times and the area turned to mush.
-  stroke.working.set(stroke.before);
-  patchFromSelection(stroke.working, context.document.width, context.document.height, context.paintMask ?? null, selection.bounds, offsetX, offsetY, Number(options.opacity ?? 100) / 100, (options.mode as "source" | "destination") ?? "source", Number(options.feather ?? 0));
+  if (stroke.compositeSnapshot) {
+    // Solved on a fresh copy of the merged picture — patchFromSelection writes
+    // into its first argument — then only the cells the patch actually wrote
+    // cross back into the layer, same door spot healing's own "sample all
+    // layers" already uses (copyHealedRegion): the repair belongs to this
+    // layer, the rest of the composite does not.
+    //
+    // Where the patch wrote is the selection's own footprint in source mode,
+    // but the *drop point* in destination mode — patch.ts's own createPatchRegion
+    // shifts the whole write rectangle there — so the copy-back mask has to
+    // follow that shift too, or "sample all layers" would silently no-op every
+    // Destination drag by copying back the one spot that was never touched.
+    const bx = Math.floor(selection.bounds.x), by = Math.floor(selection.bounds.y);
+    const bw = Math.max(0, Math.ceil(selection.bounds.width)), bh = Math.max(0, Math.ceil(selection.bounds.height));
+    const localMask = new Uint8ClampedArray(bw * bh);
+    for (let ly = 0; ly < bh; ly += 1) for (let lx = 0; lx < bw; lx += 1) {
+      const cx = bx + lx, cy = by + ly;
+      if (cx < 0 || cx >= width || cy < 0 || cy >= height) continue;
+      localMask[ly * bw + lx] = selection.mask[cy * width + cx]!;
+    }
+    const copyOriginX = mode === "destination" ? bx + Math.round(offsetX) : bx;
+    const copyOriginY = mode === "destination" ? by + Math.round(offsetY) : by;
+
+    const healed = stroke.compositeSnapshot.slice();
+    patchFromSelection(healed, width, height, context.paintMask ?? null, selection.bounds, offsetX, offsetY, opacity, mode, feather, sweepScale);
+    stroke.working.set(stroke.before);
+    copyHealedRegion(stroke.working, healed, localMask, copyOriginX, copyOriginY, bw, bh, width, height);
+  } else {
+    stroke.working.set(stroke.before);
+    patchFromSelection(stroke.working, width, height, context.paintMask ?? null, selection.bounds, offsetX, offsetY, opacity, mode, feather, sweepScale);
+  }
   stroke.pending = to;
 }
 
@@ -65,7 +121,9 @@ const patch: RasterToolDefinition<PatchState> = {
       return;
     }
     const before = context.layerPixels();
-    context.setState({ fallbackLasso: null, stroke: { pointerId: pointer.pointerId, before, working: before.slice(), curveStart: pointer.point, pending: pointer.point } });
+    // Sampled once, here, not per frame — see the field's own doc comment.
+    const compositeSnapshot = context.options.sampleAllLayers === true ? context.compositePixels() : null;
+    context.setState({ fallbackLasso: null, stroke: { pointerId: pointer.pointerId, before, working: before.slice(), curveStart: pointer.point, pending: pointer.point, compositeSnapshot } });
   },
 
   onPointerMove(context, pointer) {
@@ -76,7 +134,7 @@ const patch: RasterToolDefinition<PatchState> = {
     }
     const stroke = state.stroke;
     if (!stroke || stroke.pointerId !== pointer.pointerId) return;
-    applyPatch(context, stroke, pointer.point);
+    applyPatch(context, stroke, pointer.point, false);
     context.schedulePreview(stroke.working, "pixels", context.paintTarget.layerId, null);
   },
 
@@ -99,7 +157,7 @@ const patch: RasterToolDefinition<PatchState> = {
     const stroke = state.stroke;
     if (!stroke || stroke.pointerId !== pointer.pointerId) return;
     context.setState(empty);
-    applyPatch(context, stroke, pointer.point);
+    applyPatch(context, stroke, pointer.point, true);
     // The changed region is the selection itself, translated by the drag —
     // not a brush-stroke bounding box, which is what this tool has no use
     // for in the first place.
@@ -118,6 +176,10 @@ const patch: RasterToolDefinition<PatchState> = {
     const state = context.state;
     const stroke = state.stroke;
     if (stroke) {
+      // A mid-drag tool switch lands here instead of onGestureEnd — still has
+      // to solve at full quality before it commits, not whatever the last
+      // preview frame's cut-rate sweep count left behind.
+      applyPatch(context, stroke, stroke.pending, true);
       void context.commit(stroke.before, stroke.working, "Patch (Заплатка)", "pixels", context.paintTarget.layerId, null);
     }
     // A fallback lasso is a selection gesture, not a paint one — discarded

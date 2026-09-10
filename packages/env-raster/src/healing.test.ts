@@ -218,6 +218,34 @@ describe("patch tool", () => {
     expect(worstError(pixels, 32, 32, 9.5, 11)).toBeLessThanOrEqual(3);
   });
 
+  it("destination mode copies the selection onto the drop point, not back onto itself", () => {
+    // Source mode fixes the selection and reads from wherever the drag points at.
+    // Destination mode is the other way round in real Photoshop: the selection is
+    // the *donor*, and its content is what moves to the drop point — a clean area,
+    // dragged onto a blemish, should leave the blemish repaired and the clean area
+    // exactly as it was, not the reverse. Untested until now: every other case in
+    // this file drives "source", and the untested half is what shipped broken
+    // (found live, reported by the owner).
+    const pixels = canvas();
+    addBlemish(pixels, 32, 32, 6);
+    const before = pixels.slice();
+    const selection = createRectangleSelection(W, H, 10, 10, 28, 28); // an 18×18 patch of field, centred at (19, 19)
+    const offsetX = 13, offsetY = 13; // drags that patch 13px so its centre lands on the blemish at (32, 32)
+
+    patchFromSelection(pixels, W, H, selection.mask, selection.bounds, offsetX, offsetY, 1, "destination", 0);
+
+    let red = 0;
+    for (let index = 0; index < pixels.length; index += 4) if (pixels[index]! > 150 && pixels[index + 1]! < 60) red += 1;
+    expect(red).toBe(0);
+
+    // The donor area itself — where the selection was drawn — is untouched: this
+    // is a copy onto the drop point, not a swap or a move.
+    for (let y = 10; y < 28; y += 1) for (let x = 10; x < 28; x += 1) {
+      const index = (y * W + x) * 4;
+      expect(pixels[index]).toBe(before[index]);
+    }
+  });
+
   it("ignores a source that falls outside the canvas", () => {
     const pixels = canvas();
     const before = pixels.slice();

@@ -104,18 +104,42 @@ export function selectionOutlinePath(mask: Uint8ClampedArray, width: number, hei
     .join("");
 }
 
-function boxBlur(mask: Uint8ClampedArray, width: number, height: number, radius: number): Uint8ClampedArray {
+/**
+ * Two-pass separable box blur, each pass a sliding window: the sum for x+1
+ * reuses x's sum (add the cell entering the window, drop the one leaving)
+ * instead of re-summing all `2*radius+1` cells from scratch. Standard
+ * technique — every image library's box filter works this way — and the
+ * difference is not cosmetic: re-summing per pixel is O(width×height×radius),
+ * which a large feather on a large selection turns into real, measured
+ * multi-second stalls (patch.bench.test.ts, found live chasing exactly that
+ * on the patch tool, which re-runs this once per drag frame). The sliding
+ * window is O(width×height) regardless of radius.
+ */
+export function boxBlur(mask: Uint8ClampedArray, width: number, height: number, radius: number): Uint8ClampedArray {
   if (radius < 1) return mask;
   const horizontal = new Uint8ClampedArray(mask.length), output = new Uint8ClampedArray(mask.length);
-  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+  for (let y = 0; y < height; y += 1) {
+    const row = y * width;
     let sum = 0, count = 0;
-    for (let offset = -radius; offset <= radius; offset += 1) { const px = x + offset; if (px >= 0 && px < width) { sum += mask[y * width + px]!; count += 1; } }
-    horizontal[y * width + x] = Math.round(sum / count);
+    for (let x = 0; x <= Math.min(radius, width - 1); x += 1) { sum += mask[row + x]!; count += 1; }
+    horizontal[row] = Math.round(sum / count);
+    for (let x = 1; x < width; x += 1) {
+      const entering = x + radius, leaving = x - radius - 1;
+      if (entering < width) { sum += mask[row + entering]!; count += 1; }
+      if (leaving >= 0) { sum -= mask[row + leaving]!; count -= 1; }
+      horizontal[row + x] = Math.round(sum / count);
+    }
   }
-  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+  for (let x = 0; x < width; x += 1) {
     let sum = 0, count = 0;
-    for (let offset = -radius; offset <= radius; offset += 1) { const py = y + offset; if (py >= 0 && py < height) { sum += horizontal[py * width + x]!; count += 1; } }
-    output[y * width + x] = Math.round(sum / count);
+    for (let y = 0; y <= Math.min(radius, height - 1); y += 1) { sum += horizontal[y * width + x]!; count += 1; }
+    output[x] = Math.round(sum / count);
+    for (let y = 1; y < height; y += 1) {
+      const entering = y + radius, leaving = y - radius - 1;
+      if (entering < height) { sum += horizontal[entering * width + x]!; count += 1; }
+      if (leaving >= 0) { sum -= horizontal[leaving * width + x]!; count -= 1; }
+      output[y * width + x] = Math.round(sum / count);
+    }
   }
   return output;
 }
