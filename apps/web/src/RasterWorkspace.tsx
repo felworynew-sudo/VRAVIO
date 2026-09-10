@@ -8,7 +8,7 @@ import type { VravioDocument } from "@vravio/kernel";
 import { kernel } from "./kernel";
 import { convertLayerToScene3D, importModelAsLayer } from "./scene3d-commands";
 import { harmonizeLayer } from "./harmonize-commands";
-import { Scene3DRotationGizmo } from "./Scene3DRotationGizmo";
+import { Scene3DOrbitGizmo } from "./Scene3DOrbitGizmo";
 import { rasterToolById } from "./environments/raster/tools/registry";
 import type { PaintTarget, ToolContext, ToolPointer } from "./environments/raster/tools/types";
 import { applyWarpPreset, commitPending, empty as moveToolEmpty, pendingBounds, startPendingTransform, type MoveState } from "./environments/raster/tools/definitions/move";
@@ -513,6 +513,18 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const activeLayerForConvert = activeRasterLayer(state);
   const canConvertToScene3D = activeLayerForConvert && (activeLayerForConvert.kind === "text" || activeLayerForConvert.kind === "pixel" || activeLayerForConvert.kind === "shape");
   const canHarmonize = activeLayerForConvert?.kind === "3d";
+  // "Rotate 3D Object" — the owner tried the always-on linear-slider gizmo
+  // live and asked for it to come off. Now nothing shows until this is
+  // chosen from the layer's own menu, and it closes itself the moment the
+  // active layer or tool stops being the one it was opened for (below) —
+  // the same "a pending edit does not survive switching away from it"
+  // contract `move.tsx`'s own transform frame already keeps.
+  const orbitGizmoLayerId = useShellStore((shell) => shell.scene3dOrbitLayerIdByDocument[document.id] ?? null);
+  const setScene3DOrbitLayer = useShellStore((shell) => shell.setScene3DOrbitLayer);
+  useEffect(() => {
+    if (orbitGizmoLayerId && (activeToolId !== "raster.move" || activeLayer3D?.id !== orbitGizmoLayerId)) setScene3DOrbitLayer(document.id, null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orbitGizmoLayerId, activeToolId, activeLayer3D?.id, document.id]);
   const documentOriginX = workspaceSize.width / 2 + viewport.panX - state.width * viewport.zoom / 2, documentOriginY = workspaceSize.height / 2 + viewport.panY - state.height * viewport.zoom / 2;
   const { updateBrushCursor, onPointerLeave: onBrushCursorLeave, brushOptions, tipRoundness, overlay: brushCursorOverlay } = useBrushCursor({
     state, viewport, toolOptions, activeToolId, brushLike, canvasPixels, workspaceRef, sourcePointRef, cloneOffsetRef, preciseCursor, documentOriginX, documentOriginY,
@@ -546,7 +558,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       the workspace element, so a point past the canvas edge already came out as the document
       coordinate it is (negative, or past the width) rather than being clamped or lost.
     */}
-    <div ref={pointerFieldRef} className="raster-pointer-field" style={dynamicCursor ? { cursor: dynamicCursor } : undefined} onPointerEnter={updateBrushCursor} onPointerLeave={() => { onBrushCursorLeave(); setDynamicCursor(undefined); }} onPointerDown={handlePointerDown} onPointerMove={(event) => { updateBrushCursor(event); handlePointerMove(event); }} onPointerUp={finishGesture} onPointerCancel={finishGesture} onContextMenu={(event) => { if (selectionLike) { onSelectionContextMenu(event); return; } if (activeToolId === "raster.move" && (toolStates["raster.move"] as MoveState | undefined)?.pending) { onTransformContextMenu(event); return; } if (activeToolId === "raster.move" && (canConvertToScene3D || canHarmonize) && activeLayerForConvert) { scene3dMenu.open(event, [...(canConvertToScene3D ? [{ label: text(language, "Convert to 3D", "Преобразовать в 3D"), onSelect: () => void convertLayerToScene3D(document.id, activeLayerForConvert.id) }] : []), ...(canHarmonize ? [{ label: text(language, "Harmonize with Scene", "Гармонизировать со сценой"), onSelect: () => void harmonizeLayer(document.id, activeLayerForConvert.id) }] : [])]); return; } event.preventDefault(); if (!brushLike) return; const rect = workspaceRef.current?.getBoundingClientRect(); if (rect) setBrushPopup({ left: Math.min(event.clientX - rect.left, rect.width - 300), top: Math.min(event.clientY - rect.top, rect.height - 430), detailed: false }); }} />
+    <div ref={pointerFieldRef} className="raster-pointer-field" style={dynamicCursor ? { cursor: dynamicCursor } : undefined} onPointerEnter={updateBrushCursor} onPointerLeave={() => { onBrushCursorLeave(); setDynamicCursor(undefined); }} onPointerDown={handlePointerDown} onPointerMove={(event) => { updateBrushCursor(event); handlePointerMove(event); }} onPointerUp={finishGesture} onPointerCancel={finishGesture} onContextMenu={(event) => { if (selectionLike) { onSelectionContextMenu(event); return; } if (activeToolId === "raster.move" && (toolStates["raster.move"] as MoveState | undefined)?.pending) { onTransformContextMenu(event); return; } if (activeToolId === "raster.move" && (canConvertToScene3D || canHarmonize) && activeLayerForConvert) { scene3dMenu.open(event, [...(canConvertToScene3D ? [{ label: text(language, "Convert to 3D", "Преобразовать в 3D"), onSelect: () => void convertLayerToScene3D(document.id, activeLayerForConvert.id) }] : []), ...(canHarmonize ? [{ label: text(language, "Rotate 3D Object", "Повернуть 3D объект"), onSelect: () => setScene3DOrbitLayer(document.id, activeLayerForConvert.id) }, { label: text(language, "Harmonize with Scene", "Гармонизировать со сценой"), onSelect: () => void harmonizeLayer(document.id, activeLayerForConvert.id) }] : [])]); return; } event.preventDefault(); if (!brushLike) return; const rect = workspaceRef.current?.getBoundingClientRect(); if (rect) setBrushPopup({ left: Math.min(event.clientX - rect.left, rect.width - 300), top: Math.min(event.clientY - rect.top, rect.height - 430), detailed: false }); }} />
     <div className="raster-stage" style={stageStyle}>
       <canvas ref={canvasRef} className={brushLike ? "brush-cursor-canvas" : ""} width={state.width} height={state.height} />
       {/* Whatever the active catalogue tool draws over the canvas. */}
@@ -566,14 +578,14 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     {catalogueTool?.ScreenOverlay && <catalogueTool.ScreenOverlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>} context={toolContextFor(catalogueTool.id, canvasRef.current)}/>}
     {brushCursorOverlay}
     {/*
-      Scene3DRotationGizmo: on-canvas rotation handles for a persistent 3D
-      layer (docs/master-plan.md §8.9's own TODO — "ручки вращения модели...
-      прямо на слое, не только в панели Свойства"), positioned under and
-      beside the Move tool's own transform frame ("под основными
-      манипуляторами" — the owner's own phrasing), so it only appears
-      alongside that frame rather than on every tool.
+      Scene3DOrbitGizmo: Blender-style rotation manipulators for a 3D layer
+      (docs/master-plan.md §8.9's own TODO — "ручки вращения модели...
+      прямо на слое, не только в панели Свойства") — entered explicitly via
+      "Rotate 3D Object" on the layer's own context menu, not shown by
+      default (the owner tried the earlier always-on linear-slider version
+      live and asked for it to come off).
     */}
-    {activeToolId === "raster.move" && activeLayer3D && <Scene3DRotationGizmo documentId={document.id} document={state} layer={activeLayer3D} zoom={viewport.zoom} documentOriginX={documentOriginX} documentOriginY={documentOriginY}/>}
+    {activeToolId === "raster.move" && activeLayer3D && orbitGizmoLayerId === activeLayer3D.id && <Scene3DOrbitGizmo documentId={document.id} document={state} layer={activeLayer3D} zoom={viewport.zoom} documentOriginX={documentOriginX} documentOriginY={documentOriginY} onClose={() => setScene3DOrbitLayer(document.id, null)}/>}
     {preferences.showGuides && guideOverlay}
     {preferences.showRulers && rulers}
     {brushPopup && brushLike && activeToolId && <RasterBrushTipPopup activeToolId={activeToolId} brushOptions={brushOptions} position={brushPopup} detailed={brushPopup.detailed} onToggleDetailed={() => setBrushPopup({ ...brushPopup, detailed: !brushPopup.detailed })} onClose={() => setBrushPopup(null)} setToolOption={setToolOption}/>}

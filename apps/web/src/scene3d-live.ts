@@ -21,6 +21,18 @@ import { buildGeometrySource } from "./scene3d-render";
  * document compositing, nothing baked until the gesture actually ends.
  */
 export interface LiveScene3DSession {
+  readonly scene: THREE.Scene;
+  readonly camera: THREE.PerspectiveCamera;
+  readonly renderer: THREE.WebGLRenderer;
+  /** The object a gizmo attaches to and a caller reads the live rotation back off — everything
+   * else in the scene (lights, a future ground plane) hangs off `scene` directly, not this. */
+  readonly rig: THREE.Group;
+  /** Re-centers on the rig's current (possibly just-rotated) bounds and renders one frame —
+   * the same pair `renderScene3DLayerPixels` (the commit path this session's own last frame
+   * has to visually match) does on every bake, so a live session never drifts out of step with
+   * where the committed result ends up. Cheap enough to call every frame of an active gizmo drag:
+   * no geometry rebuild, no `readPixels`, just a bounding-box recompute and one GPU draw call. */
+  render(): void;
   setRotation(rotationX: number, rotationY: number, rotationZ: number): void;
   dispose(): void;
 }
@@ -33,34 +45,33 @@ export async function beginLiveScene3D(canvas: HTMLCanvasElement, data: Scene3DL
   scene3d.scene.add(rig);
   applyLighting(scene3d, data.lighting, 500);
   let disposed = false;
-  const setRotation = (rotationX: number, rotationY: number, rotationZ: number) => {
+  const render = () => {
     if (disposed) return;
-    rig.rotation.set(rotationX * Math.PI / 180, rotationY * Math.PI / 180, rotationZ * Math.PI / 180);
-    // Re-centering every frame is deliberate, not an oversight: an
-    // asymmetric mesh's screen-space bounding box shifts as it turns, and
-    // `renderScene3DLayerPixels` (the commit path this session's own final
-    // frame has to visually match) re-centers on every render too — a
-    // session that centered once, at the start, would drift out of step
-    // with where the committed bake ends up the moment rotation changes.
     centerAndFit(rig, scene3d.camera);
     scene3d.renderer.render(scene3d.scene, scene3d.camera);
   };
+  const setRotation = (rotationX: number, rotationY: number, rotationZ: number) => {
+    if (disposed) return;
+    rig.rotation.set(rotationX * Math.PI / 180, rotationY * Math.PI / 180, rotationZ * Math.PI / 180);
+    render();
+  };
   setRotation(data.rotationX, data.rotationY, data.rotationZ);
   return {
-    setRotation,
+    scene: scene3d.scene, camera: scene3d.camera, renderer: scene3d.renderer, rig,
+    render, setRotation,
     dispose: () => { disposed = true; scene3d.dispose(); },
   };
 }
 
 /**
- * The on-canvas rotation sliders' own arithmetic — schematically the owner's
- * own drawing, "-------o------": a bounded track whose knob position is an
- * *absolute* reading of the current angle, the same [-180°, 180°] range the
- * Properties panel's own rotation sliders already use, just relocated onto
- * the layer itself. Kept pure and separate from the React component wiring
- * them up (this codebase's own convention — the tool state-machine math in
- * `move.tsx` is pure functions, the JSX around it is thin) so the mapping is
- * unit-testable without a DOM.
+ * A bounded track's arithmetic — a linear ["-------o------"](the owner's own drawing) whose knob
+ * position is an *absolute* reading of a value across [-180°, 180°], the same range the Properties
+ * panel's own rotation sliders use. No longer used for the 3D object's own rotation (replaced by
+ * the Blender-style orbit gizmo, `Scene3DOrbitGizmo.tsx` — the owner tried the linear-slider
+ * version live and asked for it to come off), but the same bounded-track control is reused for the
+ * ground plane's tilt. Kept pure and separate from whichever component wires it up (this
+ * codebase's own convention — the tool state-machine math in `move.tsx` is pure functions, the
+ * JSX around it is thin) so the mapping is unit-testable without a DOM.
  */
 export function rotationFromTrackOffset(offset: number, trackLength: number): number {
   if (trackLength <= 0) return 0;

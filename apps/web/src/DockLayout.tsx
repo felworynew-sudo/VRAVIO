@@ -469,6 +469,8 @@ function LayersPanel() {
   const setSelectedLayers = useShellStore((state) => state.setSelectedLayers);
   const editingMaskLayerId = useShellStore((state) => activeDocumentId ? state.editingMaskLayerIdByDocument[activeDocumentId] ?? null : null);
   const setEditingMask = useShellStore((state) => state.setEditingMask);
+  const setScene3DOrbitLayer = useShellStore((state) => state.setScene3DOrbitLayer);
+  const setTool = useShellStore((state) => state.setTool);
   useEffect(() => {
     const open = () => { const current = activeDocumentId ? kernel.documents.get<RasterDocumentState>(activeDocumentId) : null; if (current && isRasterDocumentState(current.state)) setStyleLayerId(current.state.activeLayerId); };
     window.addEventListener("vravio-layer-style-open", open); return () => window.removeEventListener("vravio-layer-style-open", open);
@@ -593,6 +595,12 @@ function LayersPanel() {
         // model right now), matching its Lab statistics to the composited
         // scene around it — the same "Harmonize" the master-plan names,
         // powered by a technique that needs no trained weights.
+        // "Rotate 3D Object" opens the same Blender-style gizmo the canvas
+        // menu does (RasterWorkspace.tsx) — it only renders while the Move
+        // tool is active (it sits under that tool's own transform frame),
+        // so choosing it from here has to switch tools too, or the click
+        // would silently do nothing.
+        ...(layer.kind === "3d" ? [{ label: text(language, "Rotate 3D Object", "Повернуть 3D объект"), onSelect: () => { setTool(active.id, "raster.move"); setScene3DOrbitLayer(active.id, layer.id); } }] : []),
         ...(layer.kind === "3d" ? [{ label: text(language, "Harmonize with Scene", "Гармонизировать со сценой"), onSelect: () => void harmonizeLayer(active.id, layer.id) }] : []),
         item("layer.mergeDown"),
         item("layer.mergeVisible"),
