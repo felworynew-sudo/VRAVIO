@@ -119,6 +119,15 @@ export interface AudioSelection {
   readonly clipIds: readonly string[];
 }
 
+/** A named point on the timeline — Ardour/Audacity's own "marker", used for song sections,
+ * edit-drop points and punch references alike. `sampleTime` in the document's own sample rate,
+ * same unit every other timeline position in this file uses. */
+export interface AudioMarker {
+  readonly id: string;
+  name: string;
+  sampleTime: number;
+}
+
 export interface AudioDocumentState {
   kind: "audio";
   schemaVersion: 1;
@@ -132,6 +141,17 @@ export interface AudioDocumentState {
   loopStart: number;
   loopEnd: number;
   loopEnabled: boolean;
+  /**
+   * One project-wide tempo and time signature — not yet Ardour's own tempo *map* (a sorted list
+   * of tempo/meter change points with ramped or constant segments between them, `docs/master-
+   * plan.md` §33.2's own next slice for this). A single value is what Audacity's transport and
+   * GarageBand's project settings both actually are — an honest scope match for what this
+   * engine's bar ruler/grid-snap need today, not a silent stand-in for the harder version.
+   */
+  bpm: number;
+  timeSigNumerator: number;
+  timeSigDenominator: number;
+  markers: AudioMarker[];
 }
 
 export interface AudioDocumentOptions {

@@ -1,4 +1,4 @@
-import type { AudioClip, AudioDocumentOptions, AudioDocumentState, AudioTrack, FadeType } from "./types";
+import type { AudioClip, AudioDocumentOptions, AudioDocumentState, AudioMarker, AudioTrack, FadeType } from "./types";
 
 export function createAudioTrack(name = "Track 1 (Дорожка 1)"): AudioTrack {
   return { id: crypto.randomUUID(), name, volume: 1, pan: 0, muted: false, soloed: false, locked: false, clips: [], effects: [], volumeAutomation: [], effectAutomation: {} };
@@ -41,7 +41,12 @@ export function createAudioDocument(options: AudioDocumentOptions = {}): AudioDo
     sampleRate: options.sampleRate ?? 48000, channels: options.channels ?? 2, bitDepth: options.bitDepth ?? 24,
     tracks: [track], activeTrackId: track.id, selection: null,
     masterVolume: 1, loopStart: 0, loopEnd: 0, loopEnabled: false,
+    bpm: 120, timeSigNumerator: 4, timeSigDenominator: 4, markers: [],
   };
+}
+
+export function createAudioMarker(name: string, sampleTime: number): AudioMarker {
+  return { id: crypto.randomUUID(), name, sampleTime: Math.max(0, Math.floor(sampleTime)) };
 }
 
 export function isAudioDocumentState(value: unknown): value is AudioDocumentState {
@@ -56,6 +61,10 @@ export function isAudioDocumentState(value: unknown): value is AudioDocumentStat
  * persisted before a track carried its own effect stack restores with one added, rather than
  * failing `isAudioDocumentState` (and thus refusing to open) the moment a field is missing. */
 export function migrateAudioDocumentState(state: AudioDocumentState): AudioDocumentState {
+  if (typeof state.bpm !== "number" || state.bpm <= 0) state.bpm = 120;
+  if (typeof state.timeSigNumerator !== "number" || state.timeSigNumerator < 1) state.timeSigNumerator = 4;
+  if (typeof state.timeSigDenominator !== "number" || state.timeSigDenominator < 1) state.timeSigDenominator = 4;
+  if (!Array.isArray(state.markers)) state.markers = [];
   for (const track of state.tracks) {
     if (!Array.isArray(track.effects)) track.effects = [];
     if (!Array.isArray(track.volumeAutomation)) track.volumeAutomation = [];
@@ -87,6 +96,7 @@ export function cloneAudioState(state: AudioDocumentState): AudioDocumentState {
       effectAutomation: Object.fromEntries(Object.entries(track.effectAutomation).map(([key, points]) => [key, points.map((point) => ({ ...point }))])),
     })),
     selection: state.selection ? { trackId: state.selection.trackId, clipIds: [...state.selection.clipIds] } : null,
+    markers: state.markers.map((marker) => ({ ...marker })),
   };
 }
 

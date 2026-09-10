@@ -10,3 +10,4 @@ export * from "./automation";
 export * from "./takes";
 export * from "./wav";
 export * from "./environment";
+export * from "./tempo";

@@ -1,7 +1,7 @@
 import {
   addTake, applyLeftTrim, applyRightTrim, audioEffectCatalog, audioEffectDefaults, canPunchIn, canSplitAt, cloneAudioState,
-  constrainBoundaryTrim, constrainClipDrag, createAudioClip, createAudioTrack, cycleTake, decodeWav, encodeWav, punchInClip,
-  removeAutomationPoint, rippleShift, setAutomationPoint, splitClip, type AudioDocumentState, type AudioEffectId, type FadeType,
+  constrainBoundaryTrim, constrainClipDrag, createAudioClip, createAudioMarker, createAudioTrack, cycleTake, decodeWav, encodeWav,
+  punchInClip, removeAutomationPoint, rippleShift, setAutomationPoint, splitClip, type AudioDocumentState, type AudioEffectId, type FadeType,
 } from "@vravio/env-audio";
 import type { AssetId } from "@vravio/kernel";
 import { kernel } from "./kernel";
@@ -241,6 +241,61 @@ export function setLoopRegion(documentId: string, startSample: number, endSample
 
 export function commitLoopRegion(documentId: string, before: AudioDocumentState): void {
   commitAudioDrag(documentId, "Set Loop Region (Задать границы цикла)", before);
+}
+
+export function setTempo(documentId: string, bpm: number): void {
+  void changeAudioDocument(documentId, "Set Tempo (Задать темп)", (state) => {
+    const clamped = Math.max(1, Math.min(999, bpm));
+    if (state.bpm === clamped) return false;
+    state.bpm = clamped;
+    return true;
+  });
+}
+
+export function setTimeSignature(documentId: string, numerator: number, denominator: number): void {
+  void changeAudioDocument(documentId, "Set Time Signature (Задать размер такта)", (state) => {
+    const num = Math.max(1, Math.min(32, Math.floor(numerator))), den = Math.max(1, Math.min(32, Math.floor(denominator)));
+    if (state.timeSigNumerator === num && state.timeSigDenominator === den) return false;
+    state.timeSigNumerator = num; state.timeSigDenominator = den;
+    return true;
+  });
+}
+
+export function addMarker(documentId: string, sampleTime: number, name?: string): void {
+  void changeAudioDocument(documentId, "Add Marker (Добавить маркер)", (state) => {
+    const marker = createAudioMarker(name ?? `Marker ${state.markers.length + 1} (Маркер ${state.markers.length + 1})`, sampleTime);
+    state.markers.push(marker);
+    state.markers.sort((a, b) => a.sampleTime - b.sampleTime);
+    return true;
+  });
+}
+
+export function renameMarker(documentId: string, markerId: string, name: string): void {
+  void changeAudioDocument(documentId, "Rename Marker (Переименовать маркер)", (state) => {
+    const marker = state.markers.find((item) => item.id === markerId);
+    if (!marker || marker.name === name) return false;
+    marker.name = name;
+    return true;
+  });
+}
+
+export function removeMarker(documentId: string, markerId: string): void {
+  void changeAudioDocument(documentId, "Delete Marker (Удалить маркер)", (state) => {
+    const before = state.markers.length;
+    state.markers = state.markers.filter((item) => item.id !== markerId);
+    return state.markers.length !== before;
+  });
+}
+
+export function moveMarker(documentId: string, markerId: string, sampleTime: number): void {
+  const document = kernel.documents.get<AudioDocumentState>(documentId);
+  if (!document) return;
+  const marker = document.state.markers.find((item) => item.id === markerId);
+  if (!marker) return;
+  kernel.documents.update<AudioDocumentState>(documentId, (current) => {
+    const found = current.markers.find((item) => item.id === markerId);
+    if (found) found.sampleTime = Math.max(0, Math.round(sampleTime));
+  });
 }
 
 export function setSelection(documentId: string, trackId: string | null, clipIds: readonly string[]): void {

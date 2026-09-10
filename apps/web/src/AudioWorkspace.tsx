@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { VravioDocument } from "@vravio/kernel";
 import {
-  audioEffectCatalog, audioEffectDefaults, cloneAudioState, computeSpectrogram, decodeWav, generateMonoPeaks, heatMapColor,
-  isAudioDocumentState, mixdownAudioDocument, readPeak, removeAutomationPoint, setAutomationPoint, timelineDurationSamples, volumeAt,
-  type AudioClip, type AudioDocumentState, type AudioEffectId, type AudioTrack, type DecodedWav,
+  audioEffectCatalog, audioEffectDefaults, cloneAudioState, computeSpectrogram, decodeWav, formatBarBeat, generateMonoPeaks,
+  heatMapColor, isAudioDocumentState, mixdownAudioDocument, nearestBarSample, nearestBeatSample, readPeak, removeAutomationPoint,
+  sampleToBarBeat, samplesPerBar, setAutomationPoint, timelineDurationSamples, volumeAt,
+  type AudioClip, type AudioDocumentState, type AudioEffectId, type AudioMarker, type AudioTrack, type DecodedWav,
 } from "@vravio/env-audio";
 import type { AssetId } from "@vravio/kernel";
 import { kernel } from "./kernel";
@@ -12,11 +13,12 @@ import { text } from "./i18n";
 import { AudioPlaybackEngine } from "./audioPlayback";
 import { AUTOMATABLE_EFFECT_PARAMS } from "./audioEffects";
 import {
-  addAudioTrack, addClipFromAsset, addTrackEffect, applyEffectToClip, changeAudioDocument, clearEffectParamAutomation,
-  clearTrackVolumeAutomation, commitAudioDrag, commitLoopRegion, cycleClipTake, deleteSelectedClips, previewMoveClip, previewTrimClip,
-  punchInRecording, removeAudioTrack, removeEffectParamAutomationPoint, removeTrackEffect, removeTrackVolumeAutomationPoint,
-  setClipFade, setEffectParamAutomationPoint, setClipGain, setLoopEnabled, setLoopRegion, setSelection, setTrackEffectEnabled,
-  setTrackEffectParam, setTrackMuted, setTrackPan, setTrackSoloed, setTrackVolume, setTrackVolumeAutomationPoint, splitClipAt,
+  addAudioTrack, addClipFromAsset, addMarker, addTrackEffect, applyEffectToClip, changeAudioDocument, clearEffectParamAutomation,
+  clearTrackVolumeAutomation, commitAudioDrag, commitLoopRegion, cycleClipTake, deleteSelectedClips, moveMarker, previewMoveClip,
+  previewTrimClip, punchInRecording, removeAudioTrack, removeEffectParamAutomationPoint, removeMarker, removeTrackEffect,
+  removeTrackVolumeAutomationPoint, renameMarker, setClipFade, setEffectParamAutomationPoint, setClipGain, setLoopEnabled, setLoopRegion,
+  setSelection, setTempo, setTimeSignature, setTrackEffectEnabled, setTrackEffectParam, setTrackMuted, setTrackPan, setTrackSoloed,
+  setTrackVolume, setTrackVolumeAutomationPoint, splitClipAt,
 } from "./audio-commands";
 import { decodeAudioFileToWav, startMicrophoneRecording, type AudioRecorder } from "./audioImport";
 import { usePluginRuns } from "./plugins/usePluginRuns";
@@ -177,6 +179,9 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
   const [newTrackEffectId, setNewTrackEffectId] = useState<AudioEffectId>("eq");
   const [rippleMode, setRippleMode] = useState(false);
   const [viewMode, setViewMode] = useState<"waveform" | "spectrogram">("waveform");
+  const [showBars, setShowBars] = useState(false);
+  const [snapToGrid, setSnapToGrid] = useState(false);
+  const markerDragRef = useRef<{ markerId: string; before: AudioDocumentState } | null>(null);
   const [automationMode, setAutomationMode] = useState(false);
   const dragPointRef = useRef<AutomationDragState | null>(null);
   const loopDragRef = useRef<{ mode: "create" | "left" | "right"; anchorSample: number; before: AudioDocumentState } | null>(null);
@@ -193,6 +198,7 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
   const sampleRate = state.sampleRate;
   const durationSamples = Math.max(sampleRate * 5, timelineDurationSamples(state));
   const pxPerSample = pixelsPerSecond / sampleRate;
+  const barSamples = samplesPerBar(state);
 
   const stopPlayback = useCallback(() => {
     engineRef.current?.stop();
@@ -277,10 +283,14 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
     const drag = dragRef.current;
     if (!drag) return;
     dragRef.current = null;
-    if (drag.appliedSamples !== 0) {
-      const label = drag.kind === "move" ? "Move Clip (Переместить клип)" : "Trim Clip (Обрезать клип)";
-      commitAudioDrag(document.id, label, drag.before);
+    if (drag.appliedSamples === 0) return;
+    if (snapToGrid && drag.kind === "move") {
+      const current = kernel.documents.get<AudioDocumentState>(document.id)?.state;
+      const clip = current?.tracks.find((item) => item.id === drag.trackId)?.clips.find((item) => item.id === drag.clipId);
+      if (clip) previewMoveClip(document.id, drag.trackId, drag.clipId, nearestBeatSample(current!, clip.startSample) - clip.startSample);
     }
+    const label = drag.kind === "move" ? "Move Clip (Переместить клип)" : "Trim Clip (Обрезать клип)";
+    commitAudioDrag(document.id, label, drag.before);
   };
 
   const beginAutomationDrag = (event: React.PointerEvent, track: AudioTrack, pointId: string, laneRect: DOMRect) => {
@@ -430,7 +440,20 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
         <button className={recorder ? "media-icon-button active" : "media-icon-button"} onClick={() => void toggleRecording()} title={text(language, "Record from microphone", "Запись с микрофона")} aria-label={text(language, "Record from microphone", "Запись с микрофона")}>●</button>
         <button className={state.loopEnabled ? "media-icon-button active" : "media-icon-button"} onClick={() => setLoopEnabled(document.id, !state.loopEnabled)} title={text(language, "Loop: drag the lane under the ruler to set the range", "Цикл: перетащите дорожку под линейкой, чтобы задать границы")} aria-label={text(language, "Loop", "Цикл")}>⟲</button>
       </div>
-      <span className="audio-time">{formatTime(playheadSample / sampleRate)} / {formatTime(durationSamples / sampleRate)}</span>
+      <span className="audio-time">{showBars ? formatBarBeat(sampleToBarBeat(state, playheadSample)) : formatTime(playheadSample / sampleRate)} / {formatTime(durationSamples / sampleRate)}</span>
+      <div className="media-control-group audio-tempo-group" aria-label={text(language, "Tempo and time signature", "Темп и размер такта")}>
+        <label className="audio-tempo-field" title={text(language, "Tempo (BPM)", "Темп (уд/мин)")}>
+          <input type="number" min={1} max={999} value={state.bpm} onChange={(event) => setTempo(document.id, event.target.valueAsNumber)} />
+          <span>{text(language, "BPM", "уд/мин")}</span>
+        </label>
+        <label className="audio-tempo-field" title={text(language, "Time signature", "Размер такта")}>
+          <input type="number" min={1} max={32} value={state.timeSigNumerator} onChange={(event) => setTimeSignature(document.id, event.target.valueAsNumber, state.timeSigDenominator)} />
+          <span>/</span>
+          <input type="number" min={1} max={32} value={state.timeSigDenominator} onChange={(event) => setTimeSignature(document.id, state.timeSigNumerator, event.target.valueAsNumber)} />
+        </label>
+        <button className={showBars ? "active" : ""} onClick={() => setShowBars((value) => !value)} title={text(language, "Show ruler in bars and beats", "Показать линейку в тактах")}>{text(language, "Bars", "Такты")}</button>
+        <button className={snapToGrid ? "active" : ""} onClick={() => setSnapToGrid((value) => !value)} title={text(language, "Snap clip edits to the beat grid", "Привязывать перемещение клипов к сетке долей")}>{text(language, "Snap", "Привязка")}</button>
+      </div>
       {state.selection && <button data-role="trash" onClick={() => deleteSelectedClips(document.id, rippleMode)}>{text(language, "Delete Clip", "Удалить клип")}</button>}
     </div>
     <div className="media-edit-toolbar" aria-label={text(language, "Timeline tools", "Инструменты таймлайна")}>
@@ -554,8 +577,21 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
 
       <div className="audio-timeline-scroll">
         <div className="audio-ruler" style={{ width: timelineWidthPx }} onClick={onRulerClick}>
-          {Array.from({ length: Math.ceil(timelineWidthPx / pixelsPerSecond) + 1 }, (_, second) => <span key={second} className="audio-ruler-tick" style={{ left: second * pixelsPerSecond }}>{formatTime(second)}</span>)}
+          {showBars
+            ? Array.from({ length: Math.ceil(durationSamples / barSamples) + 1 }, (_, bar) => <span key={bar} className="audio-ruler-tick" style={{ left: bar * barSamples * pxPerSample }}>{bar + 1}</span>)
+            : Array.from({ length: Math.ceil(timelineWidthPx / pixelsPerSecond) + 1 }, (_, second) => <span key={second} className="audio-ruler-tick" style={{ left: second * pixelsPerSecond }}>{formatTime(second)}</span>)}
           <div className="audio-playhead" style={{ left: playheadSample * pxPerSample }} />
+        </div>
+        <div className="audio-marker-lane" style={{ width: timelineWidthPx }} onDoubleClick={(event) => { const rect = event.currentTarget.getBoundingClientRect(); addMarker(document.id, Math.max(0, Math.round((event.clientX - rect.left) / pxPerSample))); }} title={text(language, "Double-click to add a marker", "Двойной клик — добавить маркер")}>
+          {state.markers.map((marker) => <div key={marker.id} className="audio-marker-flag" style={{ left: marker.sampleTime * pxPerSample }}
+            onPointerDown={(event) => { event.stopPropagation(); markerDragRef.current = { markerId: marker.id, before: cloneAudioState(state) }; event.currentTarget.setPointerCapture(event.pointerId); }}
+            onPointerMove={(event) => { const drag = markerDragRef.current; if (!drag || drag.markerId !== marker.id) return; const rect = event.currentTarget.parentElement!.getBoundingClientRect(); moveMarker(document.id, marker.id, (event.clientX - rect.left) / pxPerSample); }}
+            onPointerUp={() => { const drag = markerDragRef.current; if (!drag) return; markerDragRef.current = null; commitAudioDrag(document.id, "Move Marker (Переместить маркер)", drag.before); }}
+            onDoubleClick={(event) => { event.stopPropagation(); const next = window.prompt(text(language, "Marker name", "Имя маркера"), marker.name); if (next !== null && next.trim()) renameMarker(document.id, marker.id, next.trim()); }}
+            title={`${marker.name} — ${formatTime(marker.sampleTime / sampleRate)}`}>
+            <span>{marker.name}</span>
+            <button className="audio-marker-delete" onClick={(event) => { event.stopPropagation(); removeMarker(document.id, marker.id); }} title={text(language, "Delete marker", "Удалить маркер")}>×</button>
+          </div>)}
         </div>
         <div className={`audio-loop-lane${state.loopEnabled ? " active" : ""}`} style={{ width: timelineWidthPx }}
           onPointerDown={(event) => beginLoopDrag(event, "create")} onPointerMove={onLoopDragMove} onPointerUp={onLoopDragEnd}
