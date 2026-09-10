@@ -1,4 +1,4 @@
-import type { VideoClip, VideoDocumentOptions, VideoDocumentState, VideoMarker, VideoTrack } from "./types";
+import type { VideoBinItem, VideoClip, VideoDocumentOptions, VideoDocumentState, VideoMarker, VideoTrack } from "./types";
 
 export function createVideoTrack(kind: "video" | "audio", name?: string): VideoTrack {
   return {
@@ -40,12 +40,25 @@ export function createVideoDocument(options: VideoDocumentOptions = {}): VideoDo
   return {
     kind: "video", schemaVersion: 1,
     frameRate: options.frameRate ?? 30, width: options.width ?? 1920, height: options.height ?? 1080,
-    tracks: [track], activeTrackId: track.id, selection: null, markers: [],
+    tracks: [track], activeTrackId: track.id, selection: null, markers: [], bin: [],
   };
 }
 
 export function createVideoMarker(name: string, frameAt: number): VideoMarker {
   return { id: crypto.randomUUID(), name, frameAt: Math.max(0, Math.floor(frameAt)) };
+}
+
+export interface CreateVideoBinItemOptions {
+  readonly sourceWidth?: number;
+  readonly sourceHeight?: number;
+}
+
+export function createVideoBinItem(assetId: string, name: string, kind: "video" | "audio", sourceDurationFrames: number, sourceFrameRate: number, options: CreateVideoBinItemOptions = {}): VideoBinItem {
+  return {
+    id: crypto.randomUUID(), name, assetId, kind,
+    sourceDurationFrames: Math.max(0, Math.floor(sourceDurationFrames)), sourceFrameRate,
+    sourceWidth: Math.max(0, Math.floor(options.sourceWidth ?? 0)), sourceHeight: Math.max(0, Math.floor(options.sourceHeight ?? 0)),
+  };
 }
 
 export function isVideoDocumentState(value: unknown): value is VideoDocumentState {
@@ -61,6 +74,7 @@ export function isVideoDocumentState(value: unknown): value is VideoDocumentStat
  * `isVideoDocumentState` (and thus refusing to open) the moment a field is missing. */
 export function migrateVideoDocumentState(state: VideoDocumentState): VideoDocumentState {
   if (!Array.isArray(state.markers)) state.markers = [];
+  if (!Array.isArray(state.bin)) state.bin = [];
   for (const track of state.tracks) {
     if (typeof track.hidden !== "boolean") track.hidden = false;
     if (typeof track.volume !== "number") track.volume = 1;
@@ -92,6 +106,7 @@ export function cloneVideoState(state: VideoDocumentState): VideoDocumentState {
     tracks: state.tracks.map((track) => ({ ...track, clips: track.clips.map((clip) => ({ ...clip })) })),
     selection: state.selection ? { trackId: state.selection.trackId, clipIds: [...state.selection.clipIds] } : null,
     markers: state.markers.map((marker) => ({ ...marker })),
+    bin: state.bin.map((item) => ({ ...item })),
   };
 }
 

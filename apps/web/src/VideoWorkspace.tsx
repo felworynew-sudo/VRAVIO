@@ -7,12 +7,12 @@ import { kernel } from "./kernel";
 import { useShellStore } from "./store";
 import { text } from "./i18n";
 import {
-  addClipFromAsset, addVideoMarker, addVideoTrack, changeVideoDocument, commitVideoDrag, deleteSelectedClips, moveVideoMarker,
-  previewMoveClip, previewTrimClip, removeVideoMarker, removeVideoTrack, renameVideoMarker, setClipCrop, setClipTransform, setSelection,
+  addVideoMarker, addVideoTrack, changeVideoDocument, commitVideoDrag, deleteSelectedClips, importToBin, insertBinItemToTimeline, moveVideoMarker,
+  previewMoveClip, previewTrimClip, removeBinItem, removeVideoMarker, removeVideoTrack, renameVideoMarker, setClipCrop, setClipTransform, setSelection,
   setTrackHidden, setTrackLocked, setTrackMuted, setTrackVolume, splitClipAt,
 } from "./video-commands";
 import { probeVideoMetadata } from "./videoImport";
-import { VideoCompositor } from "./videoCompositor";
+import { assetUrl, VideoCompositor } from "./videoCompositor";
 import { exportVideoDocument } from "./videoExport";
 
 const TRACK_HEIGHT = 56;
@@ -57,8 +57,13 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
   const [rippleMode, setRippleMode] = useState(false);
   const [snapMode, setSnapMode] = useState(true);
   const [exportProgress, setExportProgress] = useState<{ frame: number; durationFrames: number } | null>(null);
+  const [previewMode, setPreviewMode] = useState<"program" | "source">("program");
+  const [sourceBinItemId, setSourceBinItemId] = useState<string | null>(null);
+  const [sourceInFrame, setSourceInFrame] = useState(0);
+  const [sourceOutFrame, setSourceOutFrame] = useState(0);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const compositorRef = useRef<VideoCompositor | null>(null);
+  const sourceVideoRef = useRef<HTMLVideoElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const markerDragRef = useRef<{ markerId: string; before: VideoDocumentState } | null>(null);
@@ -197,6 +202,10 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
     }
   };
 
+  // Import lands in the Project bin, not straight on the timeline — the donor "import then
+  // place" split (docs/master-plan.md §33.3's Монтаж layout: a Project/Bin panel distinct from
+  // the timeline). Placing a bin item onto a track is `insertFromSource` below, via the Source
+  // monitor's own Insert button, same as double-clicking a bin row to load it there first does.
   const importFiles = async (files: FileList | null) => {
     if (!files?.length) return;
     for (const file of Array.from(files)) {
@@ -204,10 +213,31 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
       const meta = isAudio ? null : await probeVideoMetadata(file, frameRate);
       if (!isAudio && !meta) continue; // browser could not decode this file's metadata at all
       const assetId = await kernel.assets.importAsset(file, { kind: isAudio ? "audio" : "video", mime: file.type || "video/mp4", name: file.name, ...(meta ? { meta: meta as unknown as Record<string, unknown> } : {}) });
-      const durationFramesForClip = meta?.durationFrames ?? Math.round(frameRate * 5); // audio track: real duration deferred, see below
-      const at = Math.round(timelineDurationFrames(kernel.documents.get<VideoDocumentState>(document.id)!.state));
-      await addClipFromAsset(document.id, assetId, file.name, durationFramesForClip, meta?.frameRate ?? frameRate, isAudio ? "audio" : "video", undefined, at, meta?.width ?? 0, meta?.height ?? 0);
+      const durationFramesForClip = meta?.durationFrames ?? Math.round(frameRate * 5); // audio: real duration deferred, see below
+      importToBin(document.id, assetId, file.name, isAudio ? "audio" : "video", durationFramesForClip, meta?.frameRate ?? frameRate, meta?.width ?? 0, meta?.height ?? 0);
     }
+  };
+
+  // Loads a bin item into the Source monitor, marked in/out defaulting to the item's full length
+  // — the same "double-click a bin row" entry point every donor NLE uses.
+  const loadIntoSource = (binItemId: string) => {
+    const item = state.bin.find((entry) => entry.id === binItemId);
+    if (!item) return;
+    setSourceBinItemId(binItemId);
+    setSourceInFrame(0);
+    setSourceOutFrame(item.sourceDurationFrames);
+    setPreviewMode("source");
+    void assetUrl(item.assetId).then((url) => { if (sourceVideoRef.current) sourceVideoRef.current.src = url; });
+  };
+
+  const sourceBinItem = sourceBinItemId ? state.bin.find((entry) => entry.id === sourceBinItemId) : undefined;
+
+  const markSourceIn = () => { const video = sourceVideoRef.current; if (!video || !sourceBinItem) return; setSourceInFrame(Math.min(sourceOutFrame - 1, Math.round(video.currentTime * sourceBinItem.sourceFrameRate))); };
+  const markSourceOut = () => { const video = sourceVideoRef.current; if (!video || !sourceBinItem) return; setSourceOutFrame(Math.max(sourceInFrame + 1, Math.round(video.currentTime * sourceBinItem.sourceFrameRate))); };
+
+  const insertFromSource = () => {
+    if (!sourceBinItem) return;
+    insertBinItemToTimeline(document.id, sourceBinItem.id, state.selection?.trackId, playheadFrame, sourceInFrame, sourceOutFrame);
   };
 
   const exportVideo = async () => {
@@ -298,9 +328,42 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
     </div>}
 
     <div className="video-body">
-      <div className="video-preview"><header><strong>{text(language, "Program", "Программа")}</strong><span>{formatTime(playheadFrame / frameRate)} · {state.width}×{state.height}</span></header><canvas ref={canvasRef} width={state.width} height={state.height} /></div>
+      <div className="video-preview">
+        <header>
+          <span className="video-preview-tabs">
+            <button className={previewMode === "program" ? "active" : ""} onClick={() => setPreviewMode("program")}>{text(language, "Program", "Программа")}</button>
+            {sourceBinItem && <button className={previewMode === "source" ? "active" : ""} onClick={() => setPreviewMode("source")}>{text(language, "Source", "Исходник")}</button>}
+          </span>
+          <span>{previewMode === "program" ? `${formatTime(playheadFrame / frameRate)} · ${state.width}×${state.height}` : sourceBinItem ? `${formatTime(sourceInFrame / sourceBinItem.sourceFrameRate)} – ${formatTime(sourceOutFrame / sourceBinItem.sourceFrameRate)}` : ""}</span>
+        </header>
+        {/* Both stay mounted, toggled by `hidden`, rather than an either/or conditional render —
+            unmounting the canvas would drop the DOM node `attachCanvas`'s one-time mount effect
+            (below) attached the compositor to, leaving it painting into a detached element the
+            next time this mode was picked again. Found live: the Program monitor stayed solid
+            black after a round trip through Source, even though frame/time math kept advancing
+            correctly — the compositor was still running, just against a canvas nothing showed. */}
+        <canvas ref={canvasRef} width={state.width} height={state.height} hidden={previewMode !== "program"} />
+        <video ref={sourceVideoRef} hidden={previewMode !== "source"} />
+        {previewMode === "source" && sourceBinItem && <div className="video-source-transport">
+          <button className="media-icon-button" onClick={() => sourceVideoRef.current?.play()} title={text(language, "Play", "Играть")}>▶</button>
+          <button className="media-icon-button" onClick={() => sourceVideoRef.current?.pause()} title={text(language, "Pause", "Пауза")}>Ⅱ</button>
+          <button onClick={markSourceIn} title={text(language, "Mark In (I)", "Отметить начало (I)")}>{text(language, "In", "Начало")}</button>
+          <button onClick={markSourceOut} title={text(language, "Mark Out (O)", "Отметить конец (O)")}>{text(language, "Out", "Конец")}</button>
+          <button data-role="primary" onClick={insertFromSource} title={text(language, "Insert the marked range at the playhead on the selected track", "Вставить отмеченный диапазон в плейхед на выбранной дорожке")}>{text(language, "Insert", "Вставить")}</button>
+        </div>}
+      </div>
 
       <div className="video-track-headers">
+        <div className="video-bin" aria-label={text(language, "Project bin", "Корзина проекта")}>
+          <strong>{text(language, "Bin", "Корзина")}</strong>
+          {state.bin.length === 0
+            ? <span className="video-bin-empty">{text(language, "Import media to add it here", "Импортируйте материалы, чтобы они появились здесь")}</span>
+            : state.bin.map((item) => <div key={item.id} className={`video-bin-item${sourceBinItemId === item.id ? " active" : ""}`} onDoubleClick={() => loadIntoSource(item.id)} title={text(language, "Double-click to open in Source", "Двойной клик — открыть в мониторе исходника")}>
+                <span>{item.name}</span>
+                <small>{formatTime(item.sourceDurationFrames / item.sourceFrameRate)}</small>
+                <button onClick={(event) => { event.stopPropagation(); removeBinItem(document.id, item.id); if (sourceBinItemId === item.id) setSourceBinItemId(null); }} title={text(language, "Remove from bin", "Убрать из корзины")}>×</button>
+              </div>)}
+        </div>
         <div className="video-ruler-spacer" />
         {state.tracks.map((track) => <div key={track.id} className="video-track-header" data-track-kind={track.kind} style={{ height: TRACK_HEIGHT }}>
           <input className="video-track-name" value={track.name} onChange={(event) => void changeVideoDocument(document.id, "Rename Track (Переименовать дорожку)", (draft) => { const found = draft.tracks.find((item) => item.id === track.id); if (!found) return false; found.name = event.target.value; return true; })} />

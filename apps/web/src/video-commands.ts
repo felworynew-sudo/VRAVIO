@@ -1,6 +1,6 @@
 import {
   applyCropEdge, applyLeftTrim, applyRightTrim, canSplitAt, cloneVideoState, constrainBoundaryTrim, constrainClipDrag,
-  createVideoClip, createVideoMarker, createVideoTrack, rippleShift, splitClip, type VideoDocumentState,
+  createVideoBinItem, createVideoClip, createVideoMarker, createVideoTrack, rippleShift, splitClip, type VideoDocumentState,
 } from "@vravio/env-video";
 import type { AssetId } from "@vravio/kernel";
 import { kernel } from "./kernel";
@@ -203,6 +203,53 @@ export async function addClipFromAsset(documentId: string, assetId: string, name
     return true;
   });
   kernel.documents.addAssetRef(documentId, assetId as AssetId);
+}
+
+/**
+ * Adds an imported asset to the Project bin without placing it on the timeline — the "import"
+ * half of the donor import-then-place split (docs/master-plan.md §33.3's Монтаж layout: a
+ * Project/Bin panel distinct from the timeline). `addClipFromAsset` remains the timeline-side
+ * half, now called from `insertBinItemToTimeline` below instead of directly from file import.
+ */
+export function importToBin(documentId: string, assetId: string, name: string, kind: "video" | "audio", sourceDurationFrames: number, sourceFrameRate: number, sourceWidth = 0, sourceHeight = 0): void {
+  void changeVideoDocument(documentId, "Import to Bin (Импорт в корзину)", (state) => {
+    state.bin.push(createVideoBinItem(assetId, name, kind, sourceDurationFrames, sourceFrameRate, { sourceWidth, sourceHeight }));
+    return true;
+  });
+  kernel.documents.addAssetRef(documentId, assetId as AssetId);
+}
+
+export function removeBinItem(documentId: string, binItemId: string): void {
+  void changeVideoDocument(documentId, "Remove from Bin (Убрать из корзины)", (state) => {
+    const before = state.bin.length;
+    state.bin = state.bin.filter((item) => item.id !== binItemId);
+    return state.bin.length !== before;
+  });
+}
+
+/**
+ * Creates a timeline clip from a bin item's marked `[inFrame, outFrame)` range (the Source
+ * monitor's own in/out, in the *source's* own frame rate) at `atFrame` on `trackId` — the
+ * "insert" half of the bin's own workflow. Falls back to the item's own kind when placing onto a
+ * brand-new track (no `trackId` given).
+ */
+export function insertBinItemToTimeline(documentId: string, binItemId: string, trackId: string | undefined, atFrame: number, inFrame: number, outFrame: number): void {
+  const document = kernel.documents.get<VideoDocumentState>(documentId);
+  if (!document) return;
+  const item = document.state.bin.find((entry) => entry.id === binItemId);
+  if (!item) return;
+  const durationFrames = Math.max(1, Math.round(outFrame) - Math.round(inFrame));
+  void changeVideoDocument(documentId, "Insert Clip (Вставить клип)", (state) => {
+    const track = trackId ? state.tracks.find((entry) => entry.id === trackId) : createVideoTrack(item.kind, item.name);
+    if (!track) return false;
+    if (!trackId) state.tracks.push(track);
+    track.clips.push(createVideoClip(item.assetId, durationFrames, item.sourceDurationFrames, item.sourceFrameRate, {
+      name: item.name, startFrame: Math.max(0, Math.round(atFrame)), offsetFrames: Math.max(0, Math.round(inFrame)),
+      sourceWidth: item.sourceWidth, sourceHeight: item.sourceHeight,
+    }));
+    return true;
+  });
+  kernel.documents.addAssetRef(documentId, item.assetId as AssetId);
 }
 
 /** Position/scale/opacity — the OpenCut Classic checklist's `transform` item

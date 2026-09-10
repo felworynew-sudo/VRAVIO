@@ -92,6 +92,26 @@ export interface VideoMarker {
   frameAt: number;
 }
 
+/**
+ * An imported asset the project knows about but that isn't necessarily placed on the timeline
+ * yet — the donor "Project/Bin" panel's own row (docs/master-plan.md §33.3's Монтаж layout).
+ * Importing a file adds it here; it only becomes a `VideoClip` once dragged or inserted onto a
+ * track, the same import-then-place split every NLE donor makes and VRAVIO's own earlier
+ * "import lands straight on the timeline" shortcut didn't.
+ */
+export interface VideoBinItem {
+  readonly id: string;
+  name: string;
+  assetId: string;
+  kind: "video" | "audio";
+  /** The source's own full length and frame rate — what a `VideoClip` created from this item
+   * would inherit as `sourceDurationFrames`/`sourceFrameRate`, same units. */
+  sourceDurationFrames: number;
+  sourceFrameRate: number;
+  sourceWidth: number;
+  sourceHeight: number;
+}
+
 export interface VideoDocumentState {
   kind: "video";
   schemaVersion: 1;
@@ -103,6 +123,7 @@ export interface VideoDocumentState {
   activeTrackId: string;
   selection: VideoSelection | null;
   markers: VideoMarker[];
+  bin: VideoBinItem[];
 }
 
 export interface VideoDocumentOptions {
