@@ -8,7 +8,7 @@ import { RasterWorkspace } from "./RasterWorkspace";
 import { VectorWorkspace } from "./VectorWorkspace";
 import { AudioWorkspace } from "./AudioWorkspace";
 import { VideoWorkspace } from "./VideoWorkspace";
-import { appendLayer, appendRasterGroup, compositeRasterDocument, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, createRasterLayerMaskFromSelection, isRasterDocumentState, layerDocumentPixels, rasterLayerDescendantIds, rasterLayerRows, renderLayerEffects, setLayerPixels, dropPositionInRow, dropTargetForRow, placeLayer, toggleLayerLink, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerEffects, type RasterLayerMask } from "@vravio/env-raster";
+import { appendLayer, appendRasterGroup, compositeRasterDocument, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, createRasterLayerMaskFromSelection, isRasterDocumentState, layerDocumentPixels, punchSelectionIntoMask, rasterLayerDescendantIds, rasterLayerRows, renderLayerEffects, setLayerPixels, dropPositionInRow, dropTargetForRow, placeLayer, toggleLayerLink, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerEffects, type RasterLayerMask } from "@vravio/env-raster";
 import { kernel } from "./kernel";
 import { EnvironmentIcon } from "./EnvironmentIcon";
 import { localized, text } from "./i18n";
@@ -449,6 +449,22 @@ function LayersPanel() {
       if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable) return;
       event.preventDefault();
       const maskLayerId = editingMaskLayerId, documentId = activeDocumentId;
+      // A selection while editing a mask punches a hole in *that* mask — Photoshop
+      // paints the selected area black rather than discarding the whole mask, the
+      // same way Delete on a normal layer clears just the selected pixels instead
+      // of removing the layer. Only Delete with nothing selected reaches for the
+      // confirm-and-remove-the-whole-mask path below.
+      const document = kernel.documents.get<RasterDocumentState>(documentId);
+      if (document && isRasterDocumentState(document.state) && document.state.selection) {
+        const selection = document.state.selection;
+        void changeRasterDocument(documentId, "Clear Mask Selection (Очистить выделение на маске)", (current) => {
+          const layer = current.layers.find((item) => item.id === maskLayerId);
+          if (!layer || layer.kind === "group" || !layer.mask) return false;
+          layer.mask.pixels = punchSelectionIntoMask(layer.mask.pixels, current.width, current.height, selection);
+          return true;
+        });
+        return;
+      }
       void (async () => {
         const confirmed = await confirmModal({
           title: text(language, "Delete Layer Mask", "Удалить маску слоя"),

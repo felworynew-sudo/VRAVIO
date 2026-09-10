@@ -568,6 +568,34 @@ export function clearSelectedPixels(
 }
 
 /**
+ * Punches a hole in a layer mask over the active selection — Delete/Backspace
+ * while editing a mask, with a selection active. Photoshop paints the
+ * selection black on the mask (hides it) rather than deleting the mask
+ * itself; a mask has no alpha channel to clear, only its own single-channel
+ * value, so this scales each masked pixel toward 0 by the selection's
+ * coverage instead of reusing `liftSelection`'s RGBA math.
+ *
+ * A null selection is not this function's business — the caller (Delete
+ * without a selection, mask "selected" via its thumbnail) removes the whole
+ * mask instead, same as `clearSelectedPixels` would clear a whole layer.
+ */
+export function punchSelectionIntoMask(
+  pixels: Uint8ClampedArray, width: number, height: number, selection: PixelSelection,
+): Uint8ClampedArray {
+  const result = pixels.slice();
+  const left = Math.max(0, Math.floor(selection.bounds.x)), top = Math.max(0, Math.floor(selection.bounds.y));
+  const right = Math.min(width, Math.ceil(selection.bounds.x + selection.bounds.width));
+  const bottom = Math.min(height, Math.ceil(selection.bounds.y + selection.bounds.height));
+  for (let y = top; y < bottom; y += 1) for (let x = left; x < right; x += 1) {
+    const index = y * width + x;
+    const coverage = selection.mask[index]! / 255;
+    if (coverage <= 0) continue;
+    result[index] = Math.round(result[index]! * (1 - coverage));
+  }
+  return result;
+}
+
+/**
  * Puts floating content back down at an offset, over the layer it came from.
  *
  * Pure composition — nothing is removed here, so however many times a float is
