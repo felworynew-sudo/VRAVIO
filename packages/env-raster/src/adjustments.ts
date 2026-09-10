@@ -1,6 +1,6 @@
 import { sampleColorLookup } from "./lut";
 import { parseHexColor } from "./color";
-import type { RasterAdjustment, SelectiveColorRange } from "./types";
+import type { LevelsChannelPoints, RasterAdjustment, SelectiveColorRange } from "./types";
 
 const byte = (value: number): number => Math.max(0, Math.min(255, Math.round(value)));
 
@@ -51,10 +51,15 @@ export function hslToRgb(h: number, s: number, l: number): [number, number, numb
  * channel's own input value. Shared between `adjustRgb` (one call, one value) and
  * `buildPointLut` (256 calls, once, then indexed) below — same formula, two speeds.
  */
-const levelsPoint = (adjustment: Extract<RasterAdjustment, { kind: "levels" }>) => (value: number): number => {
-  const normalized = Math.max(0, Math.min(1, (value - adjustment.blackInput) / Math.max(1, adjustment.whiteInput - adjustment.blackInput)));
-  return byte(adjustment.blackOutput + normalized ** (1 / Math.max(.01, adjustment.gamma)) * (adjustment.whiteOutput - adjustment.blackOutput));
+const levelsPoint = (points: LevelsChannelPoints) => (value: number): number => {
+  const normalized = Math.max(0, Math.min(1, (value - points.blackInput) / Math.max(1, points.whiteInput - points.blackInput)));
+  return byte(points.blackOutput + normalized ** (1 / Math.max(.01, points.gamma)) * (points.whiteOutput - points.blackOutput));
 };
+/** The RGB ("master") points with any per-channel override laid over them —
+ *  one channel's own entry in `adjustment.channels`, or the master fields
+ *  when that channel has none. */
+const levelsChannelPoints = (adjustment: Extract<RasterAdjustment, { kind: "levels" }>, channel: "red" | "green" | "blue"): LevelsChannelPoints =>
+  adjustment.channels?.[channel] ?? adjustment;
 const posterizePoint = (levels: number) => { const denominator = Math.max(1, Math.round(levels) - 1); return (value: number): number => byte(Math.round(value * denominator / 255) * 255 / denominator); };
 const brightnessContrastPoint = (adjustment: Extract<RasterAdjustment, { kind: "brightnessContrast" }>) => {
   const brightness = adjustment.brightness * 2.55, contrast = Math.max(-255, Math.min(255, adjustment.contrast * 2.55)), factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
@@ -65,7 +70,7 @@ const exposurePoint = (adjustment: Extract<RasterAdjustment, { kind: "exposure" 
 
 export function adjustRgb(r: number, g: number, b: number, adjustment: RasterAdjustment): [number, number, number] {
   if (adjustment.kind === "invert") return [255 - r, 255 - g, 255 - b];
-  if (adjustment.kind === "levels") { const apply = levelsPoint(adjustment); return [apply(r), apply(g), apply(b)]; }
+  if (adjustment.kind === "levels") return [levelsPoint(levelsChannelPoints(adjustment, "red"))(r), levelsPoint(levelsChannelPoints(adjustment, "green"))(g), levelsPoint(levelsChannelPoints(adjustment, "blue"))(b)];
   if (adjustment.kind === "curves") { const lut = buildCurveLut(adjustment.points); return [lut[r]!, lut[g]!, lut[b]!]; }
   if (adjustment.kind === "colorBalance") return [byte(r + adjustment.cyanRed * 2.55), byte(g + adjustment.magentaGreen * 2.55), byte(b + adjustment.yellowBlue * 2.55)];
   if (adjustment.kind === "posterize") { const apply = posterizePoint(adjustment.levels); return [apply(r), apply(g), apply(b)]; }
@@ -142,7 +147,7 @@ function buildPointLut(adjustment: RasterAdjustment): readonly [Uint8ClampedArra
   switch (adjustment.kind) {
     case "invert": { const lut = mapLut((value) => 255 - value); return [lut, lut, lut]; }
     case "curves": { const lut = buildCurveLut(adjustment.points); return [lut, lut, lut]; }
-    case "levels": { const lut = mapLut(levelsPoint(adjustment)); return [lut, lut, lut]; }
+    case "levels": return [mapLut(levelsPoint(levelsChannelPoints(adjustment, "red"))), mapLut(levelsPoint(levelsChannelPoints(adjustment, "green"))), mapLut(levelsPoint(levelsChannelPoints(adjustment, "blue")))];
     case "posterize": { const lut = mapLut(posterizePoint(adjustment.levels)); return [lut, lut, lut]; }
     case "brightnessContrast": { const lut = mapLut(brightnessContrastPoint(adjustment)); return [lut, lut, lut]; }
     case "exposure": { const lut = mapLut(exposurePoint(adjustment)); return [lut, lut, lut]; }

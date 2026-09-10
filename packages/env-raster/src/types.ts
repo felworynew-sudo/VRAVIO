@@ -5,8 +5,25 @@ export type RasterLayerKind = "pixel" | "text" | "adjustment" | "fill" | "group"
 export type SelectiveColorRange = "reds" | "yellows" | "greens" | "cyans" | "blues" | "magentas" | "whites" | "neutrals" | "blacks";
 export interface SelectiveColorValues { cyan: number; magenta: number; yellow: number; black: number }
 
+export interface LevelsChannelPoints { blackInput: number; gamma: number; whiteInput: number; blackOutput: number; whiteOutput: number }
+
 export type RasterAdjustment =
-  | { kind: "levels"; blackInput: number; gamma: number; whiteInput: number; blackOutput: number; whiteOutput: number }
+  | ({ kind: "levels" } & LevelsChannelPoints & {
+      /**
+       * Per-channel overrides — Photoshop's Channel dropdown (RGB/Red/Green/
+       * Blue): the top-level fields above are the RGB ("master") points,
+       * applied to a channel with no entry here. Optional, and absent for
+       * every levels adjustment before this field existed (`structuredClone`
+       * at every clone site already copies it correctly once present — no
+       * migration needed for a field that is simply missing on old data).
+       * "Enhance Per Channel Contrast" (auto-levels.ts) is the one auto model
+       * that actually needs this: it maximizes each channel's own range
+       * independently, which the RGB-locked master fields alone cannot
+       * represent — a real, functional reason for the field to exist, not a
+       * button added because the dialog "should" have one.
+       */
+      channels?: { red?: LevelsChannelPoints; green?: LevelsChannelPoints; blue?: LevelsChannelPoints };
+    })
   | { kind: "curves"; points: Array<{ x: number; y: number }> }
   | { kind: "hueSaturation"; hue: number; saturation: number; lightness: number }
   | { kind: "colorBalance"; cyanRed: number; magentaGreen: number; yellowBlue: number }

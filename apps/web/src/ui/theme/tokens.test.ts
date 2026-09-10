@@ -82,6 +82,8 @@ const ALLOWED: readonly { readonly match: string; readonly reason: string }[] = 
   { match: "color-wells", reason: "shows the chosen colour" },
   { match: "reset-colors", reason: "the default black and white swatches" },
   { match: "blend-gradient", reason: "a black-to-white ramp is the control" },
+  { match: "levels-handle", reason: "the Levels dialog's black/gamma/white points are literal tonal values, the same fixed convention as reset-colors' black-and-white swatches" },
+  { match: "levels-output-gradient", reason: "a black-to-white ramp is the control, same as blend-gradient" },
   { match: "gradient-map-preview", reason: "shows the gradient itself" },
   { match: "preset-shape", reason: "brush preset silhouette" },
   { match: "layer-color-label", reason: "Photoshop's layer label colours: red means red" },

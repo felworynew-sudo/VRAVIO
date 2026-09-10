@@ -1,5 +1,6 @@
 export * from "./color";
 export * from "./adjustments";
+export * from "./auto-levels";
 export * from "./clone";
 export * from "./document";
 export * from "./layer-tree";

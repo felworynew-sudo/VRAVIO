@@ -775,4 +775,38 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .video-bin-item{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:5px;padding:3px 5px;border-radius:var(--radius-sm);cursor:pointer;font-size:10px}.video-bin-item:hover{background:var(--surface2)}.video-bin-item.active{background:color-mix(in srgb,var(--video) 20%,var(--surface2))}.video-bin-item span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.video-bin-item small{color:var(--muted);font-variant-numeric:tabular-nums}.video-bin-item button{width:16px;height:16px;padding:0;border:0;background:transparent;color:var(--muted);cursor:pointer;line-height:1}.video-bin-item button:hover{color:var(--danger)}
 .video-workspace-footer{flex:0 0 auto;display:flex;gap:14px;align-items:center;min-height:22px;padding:0 10px;border-top:1px solid var(--border);background:var(--surface);color:var(--muted);font-size:10px;font-variant-numeric:tabular-nums}
 @media (max-width:850px){.media-workspace-meta{display:none}.video-export-panel{grid-template-columns:1fr auto}.video-export-panel p{display:none}.audio-analysis dl{grid-template-columns:repeat(2,minmax(120px,1fr))}.audio-workspace-strip,.video-workspace-strip{overflow-x:auto;white-space:nowrap}}
+
+/* Levels dialog — LevelsEditor.tsx ------------------------------------- */
+.levels-editor{display:flex;flex-direction:column;gap:10px;min-width:0}
+.levels-editor-selectors{display:flex;flex-direction:column;gap:8px}
+.levels-histogram-block,.levels-output-block{position:relative}
+.levels-histogram{height:130px}
+.levels-histogram path{fill:var(--muted)}
+.levels-handles-track{position:relative;height:16px;margin-top:2px}
+.levels-handle{position:absolute;top:0;width:12px;height:12px;transform:translateX(-50%);cursor:ew-resize;touch-action:none}
+.levels-handle-black{background:#000;border:1px solid var(--border);clip-path:polygon(50% 0,100% 100%,0 100%)}
+.levels-handle-white{background:#fff;border:1px solid var(--border);clip-path:polygon(50% 0,100% 100%,0 100%)}
+.levels-handle-gamma{background:#888;border:1px solid var(--border);border-radius:50%;top:1px}
+.levels-input-fields,.levels-output-fields{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.levels-output-fields{grid-template-columns:repeat(2,1fr)}
+.levels-output-gradient{height:14px;border-radius:var(--radius-sm);border:1px solid var(--border);background:linear-gradient(90deg,#000,#fff)}
+.levels-auto-buttons{display:flex;gap:8px;margin-top:4px}
+.levels-auto-buttons button{flex:1;min-height:32px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface3);color:var(--text)}
+.levels-auto-buttons button:disabled{opacity:.5;cursor:not-allowed}
+
+/* Auto Color Correction Options — LevelsAutoOptionsDialog.tsx ---------- */
+.auto-levels-options{width:min(460px,calc(100vw - 32px))}
+.auto-levels-options-body{display:flex;flex-direction:column;gap:16px;padding:20px}
+.auto-levels-models{border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;display:flex;flex-direction:column;gap:8px}
+.auto-levels-models legend{padding:0 6px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+.auto-levels-models label{display:flex;align-items:center;gap:8px}
+.auto-levels-snap{margin-top:4px;padding-top:8px;border-top:1px solid var(--border)}
+.auto-levels-targets{border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px;display:flex;flex-direction:column;gap:10px}
+.auto-levels-targets legend{padding:0 6px;color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+.auto-levels-target-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.auto-levels-target{display:flex;align-items:center;gap:8px}
+.auto-levels-target input[type=color]{width:32px;height:24px;padding:0;border:1px solid var(--border);border-radius:var(--radius-sm);background:none}
+.auto-levels-options-actions{display:flex;gap:8px;justify-content:flex-end;padding:0 20px 20px}
+.auto-levels-options-actions button{min-height:34px;padding:0 18px;border:1px solid var(--border);border-radius:20px;background:var(--surface3);color:var(--text)}
+.auto-levels-options-actions button.primary{border-color:var(--focus)}
 @media (max-width:620px){.media-edit-toolbar{flex-wrap:wrap;gap:4px;padding:4px 6px}.media-edit-toolbar .media-project-actions{margin-left:0}.media-workspace-switcher{padding:0 5px}.media-workspace-switcher button{padding:0 7px}.audio-body{grid-template-columns:146px minmax(0,1fr)}.video-body{grid-template-columns:156px minmax(0,1fr)}.audio-track-header,.video-track-header{padding-left:5px;padding-right:5px}}
