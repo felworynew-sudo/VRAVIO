@@ -1493,8 +1493,26 @@ export function DockLayout() {
       // vertical only for the compact rail where our tab renderer suppresses
       // or horizontally lays out the label.
       for (const group of event.api.groups) if (group.api.location.type === "edge") group.api.setHeaderPosition(group.api.isCollapsed() ? group.api.location.position : "top");
+      // A layout saved before a panel's own `defaultVisible` changed (History, found live
+      // claiming half the screen with nothing in it) can restore with `right-panels` already
+      // empty — the reconciliation loop above only *adds* newly-catalogued panels, it never had
+      // a reason to remove a group nothing populated. Same check `onDidLayoutChange` below runs
+      // on every later change; this is the one-time catch-up for whatever a stale save already
+      // left behind.
+      const restoredSideGroup = event.api.getGroup("right-panels");
+      if (restoredSideGroup && restoredSideGroup.panels.length === 0) event.api.removeGroup(restoredSideGroup);
     }
     event.api.onDidLayoutChange(() => {
+      // Closing a group's last panel (the user closing "История" with nothing else docked next
+      // to it, found live: the *group* stayed — an empty splitter still claiming its stored
+      // width, sometimes half the screen from an earlier resize) leaves a group with zero
+      // panels. Dockview does not remove that group on its own; without this, the space it
+      // reserved for tabs that no longer exist just sits there empty. `right-panels` is the only
+      // group this codebase ever creates and removes dynamically (`createDefaultLayout`, the
+      // reconciliation loop above, `PANEL_REQUEST_EVENT`'s own handler) — checked by id, not by
+      // "any empty group," so a legitimate empty edge group elsewhere is never touched by this.
+      const sideGroup = event.api.getGroup("right-panels");
+      if (sideGroup && sideGroup.panels.length === 0) event.api.removeGroup(sideGroup);
       localStorage.setItem(storageKey, JSON.stringify(event.api.toJSON()));
       // Only the environment the dock is actually showing. Filtering the open
       // panels by "does this environment have a panel with that id" looks

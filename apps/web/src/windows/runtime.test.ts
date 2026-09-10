@@ -24,11 +24,16 @@ function withLocalStorage(entries: Record<string, string>, run: () => void): voi
 }
 
 const audioIds = () => windowsFor("audio").map((panel) => panel.id);
+const audioDefaultVisibleIds = () => windowsFor("audio").filter((panel) => panel.defaultVisible).map((panel) => panel.id);
 
 describe("readVisiblePanelIds reconciling a stored layout against a catalogue that moved", () => {
   it("falls back to the catalogue's own defaults with nothing stored at all", () => {
     withLocalStorage({}, () => {
-      expect([...readVisiblePanelIds("audio")].sort()).toEqual([...audioIds()].sort());
+      // Not every catalogued panel is `defaultVisible` — History defaulted to closed after it
+      // was found live sitting open with nothing in it, taking up half the screen for a document
+      // that had just been opened (docs/master-plan.md's own honest-progress notes). A brand new
+      // profile should only ever get the panels actually worth opening unasked.
+      expect([...readVisiblePanelIds("audio")].sort()).toEqual([...audioDefaultVisibleIds()].sort());
     });
   });
 
