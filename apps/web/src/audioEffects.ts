@@ -199,7 +199,7 @@ export function scheduleParamRamp(param: AudioParam, points: readonly Automation
  * exactly as before this feature existed — the same "an automation lane replaces the fader only
  * where it has data" rule `AudioTrack.volumeAutomation` already follows.
  */
-export function buildLiveEffectChain(context: AudioContext, effects: readonly AudioTrackEffect[], automation?: Readonly<Record<string, readonly AutomationPoint[]>>, timing?: { readonly fromSample: number; readonly sampleRate: number; readonly now: number }): EffectChain | null {
+export function buildLiveEffectChain(context: BaseAudioContext, effects: readonly AudioTrackEffect[], automation?: Readonly<Record<string, readonly AutomationPoint[]>>, timing?: { readonly fromSample: number; readonly sampleRate: number; readonly now: number }): EffectChain | null {
   const enabled = effects.filter((effect) => effect.enabled);
   if (enabled.length === 0) return null;
   const chains = enabled.map((effect) => {

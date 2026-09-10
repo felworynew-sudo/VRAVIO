@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { VravioDocument } from "@vravio/kernel";
 import {
   audioEffectCatalog, audioEffectDefaults, cloneAudioState, computeSpectrogram, decodeWav, formatBarBeat, generateMonoPeaks,
-  heatMapColor, isAudioDocumentState, mixdownAudioDocument, nearestBarSample, nearestBeatSample, readPeak, removeAutomationPoint,
+  heatMapColor, isAudioDocumentState, nearestBarSample, nearestBeatSample, readPeak, removeAutomationPoint,
   sampleToBarBeat, samplesPerBar, setAutomationPoint, timelineDurationSamples, volumeAt,
   type AudioClip, type AudioDocumentState, type AudioEffectId, type AudioMarker, type AudioTrack, type DecodedWav,
 } from "@vravio/env-audio";
@@ -10,7 +10,7 @@ import type { AssetId } from "@vravio/kernel";
 import { kernel } from "./kernel";
 import { useShellStore } from "./store";
 import { text } from "./i18n";
-import { AudioPlaybackEngine } from "./audioPlayback";
+import { AudioPlaybackEngine, renderAudioOffline } from "./audioPlayback";
 import { AUTOMATABLE_EFFECT_PARAMS } from "./audioEffects";
 import {
   addAudioTrack, addClipFromAsset, addMarker, addTrackEffect, applyEffectToClip, changeAudioDocument, clearEffectParamAutomation,
@@ -394,20 +394,18 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
     catch { /* permission denied or no microphone — nothing to record */ }
   };
 
-  const mixdownAndExport = async () => {
-    const current = kernel.documents.get<AudioDocumentState>(document.id)!.state;
-    const decoded = new Map<string, DecodedWav>();
-    for (const track of current.tracks) for (const clip of track.clips) {
-      if (decoded.has(clip.assetId)) continue;
-      try { decoded.set(clip.assetId, await decodedAsset(clip.assetId)); } catch { /* skip unreadable asset */ }
-    }
-    return mixdownAudioDocument(current, (assetId) => decoded.get(assetId));
-  };
-
   const exportMixdown = async () => {
+    const current = kernel.documents.get<AudioDocumentState>(document.id)!.state;
+    // Through the same Web Audio graph playback uses (renderAudioOffline, audioPlayback.ts) —
+    // not the pure `mixdownAudioDocument` env-audio also has, which cannot run a track's EQ/
+    // compressor/reverb/delay inserts at all (no DOM to reach OfflineAudioContext from). Export
+    // sounding different from what the transport just played was exactly that gap.
+    const rendered = await renderAudioOffline(current, async (assetId) => {
+      try { return await kernel.assets.read(assetId as AssetId); } catch { return null; }
+    });
     const { encodeWav } = await import("@vravio/env-audio");
-    const mixed = await mixdownAndExport();
-    const bytes = encodeWav(mixed, state.sampleRate, 16);
+    const channels = Array.from({ length: rendered.numberOfChannels }, (_, index) => rendered.getChannelData(index));
+    const bytes = encodeWav(channels, rendered.sampleRate, 16);
     const blob = new Blob([bytes.buffer as ArrayBuffer], { type: "audio/wav" });
     const name = `${document.name.replace(/\.[^.]+$/, "").trim() || "mixdown"}.wav`;
     await kernel.platform.fs.saveFile({ name, mime: "audio/wav", data: blob });
