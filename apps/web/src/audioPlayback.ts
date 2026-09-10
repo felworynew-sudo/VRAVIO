@@ -19,7 +19,11 @@ import { buildLiveEffectChain, scheduleParamRamp } from "./audioEffects";
  * track insert chain (if any) → track `GainNode` (volume) → track `StereoPannerNode` (pan) →
  * `master`.
  */
-function scheduleAudioGraph(context: BaseAudioContext, master: AudioNode, state: AudioDocumentState, buffers: ReadonlyMap<string, AudioBuffer>, fromSample: number, hardEndSamples: number, now: number): AudioBufferSourceNode[] {
+/** `analysersOut`, when given, is populated with one post-fader `AnalyserNode` per audible track
+ * (keyed by track id) — the meter bridge's own tap point, the same signal a send already reads
+ * (`AudioSend.pre`'s own doc comment). Left `undefined` for the offline export render, which has
+ * nothing to meter live. */
+function scheduleAudioGraph(context: BaseAudioContext, master: AudioNode, state: AudioDocumentState, buffers: ReadonlyMap<string, AudioBuffer>, fromSample: number, hardEndSamples: number, now: number, analysersOut?: Map<string, AnalyserNode>, busAnalysersOut?: Map<string, AnalyserNode>): AudioBufferSourceNode[] {
   const sampleRate = state.sampleRate;
   const anySoloed = state.tracks.some((track) => track.soloed);
   const sources: AudioBufferSourceNode[] = [];
@@ -40,6 +44,13 @@ function scheduleAudioGraph(context: BaseAudioContext, master: AudioNode, state:
       busVolume.gain.value = bus.volume;
       busPanner.connect(busVolume);
       busVolume.connect(master);
+      if (busAnalysersOut) {
+        const analyser = context.createAnalyser();
+        analyser.fftSize = 512;
+        analyser.smoothingTimeConstant = 0;
+        busVolume.connect(analyser);
+        busAnalysersOut.set(bus.id, analyser);
+      }
     }
     busInputs.set(bus.id, busInput);
   }
@@ -52,6 +63,13 @@ function scheduleAudioGraph(context: BaseAudioContext, master: AudioNode, state:
     panner.pan.value = track.pan;
     trackGain.connect(panner);
     panner.connect(master);
+    if (analysersOut) {
+      const analyser = context.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0; // the UI does its own peak-hold/decay, not the node's
+      panner.connect(analyser);
+      analysersOut.set(track.id, analyser);
+    }
     // Sends tap the same post-fader signal already headed to master — `AudioSend.pre`'s own
     // doc comment (packages/env-audio/src/types.ts) names pre-fader tapping as this feature's
     // next slice, not silently assumed done.
@@ -167,7 +185,10 @@ export async function renderAudioOffline(state: AudioDocumentState, resolveBytes
 export class AudioPlaybackEngine {
   readonly context: AudioContext;
   readonly #master: GainNode;
+  readonly #masterAnalyser: AnalyserNode;
   readonly #bufferCache = new Map<string, Promise<AudioBuffer>>();
+  #trackAnalysers = new Map<string, AnalyserNode>();
+  #busAnalysers = new Map<string, AnalyserNode>();
   #sources: AudioBufferSourceNode[] = [];
   #playing = false;
   #startedAtContextTime = 0;
@@ -179,7 +200,39 @@ export class AudioPlaybackEngine {
     this.context = new AudioContext();
     this.#master = this.context.createGain();
     this.#master.connect(this.context.destination);
+    this.#masterAnalyser = this.context.createAnalyser();
+    this.#masterAnalyser.fftSize = 512;
+    this.#masterAnalyser.smoothingTimeConstant = 0;
+    this.#master.connect(this.#masterAnalyser);
   }
+
+  /** Peak and RMS amplitude (linear, 0..~1+) read live off an `AnalyserNode`'s current time-domain
+   * buffer — the meter bridge's own sample, not smoothed or converted to dB here (the UI does
+   * that, same split `videoCompositor.ts`'s pure geometry keeps from its own DOM drawing). */
+  #readPeakRms(analyser: AnalyserNode): { peak: number; rms: number } {
+    const buffer = new Float32Array(analyser.fftSize);
+    analyser.getFloatTimeDomainData(buffer);
+    let peak = 0, sumSquares = 0;
+    for (const sample of buffer) { const abs = Math.abs(sample); if (abs > peak) peak = abs; sumSquares += sample * sample; }
+    return { peak, rms: Math.sqrt(sumSquares / buffer.length) };
+  }
+
+  /** `null` for a track that is muted, soloed-out, or otherwise not part of the currently
+   * scheduled graph (no analyser exists for it) — the meter bridge's own "nothing to show"
+   * case, not a silent 0 that could be mistaken for "audible but quiet." */
+  trackLevel(trackId: string): { peak: number; rms: number } | null {
+    const analyser = this.#trackAnalysers.get(trackId);
+    return analyser ? this.#readPeakRms(analyser) : null;
+  }
+
+  /** `null` for a muted, soloed-out, or otherwise inaudible bus — same "nothing to show" case as
+   * `trackLevel`. */
+  busLevel(busId: string): { peak: number; rms: number } | null {
+    const analyser = this.#busAnalysers.get(busId);
+    return analyser ? this.#readPeakRms(analyser) : null;
+  }
+
+  masterLevel(): { peak: number; rms: number } { return this.#readPeakRms(this.#masterAnalyser); }
 
   get isPlaying(): boolean { return this.#playing; }
 
@@ -227,7 +280,9 @@ export class AudioPlaybackEngine {
       buffers.set(assetId, await this.decode(assetId, bytes));
     }));
 
-    this.#sources = scheduleAudioGraph(this.context, this.#master, state, buffers, fromSample, hardEndSamples, now);
+    this.#trackAnalysers = new Map();
+    this.#busAnalysers = new Map();
+    this.#sources = scheduleAudioGraph(this.context, this.#master, state, buffers, fromSample, hardEndSamples, now, this.#trackAnalysers, this.#busAnalysers);
 
     this.#playing = true;
     this.#startedAtContextTime = now;
@@ -261,6 +316,8 @@ export class AudioPlaybackEngine {
     if (this.#endTimer !== null) { window.clearTimeout(this.#endTimer); this.#endTimer = null; }
     for (const source of this.#sources) { try { source.stop(); } catch { /* already stopped */ } }
     this.#sources = [];
+    this.#trackAnalysers = new Map();
+    this.#busAnalysers = new Map();
     this.#playing = false;
   }
 

@@ -162,6 +162,40 @@ interface AutomationDragState {
   readonly laneTop: number;
 }
 
+/** Linear amplitude (0..~1.4, a track's own gain can exceed unity) to a 0..1 meter-bar fraction —
+ * -60dB floor (silence, an empty bar) to 0dB (full bar); anything louder still reads as "full",
+ * the clip-light below is what actually flags it. */
+function levelToFraction(amplitude: number): number {
+  if (amplitude <= 0) return 0;
+  const db = 20 * Math.log10(amplitude);
+  return Math.max(0, Math.min(1, (db + 60) / 60));
+}
+
+/**
+ * The meter bridge's own per-track (or master) strip — peak (thin, fast) and RMS (a filled bar,
+ * the sustained loudness a fader move should actually be judged against) read live off
+ * `AudioPlaybackEngine`'s analysers, docs/master-plan.md §33.2 priority 2's own "meter bridge"
+ * item. Polls via `requestAnimationFrame` only while this component is mounted (the Mixer tab's
+ * own lifetime) — `engine.trackLevel`/`masterLevel` return silence once playback stops, so the
+ * bars settle to empty on their own without this component needing to know playback state itself.
+ */
+function LevelMeter({ read }: { read: () => { peak: number; rms: number } | null }) {
+  const [level, setLevel] = useState<{ peak: number; rms: number } | null>(null);
+  useEffect(() => {
+    let frameId: number;
+    const tick = () => { setLevel(read()); frameId = requestAnimationFrame(tick); };
+    frameId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frameId);
+  }, [read]);
+  const peakFraction = levelToFraction(level?.peak ?? 0);
+  const rmsFraction = levelToFraction(level?.rms ?? 0);
+  const clipping = (level?.peak ?? 0) > 1;
+  return <div className={`audio-meter${clipping ? " clipping" : ""}`} aria-hidden="true">
+    <div className="audio-meter-rms" style={{ width: `${rmsFraction * 100}%` }} />
+    <div className="audio-meter-peak" style={{ left: `${peakFraction * 100}%` }} />
+  </div>;
+}
+
 export function AudioWorkspace({ document }: { document: VravioDocument }) {
   const language = useShellStore((shell) => shell.language);
   const [workspaceMode, setWorkspaceMode] = useState<"edit" | "record" | "mix" | "master">("edit");
@@ -644,6 +678,7 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
           </div>
           <label><span>{text(language, "Gain", "Громкость")}</span><input aria-label={`${track.name}: ${text(language, "gain", "громкость")}`} type="range" min={0} max={1.5} step={0.01} value={track.volume} onChange={(event) => setTrackVolume(document.id, track.id, event.target.valueAsNumber)} /></label>
           <label><span>{text(language, "Pan", "Панорама")}</span><input aria-label={`${track.name}: ${text(language, "pan", "панорама")}`} type="range" min={-1} max={1} step={0.01} value={track.pan} onChange={(event) => setTrackPan(document.id, track.id, event.target.valueAsNumber)} /></label>
+          <LevelMeter read={() => engineRef.current?.trackLevel(track.id) ?? null} />
           {state.buses.length > 0 && <div className="audio-mixer-sends">
             {track.sends.map((send) => { const bus = state.buses.find((item) => item.id === send.busId); return <div className="audio-mixer-send" key={send.id}>
               <button className={send.enabled ? "active" : ""} onClick={() => setSendEnabled(document.id, track.id, send.id, !send.enabled)} title={bus?.name}>{bus?.name.slice(0, 3) ?? "—"}</button>
@@ -666,19 +701,24 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
           </div>
           <label><span>{text(language, "Gain", "Громкость")}</span><input type="range" min={0} max={1.5} step={0.01} value={bus.volume} onChange={(event) => setBusVolume(document.id, bus.id, event.target.valueAsNumber)} /></label>
           <label><span>{text(language, "Pan", "Панорама")}</span><input type="range" min={-1} max={1} step={0.01} value={bus.pan} onChange={(event) => setBusPan(document.id, bus.id, event.target.valueAsNumber)} /></label>
+          <LevelMeter read={() => engineRef.current?.busLevel(bus.id) ?? null} />
         </section>)}
         <button className="audio-mixer-add-bus" onClick={() => addBus(document.id)} title={text(language, "Add bus — a shared sub-mix tracks can send to (a reverb everyone uses, a stem for all drums)", "Добавить шину — общий саб-микс, на который дорожки могут посылать сигнал")}>{text(language, "+ Bus", "+ Шина")}</button>
       </div>
     </section>}
 
     {workspaceMode === "master" && <section className="audio-bottom-panel audio-analysis" aria-label={text(language, "Project summary", "Сводка проекта")}>
-      <header><strong>{text(language, "Project summary", "Сводка проекта")}</strong><span>{text(language, "Analysis meters require the next audio-engine stage", "Полные измерители появятся вместе со следующим этапом аудиодвижка")}</span></header>
+      <header><strong>{text(language, "Project summary", "Сводка проекта")}</strong><span>{text(language, "Peak/RMS below are live; loudness history, spectrum and phase correlation are a further stage", "Пик/RMS ниже — в реальном времени; история громкости, спектр и фазовая корреляция — следующий этап")}</span></header>
       <dl>
         <div><dt>{text(language, "Format", "Формат")}</dt><dd>{state.sampleRate.toLocaleString()} Hz · WAV</dd></div>
         <div><dt>{text(language, "Duration", "Длительность")}</dt><dd>{formatTime(durationSamples / sampleRate)}</dd></div>
         <div><dt>{text(language, "Tracks", "Дорожки")}</dt><dd>{state.tracks.length}</dd></div>
         <div><dt>{text(language, "Clips", "Клипы")}</dt><dd>{clipCount}</dd></div>
       </dl>
+      <div className="audio-master-meter">
+        <span>{text(language, "Master", "Мастер")}</span>
+        <LevelMeter read={() => engineRef.current?.masterLevel() ?? null} />
+      </div>
     </section>}
   </div>;
 }
