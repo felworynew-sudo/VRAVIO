@@ -59,6 +59,19 @@ function mergeableEdit(label: string, undo: () => void, redo: () => void): Rever
 const LAYOUT_STORAGE_KEY = WORKSPACE_LAYOUT_STORAGE_KEY;
 const PANEL_RAIL_LABELS_KEY = "vravio.panel-rail-labels";
 const PANEL_RAIL_LABELS_EVENT = "vravio-panel-rail-labels-change";
+// Dockview's own `DockviewGroupPanel` bakes in a 100px floor for every grid
+// group (`MINIMUM_DOCKVIEW_GROUP_PANEL_WIDTH`) — a `setSize({ width: 35 })`
+// call alone is silently clamped back up to 100px, so a "collapsed to icons"
+// rail never actually reaches the compact width the code asked for (found
+// live: the rail rendered ~100px wide with its content visibly cramped, not
+// the intended icon strip). `setConstraints` is the escape hatch Dockview
+// itself provides for exactly this — it overrides the floor per group, and
+// is on the same public `GridviewPanelApi` interface `setSize` is, no cast
+// needed. Every `setSize` that targets the rail width must be paired with a
+// matching `setConstraints` first, or the resize is silently ignored again.
+const GRID_RAIL_MIN_WIDTH = 35;
+const GRID_RAIL_LABELS_MIN_WIDTH = 132;
+const GRID_EXPANDED_MIN_WIDTH = 220;
 const EMPTY_LAYER_SELECTION: string[] = [];
 /** The shell owns the Tab shortcut; DockLayout owns the actual edge dock. */
 export const CLEAN_CANVAS_EVENT = "vravio-clean-canvas";
@@ -1357,7 +1370,14 @@ function PanelHeaderActions({ api, containerApi, activePanel, group }: IDockview
   }, [api]);
   useEffect(() => {
     group.element.classList.toggle("vravio-grid-rail", collapsed && api.location.type === "grid");
-  }, [api.location.type, collapsed, group]);
+    // Re-applies the rail's own constraint on every mount, not only inside `toggleCollapsed`
+    // — a layout restored from `localStorage` (`fromJSON`) already carries a collapsed grid
+    // group's serialized width, but never ran the toggle handler that pairs it with
+    // `setConstraints`. Without this, a layout saved before this fix (or one that simply
+    // restores collapsed) stays stuck at Dockview's 100px group floor until the user
+    // happens to toggle collapse off and back on.
+    if (collapsed && api.location.type === "grid") api.setConstraints({ minimumWidth: railLabels ? GRID_RAIL_LABELS_MIN_WIDTH : GRID_RAIL_MIN_WIDTH });
+  }, [api, api.location.type, collapsed, group, railLabels]);
   const hideActivePanel = () => {
     const documentId = useShellStore.getState().activeDocumentId;
     const document = documentId ? kernel.documents.get(documentId) : undefined;
@@ -1394,7 +1414,10 @@ function PanelHeaderActions({ api, containerApi, activePanel, group }: IDockview
     const next = !railLabels;
     setRailLabels(next);
     localStorage.setItem(PANEL_RAIL_LABELS_KEY, String(next));
-    if (api.location.type === "grid" && collapsed) api.setSize({ width: next ? 132 : 35 });
+    if (api.location.type === "grid" && collapsed) {
+      api.setConstraints({ minimumWidth: next ? GRID_RAIL_LABELS_MIN_WIDTH : GRID_RAIL_MIN_WIDTH });
+      api.setSize({ width: next ? GRID_RAIL_LABELS_MIN_WIDTH : GRID_RAIL_MIN_WIDTH });
+    }
     window.dispatchEvent(new CustomEvent<boolean>(PANEL_RAIL_LABELS_EVENT, { detail: next }));
   };
   const toggleCollapsed = () => {
@@ -1403,12 +1426,14 @@ function PanelHeaderActions({ api, containerApi, activePanel, group }: IDockview
       if (collapsed) {
         group.element.classList.remove("vravio-grid-rail");
         api.setHeaderPosition("top");
+        api.setConstraints({ minimumWidth: GRID_EXPANDED_MIN_WIDTH });
         api.setSize({ width: 280 });
         setCollapsed(false);
       } else {
         group.element.classList.add("vravio-grid-rail");
         api.setHeaderPosition("right");
-        requestAnimationFrame(() => api.setSize({ width: railLabels ? 132 : 35 }));
+        const railWidth = railLabels ? GRID_RAIL_LABELS_MIN_WIDTH : GRID_RAIL_MIN_WIDTH;
+        requestAnimationFrame(() => { api.setConstraints({ minimumWidth: railWidth }); api.setSize({ width: railWidth }); });
         setCollapsed(true);
       }
       return;
@@ -1560,10 +1585,13 @@ export function DockLayout() {
       if (enabled) {
         groupElement?.classList.add("vravio-grid-rail");
         group.api.setHeaderPosition("right");
-        group.api.setSize({ width: localStorage.getItem(PANEL_RAIL_LABELS_KEY) === "true" ? 132 : 35 });
+        const railWidth = localStorage.getItem(PANEL_RAIL_LABELS_KEY) === "true" ? GRID_RAIL_LABELS_MIN_WIDTH : GRID_RAIL_MIN_WIDTH;
+        group.api.setConstraints({ minimumWidth: railWidth });
+        group.api.setSize({ width: railWidth });
       } else {
         groupElement?.classList.remove("vravio-grid-rail");
         group.api.setHeaderPosition("top");
+        group.api.setConstraints({ minimumWidth: GRID_EXPANDED_MIN_WIDTH });
         group.api.setSize({ width: 280 });
       }
     };
@@ -1650,5 +1678,10 @@ export function DockLayout() {
     });
   }, [kind, language, workspaceId]);
 
-  return <div className="dock-host" data-panel-rail-labels={railLabels}><DockviewReact key={`${language}.${kind}.${workspaceId}.${layoutRevision}`} theme={themeDark} floatingGroupBounds="boundedWithinViewport" floatingGroupDragHandle="titlebar" dndCompass={{ edges: false }} components={components} defaultTabComponent={PanelTab} rightHeaderActionsComponent={PanelHeaderActions} onReady={onReady} /></div>;
+  // No `dndCompass` prop: that option only does anything once the (paid, unlicensed here)
+  // `dockview-enterprise` package registers the `DndCompass` module — passing it anyway is a
+  // checkbox that does nothing, and Dockview says so on every load ("`dndCompass` requires the
+  // 'DndCompass' module"). Drag-to-split/dock/group still works through Dockview's own default
+  // resolver without it; only the five-zone hover overlay is the enterprise-only piece missing.
+  return <div className="dock-host" data-panel-rail-labels={railLabels}><DockviewReact key={`${language}.${kind}.${workspaceId}.${layoutRevision}`} theme={themeDark} floatingGroupBounds="boundedWithinViewport" floatingGroupDragHandle="titlebar" components={components} defaultTabComponent={PanelTab} rightHeaderActionsComponent={PanelHeaderActions} onReady={onReady} /></div>;
 }
