@@ -37,7 +37,7 @@ import { confirmModal } from "./modals/runtime";
 import { useCloseOnOutsideClick } from "./useCloseOnOutsideClick";
 import { WORKSPACE_LAYOUT_STORAGE_KEY, WORKSPACE_PRESET_EVENT, selectedWorkspacePreset, workspacePresetById, type WorkspacePresetDetail } from "./workspace-presets";
 import { pickCommands } from "./commands/surface";
-import { importModelAsLayer, updateScene3DLayer } from "./scene3d-commands";
+import { convertLayerToScene3D, importModelAsLayer, updateScene3DLayer } from "./scene3d-commands";
 import type { ReversibleOperation } from "@vravio/kernel";
 import { AppearancePanel } from "./environments/vector/AppearancePanel";
 import { GeometryModifiersPanel } from "./environments/vector/GeometryModifiersPanel";
@@ -578,6 +578,14 @@ function LayersPanel() {
         item("layer.duplicate"),
         { label: text(language, "Delete Layer", "Удалить слой"), onSelect: deleteLayer, danger: true },
         { label: text(language, "Layer Style…", "Стиль слоя…"), onSelect: () => setStyleLayerId(layer.id), disabled: layer.kind === "group" },
+        // Owner's own request: a text layer offers "Convert to 3D" — extrudes
+        // its own opaque silhouette (convertLayerToScene3D's own doc comment
+        // explains why silhouette, not TextGeometry-from-the-string: the
+        // bundled 3D typeface is Latin-only, and this project is bilingual).
+        // Not restricted to text specifically — nothing about the underlying
+        // operation is, and offering it for any non-group layer costs nothing
+        // extra to show, the same way "Экструдировать слой в 3D" already does.
+        ...(layer.kind === "text" || layer.kind === "pixel" || layer.kind === "shape" ? [{ label: text(language, "Convert to 3D", "Преобразовать в 3D"), onSelect: () => void convertLayerToScene3D(active.id, layer.id) }] : []),
         item("layer.mergeDown"),
         item("layer.mergeVisible"),
         // Owner's own request: right-clicking a layer should offer Invert directly. The command

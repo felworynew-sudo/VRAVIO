@@ -68,6 +68,49 @@ export async function importModelAsLayer(documentId: string, file: File): Promis
   kernel.documents.addAssetRef(documentId, assetId);
 }
 
+/**
+ * Photoshop's own "Convert to 3D": the owner's request for a text layer, generalized to any
+ * layer since nothing about it is text-specific. Extrudes the layer's own opaque silhouette
+ * (`createScene3DExtrudeLayer`'s own "extrude" source, reusing `traceAlphaContour` and its
+ * Chaikin smoothing pass rather than rebuilding `TextGeometry` from the string — deliberately:
+ * `TextGeometry` only has the bundled Latin-only helvetiker typeface behind it (see
+ * `scene3d-render.ts`'s own doc comment on `defaultScene3DLayer`), and this project is
+ * bilingual — a Cyrillic caption run through it would come out as tofu boxes or nothing at all.
+ * Silhouette extrusion has no such limitation: it reads pixels, not glyphs.
+ *
+ * Unlike `createScene3DExtrudeLayer` (which leaves the source layer exactly as it was, visible,
+ * for "extrude this other logo too"), this hides it instead of leaving two copies of the same
+ * content in the stack — closer to what "convert" implies. It cannot be deleted outright: the
+ * new layer's `extrude` source is a *live* reference (`sourceLayerId`), re-traced from that
+ * layer's own pixels on every future re-render (rotating it, changing depth, anything that calls
+ * `updateScene3DLayer`) — the same "no persistent WebGL scene behind a baked 3D layer" limitation
+ * `docs/master-plan.md` §23.2 already names as the reason a full Spatial rewrite is on the
+ * roadmap. Deleting the source would silently turn every future edit into an empty mesh.
+ */
+export async function convertLayerToScene3D(documentId: string, sourceLayerId: string): Promise<void> {
+  const document = kernel.documents.get<RasterDocumentState>(documentId);
+  if (!document || !isRasterDocumentState(document.state)) return;
+  const state = document.state;
+  const source = state.layers.find((item) => item.id === sourceLayerId);
+  if (!source) return;
+  const before = snapshotLayers(state);
+  const layer = createRasterLayer(state.width, state.height, `${source.name} 3D (${source.name} 3D)`);
+  layer.kind = "3d";
+  const base = defaultScene3DLayer(layer);
+  layer.scene3d = { ...base, source: { kind: "extrude", sourceLayerId, depth: 40 }, size: 200 };
+  setLayerPixels(layer, await renderScene3DLayerPixels(layer.scene3d, state), state.width, state.height);
+
+  const sourceIndex = before.layers.findIndex((item) => item.id === sourceLayerId);
+  const afterLayers = before.layers.map((item) => item.id === sourceLayerId ? { ...item, visible: false } : item);
+  afterLayers.splice(sourceIndex + 1, 0, layer);
+  const after: LayerSnapshot = { layers: afterLayers, activeLayerId: layer.id };
+  const assign = (snapshot: LayerSnapshot): void => { kernel.documents.update<RasterDocumentState>(documentId, (current) => { current.layers = snapshot.layers.map((item) => ({ ...item })); current.activeLayerId = snapshot.activeLayerId; }); };
+  const history = kernel.historyByDocument.get(documentId);
+  const label = "Convert to 3D (Преобразовать в 3D)";
+  if (history) await history.execute({ label, redo: () => assign(after), undo: () => assign(before) });
+  else assign(after);
+}
+
 /** Applies a patch to a 3D layer's scene data and re-renders it — the non-destructive edit path
  * every control in the Properties panel goes through. Re-renders (not just re-composites) because
  * a 3D layer's stored pixels are its only representation on screen; there is no live WebGL canvas
