@@ -1,7 +1,8 @@
 import {
   addTake, applyLeftTrim, applyRightTrim, audioEffectCatalog, audioEffectDefaults, canPunchIn, canSplitAt, cloneAudioState,
-  constrainBoundaryTrim, constrainClipDrag, createAudioClip, createAudioMarker, createAudioTrack, cycleTake, decodeWav, encodeWav,
-  punchInClip, removeAutomationPoint, rippleShift, setAutomationPoint, splitClip, type AudioDocumentState, type AudioEffectId, type FadeType,
+  constrainBoundaryTrim, constrainClipDrag, createAudioBus, createAudioClip, createAudioMarker, createAudioTrack, cycleTake, decodeWav,
+  encodeWav, punchInClip, removeAutomationPoint, rippleShift, setAutomationPoint, splitClip, type AudioDocumentState, type AudioEffectId,
+  type FadeType,
 } from "@vravio/env-audio";
 import type { AssetId } from "@vravio/kernel";
 import { kernel } from "./kernel";
@@ -284,6 +285,91 @@ export function removeMarker(documentId: string, markerId: string): void {
     const before = state.markers.length;
     state.markers = state.markers.filter((item) => item.id !== markerId);
     return state.markers.length !== before;
+  });
+}
+
+export function addBus(documentId: string, name?: string): void {
+  void changeAudioDocument(documentId, "Add Bus (Добавить шину)", (state) => {
+    state.buses.push(createAudioBus(name ?? `Bus ${state.buses.length + 1} (Шина ${state.buses.length + 1})`));
+    return true;
+  });
+}
+
+export function removeBus(documentId: string, busId: string): void {
+  void changeAudioDocument(documentId, "Delete Bus (Удалить шину)", (state) => {
+    const before = state.buses.length;
+    state.buses = state.buses.filter((bus) => bus.id !== busId);
+    for (const track of state.tracks) track.sends = track.sends.filter((send) => send.busId !== busId);
+    return state.buses.length !== before;
+  });
+}
+
+export function renameBus(documentId: string, busId: string, name: string): void {
+  void changeAudioDocument(documentId, "Rename Bus (Переименовать шину)", (state) => {
+    const bus = state.buses.find((item) => item.id === busId);
+    if (!bus || bus.name === name) return false;
+    bus.name = name;
+    return true;
+  });
+}
+
+export function setBusVolume(documentId: string, busId: string, volume: number): void {
+  kernel.documents.update<AudioDocumentState>(documentId, (state) => { const bus = state.buses.find((item) => item.id === busId); if (bus) bus.volume = Math.max(0, volume); });
+}
+
+export function setBusPan(documentId: string, busId: string, pan: number): void {
+  kernel.documents.update<AudioDocumentState>(documentId, (state) => { const bus = state.buses.find((item) => item.id === busId); if (bus) bus.pan = Math.max(-1, Math.min(1, pan)); });
+}
+
+export function setBusMuted(documentId: string, busId: string, muted: boolean): void {
+  void changeAudioDocument(documentId, muted ? "Mute Bus (Заглушить шину)" : "Unmute Bus (Включить шину)", (state) => {
+    const bus = state.buses.find((item) => item.id === busId);
+    if (!bus || bus.muted === muted) return false;
+    bus.muted = muted;
+    return true;
+  });
+}
+
+export function setBusSoloed(documentId: string, busId: string, soloed: boolean): void {
+  void changeAudioDocument(documentId, soloed ? "Solo Bus (Соло шины)" : "Unsolo Bus (Снять соло шины)", (state) => {
+    const bus = state.buses.find((item) => item.id === busId);
+    if (!bus || bus.soloed === soloed) return false;
+    bus.soloed = soloed;
+    return true;
+  });
+}
+
+/** A track can hold at most one send to any given bus — a second send to the same bus is a
+ * level adjustment on the first, not a new routing, matching Ardour's own aux-send panel. */
+export function addSend(documentId: string, trackId: string, busId: string): void {
+  void changeAudioDocument(documentId, "Add Send (Добавить посыл)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    if (!track || track.sends.some((send) => send.busId === busId)) return false;
+    track.sends.push({ id: crypto.randomUUID(), busId, level: 0.5, enabled: true, pre: false });
+    return true;
+  });
+}
+
+export function removeSend(documentId: string, trackId: string, sendId: string): void {
+  void changeAudioDocument(documentId, "Remove Send (Удалить посыл)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    if (!track) return false;
+    const before = track.sends.length;
+    track.sends = track.sends.filter((send) => send.id !== sendId);
+    return track.sends.length !== before;
+  });
+}
+
+export function setSendLevel(documentId: string, trackId: string, sendId: string, level: number): void {
+  kernel.documents.update<AudioDocumentState>(documentId, (state) => { const send = state.tracks.find((item) => item.id === trackId)?.sends.find((item) => item.id === sendId); if (send) send.level = Math.max(0, level); });
+}
+
+export function setSendEnabled(documentId: string, trackId: string, sendId: string, enabled: boolean): void {
+  void changeAudioDocument(documentId, enabled ? "Enable Send (Включить посыл)" : "Disable Send (Выключить посыл)", (state) => {
+    const send = state.tracks.find((item) => item.id === trackId)?.sends.find((item) => item.id === sendId);
+    if (!send || send.enabled === enabled) return false;
+    send.enabled = enabled;
+    return true;
   });
 }
 

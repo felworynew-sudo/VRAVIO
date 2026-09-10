@@ -24,6 +24,26 @@ function scheduleAudioGraph(context: BaseAudioContext, master: AudioNode, state:
   const anySoloed = state.tracks.some((track) => track.soloed);
   const sources: AudioBufferSourceNode[] = [];
 
+  // Buses receive only from track sends, never straight from a clip — their own input gain node
+  // exists whether or not the bus is actually audible, so a send has somewhere to connect
+  // regardless; muted/soloed-out just means that gain never reaches `master`, the same silent-
+  // sink shape a muted track's own graph already has.
+  const anyBusSoloed = state.buses.some((bus) => bus.soloed);
+  const busInputs = new Map<string, GainNode>();
+  for (const bus of state.buses) {
+    const busInput = context.createGain();
+    const busPanner = context.createStereoPanner();
+    busPanner.pan.value = bus.pan;
+    busInput.connect(busPanner);
+    if (!bus.muted && (!anyBusSoloed || bus.soloed)) {
+      const busVolume = context.createGain();
+      busVolume.gain.value = bus.volume;
+      busPanner.connect(busVolume);
+      busVolume.connect(master);
+    }
+    busInputs.set(bus.id, busInput);
+  }
+
   for (const track of state.tracks) {
     if (track.muted || (anySoloed && !track.soloed)) continue;
     const trackGain = context.createGain();
@@ -32,6 +52,18 @@ function scheduleAudioGraph(context: BaseAudioContext, master: AudioNode, state:
     panner.pan.value = track.pan;
     trackGain.connect(panner);
     panner.connect(master);
+    // Sends tap the same post-fader signal already headed to master — `AudioSend.pre`'s own
+    // doc comment (packages/env-audio/src/types.ts) names pre-fader tapping as this feature's
+    // next slice, not silently assumed done.
+    for (const send of track.sends) {
+      if (!send.enabled) continue;
+      const busInput = busInputs.get(send.busId);
+      if (!busInput) continue;
+      const sendGain = context.createGain();
+      sendGain.gain.value = send.level;
+      panner.connect(sendGain);
+      sendGain.connect(busInput);
+    }
     // Inserts sit before the fader/pan, the same channel-strip order every mixer uses —
     // an effect shapes the raw signal, volume/pan happen after.
     const insertChain = buildLiveEffectChain(context, track.effects, track.effectAutomation, { fromSample, sampleRate, now });

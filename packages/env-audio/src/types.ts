@@ -83,6 +83,42 @@ export interface AutomationPoint {
   value: number;
 }
 
+/**
+ * One aux send from a track to a bus — Ardour/Audacity 4's own "aux send", a tap of a track's
+ * signal routed to a sub-mix independent of its main output to master. `level` a linear gain
+ * multiplier on the tapped copy, same unit `AudioTrack.volume` uses.
+ *
+ * `pre` names the intended tap point (pre-fader: before the track's own volume/pan; post-fader:
+ * after, the same signal already headed to master) but the engine's first pass
+ * (`apps/web/src/audioPlayback.ts`'s `scheduleAudioGraph`) taps every send post-fader regardless
+ * — an honest, documented simplification (this field exists so a saved send does not lose the
+ * user's intent once pre-fader tapping is actually wired), not a silent stand-in.
+ */
+export interface AudioSend {
+  readonly id: string;
+  busId: string;
+  level: number;
+  enabled: boolean;
+  pre: boolean;
+}
+
+/**
+ * A sub-mix that receives only from track sends, never directly from clips — Ardour's own
+ * "bus": a reverb send everyone shares, a stem for "all drums," a headphone mix. Its own output
+ * always joins the master bus; nothing routes bus-to-bus in this first pass (Ardour allows it,
+ * and so will this once a real need for it shows up — CLAUDE.md's own rule against contract
+ * grown ahead of a caller that needs it).
+ */
+export interface AudioBus {
+  readonly id: string;
+  name: string;
+  volume: number;
+  pan: number;
+  muted: boolean;
+  soloed: boolean;
+  effects: AudioTrackEffect[];
+}
+
 export interface AudioTrack {
   readonly id: string;
   name: string;
@@ -112,6 +148,7 @@ export interface AudioTrack {
    * the answer `automation.ts` asked for to "what happens to a lane when the effect it targets
    * is removed": nothing left pointing at an id that no longer exists. */
   effectAutomation: Record<string, AutomationPoint[]>;
+  sends: AudioSend[];
 }
 
 export interface AudioSelection {
@@ -152,6 +189,7 @@ export interface AudioDocumentState {
   timeSigNumerator: number;
   timeSigDenominator: number;
   markers: AudioMarker[];
+  buses: AudioBus[];
 }
 
 export interface AudioDocumentOptions {

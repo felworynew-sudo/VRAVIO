@@ -13,11 +13,12 @@ import { text } from "./i18n";
 import { AudioPlaybackEngine, renderAudioOffline } from "./audioPlayback";
 import { AUTOMATABLE_EFFECT_PARAMS } from "./audioEffects";
 import {
-  addAudioTrack, addClipFromAsset, addMarker, addTrackEffect, applyEffectToClip, changeAudioDocument, clearEffectParamAutomation,
-  clearTrackVolumeAutomation, commitAudioDrag, commitLoopRegion, cycleClipTake, deleteSelectedClips, moveMarker, previewMoveClip,
-  previewTrimClip, punchInRecording, removeAudioTrack, removeEffectParamAutomationPoint, removeMarker, removeTrackEffect,
-  removeTrackVolumeAutomationPoint, renameMarker, setClipFade, setEffectParamAutomationPoint, setClipGain, setLoopEnabled, setLoopRegion,
-  setSelection, setTempo, setTimeSignature, setTrackEffectEnabled, setTrackEffectParam, setTrackMuted, setTrackPan, setTrackSoloed,
+  addAudioTrack, addBus, addClipFromAsset, addMarker, addSend, addTrackEffect, applyEffectToClip, changeAudioDocument,
+  clearEffectParamAutomation, clearTrackVolumeAutomation, commitAudioDrag, commitLoopRegion, cycleClipTake, deleteSelectedClips,
+  moveMarker, previewMoveClip, previewTrimClip, punchInRecording, removeAudioTrack, removeBus, removeEffectParamAutomationPoint,
+  removeMarker, removeSend, removeTrackEffect, removeTrackVolumeAutomationPoint, renameBus, renameMarker, setBusMuted, setBusPan, setBusSoloed,
+  setBusVolume, setClipFade, setEffectParamAutomationPoint, setClipGain, setLoopEnabled, setLoopRegion, setSelection, setSendEnabled,
+  setSendLevel, setTempo, setTimeSignature, setTrackEffectEnabled, setTrackEffectParam, setTrackMuted, setTrackPan, setTrackSoloed,
   setTrackVolume, setTrackVolumeAutomationPoint, splitClipAt,
 } from "./audio-commands";
 import { decodeAudioFileToWav, startMicrophoneRecording, type AudioRecorder } from "./audioImport";
@@ -643,7 +644,30 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
           </div>
           <label><span>{text(language, "Gain", "Громкость")}</span><input aria-label={`${track.name}: ${text(language, "gain", "громкость")}`} type="range" min={0} max={1.5} step={0.01} value={track.volume} onChange={(event) => setTrackVolume(document.id, track.id, event.target.valueAsNumber)} /></label>
           <label><span>{text(language, "Pan", "Панорама")}</span><input aria-label={`${track.name}: ${text(language, "pan", "панорама")}`} type="range" min={-1} max={1} step={0.01} value={track.pan} onChange={(event) => setTrackPan(document.id, track.id, event.target.valueAsNumber)} /></label>
+          {state.buses.length > 0 && <div className="audio-mixer-sends">
+            {track.sends.map((send) => { const bus = state.buses.find((item) => item.id === send.busId); return <div className="audio-mixer-send" key={send.id}>
+              <button className={send.enabled ? "active" : ""} onClick={() => setSendEnabled(document.id, track.id, send.id, !send.enabled)} title={bus?.name}>{bus?.name.slice(0, 3) ?? "—"}</button>
+              <input type="range" min={0} max={1.5} step={0.01} value={send.level} onChange={(event) => setSendLevel(document.id, track.id, send.id, event.target.valueAsNumber)} aria-label={text(language, "Send level", "Уровень посыла")} />
+              <button className="audio-mixer-send-remove" onClick={() => removeSend(document.id, track.id, send.id)} title={text(language, "Remove send", "Удалить посыл")}>×</button>
+            </div>; })}
+            {state.buses.some((bus) => !track.sends.some((send) => send.busId === bus.id)) && <select value="" onChange={(event) => { if (event.target.value) addSend(document.id, track.id, event.target.value); }}>
+              <option value="">{text(language, "+ Send…", "+ Посыл…")}</option>
+              {state.buses.filter((bus) => !track.sends.some((send) => send.busId === bus.id)).map((bus) => <option key={bus.id} value={bus.id}>{bus.name}</option>)}
+            </select>}
+          </div>}
         </section>)}
+        {state.buses.length > 0 && <div className="audio-mixer-sep" aria-hidden="true" />}
+        {state.buses.map((bus) => <section className="audio-mixer-strip audio-mixer-bus" key={bus.id}>
+          <input className="audio-mixer-bus-name" value={bus.name} onChange={(event) => renameBus(document.id, bus.id, event.target.value)} />
+          <div className="audio-mixer-buttons">
+            <button className={bus.muted ? "active" : ""} onClick={() => setBusMuted(document.id, bus.id, !bus.muted)} title={text(language, "Mute", "Заглушить")}>M</button>
+            <button className={bus.soloed ? "active" : ""} onClick={() => setBusSoloed(document.id, bus.id, !bus.soloed)} title={text(language, "Solo", "Соло")}>S</button>
+            <button onClick={() => removeBus(document.id, bus.id)} title={text(language, "Delete bus", "Удалить шину")}>×</button>
+          </div>
+          <label><span>{text(language, "Gain", "Громкость")}</span><input type="range" min={0} max={1.5} step={0.01} value={bus.volume} onChange={(event) => setBusVolume(document.id, bus.id, event.target.valueAsNumber)} /></label>
+          <label><span>{text(language, "Pan", "Панорама")}</span><input type="range" min={-1} max={1} step={0.01} value={bus.pan} onChange={(event) => setBusPan(document.id, bus.id, event.target.valueAsNumber)} /></label>
+        </section>)}
+        <button className="audio-mixer-add-bus" onClick={() => addBus(document.id)} title={text(language, "Add bus — a shared sub-mix tracks can send to (a reverb everyone uses, a stem for all drums)", "Добавить шину — общий саб-микс, на который дорожки могут посылать сигнал")}>{text(language, "+ Bus", "+ Шина")}</button>
       </div>
     </section>}
 

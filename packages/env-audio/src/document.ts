@@ -1,7 +1,11 @@
-import type { AudioClip, AudioDocumentOptions, AudioDocumentState, AudioMarker, AudioTrack, FadeType } from "./types";
+import type { AudioBus, AudioClip, AudioDocumentOptions, AudioDocumentState, AudioMarker, AudioTrack, FadeType } from "./types";
 
 export function createAudioTrack(name = "Track 1 (Дорожка 1)"): AudioTrack {
-  return { id: crypto.randomUUID(), name, volume: 1, pan: 0, muted: false, soloed: false, locked: false, clips: [], effects: [], volumeAutomation: [], effectAutomation: {} };
+  return { id: crypto.randomUUID(), name, volume: 1, pan: 0, muted: false, soloed: false, locked: false, clips: [], effects: [], volumeAutomation: [], effectAutomation: {}, sends: [] };
+}
+
+export function createAudioBus(name: string): AudioBus {
+  return { id: crypto.randomUUID(), name, volume: 1, pan: 0, muted: false, soloed: false, effects: [] };
 }
 
 export interface CreateAudioClipOptions {
@@ -41,7 +45,7 @@ export function createAudioDocument(options: AudioDocumentOptions = {}): AudioDo
     sampleRate: options.sampleRate ?? 48000, channels: options.channels ?? 2, bitDepth: options.bitDepth ?? 24,
     tracks: [track], activeTrackId: track.id, selection: null,
     masterVolume: 1, loopStart: 0, loopEnd: 0, loopEnabled: false,
-    bpm: 120, timeSigNumerator: 4, timeSigDenominator: 4, markers: [],
+    bpm: 120, timeSigNumerator: 4, timeSigDenominator: 4, markers: [], buses: [],
   };
 }
 
@@ -65,10 +69,12 @@ export function migrateAudioDocumentState(state: AudioDocumentState): AudioDocum
   if (typeof state.timeSigNumerator !== "number" || state.timeSigNumerator < 1) state.timeSigNumerator = 4;
   if (typeof state.timeSigDenominator !== "number" || state.timeSigDenominator < 1) state.timeSigDenominator = 4;
   if (!Array.isArray(state.markers)) state.markers = [];
+  if (!Array.isArray(state.buses)) state.buses = [];
   for (const track of state.tracks) {
     if (!Array.isArray(track.effects)) track.effects = [];
     if (!Array.isArray(track.volumeAutomation)) track.volumeAutomation = [];
     if (typeof track.effectAutomation !== "object" || track.effectAutomation === null) track.effectAutomation = {};
+    if (!Array.isArray(track.sends)) track.sends = [];
     for (const clip of track.clips) {
       if (!Array.isArray(clip.takes) || clip.takes.length === 0) {
         clip.takes = [{ assetId: clip.assetId, sourceDurationSamples: clip.sourceDurationSamples, sourceSampleRate: clip.sourceSampleRate }];
@@ -94,9 +100,11 @@ export function cloneAudioState(state: AudioDocumentState): AudioDocumentState {
       effects: track.effects.map((effect) => ({ ...effect, params: { ...effect.params } })),
       volumeAutomation: track.volumeAutomation.map((point) => ({ ...point })),
       effectAutomation: Object.fromEntries(Object.entries(track.effectAutomation).map(([key, points]) => [key, points.map((point) => ({ ...point }))])),
+      sends: track.sends.map((send) => ({ ...send })),
     })),
     selection: state.selection ? { trackId: state.selection.trackId, clipIds: [...state.selection.clipIds] } : null,
     markers: state.markers.map((marker) => ({ ...marker })),
+    buses: state.buses.map((bus) => ({ ...bus, effects: bus.effects.map((effect) => ({ ...effect, params: { ...effect.params } })) })),
   };
 }
 
