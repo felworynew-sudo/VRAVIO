@@ -270,6 +270,12 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .audio-timeline-scroll{min-width:0;overflow:auto;position:relative}
 .audio-ruler{position:relative;height:26px;border-bottom:1px solid var(--border);background:var(--surface);cursor:pointer}
 .audio-ruler-tick{position:absolute;top:6px;color:var(--muted);font-size:9px;white-space:nowrap;transform:translateX(2px)}
+.audio-loop-lane{position:relative;height:10px;border-bottom:1px solid var(--border);background:var(--surface);cursor:text}
+.audio-loop-lane.active{background:color-mix(in srgb,var(--audio) 12%,var(--surface))}
+.audio-loop-region{position:absolute;top:0;bottom:0;background:color-mix(in srgb,var(--audio) 45%,transparent);cursor:grab}
+.audio-loop-handle{position:absolute;top:0;bottom:0;width:6px;cursor:ew-resize}
+.audio-loop-handle-left{left:-3px}
+.audio-loop-handle-right{right:-3px}
 .audio-tracks{position:relative}
 .audio-track-lane{position:relative;box-sizing:border-box;border-bottom:1px solid var(--border)}
 .audio-clip{position:absolute;top:3px;box-sizing:border-box;display:flex;align-items:flex-start;border:1px solid color-mix(in srgb,var(--audio) 65%,var(--border));border-radius:var(--radius-sm);background:color-mix(in srgb,var(--audio) 16%,var(--surface2));overflow:hidden;cursor:grab;user-select:none}

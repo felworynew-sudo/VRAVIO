@@ -13,10 +13,10 @@ import { AudioPlaybackEngine } from "./audioPlayback";
 import { AUTOMATABLE_EFFECT_PARAMS } from "./audioEffects";
 import {
   addAudioTrack, addClipFromAsset, addTrackEffect, applyEffectToClip, changeAudioDocument, clearEffectParamAutomation,
-  clearTrackVolumeAutomation, commitAudioDrag, cycleClipTake, deleteSelectedClips, previewMoveClip, previewTrimClip, punchInRecording,
-  removeAudioTrack, removeEffectParamAutomationPoint, removeTrackEffect, removeTrackVolumeAutomationPoint, setClipFade,
-  setEffectParamAutomationPoint, setClipGain, setSelection, setTrackEffectEnabled, setTrackEffectParam, setTrackMuted, setTrackPan,
-  setTrackSoloed, setTrackVolume, setTrackVolumeAutomationPoint, splitClipAt,
+  clearTrackVolumeAutomation, commitAudioDrag, commitLoopRegion, cycleClipTake, deleteSelectedClips, previewMoveClip, previewTrimClip,
+  punchInRecording, removeAudioTrack, removeEffectParamAutomationPoint, removeTrackEffect, removeTrackVolumeAutomationPoint,
+  setClipFade, setEffectParamAutomationPoint, setClipGain, setLoopEnabled, setLoopRegion, setSelection, setTrackEffectEnabled,
+  setTrackEffectParam, setTrackMuted, setTrackPan, setTrackSoloed, setTrackVolume, setTrackVolumeAutomationPoint, splitClipAt,
 } from "./audio-commands";
 import { decodeAudioFileToWav, startMicrophoneRecording, type AudioRecorder } from "./audioImport";
 import { usePluginRuns } from "./plugins/usePluginRuns";
@@ -179,6 +179,7 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
   const [viewMode, setViewMode] = useState<"waveform" | "spectrogram">("waveform");
   const [automationMode, setAutomationMode] = useState(false);
   const dragPointRef = useRef<AutomationDragState | null>(null);
+  const loopDragRef = useRef<{ mode: "create" | "left" | "right"; anchorSample: number; before: AudioDocumentState } | null>(null);
   const engineRef = useRef<AudioPlaybackEngine | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const rafRef = useRef<number | null>(null);
@@ -224,6 +225,31 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
     const sample = Math.max(0, Math.round((event.clientX - rect.left) / pxPerSample));
     stopPlayback();
     setPlayheadSample(sample);
+  };
+
+  const sampleAtClientX = (rect: DOMRect, clientX: number) => Math.max(0, Math.round((clientX - rect.left) / pxPerSample));
+
+  const beginLoopDrag = (event: React.PointerEvent<HTMLDivElement>, mode: "create" | "left" | "right") => {
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const rect = event.currentTarget.closest(".audio-loop-lane")!.getBoundingClientRect();
+    const sample = sampleAtClientX(rect, event.clientX);
+    loopDragRef.current = { mode, anchorSample: mode === "create" ? sample : mode === "left" ? state.loopEnd : state.loopStart, before: cloneAudioState(state) };
+    if (mode === "create") setLoopRegion(document.id, sample, sample);
+  };
+
+  const onLoopDragMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = loopDragRef.current;
+    if (!drag) return;
+    const sample = sampleAtClientX(event.currentTarget.getBoundingClientRect(), event.clientX);
+    setLoopRegion(document.id, drag.anchorSample, sample);
+  };
+
+  const onLoopDragEnd = () => {
+    const drag = loopDragRef.current;
+    if (!drag) return;
+    loopDragRef.current = null;
+    commitLoopRegion(document.id, drag.before);
   };
 
   const beginDrag = (event: React.PointerEvent, kind: DragState["kind"], track: AudioTrack, clip: AudioClip) => {
@@ -402,6 +428,7 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
         <button className="media-icon-button" onClick={togglePlay} title={text(language, "Play/Pause", "Играть/Пауза")} aria-label={text(language, "Play/Pause", "Играть/Пауза")}>{isPlaying ? "Ⅱ" : "▶"}</button>
         <button className="media-icon-button" onClick={stopToStart} title={text(language, "Stop", "Стоп")} aria-label={text(language, "Stop", "Стоп")}>■</button>
         <button className={recorder ? "media-icon-button active" : "media-icon-button"} onClick={() => void toggleRecording()} title={text(language, "Record from microphone", "Запись с микрофона")} aria-label={text(language, "Record from microphone", "Запись с микрофона")}>●</button>
+        <button className={state.loopEnabled ? "media-icon-button active" : "media-icon-button"} onClick={() => setLoopEnabled(document.id, !state.loopEnabled)} title={text(language, "Loop: drag the lane under the ruler to set the range", "Цикл: перетащите дорожку под линейкой, чтобы задать границы")} aria-label={text(language, "Loop", "Цикл")}>⟲</button>
       </div>
       <span className="audio-time">{formatTime(playheadSample / sampleRate)} / {formatTime(durationSamples / sampleRate)}</span>
       {state.selection && <button data-role="trash" onClick={() => deleteSelectedClips(document.id, rippleMode)}>{text(language, "Delete Clip", "Удалить клип")}</button>}
@@ -529,6 +556,14 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
         <div className="audio-ruler" style={{ width: timelineWidthPx }} onClick={onRulerClick}>
           {Array.from({ length: Math.ceil(timelineWidthPx / pixelsPerSecond) + 1 }, (_, second) => <span key={second} className="audio-ruler-tick" style={{ left: second * pixelsPerSecond }}>{formatTime(second)}</span>)}
           <div className="audio-playhead" style={{ left: playheadSample * pxPerSample }} />
+        </div>
+        <div className={`audio-loop-lane${state.loopEnabled ? " active" : ""}`} style={{ width: timelineWidthPx }}
+          onPointerDown={(event) => beginLoopDrag(event, "create")} onPointerMove={onLoopDragMove} onPointerUp={onLoopDragEnd}
+          title={text(language, "Drag to set the loop range", "Перетащите, чтобы задать границы цикла")}>
+          {state.loopEnd > state.loopStart && <div className="audio-loop-region" style={{ left: state.loopStart * pxPerSample, width: (state.loopEnd - state.loopStart) * pxPerSample }}>
+            <div className="audio-loop-handle audio-loop-handle-left" onPointerDown={(event) => beginLoopDrag(event, "left")} />
+            <div className="audio-loop-handle audio-loop-handle-right" onPointerDown={(event) => beginLoopDrag(event, "right")} />
+          </div>}
         </div>
         <div className="audio-tracks" style={{ width: timelineWidthPx }}
           onPointerMove={(event) => { onDragMove(event); onAutomationDragMove(event); }}

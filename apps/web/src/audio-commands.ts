@@ -219,6 +219,30 @@ export function removeAudioTrack(documentId: string, trackId: string): void {
   });
 }
 
+export function setLoopEnabled(documentId: string, enabled: boolean): void {
+  void changeAudioDocument(documentId, enabled ? "Enable Loop (Включить цикл)" : "Disable Loop (Выключить цикл)", (state) => {
+    if (state.loopEnabled === enabled) return false;
+    state.loopEnabled = enabled;
+    return true;
+  });
+}
+
+/** Ardour lets the loop range be dragged with playback already running, without a history
+ * step per pixel — same "live write, one commit at gesture end" shape as `commitAudioDrag`
+ * below, just for a document-level pair instead of a clip's. */
+export function setLoopRegion(documentId: string, startSample: number, endSample: number): void {
+  const document = kernel.documents.get<AudioDocumentState>(documentId);
+  if (!document) return;
+  const state = document.state;
+  const start = Math.max(0, Math.min(startSample, endSample));
+  const end = Math.max(start + 1, Math.max(startSample, endSample));
+  kernel.documents.update<AudioDocumentState>(documentId, (current) => { current.loopStart = start; current.loopEnd = end; });
+}
+
+export function commitLoopRegion(documentId: string, before: AudioDocumentState): void {
+  commitAudioDrag(documentId, "Set Loop Region (Задать границы цикла)", before);
+}
+
 export function setSelection(documentId: string, trackId: string | null, clipIds: readonly string[]): void {
   kernel.documents.update<AudioDocumentState>(documentId, (state) => {
     state.selection = trackId && clipIds.length ? { trackId, clipIds } : null;

@@ -62,6 +62,11 @@ export class AudioPlaybackEngine {
     const sampleRate = state.sampleRate;
     const anySoloed = state.tracks.some((track) => track.soloed);
     const now = this.context.currentTime;
+    // A loop only takes hold once playback is already inside it — starting from before
+    // loopStart plays through to it normally first, the same "loop catches you as you pass
+    // through" behavior Ardour's transport has, rather than snapping the playhead itself.
+    const looping = state.loopEnabled && state.loopEnd > state.loopStart && fromSample >= state.loopStart && fromSample < state.loopEnd;
+    const hardEndSamples = looping ? state.loopEnd : Math.max(fromSample, timelineDurationSamples(state));
 
     const neededAssetIds = new Set<string>();
     for (const track of state.tracks) {
@@ -91,15 +96,17 @@ export class AudioPlaybackEngine {
 
       for (const clip of track.clips) {
         const clipEnd = clip.startSample + clip.durationSamples;
-        if (clipEnd <= fromSample) continue;
+        const playStart = Math.max(fromSample, clip.startSample);
+        const playEnd = Math.min(clipEnd, hardEndSamples);
+        if (playEnd <= playStart) continue;
         const buffer = buffers.get(clip.assetId);
         if (!buffer) continue;
 
         // How far into the clip playback starts (0 if fromSample is before the clip).
-        const intoClipSamples = Math.max(0, fromSample - clip.startSample);
-        const whenToStart = now + Math.max(0, (clip.startSample - fromSample) / sampleRate);
+        const intoClipSamples = playStart - clip.startSample;
+        const whenToStart = now + (playStart - fromSample) / sampleRate;
         const sourceOffsetSeconds = (clip.offsetSamples + intoClipSamples) / clip.sourceSampleRate;
-        const remainingDurationSeconds = (clip.durationSamples - intoClipSamples) / sampleRate;
+        const remainingDurationSeconds = (playEnd - playStart) / sampleRate;
         if (remainingDurationSeconds <= 0) continue;
 
         const source = this.context.createBufferSource();
@@ -134,9 +141,16 @@ export class AudioPlaybackEngine {
     this.#startedAtContextTime = now;
     this.#startedAtTimelineSeconds = fromSample / sampleRate;
 
-    const totalDurationSamples = Math.max(fromSample, timelineDurationSamples(state));
-    const remaining = Math.max(0, (totalDurationSamples - fromSample) / sampleRate);
-    this.#endTimer = window.setTimeout(() => { if (this.#playing) { this.#playing = false; this.#onEnded?.(); } }, remaining * 1000 + 50);
+    const remaining = Math.max(0, (hardEndSamples - fromSample) / sampleRate);
+    this.#endTimer = window.setTimeout(() => {
+      if (!this.#playing) return;
+      // Looping re-enters play() from the top edge rather than splicing new sources onto the
+      // running graph — the same one-shot-source constraint that already forces a fresh
+      // AudioBufferSourceNode per clip on every play() (Web Audio sources cannot be restarted).
+      if (looping) { void this.play(state, state.loopStart, resolveBytes); return; }
+      this.#playing = false;
+      this.#onEnded?.();
+    }, remaining * 1000 + 50);
   }
 
   /** Halts playback and remembers the current position — the next `play()` with no explicit
