@@ -156,9 +156,17 @@ export async function renderScene3DLayerPixels(data: Scene3DLayerData, document:
   try {
     const rig = new THREE.Group();
     rig.add(object);
-    rig.rotation.set(data.rotationX * Math.PI / 180, data.rotationY * Math.PI / 180, data.rotationZ * Math.PI / 180);
     scene3d.scene.add(rig);
+    // Fit computed at the object's own intrinsic (unrotated) pose, *before* `rig.rotation` is
+    // set — not after, which is what this used to do. Fitting against the rotated box instead
+    // re-frames (and re-zooms, since the camera distance below follows the box's own radius)
+    // every single rotation, since a diagonal view's axis-aligned box is bigger than a face-on
+    // one of the same object — the reported "the object zooms/shifts on its own" and "transforms
+    // to fit its own frame instead of the frame fitting it". Centering (inside `centerAndFit`)
+    // also then happens on this same stable box, so the rotation pivot is the object's own
+    // natural centroid regardless of which way it currently faces.
     centerAndFit(rig, scene3d.camera);
+    rig.rotation.set(data.rotationX * Math.PI / 180, data.rotationY * Math.PI / 180, data.rotationZ * Math.PI / 180);
     applyLighting(scene3d, data.lighting, 500);
     // After centerAndFit, not before: the ground plane sits at the rig's own
     // bounding-box bottom, which centerAndFit is what actually settles.

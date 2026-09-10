@@ -251,7 +251,7 @@ function Scene3DProperties({ documentId, layer, language }: { documentId: string
     <strong>{text(language, "Ground Shadow", "Тень на поверхность")}</strong>
     <label className="export-check"><input type="checkbox" checked={ground.enabled} onChange={(event) => commitGround({ enabled: event.target.checked })}/>{text(language, "Cast onto an invisible plane", "Отбрасывать на невидимую поверхность")}</label>
     {ground.enabled && <>
-      {/* Numeric fallback for the same tilt/distance the on-canvas "Cast Shadow…" sliders (Scene3DGroundGizmo.tsx) drag live — either door commits through the same updateScene3DLayer call. */}
+      {/* Numeric fallback for tiltX/distance — tiltZ has no slider here (only the on-canvas point-placement flow, Scene3DGroundPointsGizmo.tsx, sets it), matching the owner's own request to keep this panel plain until a redesigned one replaces it. Either door commits through the same updateScene3DLayer call. */}
       <label>{text(language, "Surface Tilt", "Наклон поверхности")}<input type="range" min={0} max={90} value={ground.tiltX} onChange={(event) => commitGround({ tiltX: event.target.valueAsNumber })}/><output>{Math.round(ground.tiltX)}°</output></label>
       <label>{text(language, "Surface Distance", "Расстояние до поверхности")}<input type="range" min={0} max={Math.max(ground.distance * 2, data.size)} value={ground.distance} onChange={(event) => commitGround({ distance: event.target.valueAsNumber })}/><output>{Math.round(ground.distance)}</output></label>
       <label>{text(language, "Shadow Opacity", "Непрозрачность тени")}<input type="range" min={0} max={100} value={ground.opacity} onChange={(event) => commitGround({ opacity: event.target.valueAsNumber })}/><output>{Math.round(ground.opacity)}%</output></label>
@@ -607,6 +607,7 @@ function LayersPanel() {
         // would silently do nothing.
         ...(layer.kind === "3d" ? [{ label: text(language, "Rotate 3D Object", "Повернуть 3D объект"), onSelect: () => { setTool(active.id, "raster.move"); setScene3DGroundLayer(active.id, null); setScene3DOrbitLayer(active.id, layer.id); } }] : []),
         ...(layer.kind === "3d" ? [{ label: text(language, "Cast Shadow…", "Настроить тень…"), onSelect: () => { setTool(active.id, "raster.move"); setScene3DOrbitLayer(active.id, null); setScene3DGroundLayer(active.id, layer.id); } }] : []),
+        ...(layer.kind === "3d" && layer.scene3d?.ground ? [{ label: text(language, "Reset Shadow Settings", "Сбросить настройки тени"), onSelect: () => void updateScene3DLayer(active.id, layer.id, { ground: { ...defaultScene3DGround } }) }] : []),
         // Harmonize moved off the right-click menu, to Изображение ▸ Коррекция ▸ Быстрая
         // гармонизация (adjustments.ts's `quickHarmonizeCommand`) — the owner's own
         // reclassification of it from a 3D-only scene tweak to a general one-shot filter any

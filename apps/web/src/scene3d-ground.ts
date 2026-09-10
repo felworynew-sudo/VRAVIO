@@ -5,8 +5,8 @@ import type { Scene3D } from "./three3d";
 /**
  * The invisible ground plane a 3D layer's shadow falls onto — see
  * `Scene3DGround`'s own doc comment (env-raster/types.ts) for why this is
- * `tiltX`/`distance`, dragged into place against a live preview, rather than
- * a full photo calibration.
+ * `tiltX`/`tiltZ`/`distance`, dragged (or point-placed) into place against a
+ * live preview, rather than a full photo calibration.
  *
  * `THREE.ShadowMaterial` is the actual trick that makes "invisible plane,
  * visible shadow" possible: it renders nothing but the shadow itself
@@ -16,6 +16,47 @@ import type { Scene3D } from "./three3d";
  * ordinary alpha blending. No special-casing anywhere else in the
  * compositor.
  */
+
+/**
+ * The plane's own surface normal for a given tilt pair — a closed-form
+ * formula (not a three.js Euler decomposition) so the exact same math can
+ * run in both directions: forward here, to actually orient the rendered
+ * plane, and inverted by `Scene3DGroundPointsGizmo.tsx` to turn three or
+ * four clicked points back into a `tiltX`/`tiltZ` pair. Relying on
+ * `THREE.Euler`'s own XYZ/ZXY/etc. ordering for this would mean the two
+ * directions could silently drift apart if either side's rotation order
+ * ever changed — one shared formula is the only door.
+ *
+ * Derivation: the plane's own default normal is `(0,0,1)` (`PlaneGeometry`
+ * lies in its local XY plane). Rotating by `-tiltX` around X first gives
+ * `(0, sin(tiltX), cos(tiltX))`; rotating that by `tiltZ` around Z gives the
+ * formula below. `tiltX=90, tiltZ=0` — the classic floor case — yields
+ * `(0,1,0)`, straight up, matching the old single-axis behaviour exactly.
+ */
+export function groundNormal(tiltX: number, tiltZ: number): THREE.Vector3 {
+  const x = tiltX * Math.PI / 180, z = tiltZ * Math.PI / 180;
+  const sinX = Math.sin(x), cosX = Math.cos(x), sinZ = Math.sin(z), cosZ = Math.cos(z);
+  return new THREE.Vector3(-sinX * sinZ, sinX * cosZ, cosX);
+}
+
+/**
+ * The inverse of `groundNormal`: the closest `tiltX`/`tiltZ` pair for an
+ * arbitrary (already-normalized) surface normal, folded so `tiltX` stays in
+ * `[0, 180]` and pointed toward whichever hemisphere the caller's normal
+ * already faces — `Scene3DGroundPointsGizmo.tsx`'s own three-point plane fit
+ * has no guaranteed normal direction (a plane has two), so it flips first,
+ * toward the camera, before calling this.
+ */
+export function tiltFromGroundNormal(normal: THREE.Vector3): { tiltX: number; tiltZ: number } {
+  const n = normal.clone().normalize();
+  const tiltX = Math.acos(Math.max(-1, Math.min(1, n.z))) * 180 / Math.PI;
+  const sinX = Math.sin(tiltX * Math.PI / 180);
+  // A near-vertical normal (tiltX ~ 0) leaves tiltZ meaningless — dividing by a near-zero sinX
+  // would otherwise amplify floating-point noise into a wildly unstable angle for no visual gain.
+  const tiltZ = sinX > 1e-4 ? Math.atan2(-n.x, n.y) * 180 / Math.PI : 0;
+  return { tiltX, tiltZ };
+}
+
 export function applyGroundPlane(scene3d: Scene3D, rig: THREE.Group, ground: Scene3DGround | undefined): THREE.Mesh | null {
   if (!ground?.enabled) return null;
 
@@ -47,16 +88,28 @@ export function applyGroundPlane(scene3d: Scene3D, rig: THREE.Group, ground: Sce
 
   rig.traverse((child) => { if (child instanceof THREE.Mesh) child.castShadow = true; });
 
-  const planeSize = Math.max(radius * 10, ground.distance * 4, 200);
+  // Deliberately *not* derived from `radius` (the object's current, rotated bounding box) the way
+  // the shadow camera's own frustum above still is: a "floor" reads as a floor because it looks
+  // like it keeps going, and a plane sized off a live rotated silhouette shrinks toward a sliver
+  // the moment the object turns edge-on — the reported "shadow doesn't reach past the object's
+  // own bounds". A `PlaneGeometry` this size costs the same two triangles regardless, so there is
+  // no reason to size it tightly in the first place.
+  const planeSize = Math.max(ground.distance * 6, 3000);
   const geometry = new THREE.PlaneGeometry(planeSize, planeSize);
   const material = new THREE.ShadowMaterial({ opacity: Math.max(0, Math.min(1, ground.opacity / 100)) });
   const plane = new THREE.Mesh(geometry, material);
   plane.receiveShadow = true;
-  // tiltX=0 is face-on (the plane's own default orientation, normal toward
-  // the camera — a wall); tiltX=90 lays it flat with the normal pointing
-  // up (a floor seen from above). See the type's own doc comment.
-  plane.rotation.x = -ground.tiltX * Math.PI / 180;
-  plane.position.set(0, box.min.y - ground.distance, 0);
+  // tiltX=90/tiltZ=0 is a floor (normal straight up); tiltX=0 is a wall facing the camera; any
+  // other pair — reachable only through the point-placement UI, the slider never leaves tiltZ=0
+  // — tips the plane toward an arbitrary direction. `groundNormal` is the single formula both
+  // this and the point-fit's own inverse (`tiltFromGroundNormal`) agree on.
+  const normal = groundNormal(ground.tiltX, ground.tiltZ ?? 0);
+  plane.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), normal);
+  const center = box.getCenter(new THREE.Vector3());
+  // `distance` is how far *below the object's own base, along the plane's own normal* the plane
+  // sits — for the classic floor (normal straight up) this is exactly the old `box.min.y -
+  // distance`, so every ground saved before point-placement existed still renders identically.
+  plane.position.set(center.x, box.min.y, center.z).addScaledVector(normal, -ground.distance);
   scene3d.scene.add(plane);
   return plane;
 }

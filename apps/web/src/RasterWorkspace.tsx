@@ -2,13 +2,13 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import {
   activeRasterLayer, appendLayer, layerAccepts, layerLockReason, paintMask, pickLayerAt, compositeRasterDocument,
   layerDocumentPixels, isRasterDocumentState, selectionOutlinePath,
-  unionRect, type PixelSelection, type Point, type RasterDocumentState, type RasterLayer, type RasterRect,
+  unionRect, type PixelSelection, type Point, type RasterDocumentState, type RasterLayer, type RasterRect, type Scene3DGround, defaultScene3DGround,
 } from "@vravio/env-raster";
 import type { VravioDocument } from "@vravio/kernel";
 import { kernel } from "./kernel";
 import { convertLayerToScene3D, importModelAsLayer, updateScene3DLayer } from "./scene3d-commands";
 import { Scene3DOrbitGizmo } from "./Scene3DOrbitGizmo";
-import { Scene3DGroundGizmo } from "./Scene3DGroundGizmo";
+import { Scene3DGroundPointsGizmo } from "./Scene3DGroundPointsGizmo";
 import { rasterToolById } from "./environments/raster/tools/registry";
 import type { PaintTarget, ToolContext, ToolPointer } from "./environments/raster/tools/types";
 import { applyWarpPreset, commitPending, empty as moveToolEmpty, pendingBounds, startPendingTransform, type MoveState } from "./environments/raster/tools/definitions/move";
@@ -579,6 +579,46 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     return () => { window.removeEventListener("vravio-scene3d-transform-commit", commit); window.removeEventListener("vravio-scene3d-transform-cancel", cancel); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orbitGizmoLayerId]);
+  // "Cast Shadow…" — a point-placement session (Scene3DGroundPointsGizmo.tsx), the same
+  // pending/commit/cancel shape as the orbit gizmo above: nothing lands in the document until
+  // accepted, the fitted ground (once 3+ points exist) lives in a ref read back at commit time,
+  // and switching tool/layer away commits rather than silently drops it.
+  const pendingGroundRef = useRef<Scene3DGround | null>(null);
+  const [groundPointCount, setGroundPointCount] = useState(0);
+  const onGroundPointsChange = (count: number, ground: Scene3DGround | null) => {
+    pendingGroundRef.current = ground;
+    setGroundPointCount(count);
+    window.dispatchEvent(new CustomEvent("vravio-scene3d-ground-state", { detail: { active: true, pointCount: count, ready: ground !== null } }));
+  };
+  const commitGroundGizmo = async () => {
+    const ground = pendingGroundRef.current, layerId = groundGizmoLayerId;
+    pendingGroundRef.current = null;
+    if (layerId && ground) await updateScene3DLayer(document.id, layerId, { ground });
+    setScene3DGroundLayer(document.id, null);
+  };
+  const cancelGroundGizmo = () => {
+    pendingGroundRef.current = null;
+    setScene3DGroundLayer(document.id, null);
+  };
+  useEffect(() => {
+    if (!groundGizmoLayerId) return;
+    setGroundPointCount(0);
+    const context = toolContextFor("raster.move", canvasRef.current) as ToolContext<MoveState>;
+    context.previewWithLayerHidden(groundGizmoLayerId);
+    return () => {
+      context.previewWithLayerHidden(null);
+      window.dispatchEvent(new CustomEvent("vravio-scene3d-ground-state", { detail: null }));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groundGizmoLayerId]);
+  useEffect(() => {
+    const commit = () => void commitGroundGizmo();
+    const cancel = () => cancelGroundGizmo();
+    window.addEventListener("vravio-scene3d-ground-commit", commit);
+    window.addEventListener("vravio-scene3d-ground-cancel", cancel);
+    return () => { window.removeEventListener("vravio-scene3d-ground-commit", commit); window.removeEventListener("vravio-scene3d-ground-cancel", cancel); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groundGizmoLayerId]);
   useEffect(() => {
     // The orbit gizmo now commits instead of silently discarding on "switched away" — the same
     // request that gave it the options-bar Commit/Cancel pair below: losing an in-progress
@@ -586,7 +626,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     // update elsewhere, a stray re-render) is exactly what made it read as "the gizmo just
     // disappears, cause unclear" rather than a deliberate close.
     if (orbitGizmoLayerId && (activeToolId !== "raster.move" || activeLayer3D?.id !== orbitGizmoLayerId)) void commitOrbitGizmo();
-    if (groundGizmoLayerId && (activeToolId !== "raster.move" || activeLayer3D?.id !== groundGizmoLayerId)) setScene3DGroundLayer(document.id, null);
+    if (groundGizmoLayerId && (activeToolId !== "raster.move" || activeLayer3D?.id !== groundGizmoLayerId)) void commitGroundGizmo();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orbitGizmoLayerId, groundGizmoLayerId, activeToolId, activeLayer3D?.id, document.id]);
   const documentOriginX = workspaceSize.width / 2 + viewport.panX - state.width * viewport.zoom / 2, documentOriginY = workspaceSize.height / 2 + viewport.panY - state.height * viewport.zoom / 2;
@@ -622,7 +662,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       the workspace element, so a point past the canvas edge already came out as the document
       coordinate it is (negative, or past the width) rather than being clamped or lost.
     */}
-    <div ref={pointerFieldRef} className="raster-pointer-field" style={dynamicCursor ? { cursor: dynamicCursor } : undefined} onPointerEnter={updateBrushCursor} onPointerLeave={() => { onBrushCursorLeave(); setDynamicCursor(undefined); }} onPointerDown={handlePointerDown} onPointerMove={(event) => { updateBrushCursor(event); handlePointerMove(event); }} onPointerUp={finishGesture} onPointerCancel={finishGesture} onContextMenu={(event) => { if (selectionLike) { onSelectionContextMenu(event); return; } if (activeToolId === "raster.move" && (toolStates["raster.move"] as MoveState | undefined)?.pending) { onTransformContextMenu(event); return; } if (activeToolId === "raster.move" && (canConvertToScene3D || is3DLayer) && activeLayerForConvert) { scene3dMenu.open(event, [...(canConvertToScene3D ? [{ label: text(language, "Convert to 3D", "Преобразовать в 3D"), onSelect: () => void convertLayerToScene3D(document.id, activeLayerForConvert.id) }] : []), ...(is3DLayer ? [{ label: text(language, "Rotate 3D Object", "Повернуть 3D объект"), onSelect: () => { setScene3DGroundLayer(document.id, null); setScene3DOrbitLayer(document.id, activeLayerForConvert.id); } }, { label: text(language, "Cast Shadow…", "Настроить тень…"), onSelect: () => { setScene3DOrbitLayer(document.id, null); setScene3DGroundLayer(document.id, activeLayerForConvert.id); } }] : [])]); return; } event.preventDefault(); if (!brushLike) return; const rect = workspaceRef.current?.getBoundingClientRect(); if (rect) setBrushPopup({ left: Math.min(event.clientX - rect.left, rect.width - 300), top: Math.min(event.clientY - rect.top, rect.height - 430), detailed: false }); }} />
+    <div ref={pointerFieldRef} className="raster-pointer-field" style={dynamicCursor ? { cursor: dynamicCursor } : undefined} onPointerEnter={updateBrushCursor} onPointerLeave={() => { onBrushCursorLeave(); setDynamicCursor(undefined); }} onPointerDown={handlePointerDown} onPointerMove={(event) => { updateBrushCursor(event); handlePointerMove(event); }} onPointerUp={finishGesture} onPointerCancel={finishGesture} onContextMenu={(event) => { if (selectionLike) { onSelectionContextMenu(event); return; } if (activeToolId === "raster.move" && (toolStates["raster.move"] as MoveState | undefined)?.pending) { onTransformContextMenu(event); return; } if (activeToolId === "raster.move" && (canConvertToScene3D || is3DLayer) && activeLayerForConvert) { scene3dMenu.open(event, [...(canConvertToScene3D ? [{ label: text(language, "Convert to 3D", "Преобразовать в 3D"), onSelect: () => void convertLayerToScene3D(document.id, activeLayerForConvert.id) }] : []), ...(is3DLayer ? [{ label: text(language, "Rotate 3D Object", "Повернуть 3D объект"), onSelect: () => { setScene3DGroundLayer(document.id, null); setScene3DOrbitLayer(document.id, activeLayerForConvert.id); } }, { label: text(language, "Cast Shadow…", "Настроить тень…"), onSelect: () => { setScene3DOrbitLayer(document.id, null); setScene3DGroundLayer(document.id, activeLayerForConvert.id); } }] : []), ...(is3DLayer && activeLayerForConvert.scene3d?.ground ? [{ label: text(language, "Reset Shadow Settings", "Сбросить настройки тени"), onSelect: () => void updateScene3DLayer(document.id, activeLayerForConvert.id, { ground: { ...defaultScene3DGround } }) }] : [])]); return; } event.preventDefault(); if (!brushLike) return; const rect = workspaceRef.current?.getBoundingClientRect(); if (rect) setBrushPopup({ left: Math.min(event.clientX - rect.left, rect.width - 300), top: Math.min(event.clientY - rect.top, rect.height - 430), detailed: false }); }} />
     <div className="raster-stage" style={stageStyle}>
       <canvas ref={canvasRef} className={brushLike ? "brush-cursor-canvas" : ""} width={state.width} height={state.height} />
       {/* Whatever the active catalogue tool draws over the canvas. */}
@@ -650,13 +690,18 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       live and asked for it to come off).
     */}
     {activeToolId === "raster.move" && activeLayer3D && orbitGizmoLayerId === activeLayer3D.id && <Scene3DOrbitGizmo documentId={document.id} document={state} layer={activeLayer3D} zoom={viewport.zoom} documentOriginX={documentOriginX} documentOriginY={documentOriginY} onLiveChange={onOrbitLiveChange} onAccept={() => void commitOrbitGizmo()} onCancel={cancelOrbitGizmo}/>}
-    {/* Scene3DGroundGizmo: the ground-plane tilt/distance sliders for "Cast Shadow" — same entry door as the orbit gizmo above, mutually exclusive with it. */}
-    {activeToolId === "raster.move" && activeLayer3D && groundGizmoLayerId === activeLayer3D.id && <Scene3DGroundGizmo documentId={document.id} document={state} layer={activeLayer3D} zoom={viewport.zoom} documentOriginX={documentOriginX} documentOriginY={documentOriginY} onClose={() => setScene3DGroundLayer(document.id, null)}/>}
+    {/* Scene3DGroundPointsGizmo: click 3-4 points to place "Cast Shadow"'s ground plane — same entry door as the orbit gizmo above, mutually exclusive with it. */}
+    {activeToolId === "raster.move" && activeLayer3D && groundGizmoLayerId === activeLayer3D.id && <Scene3DGroundPointsGizmo documentId={document.id} document={state} layer={activeLayer3D} zoom={viewport.zoom} documentOriginX={documentOriginX} documentOriginY={documentOriginY} onPointsChange={onGroundPointsChange} onAccept={() => void commitGroundGizmo()} onCancel={cancelGroundGizmo}/>}
     {preferences.showGuides && guideOverlay}
     {preferences.showRulers && rulers}
     {brushPopup && brushLike && activeToolId && <RasterBrushTipPopup activeToolId={activeToolId} brushOptions={brushOptions} position={brushPopup} detailed={brushPopup.detailed} onToggleDetailed={() => setBrushPopup({ ...brushPopup, detailed: !brushPopup.detailed })} onClose={() => setBrushPopup(null)} setToolOption={setToolOption}/>}
     {movePending && <div className="pending-transform-hint">Enter — Apply (Применить) · Esc — Cancel (Отменить)</div>}
     {activeToolId === "raster.move" && activeLayer3D && orbitGizmoLayerId === activeLayer3D.id && <div className="pending-transform-hint">Enter — Apply (Применить) · Esc — Cancel (Отменить)</div>}
+    {activeToolId === "raster.move" && activeLayer3D && groundGizmoLayerId === activeLayer3D.id && <div className="pending-transform-hint">
+      {groundPointCount < 3
+        ? `Click ${3 - groundPointCount} more point(s) on the surface (Отметьте ещё ${3 - groundPointCount} точку/точки на поверхности) · Esc — Cancel (Отменить)`
+        : "Enter — Apply (Применить) · Esc — Cancel (Отменить)"}
+    </div>}
     <div className="canvas-badge">{state.width} × {state.height} · {Math.round(viewport.zoom * 100)}% · {Math.round(viewport.rotation * 10) / 10}° · sRGB · {state.layers.length} layer(s)</div>
     {selectionContextMenu.node}
     {transformContextMenu.node}

@@ -68,12 +68,21 @@ export async function beginLiveScene3D(canvas: HTMLCanvasElement, data: Scene3DL
   const rig = new THREE.Group();
   rig.add(object);
   scene3d.scene.add(rig);
+  // Fit once, here, at the object's own intrinsic (unrotated) pose — not on every `render()` call
+  // the way this used to (re-fitting against whichever rotation happened to be live that frame).
+  // A live rotate/orbit drag calls `render()` on every pointer-move tick, and re-fitting there
+  // meant the camera's own distance and the rig's own centering both silently followed the
+  // rotated bounding box's radius each tick — a diagonal view's axis-aligned box is bigger than a
+  // face-on one of the same object, so the object visibly zoomed and drifted as it turned, on top
+  // of whatever the user was actually doing. `renderScene3DLayerPixels`'s own commit path (this
+  // session's one-frame counterpart) fits at the same stable pose, for the same reason — see its
+  // own comment.
+  centerAndFit(rig, scene3d.camera);
   applyLighting(scene3d, data.lighting, 500);
   let disposed = false;
   let groundPlane: THREE.Mesh | null = null;
   const render = () => {
     if (disposed) return;
-    centerAndFit(rig, scene3d.camera);
     scene3d.renderer.render(scene3d.scene, scene3d.camera);
   };
   const setRotation = (rotationX: number, rotationY: number, rotationZ: number) => {
@@ -93,27 +102,4 @@ export async function beginLiveScene3D(canvas: HTMLCanvasElement, data: Scene3DL
     render, setRotation, setGround,
     dispose: () => { disposed = true; scene3d.dispose(); },
   };
-}
-
-/**
- * A bounded track's arithmetic — a linear ["-------o------"](the owner's own drawing) whose knob
- * position is an *absolute* reading of a value across `[min, max]`. Originally the 3D object's
- * own rotation, fixed at [-180°, 180°] (replaced by the Blender-style orbit gizmo,
- * `Scene3DOrbitGizmo.tsx` — the owner tried the linear-slider version live and asked for it to
- * come off); generalized to an arbitrary range for the ground plane's tilt and distance sliders
- * (`Scene3DGroundGizmo.tsx`), which need different bounds than a rotation does. Kept pure and
- * separate from whichever component wires it up (this codebase's own convention — the tool
- * state-machine math in `move.tsx` is pure functions, the JSX around it is thin) so the mapping
- * is unit-testable without a DOM.
- */
-export function valueFromTrackOffset(offset: number, trackLength: number, min: number, max: number): number {
-  if (trackLength <= 0) return min;
-  const fraction = Math.max(0, Math.min(1, offset / trackLength));
-  return min + fraction * (max - min);
-}
-
-export function trackOffsetFromValue(value: number, trackLength: number, min: number, max: number): number {
-  if (max <= min) return 0;
-  const clamped = Math.max(min, Math.min(max, value));
-  return ((clamped - min) / (max - min)) * trackLength;
 }

@@ -73,6 +73,12 @@ export interface Scene3DGround {
   /** Degrees the plane tilts away from the camera around X — 0 is
    * face-on (a wall), 90 is a floor seen from directly above. */
   tiltX: number;
+  /** Degrees the plane additionally tilts around Z, applied after `tiltX` — together the two
+   * let a point-placed plane (three or four clicks, "Cast Shadow…") tip toward an arbitrary
+   * direction rather than only toward or away from the camera. 0 for the classic single-axis
+   * floor/wall case `tiltX` alone already covered, and for any ground saved before this field
+   * existed (read back as `undefined`, meant as 0). */
+  tiltZ: number;
   /** How far below the object's own centered origin the plane sits, in
    * the same units as `Scene3DLayerData.size`. */
   distance: number;
@@ -84,7 +90,7 @@ export interface Scene3DGround {
   softness: number;
 }
 
-export const defaultScene3DGround: Scene3DGround = { enabled: false, tiltX: 65, distance: 60, opacity: 55, softness: 6 };
+export const defaultScene3DGround: Scene3DGround = { enabled: false, tiltX: 65, tiltZ: 0, distance: 60, opacity: 55, softness: 6 };
 
 export interface Scene3DLayerData {
   source: Scene3DSource;
