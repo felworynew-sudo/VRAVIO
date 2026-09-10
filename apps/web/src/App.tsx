@@ -335,7 +335,19 @@ export function App() {
     setAdjustmentDialog({ documentId: active.id, layerId: layer.id, targetsMask: false, definitionId: definition.id, initialValue: defaultAdjustment(definition.id) });
   };
 
-  const previewImageAdjustment = (value: RasterAdjustment | null) => {
+  // Recompositing the whole document (compositeRasterDocument — "over a
+  // second on a large multi-layer document" by its own doc comment, tiled
+  // down from there but still real work) used to run synchronously inside
+  // this function, once per `onChange` — and a dragged slider or a scrubbed
+  // NumberBox can fire that many times inside a single animation frame, each
+  // one blocking the main thread in turn. Found live: dragging any
+  // adjustment's slider (Levels, Curves, brightness — all of them, since
+  // they all go through this one function) stalled hard. `RasterWorkspace`'s
+  // own `schedulePreview` already solves exactly this for brush strokes by
+  // coalescing to one `requestAnimationFrame` callback; this is that same
+  // pattern applied here instead of a second, independent throttle.
+  const adjustmentPreviewFrameRef = useRef<{ frame: number; value: RasterAdjustment | null } | null>(null);
+  const runImageAdjustmentPreview = (value: RasterAdjustment | null) => {
     if (!adjustmentDialog) return;
     const document = kernel.documents.get<RasterDocumentState>(adjustmentDialog.documentId); if (!document || !isRasterDocumentState(document.state)) return;
     if (!value) { window.dispatchEvent(new CustomEvent("vravio-raster-preview", { detail: { documentId: document.id, pixels: null } })); return; }
@@ -354,6 +366,25 @@ export function App() {
     const layers = document.state.layers.map((layer) => layer.id === target.id ? { ...layer, pixels: layer.pixels.slice(), effects: structuredClone(layer.effects) } : layer);
     const previewState = { ...document.state, layers }; const previewLayer = layers.find((layer) => layer.id === target.id)!; setLayerPixels(previewLayer, confined, previewState.width, previewState.height);
     window.dispatchEvent(new CustomEvent("vravio-raster-preview", { detail: { documentId: document.id, pixels: compositeRasterDocument(previewState) } }));
+  };
+  const previewImageAdjustment = (value: RasterAdjustment | null) => {
+    // Clearing the preview (dialog closing/cancelling) is a discrete action,
+    // not a rapid-fire scrub — that one always runs immediately, cancelling
+    // whatever stale frame was still pending so it cannot land after this
+    // and repaint the preview it was just told to clear.
+    if (!value) {
+      if (adjustmentPreviewFrameRef.current) { cancelAnimationFrame(adjustmentPreviewFrameRef.current.frame); adjustmentPreviewFrameRef.current = null; }
+      runImageAdjustmentPreview(null);
+      return;
+    }
+    const pending = adjustmentPreviewFrameRef.current;
+    if (pending) { pending.value = value; return; }
+    const entry = { frame: 0, value };
+    adjustmentPreviewFrameRef.current = entry;
+    entry.frame = requestAnimationFrame(() => {
+      adjustmentPreviewFrameRef.current = null;
+      runImageAdjustmentPreview(entry.value);
+    });
   };
 
   const applyImageAdjustment = (value: RasterAdjustment) => {
