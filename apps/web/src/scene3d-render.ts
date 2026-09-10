@@ -104,7 +104,10 @@ export function smoothContour(points: readonly { x: number; y: number }[], itera
   return current;
 }
 
-async function buildGeometrySource(data: Scene3DLayerData, document: RasterDocumentState): Promise<THREE.Object3D> {
+/** Exported for `scene3d-live.ts`'s persistent drag-session renderer, which builds the mesh once
+ * at gesture start and only re-renders it (never rebuilds the geometry) on every subsequent
+ * frame — see that module's own doc comment. */
+export async function buildGeometrySource(data: Scene3DLayerData, document: RasterDocumentState): Promise<THREE.Object3D> {
   const source = data.source;
   if (source.kind === "text") {
     const font = await loadFont(source.font);

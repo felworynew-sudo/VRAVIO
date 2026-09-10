@@ -68,6 +68,7 @@ const ALLOWED: readonly { readonly match: string; readonly reason: string }[] = 
   { match: "curve-baseline", reason: "plotted data over its own graph" },
   { match: "brush-cursor", reason: "canvas overlay over artwork" },
   { match: "clone-source-cursor", reason: "canvas overlay over artwork" },
+  { match: "scene3d-rotation-knob", reason: "canvas overlay over artwork — same convention as transform-/puppet- handles" },
 
   { match: "raster-stage", reason: "transparency checkerboard: a fixed convention, not a theme colour" },
   { match: "vector-stage", reason: "transparency checkerboard" },

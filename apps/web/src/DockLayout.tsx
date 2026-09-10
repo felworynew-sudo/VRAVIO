@@ -188,10 +188,38 @@ function AudioInspector({ documentId, state, language }: { documentId: string; s
 
 /** Properties panel for a persistent 3D layer: rotation, lighting and (source-dependent)
  * material controls, each committing through updateScene3DLayer — which re-renders the layer's
- * pixels on every change, the same "edit the data, not the pixels" contract a text layer has. */
+ * pixels on every change, the same "edit the data, not the pixels" contract a text layer has.
+ *
+ * `commit` coalesces to one call per animation frame instead of one per `input` event: a
+ * `<input type="range">` fires that event continuously while dragging, and each call into
+ * `updateScene3DLayer` is a full mesh rebuild + WebGL render + `readPixels` + document commit —
+ * exactly the unthrottled-per-frame-cost pattern already fixed once this session for the
+ * adjustment dialog's live preview, reproduced here on a 3D re-render instead of a flat
+ * composite. Coalesced patches merge field-by-field for `lighting`/`source` rather than one
+ * overwriting the other's nested object outright: two different sliders (say azimuth then
+ * elevation) dragged within the same animation frame both read the same still-stale `data` —
+ * the first commit hasn't landed yet — so a shallow merge would drop whichever field's own
+ * patch got overwritten by the other's freshly-spread-but-incomplete `lighting` object. */
 function Scene3DProperties({ documentId, layer, language }: { documentId: string; layer: RasterLayer; language: Language }) {
   const data = layer.scene3d!;
-  const commit = (patch: Partial<typeof data>) => void updateScene3DLayer(documentId, layer.id, patch);
+  const pendingRef = useRef<{ frame: number; patch: Partial<typeof data> } | null>(null);
+  const commit = (patch: Partial<typeof data>) => {
+    const pending = pendingRef.current;
+    if (pending) {
+      pending.patch = {
+        ...pending.patch, ...patch,
+        ...(pending.patch.lighting || patch.lighting ? { lighting: { ...pending.patch.lighting, ...patch.lighting } as typeof data.lighting } : {}),
+        ...(pending.patch.source || patch.source ? { source: { ...pending.patch.source, ...patch.source } as typeof data.source } : {}),
+      };
+      return;
+    }
+    const entry = { frame: 0, patch };
+    pendingRef.current = entry;
+    entry.frame = requestAnimationFrame(() => {
+      pendingRef.current = null;
+      void updateScene3DLayer(documentId, layer.id, entry.patch);
+    });
+  };
   const commitLighting = (patch: Partial<typeof data.lighting>) => commit({ lighting: { ...data.lighting, ...patch } });
   const commitSource = (patch: Partial<typeof data.source>) => commit({ source: { ...data.source, ...patch } as typeof data.source });
   return <div className="dock-panel-body property-stack scene3d-properties">

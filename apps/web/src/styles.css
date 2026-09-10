@@ -612,6 +612,15 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
    all — the interface does not grow with the zoom. See the comment above these
    elements in RasterWorkspace.tsx for why vector-effect:non-scaling-stroke
    inside the scaled stage did not hold up across browsers. ------------------- */
+.scene3d-live-canvas{position:absolute;z-index:4;pointer-events:none}
+.scene3d-rotation-track{position:absolute;z-index:6;pointer-events:auto;cursor:pointer;touch-action:none}
+.scene3d-rotation-track--horizontal{height:18px;transform:translateY(-9px)}
+.scene3d-rotation-track--horizontal::before{content:"";position:absolute;left:0;right:0;top:50%;height:1px;background:var(--border);transform:translateY(-.5px)}
+.scene3d-rotation-track--vertical{width:18px;transform:translateX(-9px)}
+.scene3d-rotation-track--vertical::before{content:"";position:absolute;top:0;bottom:0;left:50%;width:1px;background:var(--border);transform:translateX(-.5px)}
+.scene3d-rotation-knob{position:absolute;width:12px;height:12px;border-radius:50%;background:var(--focus);border:1px solid rgba(0,0,0,.85);box-shadow:0 0 0 1px rgba(255,255,255,.9);transform:translate(-50%,-50%);pointer-events:none}
+.scene3d-rotation-track--horizontal .scene3d-rotation-knob{top:50%}
+.scene3d-rotation-track--vertical .scene3d-rotation-knob{left:50%}
 .brush-cursor,.clone-source-cursor{position:absolute;left:0;top:0;pointer-events:none;z-index:5;transform:translate(-50%,-50%)}
 .brush-cursor .cursor-ring{position:absolute;left:0;top:0;transform:translate(-50%,-50%);display:block;border-radius:50%;border:1px solid rgba(0,0,0,.85);box-shadow:0 0 0 1px rgba(255,255,255,.9)}
 /* The clone source marker draws its own circle and arms at constant stroke

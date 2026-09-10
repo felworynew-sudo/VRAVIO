@@ -7,6 +7,7 @@ import {
 import type { VravioDocument } from "@vravio/kernel";
 import { kernel } from "./kernel";
 import { importModelAsLayer } from "./scene3d-commands";
+import { Scene3DRotationGizmo } from "./Scene3DRotationGizmo";
 import { rasterToolById } from "./environments/raster/tools/registry";
 import type { PaintTarget, ToolContext, ToolPointer } from "./environments/raster/tools/types";
 import { applyWarpPreset, commitPending, empty as moveToolEmpty, pendingBounds, startPendingTransform, type MoveState } from "./environments/raster/tools/definitions/move";
@@ -494,6 +495,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const committedSelectionPath = displayedSelection && !selectionEdgesHidden && activeToolId !== "raster.selectionBrush" ? selectionOutlinePath(displayedSelection.mask, state.width, state.height) : "";
   const brushLike = activeToolId === "raster.brush" || activeToolId === "raster.pencil" || activeToolId === "raster.highlighter" || activeToolId === "raster.eraser" || activeToolId === "raster.clone" || activeToolId === "raster.spotHeal" || activeToolId === "raster.blur" || activeToolId === "raster.smudge" || activeToolId === "raster.dodge" || activeToolId === "raster.burn";
   const selectionLike = activeToolId === "raster.marquee" || activeToolId === "raster.ellipseMarquee" || activeToolId === "raster.lasso";
+  const activeLayer3D = activeRasterLayer(state)?.kind === "3d" ? activeRasterLayer(state) ?? null : null;
   const { selectionContextMenu, transformContextMenu, onSelectionContextMenu, onTransformContextMenu } = useRasterContextMenus({
     activeToolId, toolOptions, setToolOption, language, state, toolContextFor, canvas: canvasRef.current, selectionLike,
   });
@@ -549,6 +551,15 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     */}
     {catalogueTool?.ScreenOverlay && <catalogueTool.ScreenOverlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>} context={toolContextFor(catalogueTool.id, canvasRef.current)}/>}
     {brushCursorOverlay}
+    {/*
+      Scene3DRotationGizmo: on-canvas rotation handles for a persistent 3D
+      layer (docs/master-plan.md §8.9's own TODO — "ручки вращения модели...
+      прямо на слое, не только в панели Свойства"), positioned under and
+      beside the Move tool's own transform frame ("под основными
+      манипуляторами" — the owner's own phrasing), so it only appears
+      alongside that frame rather than on every tool.
+    */}
+    {activeToolId === "raster.move" && activeLayer3D && <Scene3DRotationGizmo documentId={document.id} document={state} layer={activeLayer3D} zoom={viewport.zoom} documentOriginX={documentOriginX} documentOriginY={documentOriginY}/>}
     {preferences.showGuides && guideOverlay}
     {preferences.showRulers && rulers}
     {brushPopup && brushLike && activeToolId && <RasterBrushTipPopup activeToolId={activeToolId} brushOptions={brushOptions} position={brushPopup} detailed={brushPopup.detailed} onToggleDetailed={() => setBrushPopup({ ...brushPopup, detailed: !brushPopup.detailed })} onClose={() => setBrushPopup(null)} setToolOption={setToolOption}/>}
