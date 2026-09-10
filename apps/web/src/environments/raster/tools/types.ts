@@ -316,6 +316,14 @@ export interface ToolContext<TState> {
    * not a buffer `schedulePreview`'s pixels-for-a-layer shape can express.
    */
   previewSpotHealMask(mask: Uint8ClampedArray, originX: number, originY: number, width: number, height: number): void;
+
+  /**
+   * Same door as `previewSpotHealMask`, magenta instead of the healing
+   * brush's dark tint — the Selection Brush's own live mark (Photoshop:
+   * paint to grow a selection, Alt-paint to shrink it) over whatever
+   * `schedulePreview` most recently painted, straight to the canvas.
+   */
+  previewSelectionBrushMask(mask: Uint8ClampedArray, originX: number, originY: number, width: number, height: number): void;
 }
 
 // `NavigationGesture`/`NavigationContext`/`NavigationHooks` used to live here;

@@ -54,7 +54,7 @@ function harness(document: RasterDocumentState) {
     commit: async () => {}, commitSelection: async () => {}, commitDocument: async () => {},
     setActiveLayer: () => {}, setSelectedLayers: () => {}, setForegroundColor: () => {},
     setMaskForegroundWhite: () => {}, resetViewportToFit: () => {}, setLastStrokePoint: () => {},
-    setCloneSource: () => {}, setCloneOffset: () => {}, previewSpotHealMask: () => {},
+    setCloneSource: () => {}, setCloneOffset: () => {}, previewSpotHealMask: () => {}, previewSelectionBrushMask: () => {},
     scheduleWork: (fn: () => void) => fn(),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any as ToolContext<MoveState>;

@@ -89,7 +89,7 @@ function driveMove(document: RasterDocumentState, path: readonly { x: number; y:
     setLastStrokePoint: () => {},
     setCloneSource: () => {},
     setCloneOffset: () => {},
-    previewSpotHealMask: () => {},
+    previewSpotHealMask: () => {}, previewSelectionBrushMask: () => {},
     // Synchronous, like contract.test.ts's own harness: the tool's per-frame
     // work then runs inside the same call and its effects are observable here.
     scheduleWork: (fn: () => void) => fn(),

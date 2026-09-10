@@ -207,6 +207,44 @@ export function useRasterCommit(params: {
     putRegionPixels(canvas, composited, region);
   };
 
+  /**
+   * The Selection Brush's live mark — same rectangle-only tint as
+   * `renderSpotHealOverlay` just above, and for the same measured reason
+   * (a per-pointer-sample full-canvas composite is what makes any brush
+   * stutter), but magenta rather than the healing brush's dark tint. This
+   * is Photoshop's own Selection Brush convention, not an invented color:
+   * a semi-transparent magenta wash over the area currently marked,
+   * deliberately not marching ants — the ants only apply to the selection
+   * as committed, and a brush's whole point is showing partial/feathered
+   * coverage while it is still being painted, which a binary ants outline
+   * cannot express.
+   */
+  const renderSelectionBrushOverlay = (mask: Uint8ClampedArray, originX: number, originY: number, maskW: number, maskH: number) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    const region = clampRegionToDocument(state, { x: originX, y: originY, width: maskW, height: maskH });
+    if (!region.width || !region.height) return;
+
+    const pixels = canvasPixels(activeRasterLayer(state));
+    const layer = activeRasterLayer(state);
+    const direct = state.layers.length === 1 && layer.visible && layer.opacity === 1 && layer.blendMode === "normal";
+    const composited = direct ? cropPixels(pixels, state.width, region) : compositeRasterRegion(withActiveLayerPixels(state, pixels), region);
+
+    for (let y = 0; y < region.height; y += 1) {
+      for (let x = 0; x < region.width; x += 1) {
+        const value = mask[(y + region.y - originY) * maskW + (x + region.x - originX)];
+        if (!value) continue;
+        const at = (y * region.width + x) * 4, alpha = value / 255 * 0.55;
+        composited[at] = Math.round(composited[at]! * (1 - alpha) + 236 * alpha);
+        composited[at + 1] = Math.round(composited[at + 1]! * (1 - alpha) + 0 * alpha);
+        composited[at + 2] = Math.round(composited[at + 2]! * (1 - alpha) + 236 * alpha);
+      }
+    }
+    putRegionPixels(canvas, composited, region);
+  };
+
   /** Binds a layer buffer to an asset on first edit, seeding it with the pre-edit bytes. */
   const ensureBufferAsset = async (layerId: string, target: "pixels" | "mask", before: Uint8ClampedArray): Promise<AssetId | null> => {
     await kernel.assetsReady;
@@ -380,5 +418,5 @@ export function useRasterCommit(params: {
     await history.execute({ label, memoryEstimate: (before?.mask.byteLength ?? 0) + (after?.mask.byteLength ?? 0), redo: () => assign(after), undo: () => assign(before) });
   };
 
-  return { renderWorking, renderWorkingMultiple, renderWorkingRegion, renderSpotHealOverlay, commitPixels, commitDocumentState, commitSelection };
+  return { renderWorking, renderWorkingMultiple, renderWorkingRegion, renderSpotHealOverlay, renderSelectionBrushOverlay, commitPixels, commitDocumentState, commitSelection };
 }

@@ -205,6 +205,7 @@ function drive(
     get cloneOffset() { return effects.cloneOffset; },
     setCloneOffset: (offset) => { effects.cloneOffset = offset; },
     previewSpotHealMask: (mask, originX, originY, width, height) => { effects.spotHealPreviews.push({ mask, originX, originY, width, height }); },
+    previewSelectionBrushMask: () => {},
     get selectedLayers() { return effects.selectedLayers; },
     setSelectedLayers: (layerIds) => { effects.selectedLayers = layerIds; effects.selectedLayerSets.push(layerIds); },
     // No RAF here — the harness drives a gesture synchronously already (see
