@@ -1,4 +1,5 @@
-import { selectionBounds, selectionBrushStrokeSegment, selectionOutlinePath, type PixelSelection } from "@vravio/env-raster";
+import { useEffect } from "react";
+import { selectionBounds, selectionBrushStrokeSegment, unionRect, type PixelSelection, type RasterRect } from "@vravio/env-raster";
 import type { RasterToolDefinition, ToolContext } from "../types";
 
 /**
@@ -6,18 +7,20 @@ import type { RasterToolDefinition, ToolContext } from "../types";
  * cycles the two). Paint to add to the selection, hold Alt to subtract —
  * momentary, not a mode captured at pointer-down, so the same stroke can
  * switch mid-drag exactly like Photoshop's own does (confirmed via
- * phlearn.com's walkthrough — Adobe's own help page 403'd). The live mark is
- * a semi-transparent magenta wash over the area currently painted,
- * deliberately not marching ants: partial/feathered coverage (a soft-edged
- * brush tip) has no honest binary outline until the stroke settles.
+ * phlearn.com's walkthrough — Adobe's own help page 403'd).
  *
- * Unlike the marquee/lasso tools, which build one shape and hand it to
- * `combineSelections` on release, this tool paints directly into a working
- * copy of the selection's own mask as the gesture runs — closer to how
- * Photoshop's brush-based selection actually behaves (you see the selection
- * itself grow and shrink live, not a pending shape that gets merged in at
- * the end) and it is what lets Alt-subtract erase pixels this same stroke
- * just added, not only pixels from an older, already-committed selection.
+ * The whole selection reads as a translucent color wash the entire time this
+ * tool is the active one — not marching ants, and not only while a stroke is
+ * in progress. This is Quick Mask, not a pending shape: GIMP's own Quick Mask
+ * (`app/core/gimpchannel-select.c`'s consumers, toggled by the same "Q"-style
+ * affordance Photoshop uses) and Photoshop's own Quick Mask both represent a
+ * selection this way — a rubylith-style overlay whose per-pixel alpha follows
+ * the mask's own coverage, so a feathered edge reads as a gradient, not a
+ * binary line — and both scope it to *while that mode/tool is active*, never
+ * bleeding into the ordinary marching-ants view the rest of the time. Opacity
+ * is the tool's own option, the same "wash strength" Quick Mask's options
+ * dialog exposes, and purely a display knob: it dims the overlay, it does not
+ * change what pixels end up selected.
  */
 
 interface Stroke {
@@ -26,11 +29,24 @@ interface Stroke {
   /** Full document-sized working copy of the selection mask, mutated dab by dab. */
   working: Uint8ClampedArray;
   pending: { x: number; y: number };
-  /** Bounding rectangle touched so far this stroke — what the live overlay repaints, grown on demand like spot-heal's own accumulating mask. */
-  dirtyX: number;
-  dirtyY: number;
-  dirtyRight: number;
-  dirtyBottom: number;
+  /**
+   * Coalesces the live tint into one repaint per animation frame, exactly
+   * the way `RasterWorkspace.tsx`'s own `schedulePreview` throttles brush
+   * strokes. The first version of this tool painted straight to the canvas
+   * on every `pointermove`, and kept widening the SAME rectangle for the
+   * whole gesture rather than resetting it after each paint — so a drag
+   * that swept most of a 2000×2000 canvas re-tinted a rectangle that only
+   * ever grew, synchronously, once per pointer sample: exactly the
+   * unthrottled-per-frame-cost bug CLAUDE.md already documents for the
+   * adjustment dialog's live preview, reproduced here on a canvas-sized
+   * scale instead of a slider. `frameDirty` is only what changed *since the
+   * last paint* and is cleared the moment it is flushed. Coalescing itself
+   * goes through `context.scheduleWork` — the same one-RAF "run the latest
+   * fn" queue every other tool with a per-frame side effect already shares —
+   * rather than calling `requestAnimationFrame` directly, which is also what
+   * lets a plain unit test drive this tool without a browser's RAF at all.
+   */
+  frameDirty: RasterRect | null;
 }
 
 export interface SelectionBrushState {
@@ -39,23 +55,36 @@ export interface SelectionBrushState {
 
 const empty: SelectionBrushState = { stroke: null };
 
-function growDirty(stroke: Stroke, x: number, y: number, radius: number, width: number, height: number): void {
-  stroke.dirtyX = Math.max(0, Math.min(stroke.dirtyX, Math.floor(x - radius)));
-  stroke.dirtyY = Math.max(0, Math.min(stroke.dirtyY, Math.floor(y - radius)));
-  stroke.dirtyRight = Math.min(width, Math.max(stroke.dirtyRight, Math.ceil(x + radius)));
-  stroke.dirtyBottom = Math.min(height, Math.max(stroke.dirtyBottom, Math.ceil(y + radius)));
+/** Extracts a region of the full-document mask, scaled by the tool's own display opacity, and blits it. */
+function paintTint(context: ToolContext<SelectionBrushState>, mask: Uint8ClampedArray, region: RasterRect): void {
+  const { width } = context.document;
+  const opacity = Math.max(0, Math.min(100, Number(context.options.opacity ?? 50))) / 100;
+  const originX = Math.max(0, Math.floor(region.x)), originY = Math.max(0, Math.floor(region.y));
+  const w = Math.max(0, Math.ceil(region.x + region.width) - originX), h = Math.max(0, Math.ceil(region.y + region.height) - originY);
+  if (w <= 0 || h <= 0) return;
+  const out = new Uint8ClampedArray(w * h);
+  for (let y = 0; y < h; y += 1) for (let x = 0; x < w; x += 1) {
+    out[y * w + x] = Math.round(mask[(originY + y) * width + (originX + x)]! * opacity);
+  }
+  context.previewSelectionBrushMask(out, originX, originY, w, h);
 }
 
-function previewStroke(context: ToolContext<SelectionBrushState>, stroke: Stroke): void {
+function flushFramePaint(context: ToolContext<SelectionBrushState>, stroke: Stroke): void {
+  const dirty = stroke.frameDirty;
+  if (!dirty) return;
+  stroke.frameDirty = null;
+  paintTint(context, stroke.working, dirty);
+}
+
+function scheduleFramePaint(context: ToolContext<SelectionBrushState>, stroke: Stroke, touchedX: number, touchedY: number, radius: number): void {
   const { width, height } = context.document;
-  const originX = stroke.dirtyX, originY = stroke.dirtyY;
-  const w = stroke.dirtyRight - originX, h = stroke.dirtyBottom - originY;
-  if (w <= 0 || h <= 0) return;
-  const region = new Uint8ClampedArray(w * h);
-  for (let y = 0; y < h; y += 1) for (let x = 0; x < w; x += 1) {
-    region[y * w + x] = stroke.working[(originY + y) * width + (originX + x)]!;
-  }
-  context.previewSelectionBrushMask(region, originX, originY, w, h);
+  const grown = unionRect(stroke.frameDirty, touchedX - radius, touchedY - radius, touchedX + radius, touchedY + radius, 0);
+  stroke.frameDirty = {
+    x: Math.max(0, grown.x), y: Math.max(0, grown.y),
+    width: Math.min(width, grown.x + grown.width) - Math.max(0, grown.x),
+    height: Math.min(height, grown.y + grown.height) - Math.max(0, grown.y),
+  };
+  context.scheduleWork(() => flushFramePaint(context, stroke));
 }
 
 const selectionBrush: RasterToolDefinition<SelectionBrushState> = {
@@ -73,15 +102,10 @@ const selectionBrush: RasterToolDefinition<SelectionBrushState> = {
     const roundness = Number(options.roundness ?? 100);
     const mode = pointer.altKey ? "subtract" : "add";
 
-    const stroke: Stroke = {
-      pointerId: pointer.pointerId, before, working,
-      pending: pointer.point,
-      dirtyX: width, dirtyY: height, dirtyRight: 0, dirtyBottom: 0,
-    };
-    growDirty(stroke, pointer.point.x, pointer.point.y, size / 2 + 2, width, height);
+    const stroke: Stroke = { pointerId: pointer.pointerId, before, working, pending: pointer.point, frameDirty: null };
     selectionBrushStrokeSegment(working, width, height, pointer.point.x, pointer.point.y, pointer.point.x, pointer.point.y, size, hardness, roundness, 0, mode);
     context.setState({ stroke });
-    previewStroke(context, stroke);
+    scheduleFramePaint(context, stroke, pointer.point.x, pointer.point.y, size / 2 + 2);
   },
 
   onPointerMove(context, pointer) {
@@ -95,50 +119,78 @@ const selectionBrush: RasterToolDefinition<SelectionBrushState> = {
     const spacing = Number(options.spacing ?? 12) / 100;
     const mode = pointer.altKey ? "subtract" : "add";
 
-    growDirty(stroke, pointer.point.x, pointer.point.y, size / 2 + 2, width, height);
-    growDirty(stroke, stroke.pending.x, stroke.pending.y, size / 2 + 2, width, height);
     selectionBrushStrokeSegment(stroke.working, width, height, stroke.pending.x, stroke.pending.y, pointer.point.x, pointer.point.y, size, hardness, roundness, 0, mode, spacing);
+    const radius = size / 2 + 2;
+    // Both ends of this segment, not just where the pointer landed — a fast
+    // sweep can jump the tip's own radius or more between samples, and the
+    // stroke drawn between them is exactly what `selectionBrushStrokeSegment`
+    // just stamped.
+    scheduleFramePaint(context, stroke, (stroke.pending.x + pointer.point.x) / 2, (stroke.pending.y + pointer.point.y) / 2, radius + Math.hypot(pointer.point.x - stroke.pending.x, pointer.point.y - stroke.pending.y) / 2);
     stroke.pending = pointer.point;
-    previewStroke(context, stroke);
   },
 
   onGestureEnd(context, pointer) {
     const stroke = context.state.stroke;
     if (!stroke || stroke.pointerId !== pointer.pointerId) return;
     context.setState(empty);
+    // The last dab's own frame may still be pending — show it now rather
+    // than waiting up to one more animation frame after the pointer is
+    // already up.
+    flushFramePaint(context, stroke);
     const { width, height } = context.document;
     const bounds = selectionBounds(stroke.working, width, height);
     const after: PixelSelection | null = bounds.width && bounds.height ? { mask: stroke.working, bounds } : null;
-    // The tint was painted straight to the canvas, outside React and outside
-    // the document's own pixels — a selection-only commit never bumps the
-    // pixel revision that would otherwise repaint over it, the same gap
-    // CLAUDE.md documents for any tool that draws outside `schedulePreview`'s
-    // own contract. Recomposite the true picture explicitly before handing
-    // the selection change to history.
-    context.previewWithLayerHidden(null);
+    // Deliberately no `previewWithLayerHidden(null)` here: the tint already
+    // on screen is byte-for-byte what `after` is about to become (same
+    // `stroke.working` array), so clearing it now and waiting for the async
+    // `commitSelection` below to land and re-derive the same picture would
+    // only buy a visible flash — the exact "glitch on completion" this was
+    // built to avoid. Nothing needs to change on screen; only the document's
+    // own selection and history need to catch up, in the background.
     void context.commitSelection(stroke.before, after, "Selection Brush (Кисть выделения)");
   },
 
   onDeactivate(context) {
     const state = context.state;
-    if (!state.stroke) return;
-    context.setState(empty);
+    if (state.stroke) { flushFramePaint(context, state.stroke); context.setState(empty); }
+    // The Quick-Mask-style wash is a representation of "this tool is active",
+    // not of the selection itself — it has to come off the canvas the moment
+    // another tool takes over, or that tool's own marching ants would be
+    // fighting a stale tint underneath them.
     context.previewWithLayerHidden(null);
   },
 
-  Overlay({ state, context, document }) {
-    // While a stroke is running, the magenta tint (previewSelectionBrushMask)
-    // is the live picture of the selection; the last-committed outline would
-    // otherwise sit stale underneath it and read as two disagreeing answers.
-    if (state.stroke) return null;
+  Overlay({ context }) {
     const selection = context.selection;
-    if (!selection) return null;
-    const path = selectionOutlinePath(selection.mask, document.width, document.height);
-    if (!path) return null;
-    const zoom = context.viewport.zoom;
-    return <svg className="selection-overlay" viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
-      <path d={path} fill="none" stroke="#ec00ec" strokeOpacity={0.85} strokeWidth={1 / zoom} strokeDasharray={`${3 / zoom} ${3 / zoom}`}/>
-    </svg>;
+    const opacity = Number(context.options.opacity ?? 50);
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    useEffect(() => {
+      // Only the at-rest picture: a stroke in progress paints its own live
+      // tint directly (see `scheduleFramePaint`), and `context.selection`
+      // does not change until that stroke's async commit lands — so this
+      // effect naturally sits out every frame of an active drag and only
+      // ever repaints the settled state before or after one, never racing it.
+      //
+      // Cleared first, unconditionally: Alt-subtract (or an undo) can shrink
+      // or move the selected area between one settled state and the next,
+      // and the old tint outside the new bounds would otherwise never get
+      // painted over — `previewWithLayerHidden(null)` is the same full
+      // recomposite `onDeactivate` already uses for exactly this reason. The
+      // tint itself is then scoped to `bounds`, not the whole canvas: cheap
+      // for the ordinary case of a selection much smaller than the document,
+      // and this whole pair only runs on a settled transition, not per frame.
+      context.previewWithLayerHidden(null);
+      if (!selection) return;
+      paintTint(context, selection.mask, selection.bounds);
+      // No cleanup here: `onDeactivate` above is this tool's one door for
+      // "stop showing the wash", already wired to the workspace's own
+      // tool-switch handler. A cleanup here as well would double the clear
+      // (once from this effect re-running on every selection change, once
+      // from onDeactivate) and, worse, run on a stale `context` closure from
+      // a prior render — see CLAUDE.md on `context.state` snapshots.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [selection, opacity]);
+    return null;
   },
 };
 

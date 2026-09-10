@@ -218,6 +218,18 @@ export function useRasterCommit(params: {
    * as committed, and a brush's whole point is showing partial/feathered
    * coverage while it is still being painted, which a binary ants outline
    * cannot express.
+   *
+   * Unlike the healing brush's own tint above, this one has to show up over
+   * fully *transparent* canvas too — a selection is a region of the canvas,
+   * not of the layer (`marquee-selection.tsx`'s own comment on the same
+   * point), so an empty new document is exactly where a selection wash needs
+   * to be visible. Blending only the RGB channels the way the healing tint
+   * does is invisible there: composited pixels start at alpha 0, and
+   * whatever color ends up in the RGB channels of a fully transparent pixel
+   * never reaches the screen. This does a real Porter-Duff "over" — the same
+   * `srcA + dstA*(1-srcA)` formula `spot_heal.ts`'s own `applySpotHealToRegion`
+   * already uses to blend a repair onto a layer — so the wash raises the
+   * alpha too, not just the color.
    */
   const renderSelectionBrushOverlay = (mask: Uint8ClampedArray, originX: number, originY: number, maskW: number, maskH: number) => {
     const canvas = canvasRef.current;
@@ -236,10 +248,14 @@ export function useRasterCommit(params: {
       for (let x = 0; x < region.width; x += 1) {
         const value = mask[(y + region.y - originY) * maskW + (x + region.x - originX)];
         if (!value) continue;
-        const at = (y * region.width + x) * 4, alpha = value / 255 * 0.55;
-        composited[at] = Math.round(composited[at]! * (1 - alpha) + 236 * alpha);
-        composited[at + 1] = Math.round(composited[at + 1]! * (1 - alpha) + 0 * alpha);
-        composited[at + 2] = Math.round(composited[at + 2]! * (1 - alpha) + 236 * alpha);
+        const at = (y * region.width + x) * 4;
+        const srcA = value / 255, dstA = composited[at + 3]! / 255;
+        const outA = srcA + dstA * (1 - srcA);
+        if (outA <= 0) continue;
+        composited[at] = Math.round((236 * srcA + composited[at]! * dstA * (1 - srcA)) / outA);
+        composited[at + 1] = Math.round((0 * srcA + composited[at + 1]! * dstA * (1 - srcA)) / outA);
+        composited[at + 2] = Math.round((236 * srcA + composited[at + 2]! * dstA * (1 - srcA)) / outA);
+        composited[at + 3] = Math.round(outA * 255);
       }
     }
     putRegionPixels(canvas, composited, region);

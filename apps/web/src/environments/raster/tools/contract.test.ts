@@ -549,6 +549,16 @@ describe("every tool in the catalogue keeps the contract", () => {
           // shows.
           if (tool.id === "raster.inpaint" && option.id === "model") continue;
 
+          // raster.selectionBrush's "opacity" is a display-only knob, the
+          // same "wash strength" Quick Mask's own options dialog exposes —
+          // it dims the live/at-rest translucent overlay this tool paints
+          // straight to the canvas (`previewSelectionBrushMask`) and never
+          // touches the committed mask this harness's `signature()` reads.
+          // Not untested: `selection-brush.test.ts` checks it scales the
+          // painted tint's own values directly, the same way inpaint's
+          // "model" note above points at `ml/inpaint/prepare.test.ts`.
+          if (tool.id === "raster.selectionBrush" && option.id === "opacity") continue;
+
           // A value that is not the default, chosen by the option's own type.
           // "angle" is the one exception: an ellipse has 180°-rotational
           // symmetry, so max (180, for a -180..180 range) maps it onto

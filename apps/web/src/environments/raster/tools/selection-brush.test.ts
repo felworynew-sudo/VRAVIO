@@ -28,21 +28,25 @@ interface Recorded {
   selection: PixelSelection | null;
   commits: { before: PixelSelection | null; after: PixelSelection | null }[];
   clears: number;
+  paints: { mask: Uint8ClampedArray; originX: number; originY: number; width: number; height: number }[];
 }
 
-function driveBrush(document: RasterDocumentState, path: readonly { x: number; altKey?: boolean }[][]): Recorded {
-  const recorded: Recorded = { state: selectionBrush.createState!() as SelectionBrushState, selection: document.selection, commits: [], clears: 0 };
+function driveBrush(document: RasterDocumentState, path: readonly { x: number; altKey?: boolean }[][], options: Record<string, string | number | boolean> = { size: 10, hardness: 100, roundness: 100, spacing: 12 }): Recorded {
+  const recorded: Recorded = { state: selectionBrush.createState!() as SelectionBrushState, selection: document.selection, commits: [], clears: 0, paints: [] };
   const context = {
     documentId: "test-document",
     document,
     viewport: { zoom: 1, rotation: 0, panX: 0, panY: 0, mode: "actual" },
-    options: { size: 10, hardness: 100, roundness: 100, spacing: 12 },
+    options,
     get selection() { return recorded.selection; },
     get state() { return recorded.state; },
     setState: (next: SelectionBrushState) => { recorded.state = next; },
     capturePointer: () => {},
     previewWithLayerHidden: () => { recorded.clears += 1; },
-    previewSelectionBrushMask: () => {},
+    previewSelectionBrushMask: (mask: Uint8ClampedArray, originX: number, originY: number, width: number, height: number) => { recorded.paints.push({ mask, originX, originY, width, height }); },
+    // Synchronous, like contract.test.ts's own harness: coalesced per-frame
+    // work then runs inside the same call and its effects are observable here.
+    scheduleWork: (fn: () => void) => fn(),
     commitSelection: async (before: PixelSelection | null, after: PixelSelection | null) => {
       recorded.commits.push({ before, after });
       recorded.selection = after;
@@ -104,9 +108,41 @@ describe("selection brush tool", () => {
     expect(sweptSelected).toBe(false);
   });
 
-  it("clears the live magenta tint on gesture end, since a selection-only commit never bumps the pixel revision that would otherwise repaint over it", () => {
+  it("does not clear the canvas on gesture end — the live tint already shows the exact final mask, and clearing it here would only flash before the async commit re-derives the same picture", () => {
     const document = createRasterDocument(WIDTH, HEIGHT);
     const result = driveBrush(document, [[{ x: 10 }, { x: 20 }]]);
-    expect(result.clears).toBeGreaterThan(0);
+    expect(result.clears).toBe(0);
+  });
+
+  it("opacity dims the live tint's own painted values without changing what gets selected", () => {
+    const full = driveBrush(createRasterDocument(WIDTH, HEIGHT), [[{ x: 10 }, { x: 20 }]], { size: 10, hardness: 100, roundness: 100, spacing: 12, opacity: 100 });
+    const dim = driveBrush(createRasterDocument(WIDTH, HEIGHT), [[{ x: 10 }, { x: 20 }]], { size: 10, hardness: 100, roundness: 100, spacing: 12, opacity: 25 });
+    expect(full.paints.length).toBeGreaterThan(0);
+    const fullPeak = Math.max(...full.paints.flatMap((paint) => [...paint.mask]));
+    const dimPeak = Math.max(...dim.paints.flatMap((paint) => [...paint.mask]));
+    expect(fullPeak).toBe(255);
+    // 25% of 255, rounded — the same scaling `paintTint` applies.
+    expect(dimPeak).toBe(Math.round(255 * 0.25));
+    // The committed selection itself is identical either way: opacity never
+    // touches what ends up selected, only how the wash is drawn.
+    expect(maskSum(full.selection)).toBe(maskSum(dim.selection));
+  });
+
+  it("deactivating the tool clears the wash — it represents the tool being active, not the selection itself", () => {
+    const document = createRasterDocument(WIDTH, HEIGHT);
+    const state = selectionBrush.createState!() as SelectionBrushState;
+    let clears = 0;
+    const context = {
+      documentId: "test-document",
+      document,
+      selection: null,
+      state,
+      setState: () => {},
+      previewWithLayerHidden: () => { clears += 1; },
+      scheduleWork: (fn: () => void) => fn(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any as ToolContext<SelectionBrushState>;
+    selectionBrush.onDeactivate!(context);
+    expect(clears).toBe(1);
   });
 });

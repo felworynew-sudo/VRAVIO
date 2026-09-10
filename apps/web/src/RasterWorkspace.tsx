@@ -377,7 +377,17 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     previousToolRef.current = activeToolId;
     if (previous === activeToolId || !previous) return;
     const leaving = rasterToolById.get(previous);
-    leaving?.onDeactivate?.(toolContextFor(previous, null));
+    // Every other `toolContextFor` call site below wires the live canvas —
+    // this was the one exception, passing `null` unconditionally. Nothing
+    // exposed it before: no other tool's own `onDeactivate` reached for
+    // `context.previewWithLayerHidden` (raster.move's routes cleanup through
+    // an actual document commit instead, which repaints via the ordinary
+    // revision-watching effect). raster.selectionBrush's own `onDeactivate`
+    // is the first to call it directly — found live, as a translucent wash
+    // left stuck on screen after switching away from the tool, no matter how
+    // many times `previewWithLayerHidden(null)` ran: it was a no-op the whole
+    // time, `if (!canvas) return;` swallowing it silently.
+    leaving?.onDeactivate?.(toolContextFor(previous, canvasRef.current));
     // A cursor hint from the tool being left must not linger on the one just switched to — it
     // will set its own on the next pointer move, but there is a gap (right after switching,
     // before the pointer moves again) that would otherwise still show the old tool's hint.
@@ -475,8 +485,13 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const movePending = (toolStates["raster.move"] as MoveState | undefined)?.pending;
   const displayedSelection = catalogueMarqueePreview ?? movePending?.selection ?? state.selection;
   // Cmd/Ctrl+H hides the marching ants without dropping the selection, so an
-  // edge can be judged without the animation crawling over it.
-  const committedSelectionPath = displayedSelection && !selectionEdgesHidden ? selectionOutlinePath(displayedSelection.mask, state.width, state.height) : "";
+  // edge can be judged without the animation crawling over it. The Selection
+  // Brush hides them the same way, but for a different reason and only while
+  // it is the active tool: it draws its own Quick-Mask-style translucent wash
+  // over the selection instead (see selection-brush.tsx's own Overlay), and
+  // this baseline ants outline sitting underneath a raster tint read as two
+  // disagreeing representations of the same selection at once.
+  const committedSelectionPath = displayedSelection && !selectionEdgesHidden && activeToolId !== "raster.selectionBrush" ? selectionOutlinePath(displayedSelection.mask, state.width, state.height) : "";
   const brushLike = activeToolId === "raster.brush" || activeToolId === "raster.pencil" || activeToolId === "raster.highlighter" || activeToolId === "raster.eraser" || activeToolId === "raster.clone" || activeToolId === "raster.spotHeal" || activeToolId === "raster.blur" || activeToolId === "raster.smudge" || activeToolId === "raster.dodge" || activeToolId === "raster.burn";
   const selectionLike = activeToolId === "raster.marquee" || activeToolId === "raster.ellipseMarquee" || activeToolId === "raster.lasso";
   const { selectionContextMenu, transformContextMenu, onSelectionContextMenu, onTransformContextMenu } = useRasterContextMenus({
