@@ -38,6 +38,7 @@ import { useCloseOnOutsideClick } from "./useCloseOnOutsideClick";
 import { WORKSPACE_LAYOUT_STORAGE_KEY, WORKSPACE_PRESET_EVENT, selectedWorkspacePreset, workspacePresetById, type WorkspacePresetDetail } from "./workspace-presets";
 import { pickCommands } from "./commands/surface";
 import { convertLayerToScene3D, importModelAsLayer, updateScene3DLayer } from "./scene3d-commands";
+import { harmonizeLayer } from "./harmonize-commands";
 import type { ReversibleOperation } from "@vravio/kernel";
 import { AppearancePanel } from "./environments/vector/AppearancePanel";
 import { GeometryModifiersPanel } from "./environments/vector/GeometryModifiersPanel";
@@ -586,6 +587,13 @@ function LayersPanel() {
         // operation is, and offering it for any non-group layer costs nothing
         // extra to show, the same way "Экструдировать слой в 3D" already does.
         ...(layer.kind === "text" || layer.kind === "pixel" || layer.kind === "shape" ? [{ label: text(language, "Convert to 3D", "Преобразовать в 3D"), onSelect: () => void convertLayerToScene3D(active.id, layer.id) }] : []),
+        // Owner's own request: harmonize a 3D layer with its surroundings,
+        // reachable by right-click. Reinhard color transfer (harmonize.ts's
+        // own doc comment explains why a classic algorithm and not a neural
+        // model right now), matching its Lab statistics to the composited
+        // scene around it — the same "Harmonize" the master-plan names,
+        // powered by a technique that needs no trained weights.
+        ...(layer.kind === "3d" ? [{ label: text(language, "Harmonize with Scene", "Гармонизировать со сценой"), onSelect: () => void harmonizeLayer(active.id, layer.id) }] : []),
         item("layer.mergeDown"),
         item("layer.mergeVisible"),
         // Owner's own request: right-clicking a layer should offer Invert directly. The command

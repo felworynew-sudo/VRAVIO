@@ -7,6 +7,7 @@ import {
 import type { VravioDocument } from "@vravio/kernel";
 import { kernel } from "./kernel";
 import { convertLayerToScene3D, importModelAsLayer } from "./scene3d-commands";
+import { harmonizeLayer } from "./harmonize-commands";
 import { Scene3DRotationGizmo } from "./Scene3DRotationGizmo";
 import { rasterToolById } from "./environments/raster/tools/registry";
 import type { PaintTarget, ToolContext, ToolPointer } from "./environments/raster/tools/types";
@@ -500,16 +501,18 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const { selectionContextMenu, transformContextMenu, onSelectionContextMenu, onTransformContextMenu } = useRasterContextMenus({
     activeToolId, toolOptions, setToolOption, language, state, toolContextFor, canvas: canvasRef.current, selectionLike,
   });
-  // "Convert to 3D" on canvas — the owner's own request that this reach the
-  // layer whether right-clicked in the Layers panel (DockLayout.tsx's own
-  // menu) or right here. Deliberately its own small menu rather than folding
-  // into `layerContextMenu`: that builder lives inside DockLayout.tsx's
-  // closures (deleteLayer, addGroup, applyMask, a dozen others), all scoped
-  // to state that component owns — pulling it out for one shared entry would
-  // be a much larger refactor than the single action actually needs.
+  // "Convert to 3D" / "Harmonize with Scene" on canvas — the owner's own
+  // request that both reach the layer whether right-clicked in the Layers
+  // panel (DockLayout.tsx's own menu) or right here. Deliberately its own
+  // small menu rather than folding into `layerContextMenu`: that builder
+  // lives inside DockLayout.tsx's closures (deleteLayer, addGroup,
+  // applyMask, a dozen others), all scoped to state that component owns —
+  // pulling it out for two shared entries would be a much larger refactor
+  // than the actions themselves need.
   const scene3dMenu = useContextMenu();
   const activeLayerForConvert = activeRasterLayer(state);
   const canConvertToScene3D = activeLayerForConvert && (activeLayerForConvert.kind === "text" || activeLayerForConvert.kind === "pixel" || activeLayerForConvert.kind === "shape");
+  const canHarmonize = activeLayerForConvert?.kind === "3d";
   const documentOriginX = workspaceSize.width / 2 + viewport.panX - state.width * viewport.zoom / 2, documentOriginY = workspaceSize.height / 2 + viewport.panY - state.height * viewport.zoom / 2;
   const { updateBrushCursor, onPointerLeave: onBrushCursorLeave, brushOptions, tipRoundness, overlay: brushCursorOverlay } = useBrushCursor({
     state, viewport, toolOptions, activeToolId, brushLike, canvasPixels, workspaceRef, sourcePointRef, cloneOffsetRef, preciseCursor, documentOriginX, documentOriginY,
@@ -543,7 +546,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       the workspace element, so a point past the canvas edge already came out as the document
       coordinate it is (negative, or past the width) rather than being clamped or lost.
     */}
-    <div ref={pointerFieldRef} className="raster-pointer-field" style={dynamicCursor ? { cursor: dynamicCursor } : undefined} onPointerEnter={updateBrushCursor} onPointerLeave={() => { onBrushCursorLeave(); setDynamicCursor(undefined); }} onPointerDown={handlePointerDown} onPointerMove={(event) => { updateBrushCursor(event); handlePointerMove(event); }} onPointerUp={finishGesture} onPointerCancel={finishGesture} onContextMenu={(event) => { if (selectionLike) { onSelectionContextMenu(event); return; } if (activeToolId === "raster.move" && (toolStates["raster.move"] as MoveState | undefined)?.pending) { onTransformContextMenu(event); return; } if (activeToolId === "raster.move" && canConvertToScene3D && activeLayerForConvert) { scene3dMenu.open(event, [{ label: text(language, "Convert to 3D", "Преобразовать в 3D"), onSelect: () => void convertLayerToScene3D(document.id, activeLayerForConvert.id) }]); return; } event.preventDefault(); if (!brushLike) return; const rect = workspaceRef.current?.getBoundingClientRect(); if (rect) setBrushPopup({ left: Math.min(event.clientX - rect.left, rect.width - 300), top: Math.min(event.clientY - rect.top, rect.height - 430), detailed: false }); }} />
+    <div ref={pointerFieldRef} className="raster-pointer-field" style={dynamicCursor ? { cursor: dynamicCursor } : undefined} onPointerEnter={updateBrushCursor} onPointerLeave={() => { onBrushCursorLeave(); setDynamicCursor(undefined); }} onPointerDown={handlePointerDown} onPointerMove={(event) => { updateBrushCursor(event); handlePointerMove(event); }} onPointerUp={finishGesture} onPointerCancel={finishGesture} onContextMenu={(event) => { if (selectionLike) { onSelectionContextMenu(event); return; } if (activeToolId === "raster.move" && (toolStates["raster.move"] as MoveState | undefined)?.pending) { onTransformContextMenu(event); return; } if (activeToolId === "raster.move" && (canConvertToScene3D || canHarmonize) && activeLayerForConvert) { scene3dMenu.open(event, [...(canConvertToScene3D ? [{ label: text(language, "Convert to 3D", "Преобразовать в 3D"), onSelect: () => void convertLayerToScene3D(document.id, activeLayerForConvert.id) }] : []), ...(canHarmonize ? [{ label: text(language, "Harmonize with Scene", "Гармонизировать со сценой"), onSelect: () => void harmonizeLayer(document.id, activeLayerForConvert.id) }] : [])]); return; } event.preventDefault(); if (!brushLike) return; const rect = workspaceRef.current?.getBoundingClientRect(); if (rect) setBrushPopup({ left: Math.min(event.clientX - rect.left, rect.width - 300), top: Math.min(event.clientY - rect.top, rect.height - 430), detailed: false }); }} />
     <div className="raster-stage" style={stageStyle}>
       <canvas ref={canvasRef} className={brushLike ? "brush-cursor-canvas" : ""} width={state.width} height={state.height} />
       {/* Whatever the active catalogue tool draws over the canvas. */}

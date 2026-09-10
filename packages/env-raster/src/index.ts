@@ -25,6 +25,7 @@ export * from "./effects";
 export * from "./types";
 export * from "./spot_heal";
 export * from "./selection_brush";
+export * from "./harmonize";
 export * from "./patch";
 export * from "./heal_membrane";
 export * from "./retouch";
