@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import {
-  cloneRasterState, layerAccepts, layerLockReason, layerOpaqueBounds, liftSelection, linkedLayers, meshLayerPixels, meshSelection,
+  cloneRasterState, compositeRasterDocument, flattenRasterLayers, layerAccepts, layerLockReason, layerOpaqueBounds, liftSelection, linkedLayers, meshLayerPixels, meshSelection,
   pickLayerAt, quadLayerPixels, quadSelection, regularMesh, restrictSelectionToContent, rotateLayerPixels, rotateSelection,
   rotatedDestinationBounds, scaleLayerPixels, scaleSelection, setLayerPixels, stampFloating, transformLayerPixels, translateLayerPixels, translateSelection, unionRect, WARP_GRID, warpPresetMesh,
   type WarpPresetId,
@@ -787,6 +787,28 @@ const move: RasterToolDefinition<MoveState> = {
       return () => context.previewWithLayerHidden(null);
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [Boolean(live), pending?.layerId]);
+    // What sits *above* the transforming layer in the stack has to stay above its live preview
+    // too, or a lower layer being rotated/scaled would paint over layers stacked on top of it —
+    // `livePreviewRef` is one DOM element floating over the whole canvas by construction, with no
+    // idea where in the layer order it belongs, so nothing routed it through compositing order at
+    // all until this. Composited once, at gesture start, same as the live preview canvas itself
+    // (`document.layers` reference alone is not in this effect's own dependency list, deliberately
+    // — a re-render mid-drag must not resample this any more than it resamples that one).
+    const aboveLayersRef = useRef<HTMLCanvasElement>(null);
+    useEffect(() => {
+      const overlay = aboveLayersRef.current;
+      if (!live || !pending || !overlay) return;
+      const flattened = flattenRasterLayers(document.layers);
+      const index = flattened.findIndex((item) => item.id === pending.layerId);
+      const above = new Set(flattened.slice(index + 1).map((item) => item.id));
+      overlay.width = document.width; overlay.height = document.height;
+      const ctx2d = overlay.getContext("2d");
+      if (!ctx2d) return;
+      if (above.size === 0) { ctx2d.clearRect(0, 0, overlay.width, overlay.height); return; }
+      const onlyAbove = compositeRasterDocument({ ...document, layers: document.layers.map((item) => above.has(item.id) ? item : { ...item, visible: false }) });
+      ctx2d.putImageData(new ImageData(onlyAbove as Uint8ClampedArray<ArrayBuffer>, document.width, document.height), 0, 0);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [Boolean(live), pending?.layerId]);
     useEffect(() => {
       const overlay = livePreviewRef.current;
       if (!live || !overlay || !pending) return;
@@ -823,6 +845,10 @@ const move: RasterToolDefinition<MoveState> = {
     }
     return <>
       {live && <canvas ref={livePreviewRef} className="text-transform-preview" style={{ left: live.target.x, top: live.target.y, width: live.target.width, height: live.target.height, transform: `rotate(${live.rotation}deg)` }}/>}
+      {/* Static (never itself rotated/moved) and sized to the whole document, not the dragged
+          layer's own bounds — it stands in for whatever is stacked above that layer, which does
+          not move just because the layer underneath it does. */}
+      {live && <canvas ref={aboveLayersRef} className="transform-above-layers-preview" style={{ left: 0, top: 0, width: document.width, height: document.height }}/>}
       {text && <canvas ref={textPreviewRef} className="text-transform-preview" style={{ left: text.targetBounds.x, top: text.targetBounds.y, width: text.targetBounds.width, height: text.targetBounds.height, transform: `rotate(${pending.rotation}deg)` }}/>}
       <svg className="transform-controls" strokeWidth={1 / zoom} viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
         <rect x={bounds.x} y={bounds.y} width={bounds.width} height={bounds.height}/>
