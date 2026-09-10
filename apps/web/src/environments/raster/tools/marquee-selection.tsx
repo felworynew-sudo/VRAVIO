@@ -1,4 +1,4 @@
-import { combineSelections, createEllipseSelection, createPolygonSelection, createRectangleSelection, marqueeCorners, marqueeRect, translateSelection, type PixelSelection, type Point, type SelectionCombineMode } from "@vravio/env-raster";
+import { appendLassoPoint, combineSelections, createEllipseSelection, createPolygonSelection, createRectangleSelection, marqueeCorners, marqueeRect, translateSelection, type PixelSelection, type Point, type SelectionCombineMode } from "@vravio/env-raster";
 import { MarchingAnts } from "../../../marching-ants";
 import type { RasterToolDefinition, ToolContext, ToolPointer } from "./types";
 
@@ -35,7 +35,7 @@ interface DrawState {
   from: Point;
   current: Point;
   /** Only meaningful for lasso; empty otherwise. */
-  points: Point[];
+  points: readonly Point[];
   readonly mode: SelectionCombineMode;
   /** Where Space was when it started being held mid-drag, so the marquee
    * slides by how far the pointer has moved since — not by an accumulating
@@ -53,6 +53,7 @@ const empty: MarqueeState = { drag: null, draw: null };
 function modeFromModifiers(pointer: ToolPointer): SelectionCombineMode {
   return pointer.shiftKey && pointer.altKey ? "intersect" : pointer.shiftKey ? "add" : pointer.altKey ? "subtract" : "replace";
 }
+
 
 function shapeFrom(kind: MarqueeKind, draw: DrawState, width: number, height: number, feather: number, pointer: ToolPointer): PixelSelection {
   const corners = marqueeCorners(draw.from.x, draw.from.y, draw.current.x, draw.current.y, { square: pointer.shiftKey, fromCentre: pointer.altKey });
@@ -106,7 +107,7 @@ export function createMarqueeTool(id: string, kind: MarqueeKind): RasterToolDefi
           context.setState({ drag: null, draw: { ...draw, from: { x: draw.from.x + dx, y: draw.from.y + dy }, current: { x: draw.current.x + dx, y: draw.current.y + dy }, spaceAnchor: pointer.point } });
           return;
         }
-        const points = kind === "lasso" ? [...draw.points, pointer.point] : draw.points;
+        const points = kind === "lasso" ? appendLassoPoint(draw.points, pointer.point) : draw.points;
         context.setState({ drag: null, draw: { ...draw, current: pointer.point, points, spaceAnchor: null } });
       }
     },
@@ -121,12 +122,20 @@ export function createMarqueeTool(id: string, kind: MarqueeKind): RasterToolDefi
       if (!draw || draw.pointerId !== pointer.pointerId) return;
       context.setState(empty);
 
+      // The spacing floor above can leave the release point itself unrecorded
+      // — the last few sub-threshold pixels of the gesture never crossed
+      // `LASSO_POINT_SPACING`. Closing the loop on a vertex short of where the
+      // pointer actually came up would nick a sliver off the traced shape, so
+      // it is forced in here with a zero minimum spacing.
+      const finalPoints = kind === "lasso" ? appendLassoPoint(draw.points, pointer.point, 0) : draw.points;
+      const finalDraw = draw.points === finalPoints ? draw : { ...draw, points: [...finalPoints] };
+
       // A click that never became a drag deselects, as it does in Photoshop.
       // Taken literally it described a one-pixel selection, which is never
       // what anyone wanted and left a selection nothing else would work
       // outside of.
       const travelled = kind === "lasso"
-        ? Math.max(...draw.points.map((point) => Math.hypot(point.x - draw.from.x, point.y - draw.from.y)), 0)
+        ? Math.max(...finalDraw.points.map((point) => Math.hypot(point.x - draw.from.x, point.y - draw.from.y)), 0)
         : Math.hypot(draw.current.x - draw.from.x, draw.current.y - draw.from.y);
       if (travelled < 2) {
         if (context.selection) void context.commitSelection(context.selection, null, "Deselect (Снять выделение)");
@@ -134,7 +143,7 @@ export function createMarqueeTool(id: string, kind: MarqueeKind): RasterToolDefi
       }
 
       const feather = Number(context.options.feather ?? 0);
-      const incoming = shapeFrom(kind, draw, context.document.width, context.document.height, feather, pointer);
+      const incoming = shapeFrom(kind, finalDraw, context.document.width, context.document.height, feather, pointer);
       // A selection is a region of the canvas, not of the layer: selecting
       // empty space is how anything gets painted into it. Confining it to
       // opaque pixels belongs at the moment something is moved or

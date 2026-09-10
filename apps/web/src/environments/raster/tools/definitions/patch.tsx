@@ -1,4 +1,4 @@
-import { combineSelections, copyHealedRegion, createPolygonSelection, patchFromSelection, selectionOutlinePath, type Point } from "@vravio/env-raster";
+import { appendLassoPoint, combineSelections, copyHealedRegion, createPolygonSelection, patchFromSelection, selectionOutlinePath, type Point } from "@vravio/env-raster";
 import { MarchingAnts } from "../../../../marching-ants";
 import type { RasterToolDefinition, ToolContext } from "../types";
 import { locksRefuse } from "../lock-guard";
@@ -129,7 +129,7 @@ const patch: RasterToolDefinition<PatchState> = {
   onPointerMove(context, pointer) {
     const state = context.state;
     if (state.fallbackLasso && state.fallbackLasso.pointerId === pointer.pointerId) {
-      context.setState({ ...state, fallbackLasso: { ...state.fallbackLasso, points: [...state.fallbackLasso.points, pointer.point] } });
+      context.setState({ ...state, fallbackLasso: { ...state.fallbackLasso, points: appendLassoPoint(state.fallbackLasso.points, pointer.point) } });
       return;
     }
     const stroke = state.stroke;
@@ -142,7 +142,10 @@ const patch: RasterToolDefinition<PatchState> = {
     const state = context.state;
     if (state.fallbackLasso && state.fallbackLasso.pointerId === pointer.pointerId) {
       context.setState(empty);
-      const points = state.fallbackLasso.points;
+      // Same reasoning as `marquee-selection.tsx`'s own `appendLassoPoint`
+      // call at gesture end: the spacing floor can leave the exact release
+      // point unrecorded, so it is forced in here too.
+      const points = appendLassoPoint(state.fallbackLasso.points, pointer.point, 0);
       const first = points[0]!;
       // A click that never became a drag draws nothing, as it does for
       // lasso itself — a one-pixel selection is never what anyone wanted.
