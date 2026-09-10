@@ -9,7 +9,31 @@ export interface PatchRegion {
   originY: number;
 }
 
-export function createPatchRegion(
+/**
+ * Everything `createPatchRegion` needs *around* the membrane solve — gathered once, synchronously
+ * (cheap: one pass over the region), so the solve itself (the expensive part,
+ * `patch.bench.test.ts`'s own ~100ms+ figure) can be swapped out for whoever calls
+ * `solveHealMembrane` on `interior`/`offsets`: the main thread directly (as `createPatchRegion`
+ * still does below, for the one-shot commit-on-release case), or a Worker (`patch.tsx`'s own live
+ * drag preview, through `@vravio/kernel`'s `WorkerPool` — this is the engine layer, so it stays a
+ * plain function returning plain typed arrays rather than knowing workers exist at all).
+ */
+export interface PreparedPatchRegion {
+  readonly interior: Uint8Array;
+  readonly offsets: Int16Array;
+  readonly regionMask: Uint8ClampedArray;
+  readonly regionWidth: number;
+  readonly regionHeight: number;
+  readonly sourcePixels: Uint8ClampedArray;
+  readonly destOriginX: number;
+  readonly destOriginY: number;
+  readonly dx: number;
+  readonly dy: number;
+  readonly mode: "source" | "destination";
+  readonly opacity: number;
+}
+
+export function preparePatchRegion(
   pixels: Uint8ClampedArray,
   canvasWidth: number,
   canvasHeight: number,
@@ -21,9 +45,8 @@ export function createPatchRegion(
   sourceOffsetX: number,
   sourceOffsetY: number,
   opacity: number,
-  mode: "source" | "destination" = "source",
-  sweepScale = 1
-): void {
+  mode: "source" | "destination" = "source"
+): PreparedPatchRegion {
   const sourcePixels = pixels.slice();
   const interior = new Uint8Array(regionWidth * regionHeight);
   const offsets = new Int16Array(regionWidth * regionHeight * 3);
@@ -88,8 +111,14 @@ export function createPatchRegion(
     }
   }
 
-  solveHealMembrane(interior, regionWidth, regionHeight, offsets, sweepScale);
+  return { interior, offsets, regionMask, regionWidth, regionHeight, sourcePixels, destOriginX, destOriginY, dx, dy, mode, opacity };
+}
 
+/** Writes an already-solved `PreparedPatchRegion` (its `offsets` mutated in place by
+ *  `solveHealMembrane`, wherever that ran) back into `pixels` — the cheap phase on either side of
+ *  the expensive solve, same as the gather phase `preparePatchRegion` already is. */
+export function applyPreparedPatchRegion(pixels: Uint8ClampedArray, canvasWidth: number, canvasHeight: number, prepared: PreparedPatchRegion): void {
+  const { offsets, regionMask, regionWidth, regionHeight, sourcePixels, destOriginX, destOriginY, dx, dy, mode, opacity } = prepared;
   for (let ly = 0; ly < regionHeight; ly++) {
     for (let lx = 0; lx < regionWidth; lx++) {
       if (regionMask[ly * regionWidth + lx] === 0) continue;
@@ -143,7 +172,40 @@ export function createPatchRegion(
   }
 }
 
-export function patchFromSelection(
+/** The original all-in-one shape, unchanged: prepare, solve on the main thread, apply — every
+ *  existing caller (the one-shot commit-on-release, `patch.bench.test.ts`) keeps working exactly
+ *  as before. `patch.tsx`'s own live-drag preview is the one caller that skips this and calls
+ *  `preparePatchRegion`/`applyPreparedPatchRegion` itself, with the solve routed through a Worker
+ *  in between. */
+export function createPatchRegion(
+  pixels: Uint8ClampedArray,
+  canvasWidth: number,
+  canvasHeight: number,
+  regionMask: Uint8ClampedArray,
+  regionWidth: number,
+  regionHeight: number,
+  regionOriginX: number,
+  regionOriginY: number,
+  sourceOffsetX: number,
+  sourceOffsetY: number,
+  opacity: number,
+  mode: "source" | "destination" = "source",
+  sweepScale = 1
+): void {
+  const prepared = preparePatchRegion(pixels, canvasWidth, canvasHeight, regionMask, regionWidth, regionHeight, regionOriginX, regionOriginY, sourceOffsetX, sourceOffsetY, opacity, mode);
+  solveHealMembrane(prepared.interior, prepared.regionWidth, prepared.regionHeight, prepared.offsets, sweepScale);
+  applyPreparedPatchRegion(pixels, canvasWidth, canvasHeight, prepared);
+}
+
+/**
+ * Everything `patchFromSelection` needs before the membrane solve — the padded region rectangle,
+ * the feathered local mask, and `preparePatchRegion`'s own gathered `interior`/`offsets` — split
+ * out for the same reason `preparePatchRegion` itself is (see its own doc comment): so the live
+ * drag preview can await a Worker's solve in between this and `applyPreparedPatchRegion`, instead
+ * of calling the all-in-one `patchFromSelection` below and blocking the main thread for the
+ * ~100ms+ `patch.bench.test.ts` already measures.
+ */
+export function preparePatchFromSelection(
   pixels: Uint8ClampedArray,
   canvasWidth: number,
   canvasHeight: number,
@@ -153,10 +215,9 @@ export function patchFromSelection(
   sourceOffsetY: number,
   opacity: number,
   mode: "source" | "destination" = "source",
-  feather = 0,
-  sweepScale = 1
-): void {
-  if (!selectionMask) return;
+  feather = 0
+): PreparedPatchRegion | null {
+  if (!selectionMask) return null;
 
   // The membrane is solved over this rectangle, and it needs cells outside the
   // selection to hold its boundary values. A rectangular selection fills its own
@@ -169,7 +230,7 @@ export function patchFromSelection(
   const right = Math.min(canvasWidth, Math.ceil(selectionBounds.x + selectionBounds.width) + margin);
   const bottom = Math.min(canvasHeight, Math.ceil(selectionBounds.y + selectionBounds.height) + margin);
   const regionWidth = right - left, regionHeight = bottom - top;
-  if (regionWidth <= 0 || regionHeight <= 0) return;
+  if (regionWidth <= 0 || regionHeight <= 0) return null;
 
   const localMask = new Uint8ClampedArray(regionWidth * regionHeight);
   for (let y = 0; y < regionHeight; y += 1) for (let x = 0; x < regionWidth; x += 1) {
@@ -189,19 +250,28 @@ export function patchFromSelection(
   let effectiveMask: Uint8ClampedArray<ArrayBufferLike> = localMask;
   if (feather > 0) effectiveMask = boxBlur(localMask, regionWidth, regionHeight, Math.max(0, Math.round(feather)));
 
-  createPatchRegion(
-    pixels,
-    canvasWidth,
-    canvasHeight,
-    effectiveMask,
-    regionWidth,
-    regionHeight,
-    left,
-    top,
-    sourceOffsetX,
-    sourceOffsetY,
-    opacity,
-    mode,
-    sweepScale
-  );
+  return preparePatchRegion(pixels, canvasWidth, canvasHeight, effectiveMask, regionWidth, regionHeight, left, top, sourceOffsetX, sourceOffsetY, opacity, mode);
+}
+
+/** The original all-in-one shape, unchanged — every existing caller (the one-shot
+ *  commit-on-release, `patch.bench.test.ts`) keeps working exactly as before. `patch.tsx`'s own
+ *  live-drag preview calls `preparePatchFromSelection`/`applyPreparedPatchRegion` itself instead,
+ *  with the solve routed through a Worker in between — see `preparePatchRegion`'s own comment. */
+export function patchFromSelection(
+  pixels: Uint8ClampedArray,
+  canvasWidth: number,
+  canvasHeight: number,
+  selectionMask: Uint8ClampedArray | null,
+  selectionBounds: { x: number; y: number; width: number; height: number },
+  sourceOffsetX: number,
+  sourceOffsetY: number,
+  opacity: number,
+  mode: "source" | "destination" = "source",
+  feather = 0,
+  sweepScale = 1
+): void {
+  const prepared = preparePatchFromSelection(pixels, canvasWidth, canvasHeight, selectionMask, selectionBounds, sourceOffsetX, sourceOffsetY, opacity, mode, feather);
+  if (!prepared) return;
+  solveHealMembrane(prepared.interior, prepared.regionWidth, prepared.regionHeight, prepared.offsets, sweepScale);
+  applyPreparedPatchRegion(pixels, canvasWidth, canvasHeight, prepared);
 }

@@ -1,7 +1,9 @@
-import { appendLassoPoint, combineSelections, copyHealedRegion, createPolygonSelection, patchFromSelection, selectionOutlinePath, type Point } from "@vravio/env-raster";
+import { appendLassoPoint, applyPreparedPatchRegion, combineSelections, copyHealedRegion, createPolygonSelection, patchFromSelection, preparePatchFromSelection, selectionOutlinePath, type Point } from "@vravio/env-raster";
 import { MarchingAnts } from "../../../../marching-ants";
 import type { RasterToolDefinition, ToolContext } from "../types";
 import { locksRefuse } from "../lock-guard";
+import { healMembranePool } from "../../../../heal-membrane-pool";
+import { diagnostic } from "../../../../diagnostics";
 
 /**
  * The patch tool: drag a selected region elsewhere on the canvas and it is
@@ -42,6 +44,11 @@ interface Stroke {
    * cannot afford.
    */
   readonly compositeSnapshot: Uint8ClampedArray | null;
+  /** The live preview's own in-flight Worker solve, if one is running — aborted (and replaced)
+   *  the moment a newer frame supersedes it, and aborted outright the moment the gesture ends, so
+   *  a stale solve can never resolve after the fact and paint over what just committed. See
+   *  `applyPatchPreviewAsync`'s own comment. */
+  previewAbort: AbortController | null;
 }
 
 export interface PatchState {
@@ -109,6 +116,84 @@ function applyPatch(context: ToolContext<PatchState>, stroke: Stroke, to: Point,
   stroke.pending = to;
 }
 
+/**
+ * `applyPatch`'s own live-preview half, moved off the main thread — the multigrid solve is real
+ * work regardless of `PREVIEW_SWEEP_SCALE` (`patch.bench.test.ts`'s own ~66ms even at the cut
+ * rate), and `docs/migration-plan.md` §6.2 named exactly this gap: nothing in the app routed
+ * expensive computation to a Worker yet, `@vravio/kernel`'s own `WorkerPool` built and tested but
+ * never actually wired to anything. This is the first wiring — `preparePatchFromSelection` /
+ * `applyPreparedPatchRegion` (patch.ts) are the same gather/write halves `applyPatch` already used
+ * through the all-in-one `patchFromSelection`, split so the expensive middle (the solve) can await
+ * a Worker instead of blocking here.
+ *
+ * Superseding matters more here than in the synchronous version: a stale solve does not just
+ * waste a solved-then-discarded frame the way an unthrottled synchronous call did, it can resolve
+ * *after* a newer one and paint an old drag position — an actual visible regression, not just
+ * slowness, if not guarded. `stroke.previewAbort` is the guard: aborted before starting a new
+ * solve, and aborted again the moment the gesture ends (`onGestureEnd`/`onDeactivate`, before
+ * their own synchronous full-quality `applyPatch` call), so a stale resolution after the fact is
+ * silently ignored rather than flashing over whatever just committed.
+ */
+async function applyPatchPreviewAsync(context: ToolContext<PatchState>, stroke: Stroke): Promise<void> {
+  const selection = context.selection;
+  if (!selection) return;
+  stroke.previewAbort?.abort();
+  const controller = new AbortController();
+  stroke.previewAbort = controller;
+
+  const to = stroke.pending;
+  const offsetX = to.x - stroke.curveStart.x, offsetY = to.y - stroke.curveStart.y;
+  const options = context.options;
+  const { width, height } = context.document;
+  const opacity = Number(options.opacity ?? 100) / 100;
+  const mode = (options.mode as "source" | "destination") ?? "source";
+  const feather = Number(options.feather ?? 0);
+
+  const solve = async (pixels: Uint8ClampedArray): Promise<boolean> => {
+    const prepared = preparePatchFromSelection(pixels, width, height, context.paintMask ?? null, selection.bounds, offsetX, offsetY, opacity, mode, feather);
+    if (!prepared) return false;
+    let solved: { offsetsRgb: Int16Array };
+    try {
+      solved = await healMembranePool().run(
+        { interior: prepared.interior, width: prepared.regionWidth, height: prepared.regionHeight, offsetsRgb: prepared.offsets, sweepScale: PREVIEW_SWEEP_SCALE },
+        { signal: controller.signal },
+      );
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") return false;
+      throw error;
+    }
+    if (controller.signal.aborted) return false;
+    applyPreparedPatchRegion(pixels, width, height, { ...prepared, offsets: solved.offsetsRgb });
+    return true;
+  };
+
+  if (stroke.compositeSnapshot) {
+    const bx = Math.floor(selection.bounds.x), by = Math.floor(selection.bounds.y);
+    const bw = Math.max(0, Math.ceil(selection.bounds.width)), bh = Math.max(0, Math.ceil(selection.bounds.height));
+    const localMask = new Uint8ClampedArray(bw * bh);
+    for (let ly = 0; ly < bh; ly += 1) for (let lx = 0; lx < bw; lx += 1) {
+      const cx = bx + lx, cy = by + ly;
+      if (cx < 0 || cx >= width || cy < 0 || cy >= height) continue;
+      localMask[ly * bw + lx] = selection.mask[cy * width + cx]!;
+    }
+    const copyOriginX = mode === "destination" ? bx + Math.round(offsetX) : bx;
+    const copyOriginY = mode === "destination" ? by + Math.round(offsetY) : by;
+
+    const healed = stroke.compositeSnapshot.slice();
+    if (!await solve(healed)) return;
+    stroke.working.set(stroke.before);
+    copyHealedRegion(stroke.working, healed, localMask, copyOriginX, copyOriginY, bw, bh, width, height);
+  } else {
+    stroke.working.set(stroke.before);
+    if (!await solve(stroke.working)) return;
+  }
+  // `stroke.pending` is not touched here — `onPointerMove` already set it, synchronously, to
+  // whichever point was actually latest by the time this scheduled work ran (see its own
+  // comment); reassigning it to `to` (this specific call's own, possibly since-superseded,
+  // capture) after an `await` could stomp a newer value a later pointer sample already wrote.
+  context.schedulePreview(stroke.working, "pixels", context.paintTarget.layerId, null);
+}
+
 const patch: RasterToolDefinition<PatchState> = {
   id: "raster.patch",
   requiresRasterized: true,
@@ -130,7 +215,7 @@ const patch: RasterToolDefinition<PatchState> = {
     const before = context.layerPixels();
     // Sampled once, here, not per frame — see the field's own doc comment.
     const compositeSnapshot = context.options.sampleAllLayers === true ? context.compositePixels() : null;
-    context.setState({ fallbackLasso: null, stroke: { pointerId: pointer.pointerId, before, working: before.slice(), curveStart: pointer.point, pending: pointer.point, compositeSnapshot } });
+    context.setState({ fallbackLasso: null, stroke: { pointerId: pointer.pointerId, before, working: before.slice(), curveStart: pointer.point, pending: pointer.point, compositeSnapshot, previewAbort: null } });
   },
 
   onPointerMove(context, pointer) {
@@ -154,9 +239,20 @@ const patch: RasterToolDefinition<PatchState> = {
     // per-frame side effect) collapses that whole backlog to exactly one solve per real frame,
     // always against whichever point turns out to be latest by the time it actually runs.
     stroke.pending = pointer.point;
+    // The solve itself is scheduled through `applyPatchPreviewAsync`, off the main thread — see
+    // its own comment. `scheduleWork` still coalesces *when* that async kick-off happens to once
+    // per frame; superseding an already-running solve is `applyPatchPreviewAsync`'s own job
+    // (`stroke.previewAbort`), since a frame boundary and "the previous Worker call finished" are
+    // two different clocks now that the solve itself is async.
     context.scheduleWork(() => {
-      applyPatch(context, stroke, stroke.pending, false);
-      context.schedulePreview(stroke.working, "pixels", context.paintTarget.layerId, null);
+      // Never left as an unhandled rejection: a genuine failure here (the Worker script fails to
+      // load, `Worker` itself is unavailable — the Node/jsdom test harness this same code path
+      // runs under in `contract.test.ts`, for one) should not crash the drag, only skip that
+      // frame's own preview and say so once, the same way `diagnostic` already surfaces every
+      // other non-fatal tool-level problem in this codebase.
+      applyPatchPreviewAsync(context, stroke).catch((error: unknown) => {
+        diagnostic("warn", "patch", "Live preview solve failed", { error: error instanceof Error ? error.message : String(error) });
+      });
     });
   },
 
@@ -186,6 +282,11 @@ const patch: RasterToolDefinition<PatchState> = {
     const stroke = state.stroke;
     if (!stroke || stroke.pointerId !== pointer.pointerId) return;
     context.setState(empty);
+    // Cancels whatever live-preview solve might still be in flight in the Worker before this
+    // tool's own synchronous, full-quality solve runs — otherwise that stale preview could
+    // resolve after the commit below and repaint over it (`applyPatchPreviewAsync`'s own comment
+    // has the full reasoning).
+    stroke.previewAbort?.abort();
     applyPatch(context, stroke, pointer.point, true);
     // The changed region is the selection itself, translated by the drag —
     // not a brush-stroke bounding box, which is what this tool has no use
@@ -208,6 +309,7 @@ const patch: RasterToolDefinition<PatchState> = {
       // A mid-drag tool switch lands here instead of onGestureEnd — still has
       // to solve at full quality before it commits, not whatever the last
       // preview frame's cut-rate sweep count left behind.
+      stroke.previewAbort?.abort();
       applyPatch(context, stroke, stroke.pending, true);
       void context.commit(stroke.before, stroke.working, "Patch (Заплатка)", "pixels", context.paintTarget.layerId, null);
     }
