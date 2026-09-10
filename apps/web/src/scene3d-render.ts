@@ -148,18 +148,25 @@ export async function buildGeometrySource(data: Scene3DLayerData, document: Rast
 export async function renderScene3DLayerPixels(data: Scene3DLayerData, document: RasterDocumentState): Promise<Uint8ClampedArray> {
   const object = await buildGeometrySource(data, document);
   const scene3d = createScene3D(window.document.createElement("canvas"), document.width, document.height);
-  const rig = new THREE.Group();
-  rig.add(object);
-  rig.rotation.set(data.rotationX * Math.PI / 180, data.rotationY * Math.PI / 180, data.rotationZ * Math.PI / 180);
-  scene3d.scene.add(rig);
-  centerAndFit(rig, scene3d.camera);
-  applyLighting(scene3d, data.lighting, 500);
-  // After centerAndFit, not before: the ground plane sits at the rig's own
-  // bounding-box bottom, which centerAndFit is what actually settles.
-  applyGroundPlane(scene3d, rig, data.ground);
-  const pixels = readPixelsRgba(scene3d.renderer, scene3d.scene, scene3d.camera, document.width, document.height);
-  scene3d.dispose();
-  return pixels;
+  // `dispose()` moved into `finally`: every rotate/shadow edit spins up a fresh WebGLRenderer here
+  // and threw it away undisposed if anything between construction and the end of this function
+  // (lighting, the ground plane, the actual `readPixels` call) ever threw — a real way to leak
+  // toward the browser's own concurrent-WebGL-context limit over a session with many edits, which
+  // reads on screen as some *other*, unrelated live 3D context silently losing its own.
+  try {
+    const rig = new THREE.Group();
+    rig.add(object);
+    rig.rotation.set(data.rotationX * Math.PI / 180, data.rotationY * Math.PI / 180, data.rotationZ * Math.PI / 180);
+    scene3d.scene.add(rig);
+    centerAndFit(rig, scene3d.camera);
+    applyLighting(scene3d, data.lighting, 500);
+    // After centerAndFit, not before: the ground plane sits at the rig's own
+    // bounding-box bottom, which centerAndFit is what actually settles.
+    applyGroundPlane(scene3d, rig, data.ground);
+    return readPixelsRgba(scene3d.renderer, scene3d.scene, scene3d.camera, document.width, document.height);
+  } finally {
+    scene3d.dispose();
+  }
 }
 
 /** The bundled helvetiker JSON typeface (three.js's own example font) only carries Latin glyphs —

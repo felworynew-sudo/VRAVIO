@@ -63,7 +63,8 @@ export function Scene3DGroundGizmo({
   useEffect(() => {
     if (!canvasRef.current) return;
     let cancelled = false;
-    void beginLiveScene3D(canvasRef.current, data, document).then((session) => {
+    void beginLiveScene3D(canvasRef.current, data, document, () => cancelled).then((session) => {
+      if (!session) return;
       if (cancelled) { session.dispose(); return; }
       sessionRef.current = session;
       session.setGround(committedGround);

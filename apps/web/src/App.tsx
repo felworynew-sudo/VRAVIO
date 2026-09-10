@@ -70,6 +70,12 @@ export function App() {
   const openImageRef = useRef<HTMLInputElement>(null);
   const importSvgAsVectorRef = useRef<HTMLInputElement>(null);
   const [transformMetrics, setTransformMetrics] = useState<{ active: boolean; x: number; y: number; width: number; height: number; rotation: number; warp?: boolean } | null>(null);
+  // The 3D rotation gizmo's own pending state — a parallel channel to `transformMetrics` above
+  // rather than folded into it: the two are never active at once (Scene3DOrbitGizmo only mounts
+  // while raster.move is active and a 3D layer is targeted, mutually exclusive with a 2D pending
+  // transform on the same tool), but their shapes differ enough (X/Y/Z degrees vs. x/y/w/h/angle)
+  // that sharing one prop would mean every reader re-checking which fields apply.
+  const [scene3dTransformMetrics, setScene3DTransformMetrics] = useState<{ active: boolean; rotationX: number; rotationY: number; rotationZ: number } | null>(null);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
   const [filterGalleryOpen, setFilterGalleryOpen] = useState(false);
@@ -453,6 +459,12 @@ export function App() {
     return () => window.removeEventListener("vravio-transform-state", onTransformState);
   }, []);
 
+  useEffect(() => {
+    const onScene3DTransformState = (event: Event) => setScene3DTransformMetrics((event as CustomEvent).detail ?? null);
+    window.addEventListener("vravio-scene3d-transform-state", onScene3DTransformState);
+    return () => window.removeEventListener("vravio-scene3d-transform-state", onScene3DTransformState);
+  }, []);
+
   // docs/master-plan.md §8.3: every custom dropdown (the top File/Edit/…
   // menus and the toolbar's tool-group flyouts) only ever closed by
   // clicking the exact button that opened it — there was no outside-click
@@ -734,7 +746,7 @@ export function App() {
       </div>)}
     </div>}
 
-    {(active?.kind === "raster" || active?.kind === "vector") && <OptionsBar language={store.language} tool={activeTool} pixelsPerInch={isRasterDocumentState(active.state) ? active.state.resolution : undefined} values={activeTool ? { ...(store.toolOptions[activeTool.id] ?? {}), ...(activeTool.options.some((option) => option.id === "color") ? { color: effectiveForegroundColor } : {}) } : {}} transform={transformMetrics} onTransformCommit={() => window.dispatchEvent(new Event("vravio-transform-commit"))} onTransformCancel={() => window.dispatchEvent(new Event("vravio-transform-cancel"))} onChange={(id, value) => { if (!activeTool) return; store.setToolOption(activeTool.id, id, value); if (id === "color") { if (editingMaskLayerId) store.setMaskForegroundWhite(active.id, String(value).toLowerCase() !== "#000000"); else store.setForegroundColor(String(value)); } }} alignSelectionCount={isRasterDocumentState(active.state) ? (selectedLayerIds.length || 1) : 0} onAlign={(edge) => alignOrDistributeLayers("align", edge)} onDistribute={(edge) => alignOrDistributeLayers("distribute", edge)} smartGuides={store.preferences.smartGuides} snapToGrid={store.preferences.snapToGrid} onToggleSmartGuides={(smartGuides) => store.updatePreferences({ smartGuides })} onToggleSnapToGrid={(snapToGrid) => store.updatePreferences({ snapToGrid })} />}
+    {(active?.kind === "raster" || active?.kind === "vector") && <OptionsBar language={store.language} tool={activeTool} pixelsPerInch={isRasterDocumentState(active.state) ? active.state.resolution : undefined} values={activeTool ? { ...(store.toolOptions[activeTool.id] ?? {}), ...(activeTool.options.some((option) => option.id === "color") ? { color: effectiveForegroundColor } : {}) } : {}} transform={transformMetrics} onTransformCommit={() => window.dispatchEvent(new Event("vravio-transform-commit"))} onTransformCancel={() => window.dispatchEvent(new Event("vravio-transform-cancel"))} scene3d={scene3dTransformMetrics} onScene3DCommit={() => window.dispatchEvent(new Event("vravio-scene3d-transform-commit"))} onScene3DCancel={() => window.dispatchEvent(new Event("vravio-scene3d-transform-cancel"))} onChange={(id, value) => { if (!activeTool) return; store.setToolOption(activeTool.id, id, value); if (id === "color") { if (editingMaskLayerId) store.setMaskForegroundWhite(active.id, String(value).toLowerCase() !== "#000000"); else store.setForegroundColor(String(value)); } }} alignSelectionCount={isRasterDocumentState(active.state) ? (selectedLayerIds.length || 1) : 0} onAlign={(edge) => alignOrDistributeLayers("align", edge)} onDistribute={(edge) => alignOrDistributeLayers("distribute", edge)} smartGuides={store.preferences.smartGuides} snapToGrid={store.preferences.snapToGrid} onToggleSmartGuides={(smartGuides) => store.updatePreferences({ smartGuides })} onToggleSnapToGrid={(snapToGrid) => store.updatePreferences({ snapToGrid })} />}
 
     <main className="workspace">
       {active ? <DockLayout /> : <HomeScreen language={store.language} requestNewDocument={store.requestNewDocument} openFile={openBridgeFile} />}
@@ -1008,7 +1020,11 @@ function WarpStyleControls({ language }: { language: Language }) {
   </>;
 }
 
-function OptionsBar({ language, tool, values, transform, pixelsPerInch, onTransformCommit, onTransformCancel, onChange, alignSelectionCount, onAlign, onDistribute, smartGuides, snapToGrid, onToggleSmartGuides, onToggleSnapToGrid }: { language: Language; tool: ReturnType<typeof toolById>; values: Record<string, string | number | boolean>; transform: { active: boolean; x: number; y: number; width: number; height: number; rotation: number; warp?: boolean } | null; pixelsPerInch?: number | undefined; onTransformCommit(): void; onTransformCancel(): void; onChange(id: string, value: string | number | boolean): void; alignSelectionCount: number; onAlign(edge: AlignEdge): void; onDistribute(edge: AlignEdge): void; smartGuides: boolean; snapToGrid: boolean; onToggleSmartGuides(value: boolean): void; onToggleSnapToGrid(value: boolean): void }) {
+function OptionsBar({ language, tool, values, transform, scene3d, pixelsPerInch, onTransformCommit, onTransformCancel, onScene3DCommit, onScene3DCancel, onChange, alignSelectionCount, onAlign, onDistribute, smartGuides, snapToGrid, onToggleSmartGuides, onToggleSnapToGrid }: { language: Language; tool: ReturnType<typeof toolById>; values: Record<string, string | number | boolean>; transform: { active: boolean; x: number; y: number; width: number; height: number; rotation: number; warp?: boolean } | null; scene3d: { active: boolean; rotationX: number; rotationY: number; rotationZ: number } | null; pixelsPerInch?: number | undefined; onTransformCommit(): void; onTransformCancel(): void; onScene3DCommit(): void; onScene3DCancel(): void; onChange(id: string, value: string | number | boolean): void; alignSelectionCount: number; onAlign(edge: AlignEdge): void; onDistribute(edge: AlignEdge): void; smartGuides: boolean; snapToGrid: boolean; onToggleSmartGuides(value: boolean): void; onToggleSnapToGrid(value: boolean): void }) {
   if (transform?.active) return <div className="options-bar transform-options"><strong>Free Transform (Свободная трансформация)</strong>{transform.warp && <WarpStyleControls language={language}/>}<label>X:<input value={Math.round(transform.x)} readOnly/></label><label>Y:<input value={Math.round(transform.y)} readOnly/></label><label>W:<input value={Math.round(transform.width)} readOnly/></label><label>H:<input value={Math.round(transform.height)} readOnly/></label><label>∠:<input value={`${Math.round(transform.rotation * 10) / 10}°`} readOnly/></label><button title="Cancel (Отмена)" onClick={onTransformCancel}>×</button><button className="commit" title="Commit (Подтвердить)" onClick={onTransformCommit}>✓</button></div>;
+  // Same "Free Transform" bar shape as above, X/Y/Z rotation degrees in place of x/y/w/h/angle —
+  // the owner's own request to make the 3D rotate gizmo look like this exact interface state
+  // rather than inventing its own (Scene3DOrbitGizmo.tsx's own doc comment has the reasoning).
+  if (scene3d?.active) return <div className="options-bar transform-options"><strong>Rotate 3D Object (Повернуть 3D объект)</strong><label>X:<input value={`${Math.round(scene3d.rotationX * 10) / 10}°`} readOnly/></label><label>Y:<input value={`${Math.round(scene3d.rotationY * 10) / 10}°`} readOnly/></label><label>Z:<input value={`${Math.round(scene3d.rotationZ * 10) / 10}°`} readOnly/></label><button title="Cancel (Отмена)" onClick={onScene3DCancel}>×</button><button className="commit" title="Commit (Подтвердить)" onClick={onScene3DCommit}>✓</button></div>;
   return <div className="options-bar"><strong>{tool ? resolveLabel(tool.label, language) : text(language, "Tool options", "Параметры инструмента")}</strong>{tool ? tool.options.map((option) => <OptionRow key={option.id} language={language} option={option} pixelsPerInch={pixelsPerInch} value={values[option.id] ?? option.defaultValue} onChange={(value) => onChange(option.id, value)} />) : <span className="muted">{language === "ru" ? "Выберите или создайте документ" : "Select or create a document"}</span>}{tool?.id === "raster.move" && <AlignDistributeBar selectionCount={alignSelectionCount} onAlign={onAlign} onDistribute={onDistribute}/>}{tool?.kind === "vector" && <SnapControls language={language} smartGuides={smartGuides} snapToGrid={snapToGrid} onToggleSmartGuides={onToggleSmartGuides} onToggleSnapToGrid={onToggleSnapToGrid}/>}</div>;
 }

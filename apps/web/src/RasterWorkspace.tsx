@@ -6,7 +6,7 @@ import {
 } from "@vravio/env-raster";
 import type { VravioDocument } from "@vravio/kernel";
 import { kernel } from "./kernel";
-import { convertLayerToScene3D, importModelAsLayer } from "./scene3d-commands";
+import { convertLayerToScene3D, importModelAsLayer, updateScene3DLayer } from "./scene3d-commands";
 import { Scene3DOrbitGizmo } from "./Scene3DOrbitGizmo";
 import { Scene3DGroundGizmo } from "./Scene3DGroundGizmo";
 import { rasterToolById } from "./environments/raster/tools/registry";
@@ -526,8 +526,66 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   // once would mean two persistent THREE sessions fighting over the same visible pixels.
   const groundGizmoLayerId = useShellStore((shell) => shell.scene3dGroundLayerIdByDocument[document.id] ?? null);
   const setScene3DGroundLayer = useShellStore((shell) => shell.setScene3DGroundLayer);
+  // The orbit gizmo's own pending rotation — a ref, not state, since it is written on every drag
+  // tick (`onOrbitLiveChange`, forwarded to the options bar's live X/Y/Z readout through a window
+  // event the same way `vravio-transform-state` already broadcasts the 2D pending transform) and
+  // only ever *read* imperatively, at the one moment a commit actually happens.
+  const pendingOrbitRotationRef = useRef<{ x: number; y: number; z: number } | null>(null);
+  const onOrbitLiveChange = (rotation: { x: number; y: number; z: number }) => {
+    pendingOrbitRotationRef.current = rotation;
+    window.dispatchEvent(new CustomEvent("vravio-scene3d-transform-state", { detail: { active: true, rotationX: rotation.x, rotationY: rotation.y, rotationZ: rotation.z } }));
+  };
+  // The gizmo's one door for ending a session, committed or not — used by Enter/the options bar's
+  // own ✓ button *and* by the "switched away" effect below, so "click elsewhere saves" (the
+  // owner's own request, matching Free Transform's own "click outside the frame commits" habit)
+  // and an explicit Commit button are the same code path, not two.
+  const commitOrbitGizmo = async () => {
+    const rotation = pendingOrbitRotationRef.current, layerId = orbitGizmoLayerId;
+    pendingOrbitRotationRef.current = null;
+    // Awaited before closing: `updateScene3DLayer` re-renders the layer's own baked pixels, and
+    // closing the gizmo restores that layer's ordinary visibility (see the hide/restore effect
+    // below) — closing first would flash the *old*, pre-rotation pixels for a frame while the new
+    // render is still in flight.
+    if (layerId && rotation) await updateScene3DLayer(document.id, layerId, { rotationX: rotation.x, rotationY: rotation.y, rotationZ: rotation.z });
+    setScene3DOrbitLayer(document.id, null);
+  };
+  const cancelOrbitGizmo = () => {
+    pendingOrbitRotationRef.current = null;
+    setScene3DOrbitLayer(document.id, null);
+  };
+  // Nothing in the document changes while the gizmo drags — only its own live Three.js session
+  // does — so the layer's own last-committed pixels would otherwise still show underneath that
+  // live overlay for the whole gesture: the reported "object visually duplicates while rotating"
+  // bug. Hidden for the whole visit (not just mid-drag) and restored the moment it ends, whichever
+  // way (commit, cancel, or the "switched away" effect below) — one effect, so there is no path
+  // that hides the layer without a matching path that un-hides it again.
   useEffect(() => {
-    if (orbitGizmoLayerId && (activeToolId !== "raster.move" || activeLayer3D?.id !== orbitGizmoLayerId)) setScene3DOrbitLayer(document.id, null);
+    if (!orbitGizmoLayerId) return;
+    const context = toolContextFor("raster.move", canvasRef.current) as ToolContext<MoveState>;
+    context.previewWithLayerHidden(orbitGizmoLayerId);
+    return () => {
+      context.previewWithLayerHidden(null);
+      window.dispatchEvent(new CustomEvent("vravio-scene3d-transform-state", { detail: null }));
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orbitGizmoLayerId]);
+  // The options bar's own ✓/× buttons live in App.tsx, outside this component — reached the same
+  // way the 2D pending transform's own commit/cancel buttons already are, through a window event.
+  useEffect(() => {
+    const commit = () => void commitOrbitGizmo();
+    const cancel = () => cancelOrbitGizmo();
+    window.addEventListener("vravio-scene3d-transform-commit", commit);
+    window.addEventListener("vravio-scene3d-transform-cancel", cancel);
+    return () => { window.removeEventListener("vravio-scene3d-transform-commit", commit); window.removeEventListener("vravio-scene3d-transform-cancel", cancel); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orbitGizmoLayerId]);
+  useEffect(() => {
+    // The orbit gizmo now commits instead of silently discarding on "switched away" — the same
+    // request that gave it the options-bar Commit/Cancel pair below: losing an in-progress
+    // rotation because the active tool or layer happened to change out from under it (a document
+    // update elsewhere, a stray re-render) is exactly what made it read as "the gizmo just
+    // disappears, cause unclear" rather than a deliberate close.
+    if (orbitGizmoLayerId && (activeToolId !== "raster.move" || activeLayer3D?.id !== orbitGizmoLayerId)) void commitOrbitGizmo();
     if (groundGizmoLayerId && (activeToolId !== "raster.move" || activeLayer3D?.id !== groundGizmoLayerId)) setScene3DGroundLayer(document.id, null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orbitGizmoLayerId, groundGizmoLayerId, activeToolId, activeLayer3D?.id, document.id]);
@@ -591,13 +649,14 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       default (the owner tried the earlier always-on linear-slider version
       live and asked for it to come off).
     */}
-    {activeToolId === "raster.move" && activeLayer3D && orbitGizmoLayerId === activeLayer3D.id && <Scene3DOrbitGizmo documentId={document.id} document={state} layer={activeLayer3D} zoom={viewport.zoom} documentOriginX={documentOriginX} documentOriginY={documentOriginY} onClose={() => setScene3DOrbitLayer(document.id, null)}/>}
+    {activeToolId === "raster.move" && activeLayer3D && orbitGizmoLayerId === activeLayer3D.id && <Scene3DOrbitGizmo documentId={document.id} document={state} layer={activeLayer3D} zoom={viewport.zoom} documentOriginX={documentOriginX} documentOriginY={documentOriginY} onLiveChange={onOrbitLiveChange} onAccept={() => void commitOrbitGizmo()} onCancel={cancelOrbitGizmo}/>}
     {/* Scene3DGroundGizmo: the ground-plane tilt/distance sliders for "Cast Shadow" — same entry door as the orbit gizmo above, mutually exclusive with it. */}
     {activeToolId === "raster.move" && activeLayer3D && groundGizmoLayerId === activeLayer3D.id && <Scene3DGroundGizmo documentId={document.id} document={state} layer={activeLayer3D} zoom={viewport.zoom} documentOriginX={documentOriginX} documentOriginY={documentOriginY} onClose={() => setScene3DGroundLayer(document.id, null)}/>}
     {preferences.showGuides && guideOverlay}
     {preferences.showRulers && rulers}
     {brushPopup && brushLike && activeToolId && <RasterBrushTipPopup activeToolId={activeToolId} brushOptions={brushOptions} position={brushPopup} detailed={brushPopup.detailed} onToggleDetailed={() => setBrushPopup({ ...brushPopup, detailed: !brushPopup.detailed })} onClose={() => setBrushPopup(null)} setToolOption={setToolOption}/>}
     {movePending && <div className="pending-transform-hint">Enter — Apply (Применить) · Esc — Cancel (Отменить)</div>}
+    {activeToolId === "raster.move" && activeLayer3D && orbitGizmoLayerId === activeLayer3D.id && <div className="pending-transform-hint">Enter — Apply (Применить) · Esc — Cancel (Отменить)</div>}
     <div className="canvas-badge">{state.width} × {state.height} · {Math.round(viewport.zoom * 100)}% · {Math.round(viewport.rotation * 10) / 10}° · sRGB · {state.layers.length} layer(s)</div>
     {selectionContextMenu.node}
     {transformContextMenu.node}

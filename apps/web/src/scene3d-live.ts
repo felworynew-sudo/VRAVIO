@@ -44,8 +44,26 @@ export interface LiveScene3DSession {
   dispose(): void;
 }
 
-export async function beginLiveScene3D(canvas: HTMLCanvasElement, data: Scene3DLayerData, document: RasterDocumentState): Promise<LiveScene3DSession> {
+/**
+ * `isCancelled`, checked right after the async geometry build and before touching the canvas at
+ * all: `buildGeometrySource` can await a font/model fetch for a real stretch of time, and if the
+ * caller's own effect was already cleaned up by the time it resolves — closed the gizmo already,
+ * or (in dev) React StrictMode's mount→cleanup→mount double-invoke — creating a `WebGLRenderer`
+ * here anyway hands back a session nobody will ever call `render()` on, whose own `dispose()`
+ * only runs once the caller notices via this same `cancelled` flag. Twice in a row on the *same*
+ * canvas element (StrictMode's replay keeps the DOM commit, so both invocations share one canvas)
+ * is worse than a leak: two `WebGLRenderer`s calling `canvas.getContext(...)` both resolve to the
+ * *same* underlying context, and the first one's `dispose()` — arriving after the second has
+ * already started drawing into it — quietly resets state the second renderer assumed it still
+ * owned. Found by reproducing the "the object doesn't render, only the gizmo rings do" symptom:
+ * the scene graph was correct (mesh present, visible, right parent) on the surviving session, so
+ * only a corrupted *shared* GL context explained a structurally sound scene drawing empty.
+ * Checking before creating the renderer at all — not merely disposing sooner afterward — is what
+ * keeps two renderers from ever touching the same canvas in the first place.
+ */
+export async function beginLiveScene3D(canvas: HTMLCanvasElement, data: Scene3DLayerData, document: RasterDocumentState, isCancelled: () => boolean = () => false): Promise<LiveScene3DSession | null> {
   const object = await buildGeometrySource(data, document);
+  if (isCancelled()) return null;
   const scene3d: Scene3D = createScene3D(canvas, document.width, document.height);
   const rig = new THREE.Group();
   rig.add(object);

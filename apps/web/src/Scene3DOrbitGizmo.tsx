@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import type { RasterDocumentState, RasterLayer } from "@vravio/env-raster";
 import { beginLiveScene3D, type LiveScene3DSession } from "./scene3d-live";
-import { updateScene3DLayer } from "./scene3d-commands";
 
 /**
  * Blender-style rotation manipulators for a 3D layer — the owner tried the
@@ -27,9 +26,25 @@ import { updateScene3DLayer } from "./scene3d-commands";
  * Entered by choosing "Rotate 3D Object" from the layer's own context
  * menu (RasterWorkspace.tsx / DockLayout.tsx) — not shown by default the
  * way the linear sliders were, per the owner's own request.
+ *
+ * Behaves like Free Transform now, at the owner's own request: nothing is
+ * written to the document while dragging — only this component's own live
+ * Three.js session moves — and the drag's result only lands through
+ * `onAccept` (Enter, the options bar's own ✓, or clicking away, all wired
+ * up by `RasterWorkspace.tsx`) or is thrown away through `onCancel`
+ * (Escape / ×). The previous version committed through `updateScene3DLayer`
+ * on every single mouse-up: harmless for one drag, but a second drag
+ * started before the first commit's own `renderScene3DLayerPixels` (a real
+ * WebGL render, not instant) had finished let two of those async commits
+ * race, and the loser could land after the winner and silently revert the
+ * rotation — the likely source of the reported "gizmo just disappears,
+ * cause unclear", since a layer whose kind/state briefly looked
+ * inconsistent under that race would fail this component's own render
+ * condition in `RasterWorkspace.tsx` and unmount. One commit per session
+ * removes the race outright, not just the symptom.
  */
 export function Scene3DOrbitGizmo({
-  documentId, document, layer, zoom, documentOriginX, documentOriginY, onClose,
+  documentId, document, layer, zoom, documentOriginX, documentOriginY, onLiveChange, onAccept, onCancel,
 }: {
   documentId: string;
   document: RasterDocumentState;
@@ -37,11 +52,17 @@ export function Scene3DOrbitGizmo({
   zoom: number;
   documentOriginX: number;
   documentOriginY: number;
-  onClose(): void;
+  onLiveChange(rotation: { x: number; y: number; z: number }): void;
+  onAccept(): void;
+  onCancel(): void;
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
+  const onLiveChangeRef = useRef(onLiveChange);
+  onLiveChangeRef.current = onLiveChange;
+  const onAcceptRef = useRef(onAccept);
+  onAcceptRef.current = onAccept;
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -50,7 +71,8 @@ export function Scene3DOrbitGizmo({
     let session: LiveScene3DSession | null = null;
     let controls: TransformControls | null = null;
 
-    void beginLiveScene3D(canvas, layer.scene3d!, document).then((liveSession) => {
+    void beginLiveScene3D(canvas, layer.scene3d!, document, () => cancelled).then((liveSession) => {
+      if (!liveSession) return;
       if (cancelled) { liveSession.dispose(); return; }
       session = liveSession;
       controls = new TransformControls(liveSession.camera, canvas);
@@ -58,25 +80,27 @@ export function Scene3DOrbitGizmo({
       controls.setSize(1.1);
       controls.attach(liveSession.rig);
       liveSession.scene.add(controls.getHelper());
-      controls.addEventListener("change", () => liveSession.render());
-      controls.addEventListener("mouseUp", () => {
+      const reportRotation = () => {
         const rotation = liveSession.rig.rotation;
-        void updateScene3DLayer(documentId, layer.id, {
-          rotationX: rotation.x * 180 / Math.PI, rotationY: rotation.y * 180 / Math.PI, rotationZ: rotation.z * 180 / Math.PI,
-        });
-      });
+        onLiveChangeRef.current({ x: rotation.x * 180 / Math.PI, y: rotation.y * 180 / Math.PI, z: rotation.z * 180 / Math.PI });
+      };
+      controls.addEventListener("change", () => { liveSession.render(); reportRotation(); });
       liveSession.render();
+      // The starting pose, reported once up front — otherwise the options bar's own X/Y/Z readout
+      // (and RasterWorkspace's own pending-rotation ref, read back on commit) would stay empty
+      // until the very first drag tick, the same way Free Transform's own X/Y/W/H appear the
+      // instant it starts rather than only once something has actually moved.
+      reportRotation();
     });
 
-    // Escape closes the gizmo the same way every other pending-edit
-    // overlay in this project does (move.tsx's own pending transform).
-    // Ignored while the gizmo's own drag is in progress — matches
-    // `PendingTransform`'s convention of not letting a global key handler
+    // Enter accepts, Escape discards — the same pair every settled-but-uncommitted edit in this
+    // project uses (move.tsx's own pending transform). Both ignored while the gizmo's own drag is
+    // in progress, matching `PendingTransform`'s convention of not letting a global key handler
     // race an active gesture.
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || controls?.dragging) return;
-      event.preventDefault();
-      onCloseRef.current();
+      if (controls?.dragging) return;
+      if (event.key === "Enter") { event.preventDefault(); onAcceptRef.current(); }
+      else if (event.key === "Escape") { event.preventDefault(); onCancelRef.current(); }
     };
     window.addEventListener("keydown", onKeyDown, true);
 
