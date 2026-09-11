@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { rasterFilterCatalog, type RasterFilterDefinition, type RasterLayer } from "@vravio/env-raster";
 import { filterSpecById, hasGpuFilter } from "@vravio/env-raster";
 import { sharedGlFilterBackend } from "./glFilterBackend";
+import { applyRasterFilterParallel, filterWorkerPool } from "./filter-worker-pool";
 
 const THUMBNAIL_EDGE = 48;
 
@@ -50,7 +51,6 @@ export function FilterGalleryDialog({ layer, onApply, onClose }: { layer: Raster
   }, [layer.id, layer.pixels]);
 
   useEffect(() => {
-    const requestId = ++requestIdRef.current;
     const spec = filterSpecById.get(filterId);
     const backend = hasGpuFilter(filterId) ? sharedGlFilterBackend() : null;
     if (backend && spec) {
@@ -64,27 +64,37 @@ export function FilterGalleryDialog({ layer, onApply, onClose }: { layer: Raster
         return;
       }
     }
-    const worker = new Worker(new URL("./filter-worker.ts", import.meta.url), { type: "module" });
+    // docs/master-plan.md §37.3 item 4: dispatched through the same worker pool as every other
+    // filter render, row-banded across it when the filter is one filter-tiling.ts has verified
+    // splits safely — a drop-in replacement for the old one-worker-per-request call below, not a
+    // separate path this component needs to choose between.
+    const controller = new AbortController();
     const timer = window.setTimeout(() => {
       setIsRendering(true);
       setRenderError(null);
-      const pixels = layer.pixels.slice();
-      worker.postMessage({ type: "render", requestId, pixels: pixels.buffer, width: layer.width, height: layer.height, filterId, settings: effectiveSettings }, [pixels.buffer]);
+      applyRasterFilterParallel(filterWorkerPool(), layer.pixels, layer.width, layer.height, filterId, effectiveSettings, controller.signal)
+        .then((pixels) => {
+          // Gate on this exact invocation's own signal, not a shared counter compared against
+          // `requestIdRef.current`: that comparison raced with `applyRasterFilterParallel`
+          // resolving — one of its `Promise.all`-ed row bands could already be past the point
+          // where an abort fired to still reject it (an in-flight `WorkerPool` entry's internal
+          // controller is only aborted, and its promise only rejected, at the moment the abort
+          // event listener runs; a result that arrived microtasks earlier has already settled the
+          // promise and nothing retroactively un-resolves it). `controller.signal.aborted` is
+          // true in exactly that same case, because this effect's own cleanup is what calls
+          // `controller.abort()` — so it says the right thing regardless of which of the two
+          // ever won that race, without needing the two to agree on ordering at all.
+          if (controller.signal.aborted) return;
+          setRendered(pixels);
+          setIsRendering(false);
+        })
+        .catch((error: unknown) => {
+          if (controller.signal.aborted) return;
+          setRenderError(error instanceof Error ? error.message : "Filter calculation failed");
+          setIsRendering(false);
+        });
     }, 70);
-    worker.onmessage = (event: MessageEvent<{ type: string; requestId: number; pixels?: ArrayBuffer; message?: string }>) => {
-      if (event.data.requestId !== requestId) return;
-      if (event.data.type === "error") {
-        setRenderError(event.data.message ?? "Filter calculation failed");
-        setIsRendering(false);
-        return;
-      }
-      if (event.data.type === "rendered" && event.data.pixels) {
-        setRendered(new Uint8ClampedArray(event.data.pixels));
-        setIsRendering(false);
-      }
-    };
-    worker.onerror = (event) => { setRenderError(event.message); setIsRendering(false); };
-    return () => { window.clearTimeout(timer); worker.terminate(); };
+    return () => { window.clearTimeout(timer); controller.abort(); };
   }, [layer.id, layer.pixels, layer.width, layer.height, filterId, effectiveSettings]);
   useEffect(()=>{const canvas=canvasRef.current,context=canvas?.getContext("2d");if(canvas&&context&&rendered)context.putImageData(new ImageData(rendered as Uint8ClampedArray<ArrayBuffer>,layer.width,layer.height),0,0);},[rendered,layer.width,layer.height]);
   const select=(next:RasterFilterDefinition)=>{setFilterId(next.id);setSettings(Object.fromEntries(next.parameters.map((parameter)=>[parameter.id,parameter.value])));};

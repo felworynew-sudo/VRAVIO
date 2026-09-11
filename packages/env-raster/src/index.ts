@@ -7,6 +7,7 @@ export * from "./layer-tree";
 export * from "./lut";
 export * from "./fill";
 export * from "./filters";
+export * from "./filter-tiling";
 export * from "./camera-raw-filter";
 export * from "./filter-spec";
 export * from "./paint";
