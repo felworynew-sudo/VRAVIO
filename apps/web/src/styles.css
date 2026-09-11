@@ -169,7 +169,34 @@ select{-webkit-appearance:none;appearance:none;background-image:linear-gradient(
    reported live. `display:none` removes it from layout entirely; a collapsed rail's icon is
    architecturally just a button, it never holds a mounted panel. */
 .dv-groupview.vravio-grid-rail>.dv-content-container{display:none}
-.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-and-actions-container{width:35px}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-container-vertical .panel-tab{display:grid;place-items:center;width:34px;height:42px;min-width:34px;min-height:42px;padding:0;writing-mode:horizontal-tb}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-container-vertical .panel-tab span{display:none!important}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .panel-collapse{writing-mode:horizontal-tb}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .panel-collapse i{transform:none}
+/* информация.txt, repeated live: the icon's own left edge stays a fixed distance from the
+   rail's left wall no matter the rail's current width, and only the *name* may ever give way
+   — trimmed from the right with "…", never the icon. A fixed 131px tab width (tried first,
+   toggled on by a `data-panel-rail-labels` class once the rail's live drag width crossed a
+   midpoint) broke exactly that: between the two endpoints the *group* itself could be any
+   width the drag left it at, but the tab inside kept demanding its full fixed width regardless
+   — overflowing the actual, narrower box and clipping unpredictably, icon included, reported
+   live and reproduced by watching the rail specifically *while* dragging, not just its two
+   resting states. `width:100%` instead of a fixed number makes the tab always match the
+   rail's real live width with no gap between them to clip through; the icon's own `flex:none`
+   keeps it full-size and left-anchored regardless, and the name (`flex:1`, already-set
+   `text-overflow:ellipsis`) is the only part that shrinks, continuously, as the rail narrows
+   — never clipped through the fixed-vs-live mismatch, because there no longer is one. No
+   `data-panel-rail-labels` switch is needed for this any more; it now happens continuously,
+   the same way a Chrome tab's own name recedes as the tab strip gets crowded.*/
+.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-container-vertical .panel-tab{display:flex;align-items:center;justify-content:flex-start;width:100%;height:42px;min-height:42px;padding:0 9px;gap:8px;writing-mode:horizontal-tb}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-container-vertical .panel-tab i{flex:none}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-container-vertical .panel-tab span{display:block!important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .panel-collapse{writing-mode:horizontal-tb}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .panel-collapse i{transform:none}
+/* The chain above (`width:100%`, all the way down to the icon/name split) only actually
+   tracks the rail's *live* width if every ancestor between the group and the tab does too —
+   found live, one level up from the fix above: `.dv-tabs-and-actions-container` is itself a
+   flex *item* within `.dv-groupview`'s own row layout (`flex-direction:row-reverse` for a
+   right-docked header), so its own width is that row's *main* axis, sized to content by
+   default rather than stretched the way cross-axis (height) items are — it was sitting at
+   ~28px, its own content's natural width, while the group around it measured 54px, and
+   nothing below it in the chain, `width:100%` included, could see past that mismatch to the
+   group's real width. `flex-grow:1` here is what actually lets it (and everything inside it)
+   reach the group's full live width — the collapsed rail's own `.dv-content-container` is
+   already `display:none`, so it's the only row item left to grow into that space anyway.*/
+.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-and-actions-container{flex-grow:1}
 /* Dockview's own default padding for a vertical tab wrapper (`.dv-tabs-container-vertical
    .dv-tab{padding:.5rem .25rem}`, 8px/4px) leaves a 27px content box for our fixed 34px
    `.panel-tab` above to sit in — 7px too narrow, so the real tab silently overflowed its own
@@ -210,7 +237,6 @@ select{-webkit-appearance:none;appearance:none;background-image:linear-gradient(
    would be a checkbox that doesn't do anything new — CLAUDE.md's own rule) — the handle
    still works today for the one group that already exists, dragging the whole rail. */
 .dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-and-actions-container.dv-groupview-header-vertical>.dv-void-container{order:-1;flex:none!important;width:100%;height:13px}
-.dock-host[data-panel-rail-labels="true"] .dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-and-actions-container{width:132px}.dock-host[data-panel-rail-labels="true"] .dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-container-vertical .panel-tab{display:flex;justify-content:flex-start;width:131px;min-width:131px;padding:0 10px}.dock-host[data-panel-rail-labels="true"] .dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-container-vertical .panel-tab span{display:block!important;max-width:94px}
 /* A collapsed tab click peeks the panel via a real floating group (see PanelTab's own
    comment in DockLayout.tsx) rather than resizing the rail's own DOM in place, so there is
    no CSS state to carry here any more. */
