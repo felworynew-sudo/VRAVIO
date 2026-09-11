@@ -1,4 +1,4 @@
-import { blurDab, blurStrokeSegment, dodgeBurnDab, dodgeBurnStrokeSegment, sampleAverage, smudgeStrokeSegment, toHexColor, unionRect, type DodgeBurnRange, type Point, type RasterRect } from "@vravio/env-raster";
+import { blurDab, blurStrokeSegment, compositeDodgeBurn, dodgeBurnDab, dodgeBurnStrokeSegment, sampleAverage, smudgeStrokeSegment, toHexColor, unionRect, type DodgeBurnRange, type Point, type RasterRect } from "@vravio/env-raster";
 import type { RasterToolDefinition, ToolContext, ToolPointer } from "./types";
 import { locksRefuse } from "./lock-guard";
 
@@ -17,12 +17,27 @@ import { locksRefuse } from "./lock-guard";
  * snapshot (`stroke.before`) rather than the accumulating `working` buffer,
  * so each dab blends fresh from the source instead of blurring what an
  * earlier dab in the same stroke already blurred.
+ *
+ * Dodge/Burn work a third way, closer to `paint-stroke.ts`'s own brush than
+ * to blur/smudge: `stroke.coverage` accumulates brush-shaped coverage
+ * capped at Exposure (`retouch.ts`'s `dodgeBurnDab`/`dodgeBurnStrokeSegment`,
+ * the identical mechanism `paint.ts`'s `accumulateDab` caps a normal
+ * brush's dabs at its Opacity), and `compositeDodgeBurn` lays that coverage
+ * onto `working` fresh from `stroke.before` after every dab — so overlapping
+ * dabs within one stroke approach the Exposure ceiling instead of each
+ * reading the previous dab's already-darkened output and compounding past
+ * it, which is what an owner reported live: dragging Burn over a face burnt
+ * it to solid black almost immediately. See `retouch.ts`'s own doc comment
+ * on `dodgeBurnTransform` for the GIMP/Photoshop research this followed.
  */
 
 interface Stroke {
   readonly pointerId: number;
   readonly before: Uint8ClampedArray;
   working: Uint8ClampedArray;
+  /** Dodge/Burn only — null for blur/smudge, which have no such buffer. */
+  coverage: Uint8ClampedArray | null;
+  spacingCarry: number;
   curveStart: Point;
   pending: Point;
   dirty: RasterRect | null;
@@ -55,22 +70,43 @@ function resolvedOptions(context: ToolContext<TonalStrokeState>) {
   };
 }
 
+/** Composites Dodge/Burn's accumulated coverage onto `working` from the
+ * stroke's frozen `before`, over just the region a dab or segment touched —
+ * the same "lay it down once, from the pristine source" shape
+ * `paint-stroke.ts`'s own `layStroke` uses for a normal brush's coverage. */
+function layDodgeBurn(context: ToolContext<TonalStrokeState>, config: TonalStrokeConfig, working: Uint8ClampedArray, before: Uint8ClampedArray, coverage: Uint8ClampedArray, region: RasterRect): void {
+  const o = resolvedOptions(context);
+  compositeDodgeBurn(working, before, coverage, context.document.width, context.document.height, region, config.kind as "dodge" | "burn", o.range);
+}
+
 /** The one-shot dab a press paints before any drag exists. Smudge has none
  * — Photoshop's smudge tool has nothing to smear until the pointer moves,
  * exactly as the old switch left it. */
-function paintDab(context: ToolContext<TonalStrokeState>, config: TonalStrokeConfig, working: Uint8ClampedArray, before: Uint8ClampedArray, point: Point): void {
+function paintDab(context: ToolContext<TonalStrokeState>, config: TonalStrokeConfig, working: Uint8ClampedArray, before: Uint8ClampedArray, coverage: Uint8ClampedArray | null, point: Point): void {
   const o = resolvedOptions(context);
   const w = context.document.width, h = context.document.height;
-  if (config.kind === "blur") blurDab(working, before, w, h, point, o.size, o.strength, context.paintMask, o.roundness, o.angle, o.hardness);
-  else if (config.kind === "dodge" || config.kind === "burn") dodgeBurnDab(working, w, h, point, o.size, o.exposure, config.kind, o.range, context.paintMask, o.roundness, o.angle, o.hardness);
+  if (config.kind === "blur") { blurDab(working, before, w, h, point, o.size, o.strength, context.paintMask, o.roundness, o.angle, o.hardness); return; }
+  if ((config.kind === "dodge" || config.kind === "burn") && coverage) {
+    dodgeBurnDab(coverage, w, h, point, o.size, o.exposure, context.paintMask, o.roundness, o.angle, o.hardness);
+    const pad = o.size / 2 + 2;
+    layDodgeBurn(context, config, working, before, coverage, { x: point.x - pad, y: point.y - pad, width: pad * 2, height: pad * 2 });
+  }
 }
 
-function paintSegment(context: ToolContext<TonalStrokeState>, config: TonalStrokeConfig, working: Uint8ClampedArray, before: Uint8ClampedArray, from: Point, to: Point): void {
+/** Returns the updated spacing carry for dodge/burn's own accumulated walk;
+ * blur/smudge take fixed steps per call and have no carry to thread. */
+function paintSegment(context: ToolContext<TonalStrokeState>, config: TonalStrokeConfig, working: Uint8ClampedArray, before: Uint8ClampedArray, coverage: Uint8ClampedArray | null, from: Point, to: Point, carry: number): number {
   const o = resolvedOptions(context);
   const w = context.document.width, h = context.document.height;
-  if (config.kind === "blur") blurStrokeSegment(working, before, w, h, from, to, o.size, o.strength, context.paintMask, o.roundness, o.angle, o.hardness);
-  else if (config.kind === "smudge") smudgeStrokeSegment(working, before, w, h, from, to, o.size, o.strength, context.paintMask, o.roundness, o.angle, o.hardness, o.spacing);
-  else dodgeBurnStrokeSegment(working, w, h, from, to, o.size, o.exposure, config.kind, o.range, context.paintMask, o.roundness, o.angle, o.hardness, o.spacing);
+  if (config.kind === "blur") { blurStrokeSegment(working, before, w, h, from, to, o.size, o.strength, context.paintMask, o.roundness, o.angle, o.hardness); return carry; }
+  if (config.kind === "smudge") { smudgeStrokeSegment(working, before, w, h, from, to, o.size, o.strength, context.paintMask, o.roundness, o.angle, o.hardness, o.spacing); return carry; }
+  if (!coverage) return carry;
+  const nextCarry = dodgeBurnStrokeSegment(coverage, w, h, from, to, o.size, o.exposure, context.paintMask, o.roundness, o.angle, o.hardness, o.spacing, carry);
+  const pad = o.size / 2 + 2;
+  const left = Math.min(from.x, to.x) - pad, top = Math.min(from.y, to.y) - pad;
+  const right = Math.max(from.x, to.x) + pad, bottom = Math.max(from.y, to.y) + pad;
+  layDodgeBurn(context, config, working, before, coverage, { x: left, y: top, width: right - left, height: bottom - top });
+  return nextCarry;
 }
 
 /** Extends the stroke to `point`, mutating it in place — see paint-stroke.ts's
@@ -80,7 +116,7 @@ function appendPoint(context: ToolContext<TonalStrokeState>, config: TonalStroke
   const end: Point = { x: (stroke.pending.x + point.x) / 2, y: (stroke.pending.y + point.y) / 2, pressure: ((stroke.pending.pressure ?? 1) + (point.pressure ?? 1)) / 2 };
   // Unlike paint-stroke's segment, this draws to the raw `point`, not the
   // smoothed `end` — the old `appendBrushPoint` never smoothed these four.
-  paintSegment(context, config, stroke.working, stroke.before, stroke.curveStart, point);
+  stroke.spacingCarry = paintSegment(context, config, stroke.working, stroke.before, stroke.coverage, stroke.curveStart, point, stroke.spacingCarry);
   const pad = Number(context.options.size ?? 24) / 2 + 2;
   stroke.dirty = unionRect(stroke.dirty, stroke.curveStart.x, stroke.curveStart.y, stroke.pending.x, stroke.pending.y, pad);
   stroke.dirty = unionRect(stroke.dirty, point.x, point.y, end.x, end.y, pad);
@@ -125,19 +161,21 @@ export function createTonalStrokeTool(config: TonalStrokeConfig): RasterToolDefi
       const shiftFrom = pointer.shiftKey && last?.toolId === config.id && last.layerId === key ? last.point : null;
       const before = context.targetPixels();
       const working = before.slice();
+      const isDodgeBurn = config.kind === "dodge" || config.kind === "burn";
+      const coverage = isDodgeBurn ? new Uint8ClampedArray(context.document.width * context.document.height) : null;
 
       if (shiftFrom) {
-        paintSegment(context, config, working, before, shiftFrom, pointer.point);
+        paintSegment(context, config, working, before, coverage, shiftFrom, pointer.point, 0);
         context.setLastStrokePoint({ toolId: config.id, layerId: key, point: pointer.point });
         context.schedulePreview(working, "pixels", context.paintTarget.layerId, null);
         void context.commit(before, working, "Straight Brush Line (Прямая линия кисти)", "pixels", context.paintTarget.layerId);
         return;
       }
 
-      paintDab(context, config, working, before, pointer.point);
+      paintDab(context, config, working, before, coverage, pointer.point);
       context.schedulePreview(working, "pixels", context.paintTarget.layerId, null);
       context.setState({
-        stroke: { pointerId: pointer.pointerId, before, working, curveStart: pointer.point, pending: pointer.point, dirty: null, strokeBounds: null },
+        stroke: { pointerId: pointer.pointerId, before, working, coverage, spacingCarry: 0, curveStart: pointer.point, pending: pointer.point, dirty: null, strokeBounds: null },
       });
     },
 

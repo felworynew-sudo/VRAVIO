@@ -37,17 +37,49 @@ class WebFileSystem implements FileSystemPort {
 
   async saveFile(options: SaveFileOptions): Promise<SaveFileResult> {
     const blob = options.data instanceof Blob ? options.data : new Blob([options.data.slice().buffer], { type: options.mime });
+    if (options.target && isBrowserFileHandle(options.target)) {
+      const writable = await options.target.createWritable();
+      await writable.write(blob);
+      await writable.close();
+      return { name: options.name, method: "native-picker", target: options.target };
+    }
     if (browserWindow.showSaveFilePicker) {
-      const handle = await browserWindow.showSaveFilePicker({ suggestedName: options.name, types: [{ description: options.mime, accept: { [options.mime]: [`.${options.name.split(".").pop() ?? "bin"}`] } }] });
+      let handle: BrowserFileHandle;
+      try { handle = await browserWindow.showSaveFilePicker({ suggestedName: options.name, types: [{ description: options.mime, accept: { [options.mime]: [`.${options.name.split(".").pop() ?? "bin"}`] } }] }); }
+      catch (error) { if (error instanceof DOMException && error.name === "AbortError") return { name: options.name, method: "native-picker", cancelled: true }; throw error; }
       const writable = await handle.createWritable();
       await writable.write(blob);
       await writable.close();
-      return { name: options.name, method: "native-picker" };
+      return { name: options.name, method: "native-picker", target: handle };
     }
     const url = URL.createObjectURL(blob), anchor = document.createElement("a");
     anchor.href = url; anchor.download = options.name; anchor.click();
     setTimeout(() => URL.revokeObjectURL(url), 0);
     return { name: options.name, method: "download" };
+  }
+}
+
+function isBrowserFileHandle(value: unknown): value is BrowserFileHandle {
+  return Boolean(value) && typeof value === "object" && "createWritable" in value && typeof (value as BrowserFileHandle).createWritable === "function";
+}
+
+const isTauriDesktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+
+class DesktopFileSystem implements FileSystemPort {
+  async openFiles(options: OpenFileOptions = {}): Promise<readonly PlatformFile[]> { return new WebFileSystem().openFiles(options); }
+
+  async saveFile(options: SaveFileOptions): Promise<SaveFileResult> {
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const { writeFile } = await import("@tauri-apps/plugin-fs");
+    let path = typeof options.target === "string" ? options.target : null;
+    if (!path) {
+      const extension = options.name.split(".").pop() ?? "bin";
+      path = await save({ defaultPath: options.name, filters: [{ name: options.mime === "application/vnd.vravio+json" ? "VRAVIO project" : extension.toUpperCase(), extensions: [extension] }] });
+    }
+    if (!path) return { name: options.name, method: "desktop", cancelled: true };
+    const bytes = options.data instanceof Blob ? new Uint8Array(await options.data.arrayBuffer()) : options.data;
+    await writeFile(path, bytes);
+    return { name: path.split(/[\\/]/).pop() || options.name, method: "desktop", target: path };
   }
 }
 
@@ -138,5 +170,5 @@ export function createWebPlatform(gpu: GPUContext, models: ModelStore): Platform
   };
   const workerCount = storedWorkerCount();
   const ml: MLPort = createOnnxRuntime({ gpu, models, ...(workerCount !== undefined ? { workerCount } : {}) });
-  return { kind: "web", fs: new WebFileSystem(), codecs: new WebCodecs(), fonts: new WebFonts(), clipboard: new WebClipboard(), ml, gpu, capabilities };
+  return { kind: isTauriDesktop ? "desktop" : "web", fs: isTauriDesktop ? new DesktopFileSystem() : new WebFileSystem(), codecs: new WebCodecs(), fonts: new WebFonts(), clipboard: new WebClipboard(), ml, gpu, capabilities };
 }

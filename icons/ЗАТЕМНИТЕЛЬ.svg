@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <path fill="#fff" fill-rule="evenodd" d="M50,8 a42,42 0 1 0 0,84 a34,34 0 0 1 0,-84 Z"/>
+<svg id="_Слой_1" data-name="Слой 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 250 250">
+  <defs>
+    <mask id="crescent-cut">
+      <rect x="0" y="0" width="250" height="250" fill="#fff"/>
+      <circle cx="158" cy="103" r="66" fill="#000"/>
+    </mask>
+  </defs>
+  <circle cx="120" cy="125" r="78" fill="#fff" mask="url(#crescent-cut)"/>
 </svg>

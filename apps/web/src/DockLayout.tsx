@@ -661,6 +661,25 @@ function LayersPanel() {
     const addLayer = () => { let createdId = ""; void changeRasterDocument(active.id, "New Layer (Новый слой)", (current) => { const selected = current.layers.find((item) => item.id === current.activeLayerId); const parentId = selected?.kind === "group" ? selected.id : (selected?.parentId ?? null); const layer = createRasterLayer(current.width, current.height, `Layer ${current.layers.length + 1} (Слой ${current.layers.length + 1})`); appendLayer(current, layer, parentId); current.activeLayerId = layer.id; createdId = layer.id; return true; }); setSelectedLayers(active.id, [createdId]); };
     const addGroup = () => { let createdId = ""; void changeRasterDocument(active.id, "New Group (Новая группа)", (current) => { const number = current.layers.filter((item) => item.kind === "group").length + 1; const group = appendRasterGroup(current, `Group ${number} (Группа ${number})`); current.activeLayerId = group.id; createdId = group.id; return true; }); setSelectedLayers(active.id, [createdId]); };
     const addAdjustment = (definition: (typeof rasterAdjustments)[number]) => { void changeRasterDocument(active.id, `New Adjustment Layer: ${definition.name.en} (Новый корректирующий слой: ${definition.name.ru})`, (current) => { const selected = current.layers.find((item) => item.id === current.activeLayerId); const layer = createAdjustmentLayer(current.width, current.height, definition.id, `${definition.name.en} (${definition.name.ru})`); appendLayer(current, layer, selected?.kind === "group" ? selected.id : (selected?.parentId ?? null)); current.activeLayerId = layer.id; return true; }); setShowAdjustments(false); };
+    const exportLayerPng = async (layer: RasterLayer) => {
+      if (layer.kind === "group") return;
+      // Export one full document-sized transparent sheet. This preserves the
+      // layer's position, effects and alpha exactly; cropping would make a
+      // re-import land in a different place.
+      const canvas = window.document.createElement("canvas");
+      canvas.width = state.width; canvas.height = state.height;
+      const context = canvas.getContext("2d");
+      if (!context) return;
+      const documentPixels = layerDocumentPixels(layer, state.width, state.height);
+      const rendered = Object.values(layer.effects ?? {}).some((effect) => effect?.enabled)
+        ? renderLayerEffects({ ...layer, pixels: documentPixels, bounds: { x: 0, y: 0, width: state.width, height: state.height } }, state.width, state.height)
+        : documentPixels;
+      context.putImageData(new ImageData(new Uint8ClampedArray(rendered), state.width, state.height), 0, 0);
+      const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+      if (!blob) throw new Error("Could not encode the layer as PNG.");
+      const name = `${layer.name.replace(/\.[^.]+$/, "").trim() || "layer"}.png`;
+      await kernel.platform.fs.saveFile({ name, mime: "image/png", data: blob });
+    };
     const deleteLayer = () => { let survivorId = "", removedMaskTarget = false; void changeRasterDocument(active.id, "Delete Layer (Удалить слой)", (current) => { const index = current.layers.findIndex((item) => item.id === current.activeLayerId); if (index < 0) return false; const target = current.layers[index]!; const removed = new Set([target.id, ...rasterLayerDescendantIds(current.layers, target.id)]); removedMaskTarget = editingMaskLayerId ? removed.has(editingMaskLayerId) : false; current.layers = current.layers.filter((item) => !removed.has(item.id)); if (!current.layers.some((item) => item.kind !== "group")) appendLayer(current, createRasterLayer(current.width, current.height, "Layer 1 (Слой 1)")); const next = current.layers[Math.min(index, current.layers.length - 1)] ?? current.layers[0]; if (!next) return false; current.activeLayerId = next.id; survivorId = next.id; return true; }); if (removedMaskTarget) setEditingMask(active.id, null); if (survivorId) setSelectedLayers(active.id, [survivorId]); };
     const selectLayer = (id: string) => kernel.documents.update<RasterDocumentState>(active.id, (current) => { current.activeLayerId = id; });
 
@@ -716,6 +735,7 @@ function LayersPanel() {
         // makes `layer` the active layer/mask target above (`onContextMenu`'s `selectLayer` call),
         // so this inverts whichever of the layer's pixels or its mask was actually being edited.
         item("image.adjustment.invert", { separatorBefore: true }),
+        { label: text(language, "Export as PNG…", "Экспортировать в PNG…"), onSelect: () => { void exportLayerPng(layer); }, disabled: layer.kind === "group" },
         { label: text(language, "Group Layers", "Сгруппировать слои"), onSelect: addGroup, separatorBefore: true },
         item("layer.ungroup"),
         { label: text(language, layer.linkGroup ? "Unlink Layers" : "Link Layers", layer.linkGroup ? "Отвязать слои" : "Связать слои"), onSelect: () => kernel.documents.update<RasterDocumentState>(active.id, (current) => { toggleLayerLink(current, selectedLayerIds.length > 1 ? selectedLayerIds : [layer.id]); }) },

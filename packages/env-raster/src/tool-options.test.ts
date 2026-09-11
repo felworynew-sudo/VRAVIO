@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  blurStrokeSegment, cloneStrokeSegment, createRectangleSelection, dodgeBurnStrokeSegment,
+  blurStrokeSegment, cloneStrokeSegment, createRectangleSelection, compositeDodgeBurn, dodgeBurnStrokeSegment,
   accumulateStrokeSegment, compositeCoverage, drawShape, floodFill, sampleAverage, smudgeStrokeSegment, translateLayerPixels, liftSelection, stampFloating,
 } from "./index";
+import type { DodgeBurnRange } from "./retouch";
 import type { Point, RgbaColor } from "./types";
 
 const W = 128, H = 128;
@@ -93,9 +94,19 @@ describe("every retouch option reaches its tool", () => {
   it("blur roundness", () => expect(changesOutput(textured, (p, high) => blurStrokeSegment(p, textured(), W, H, from, to, 30, 0.8, undefined, high ? 0.2 : 1, 0))).toBe(true));
   it("blur angle", () => expect(changesOutput(textured, (p, high) => blurStrokeSegment(p, textured(), W, H, from, to, 30, 0.8, undefined, 0.3, high ? 90 : 0))).toBe(true));
   it("smudge strength", () => expect(changesOutput(textured, (p, high) => smudgeStrokeSegment(p, textured(), W, H, from, to, 30, high ? 0.15 : 0.9))).toBe(true));
-  it("dodge strength", () => expect(changesOutput(filled, (p, high) => dodgeBurnStrokeSegment(p, W, H, from, to, 30, high ? 0.1 : 0.9, "dodge", "midtones"))).toBe(true));
-  it("dodge range", () => expect(changesOutput(filled, (p, high) => dodgeBurnStrokeSegment(p, W, H, from, to, 30, 0.7, "dodge", high ? "shadows" : "highlights"))).toBe(true));
-  it("dodge against burn", () => expect(changesOutput(filled, (p, high) => dodgeBurnStrokeSegment(p, W, H, from, to, 30, 0.7, high ? "burn" : "dodge", "midtones"))).toBe(true));
+  // Dodge/Burn gathers its dabs into a coverage mask capped at Exposure and composites once
+  // against the stroke's own frozen source, same shape as the plain brush's own `stroke` helper
+  // above — see retouch.ts's dodgeBurnTransform for why (overlapping dabs used to compound
+  // instead of approaching a ceiling, reported live as Burn blowing straight to solid black).
+  const dodgeBurn = (pixels: Uint8ClampedArray, size: number, exposure: number, mode: "dodge" | "burn", range: DodgeBurnRange) => {
+    const coverage = new Uint8ClampedArray(W * H);
+    dodgeBurnStrokeSegment(coverage, W, H, from, to, size, exposure);
+    compositeDodgeBurn(pixels, pixels.slice(), coverage, W, H, { x: 0, y: 0, width: W, height: H }, mode, range);
+  };
+
+  it("dodge strength", () => expect(changesOutput(filled, (p, high) => dodgeBurn(p, 30, high ? 0.1 : 0.9, "dodge", "midtones"))).toBe(true));
+  it("dodge range", () => expect(changesOutput(filled, (p, high) => dodgeBurn(p, 30, 0.7, "dodge", high ? "shadows" : "highlights"))).toBe(true));
+  it("dodge against burn", () => expect(changesOutput(filled, (p, high) => dodgeBurn(p, 30, 0.7, high ? "burn" : "dodge", "midtones"))).toBe(true));
 });
 
 describe("every shape and fill option reaches its tool", () => {

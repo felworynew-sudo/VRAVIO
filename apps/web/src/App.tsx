@@ -71,6 +71,10 @@ export function App() {
   const [cleanCanvas, setCleanCanvas] = useState(false);
   const openImageRef = useRef<HTMLInputElement>(null);
   const importSvgAsVectorRef = useRef<HTMLInputElement>(null);
+  // A platform handle is deliberately kept outside document state: it is a
+  // browser permission or an authorised desktop path, not portable artwork.
+  // Save writes back to it; Save As explicitly discards it and asks again.
+  const savedTargetByDocument = useRef(new Map<string, unknown>());
   const [transformMetrics, setTransformMetrics] = useState<{ active: boolean; x: number; y: number; width: number; height: number; rotation: number; warp?: boolean } | null>(null);
   // The 3D rotation gizmo's own pending state — a parallel channel to `transformMetrics` above
   // rather than folded into it: the two are never active at once (Scene3DOrbitGizmo only mounts
@@ -245,13 +249,18 @@ export function App() {
     const name = `${active.name.replace(/\s*\([^()]*\)\s*$/, "").replace(/\.[^.]+$/, "").trim() || "untitled"}.svg`;
     download(new Blob([svg], { type: "image/svg+xml" }), name);
   };
-  const projectFileName = (name: string) => `${name.replace(/\s*\([^()]*\)\s*$/, "").replace(/\.[^.]+$/, "").trim() || "untitled"}.vravio.json`;
+  const projectFileName = (name: string) => `${name.replace(/\s*\([^()]*\)\s*$/, "").replace(/\.[^.]+$/, "").trim() || "untitled"}.vravio`;
   const projectBlob = () => { const replacer = (_key: string, value: unknown) => value instanceof Uint8ClampedArray ? { __type: "Uint8ClampedArray", data: Array.from(value) } : value; return new Blob([JSON.stringify(active?.state, replacer)], { type: "application/json" }); };
-  /** Save writes through the platform port and clears the dirty flag; Save a Copy deliberately leaves it set. */
-  const saveProject = async (markClean = true) => {
+  /** Save reuses its location; Save As replaces it; a copy never changes the
+   * current document's location or clean/dirty status. Raster delivery
+   * formats remain in Export, matching Photoshop's project/export split. */
+  const saveProject = async ({ markClean = true, saveAs = false }: { markClean?: boolean; saveAs?: boolean } = {}) => {
     if (!active) return;
     try {
-      await kernel.platform.fs.saveFile({ name: projectFileName(active.name), mime: "application/json", data: projectBlob() });
+      const result = await kernel.platform.fs.saveFile({ name: projectFileName(active.name), mime: "application/vnd.vravio+json", data: projectBlob(), target: saveAs ? undefined : savedTargetByDocument.current.get(active.id) });
+      if (result.cancelled) return;
+      if (!saveAs && !savedTargetByDocument.current.has(active.id) && result.target !== undefined) savedTargetByDocument.current.set(active.id, result.target);
+      if (saveAs && result.target !== undefined) savedTargetByDocument.current.set(active.id, result.target);
       if (markClean) kernel.documents.markSaved(active.id);
     } catch (error) {
       const because = error instanceof Error ? error.message : String(error);
@@ -291,8 +300,14 @@ export function App() {
   const activeRasterState = active && isRasterDocumentState(active.state) ? active.state : null;
   const editingMaskLayerId = active ? store.editingMaskLayerIdByDocument[active.id] ?? null : null;
   const maskForegroundIsWhite = active ? store.maskForegroundIsWhiteByDocument[active.id] ?? false : false;
-  const effectiveForegroundColor = editingMaskLayerId ? (maskForegroundIsWhite ? "#ffffff" : "#000000") : store.foregroundColor;
-  const effectiveBackgroundColor = editingMaskLayerId ? (maskForegroundIsWhite ? "#000000" : "#ffffff") : store.backgroundColor;
+  // Dodge/Burn have no colour of their own — while one is active the wells
+  // stand in for "which of the pair is selected" instead: black for Burn
+  // (darkens), white for Dodge (lightens), the other swatch showing what X
+  // would switch to, each with that tool's own icon so the wells answer
+  // "what's active" at a glance the same way they normally show a colour.
+  const dodgeBurnActive: "dodge" | "burn" | null = activeToolId === "raster.dodge" ? "dodge" : activeToolId === "raster.burn" ? "burn" : null;
+  const effectiveForegroundColor = dodgeBurnActive ? (dodgeBurnActive === "dodge" ? "#ffffff" : "#000000") : editingMaskLayerId ? (maskForegroundIsWhite ? "#ffffff" : "#000000") : store.foregroundColor;
+  const effectiveBackgroundColor = dodgeBurnActive ? (dodgeBurnActive === "dodge" ? "#000000" : "#ffffff") : editingMaskLayerId ? (maskForegroundIsWhite ? "#000000" : "#ffffff") : store.backgroundColor;
   const activeTextLayer = (() => { if (!active || !isRasterDocumentState(active.state)) return null; const state = active.state; return state.layers.find((layer) => layer.id === state.activeLayerId && layer.kind === "text" && layer.text) ?? null; })();
   const activeImageShape = (() => { if (!active || !isVectorDocumentState(active.state)) return false; const state = active.state; return state.shapes.find((shape) => shape.id === state.activeShapeId)?.kind === "image"; })();
   const pathfinderDisabled = !active || !isVectorDocumentState(active.state) || active.state.selection.length < 2;
@@ -502,16 +517,15 @@ export function App() {
 
   useEffect(() => {
     const save = () => void saveProject();
-    const saveCopy = () => void saveProject(false);
+    const saveAs = () => void saveProject({ saveAs: true });
+    const saveCopy = () => void saveProject({ markClean: false, saveAs: true });
     const openExport = () => setExportOpen(true);
     const openPrint = () => setPrintOpen(true);
     const openFile = () => openImageRef.current?.click();
     const openLiquify = () => { if (active && isRasterDocumentState(active.state)) setLiquifyOpen(true); };
     const openAdjustment = (event: Event) => { const definition = rasterAdjustmentById.get((event as CustomEvent<{ kind: RasterAdjustment["kind"] }>).detail.kind); if (definition) openImageAdjustment(definition); };
-    // Save As and Save both go through the platform picker, so they share a handler until
-    // the web build can remember a file handle to write back to silently.
     window.addEventListener("vravio-file-save", save);
-    window.addEventListener("vravio-file-save-as", save);
+    window.addEventListener("vravio-file-save-as", saveAs);
     window.addEventListener("vravio-file-save-copy", saveCopy);
     window.addEventListener("vravio-file-export", openExport);
     window.addEventListener("vravio-file-print", openPrint);
@@ -520,7 +534,7 @@ export function App() {
     window.addEventListener("vravio-adjustment-open", openAdjustment);
     return () => {
       window.removeEventListener("vravio-file-save", save);
-      window.removeEventListener("vravio-file-save-as", save);
+      window.removeEventListener("vravio-file-save-as", saveAs);
       window.removeEventListener("vravio-file-save-copy", saveCopy);
       window.removeEventListener("vravio-file-export", openExport);
       window.removeEventListener("vravio-file-print", openPrint);
@@ -578,7 +592,17 @@ export function App() {
       }
       if (!modifier && !editing && active) {
         if (key === "d") { event.preventDefault(); if (editingMaskLayerId) store.setMaskForegroundWhite(active.id, false); else store.resetColors(); return; }
-        if (key === "x") { event.preventDefault(); if (editingMaskLayerId) store.swapMaskColors(active.id); else store.swapColors(); return; }
+        if (key === "x") {
+          event.preventDefault();
+          // Dodge and Burn are opposite ends of the same gesture — the owner
+          // asked for X to swap between them while one is active, the same
+          // muscle memory as swapping foreground/background, rather than
+          // swap colours that this tool pair doesn't even use as a colour.
+          if (activeToolId === "raster.dodge") { store.setTool(active.id, "raster.burn"); return; }
+          if (activeToolId === "raster.burn") { store.setTool(active.id, "raster.dodge"); return; }
+          if (editingMaskLayerId) store.swapMaskColors(active.id); else store.swapColors();
+          return;
+        }
         if ((key === "[" || key === "]") && activeTool) {
           const sizeOption = activeTool.options.find((option) => option.id === "size" && option.type === "number");
           if (sizeOption?.type === "number") { event.preventDefault(); const current = Number(store.toolOptions[activeTool.id]?.size ?? sizeOption.defaultValue); store.setToolOption(activeTool.id, "size", Math.max(sizeOption.min, Math.min(sizeOption.max, current + (key === "]" ? Math.max(1, Math.round(current * .1)) : -Math.max(1, Math.round(current * .1)))))); return; }
@@ -607,8 +631,8 @@ export function App() {
           ...(active?.kind === "raster" || active?.kind === "vector" ? [["Import… (Импортировать…)", "", () => openImageRef.current?.click()] as MainMenuItem] : []),
           ...(active?.kind === "vector" ? [["Import SVG as Vector… (Импортировать SVG как вектор…)", "", () => importSvgAsVectorRef.current?.click()] as MainMenuItem] : []),
           ["Save (Сохранить)", "Ctrl+S", () => void saveProject(), !active],
-          ["Save As… (Сохранить как…)", "Ctrl+Shift+S", () => void saveProject(), !active],
-          ["Save a Copy… (Сохранить копию…)", "Ctrl+Alt+S", () => void saveProject(false), !active],
+          ["Save As… (Сохранить как…)", "Ctrl+Shift+S", () => void saveProject({ saveAs: true }), !active],
+          ["Save a Copy… (Сохранить копию…)", "Ctrl+Alt+S", () => void saveProject({ markClean: false, saveAs: true }), !active],
           ...(active?.kind === "raster" ? [["Export… (Экспортировать…)", "Ctrl+Shift+E", () => setExportOpen(true), !isRasterDocumentState(active.state)] as MainMenuItem] : []),
           ...(active?.kind === "vector" ? [["Export as SVG… (Экспортировать в SVG…)", "", exportActiveVectorAsSvg, !isVectorDocumentState(active.state)] as MainMenuItem] : []),
           ...(active?.kind === "raster" ? [["Print… (Печать…)", "Ctrl+P", () => setPrintOpen(true), !isRasterDocumentState(active.state)] as MainMenuItem] : []),
@@ -742,7 +766,7 @@ export function App() {
 
     {(active?.kind === "raster" || active?.kind === "vector") && <aside className="toolbar" aria-label="Tools (Инструменты)">
       <ToolPalette kind={active.kind} language={store.language} activeToolId={activeToolId} openGroup={openToolGroup} onOpenGroup={setOpenToolGroup} onSelect={(toolId) => { store.setTool(active.id, toolId); setOpenToolGroup(null); }} />
-      {active.kind === "raster" && <ColorWells foreground={effectiveForegroundColor} background={effectiveBackgroundColor} monochrome={Boolean(editingMaskLayerId)} onForeground={(color) => editingMaskLayerId ? store.setMaskForegroundWhite(active.id, color.toLowerCase() !== "#000000") : store.setForegroundColor(color)} onBackground={(color) => editingMaskLayerId ? store.setMaskForegroundWhite(active.id, color.toLowerCase() === "#000000") : store.setBackgroundColor(color)} onSwap={() => editingMaskLayerId ? store.swapMaskColors(active.id) : store.swapColors()} onReset={() => editingMaskLayerId ? store.setMaskForegroundWhite(active.id, false) : store.resetColors()} />}
+      {active.kind === "raster" && <ColorWells foreground={effectiveForegroundColor} background={effectiveBackgroundColor} monochrome={Boolean(editingMaskLayerId)} dodgeBurnActive={dodgeBurnActive} onForeground={(color) => editingMaskLayerId ? store.setMaskForegroundWhite(active.id, color.toLowerCase() !== "#000000") : store.setForegroundColor(color)} onBackground={(color) => editingMaskLayerId ? store.setMaskForegroundWhite(active.id, color.toLowerCase() === "#000000") : store.setBackgroundColor(color)} onSwap={() => dodgeBurnActive ? store.setTool(active.id, dodgeBurnActive === "dodge" ? "raster.burn" : "raster.dodge") : editingMaskLayerId ? store.swapMaskColors(active.id) : store.swapColors()} onReset={() => editingMaskLayerId ? store.setMaskForegroundWhite(active.id, false) : store.resetColors()} />}
     </aside>}
 
     {/* информация.txt: docked side panels must reach the same full height as `.toolbar`,
@@ -947,12 +971,21 @@ function WelcomeScreen({ language, requestNewDocument }: { language: Language; r
   </div></div>;
 }
 
-function ColorWells({ foreground, background, monochrome = false, onForeground, onBackground, onSwap, onReset }: { foreground: string; background: string; monochrome?: boolean; onForeground(color: string): void; onBackground(color: string): void; onSwap(): void; onReset(): void }) {
-  return <div className={`color-wells${monochrome ? " mask-colors" : ""}`} title={monochrome ? "Layer mask colors: black hides, white reveals (Цвета маски: чёрный скрывает, белый показывает)" : "Foreground / Background (Основной / дополнительный цвет)"}>
-    <label className="background-color" style={{ "--swatch": background } as CSSProperties}><input type="color" value={background} onChange={(event) => onBackground(event.target.value)} aria-label="Background color (Дополнительный цвет)" /><span /></label>
-    <label className="foreground-color" style={{ "--swatch": foreground } as CSSProperties}><input type="color" value={foreground} onChange={(event) => onForeground(event.target.value)} aria-label="Foreground color (Основной цвет)" /><span /></label>
-    <button className="swap-colors" onClick={onSwap} title="Swap colors [X]" aria-label="Swap colors"><span className="swap-colors-icon" style={{ "--swap-colors-mask": `url("${import.meta.env.BASE_URL}ПОМЕНЯТЬ-ЦВЕТА.svg")` } as CSSProperties} /></button>
-    <button className="reset-colors" onClick={onReset} title="Default colors [D]" aria-label="Default colors"><i/><i/></button>
+const dodgeBurnIconFile: Record<"dodge" | "burn", string> = { dodge: "ОСВЕТЛИТЕЛЬ.svg", burn: "ЗАТЕМНИТЕЛЬ.svg" };
+
+function ColorWells({ foreground, background, monochrome = false, dodgeBurnActive = null, onForeground, onBackground, onSwap, onReset }: { foreground: string; background: string; monochrome?: boolean; dodgeBurnActive?: "dodge" | "burn" | null; onForeground(color: string): void; onBackground(color: string): void; onSwap(): void; onReset(): void }) {
+  // While Dodge or Burn is active the wells have no colour to hold — they
+  // stand in for "which of the pair is on", foreground showing the active
+  // one's own icon, background showing the other (what X switches to), so
+  // glancing at the wells answers the same question they normally answer
+  // for a colour. `swap-colors`'s own click and the X shortcut in App.tsx's
+  // keydown handler call the identical `onSwap`, so the two stay in sync.
+  const otherDodgeBurn = dodgeBurnActive === "dodge" ? "burn" : "dodge";
+  return <div className={`color-wells${monochrome ? " mask-colors" : ""}${dodgeBurnActive ? " dodge-burn-colors" : ""}`} title={dodgeBurnActive ? "Dodge / Burn — X swaps which is active (Осветлитель / Затемнитель — X переключает)" : monochrome ? "Layer mask colors: black hides, white reveals (Цвета маски: чёрный скрывает, белый показывает)" : "Foreground / Background (Основной / дополнительный цвет)"}>
+    <label className="background-color" style={{ "--swatch": background } as CSSProperties}><input type="color" value={background} disabled={Boolean(dodgeBurnActive)} onChange={(event) => onBackground(event.target.value)} aria-label="Background color (Дополнительный цвет)" /><span />{dodgeBurnActive && <i className="dodge-burn-swatch-icon" aria-hidden="true" style={{ color: background === "#000000" ? "#fff" : "#000", "--icon-mask": `url("${import.meta.env.BASE_URL}${dodgeBurnIconFile[otherDodgeBurn]}")` } as CSSProperties}/>}</label>
+    <label className="foreground-color" style={{ "--swatch": foreground } as CSSProperties}><input type="color" value={foreground} disabled={Boolean(dodgeBurnActive)} onChange={(event) => onForeground(event.target.value)} aria-label="Foreground color (Основной цвет)" /><span />{dodgeBurnActive && <i className="dodge-burn-swatch-icon" aria-hidden="true" style={{ color: foreground === "#000000" ? "#fff" : "#000", "--icon-mask": `url("${import.meta.env.BASE_URL}${dodgeBurnIconFile[dodgeBurnActive]}")` } as CSSProperties}/>}</label>
+    <button className="swap-colors" onClick={onSwap} title={dodgeBurnActive ? "Swap Dodge/Burn [X]" : "Swap colors [X]"} aria-label={dodgeBurnActive ? "Swap Dodge/Burn" : "Swap colors"}><span className="swap-colors-icon" style={{ "--swap-colors-mask": `url("${import.meta.env.BASE_URL}ПОМЕНЯТЬ-ЦВЕТА.svg")` } as CSSProperties} /></button>
+    <button className="reset-colors" onClick={onReset} title="Default colors [D]" aria-label="Default colors" disabled={Boolean(dodgeBurnActive)}><i/><i/></button>
   </div>;
 }
 
@@ -1049,5 +1082,5 @@ function OptionsBar({ language, tool, values, transform, scene3d, scene3dGround,
   // Same bar shape a third time — a status readout in place of numeric fields, since "how many of
   // the 3-4 points has the user placed" is the only state there is until the plane can be fitted.
   if (scene3dGround?.active) return <div className="options-bar transform-options"><strong>Cast Shadow (Настроить тень)</strong><span>{scene3dGround.ready ? text(language, "Surface ready", "Поверхность готова") : text(language, `Point ${scene3dGround.pointCount + 1} of 3–4`, `Точка ${scene3dGround.pointCount + 1} из 3–4`)}</span><button title="Cancel (Отмена)" onClick={onScene3DGroundCancel}>×</button><button className="commit" title="Commit (Подтвердить)" onClick={onScene3DGroundCommit} disabled={!scene3dGround.ready}>✓</button></div>;
-  return <div className="options-bar"><strong>{tool ? resolveLabel(tool.label, language) : text(language, "Tool options", "Параметры инструмента")}</strong>{tool ? tool.options.map((option) => <OptionRow key={option.id} language={language} option={option} pixelsPerInch={pixelsPerInch} value={values[option.id] ?? option.defaultValue} onChange={(value) => onChange(option.id, value)} />) : <span className="muted">{language === "ru" ? "Выберите или создайте документ" : "Select or create a document"}</span>}{tool?.id === "raster.move" && <AlignDistributeBar selectionCount={alignSelectionCount} onAlign={onAlign} onDistribute={onDistribute}/>}{tool?.kind === "vector" && <SnapControls language={language} smartGuides={smartGuides} snapToGrid={snapToGrid} onToggleSmartGuides={onToggleSmartGuides} onToggleSnapToGrid={onToggleSnapToGrid}/>}</div>;
+  return <div className="options-bar"><strong>{tool ? resolveLabel(tool.label, language) : text(language, "Tool options", "Параметры инструмента")}</strong>{tool ? tool.options.filter((option) => !option.hideFromBar).map((option) => <OptionRow key={option.id} language={language} option={option} pixelsPerInch={pixelsPerInch} value={values[option.id] ?? option.defaultValue} onChange={(value) => onChange(option.id, value)} />) : <span className="muted">{language === "ru" ? "Выберите или создайте документ" : "Select or create a document"}</span>}{tool?.id === "raster.move" && <AlignDistributeBar selectionCount={alignSelectionCount} onAlign={onAlign} onDistribute={onDistribute}/>}{tool?.kind === "vector" && <SnapControls language={language} smartGuides={smartGuides} snapToGrid={snapToGrid} onToggleSmartGuides={onToggleSmartGuides} onToggleSnapToGrid={onToggleSnapToGrid}/>}</div>;
 }

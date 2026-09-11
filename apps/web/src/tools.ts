@@ -2,10 +2,10 @@ import type { EnvironmentKind } from "@vravio/kernel";
 import type { LocalizedText } from "./i18n";
 
 export type ToolOption =
-  | { id: string; label: LocalizedText; type: "number"; min: number; max: number; step: number; defaultValue: number; unit?: string }
-  | { id: string; label: LocalizedText; type: "boolean"; defaultValue: boolean }
-  | { id: string; label: LocalizedText; type: "color"; defaultValue: string }
-  | { id: string; label: LocalizedText; type: "select"; defaultValue: string; values: readonly { value: string; label: LocalizedText }[] };
+  | { id: string; label: LocalizedText; type: "number"; min: number; max: number; step: number; defaultValue: number; unit?: string; hideFromBar?: boolean }
+  | { id: string; label: LocalizedText; type: "boolean"; defaultValue: boolean; hideFromBar?: boolean }
+  | { id: string; label: LocalizedText; type: "color"; defaultValue: string; hideFromBar?: boolean }
+  | { id: string; label: LocalizedText; type: "select"; defaultValue: string; values: readonly { value: string; label: LocalizedText }[]; hideFromBar?: boolean };
 
 export interface ToolDefinition {
   id: string;
@@ -20,11 +20,21 @@ export interface ToolDefinition {
 const size: ToolOption = { id: "size", label: { en: "Size", ru: "Размер" }, type: "number", min: 1, max: 1000, step: 1, defaultValue: 24, unit: "px" };
 const opacity: ToolOption = { id: "opacity", label: { en: "Opacity", ru: "Непрозрачность" }, type: "number", min: 0, max: 100, step: 1, defaultValue: 100, unit: "%" };
 const color: ToolOption = { id: "color", label: { en: "Color", ru: "Цвет" }, type: "color", defaultValue: "#5be0b3" };
+// Spacing/Roundness/Angle live on every brush-family tool (`brushLike` in
+// RasterWorkspace.tsx) via the right-click Brush Tip popup already — a
+// dial for angle/roundness, a detail section for all three as numbers
+// (RasterBrushTipPopup.tsx). Kept declared here (so `context.options` still
+// carries them, presets can still set them, and the popup's own defaults
+// come from the same place everything else's do) but `hideFromBar: true`
+// keeps them out of the options bar itself — an owner request, to stop a
+// long option list from pushing tool-specific fields (Dodge/Burn's own
+// Exposure/Range) off the edge of a normal-width window with no visible
+// scroll indicator to say more was there.
 const brushTipOptions: readonly ToolOption[] = [size,
   { id: "hardness", label: { en: "Hardness", ru: "Жёсткость" }, type: "number", min: 0, max: 100, step: 1, defaultValue: 82, unit: "%" },
-  { id: "spacing", label: { en: "Spacing", ru: "Интервал" }, type: "number", min: 1, max: 1000, step: 1, defaultValue: 12, unit: "%" },
-  { id: "roundness", label: { en: "Roundness", ru: "Округлость" }, type: "number", min: 1, max: 100, step: 1, defaultValue: 100, unit: "%" },
-  { id: "angle", label: { en: "Angle", ru: "Угол" }, type: "number", min: -180, max: 180, step: 1, defaultValue: 0, unit: "°" },
+  { id: "spacing", label: { en: "Spacing", ru: "Интервал" }, type: "number", min: 1, max: 1000, step: 1, defaultValue: 12, unit: "%", hideFromBar: true },
+  { id: "roundness", label: { en: "Roundness", ru: "Округлость" }, type: "number", min: 1, max: 100, step: 1, defaultValue: 100, unit: "%", hideFromBar: true },
+  { id: "angle", label: { en: "Angle", ru: "Угол" }, type: "number", min: -180, max: 180, step: 1, defaultValue: 0, unit: "°", hideFromBar: true },
 ];
 
 export const tools: readonly ToolDefinition[] = [

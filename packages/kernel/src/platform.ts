@@ -13,8 +13,11 @@ export interface PlatformFile {
 }
 
 export interface OpenFileOptions { readonly accept?: Record<string, readonly string[]>; readonly multiple?: boolean }
-export interface SaveFileOptions { readonly name: string; readonly mime: string; readonly data: Blob | Uint8Array }
-export interface SaveFileResult { readonly name: string; readonly method: "native-picker" | "download" | "desktop" }
+/** `target` is an opaque platform handle (a File System Access handle in the
+ * browser, a user-authorised native path in desktop). The kernel never reads
+ * it; keeping it here lets Save write back while Save As always asks again. */
+export interface SaveFileOptions { readonly name: string; readonly mime: string; readonly data: Blob | Uint8Array; readonly target?: unknown }
+export interface SaveFileResult { readonly name: string; readonly method: "native-picker" | "download" | "desktop"; readonly target?: unknown; readonly cancelled?: boolean }
 
 export interface FileSystemPort {
   openFiles(options?: OpenFileOptions): Promise<readonly PlatformFile[]>;

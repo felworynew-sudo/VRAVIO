@@ -633,7 +633,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const { updateBrushCursor, onPointerLeave: onBrushCursorLeave, brushOptions, tipRoundness, overlay: brushCursorOverlay } = useBrushCursor({
     state, viewport, toolOptions, activeToolId, brushLike, canvasPixels, workspaceRef, sourcePointRef, cloneOffsetRef, preciseCursor, documentOriginX, documentOriginY,
   });
-  const { guideOverlay, rulers } = useRasterRulerGuides({ documentId: document.id, state, viewport, workspaceRef, workspaceSize, documentOriginX, documentOriginY });
+  const { guideOverlay, rulers } = useRasterRulerGuides({ documentId: document.id, state, viewport, workspaceRef, workspaceSize, documentOriginX, documentOriginY, activeToolId });
   const onDropModel = (event: React.DragEvent<HTMLDivElement>) => {
     const files = [...(event.dataTransfer?.files ?? [])].filter((file) => /\.(obj|glb|gltf)$/i.test(file.name));
     if (!files.length) return;

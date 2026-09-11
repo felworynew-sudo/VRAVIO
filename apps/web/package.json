@@ -15,6 +15,7 @@
     "@ffmpeg/util": "0.12.2",
     "@svar-ui/react-filemanager": "2.6.0",
     "@tauri-apps/api": "^2.9.0",
+    "@tauri-apps/plugin-dialog": "2.5.0",
     "@tauri-apps/plugin-fs": "^2.5.2",
     "@vravio/env-audio": "workspace:*",
     "@vravio/env-raster": "workspace:*",

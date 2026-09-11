@@ -16,6 +16,7 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
+tauri-plugin-dialog = "2"
 
 [target.'cfg(windows)'.dependencies]
 # WebView2 already powers the Tauri window. Its Print API accepts a named

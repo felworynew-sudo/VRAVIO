@@ -39,9 +39,11 @@ export function useRasterRulerGuides(params: {
   workspaceSize: { width: number; height: number };
   documentOriginX: number;
   documentOriginY: number;
+  activeToolId: string | undefined;
 }) {
-  const { documentId, state, viewport, workspaceRef, workspaceSize, documentOriginX, documentOriginY } = params;
+  const { documentId, state, viewport, workspaceRef, workspaceSize, documentOriginX, documentOriginY, activeToolId } = params;
   const [guideDraft, setGuideDraft] = useState<RasterGuide | null>(null);
+  const [movingGuideIndex, setMovingGuideIndex] = useState<number | null>(null);
   const [unitMenu, setUnitMenu] = useState<{ x: number; y: number } | null>(null);
   const rulerUnit = useShellStore((shell) => shell.preferences.rulerUnit);
   const updatePreferences = useShellStore((shell) => shell.updatePreferences);
@@ -92,6 +94,34 @@ export function useRasterRulerGuides(params: {
     if (position < 0 || position > limit) return;
     kernel.documents.update<RasterDocumentState>(documentId, (current) => { (current.guides ??= []).push(next); });
   };
+  const moveExistingGuide = (event: React.PointerEvent<SVGLineElement>, index: number, guide: RasterGuide, finish = false) => {
+    if (activeToolId !== "raster.move" || (event.type === "pointerdown" && event.button !== 0)) return;
+    event.stopPropagation();
+    const workspace = workspaceRef.current;
+    if (!workspace) return;
+    const point = pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent);
+    const position = guide.orientation === "vertical" ? point.x : point.y;
+    if (!finish) {
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setMovingGuideIndex(index);
+      setGuideDraft({ orientation: guide.orientation, position });
+      return;
+    }
+    setGuideDraft(null); setMovingGuideIndex(null);
+    const rect = workspace.getBoundingClientRect();
+    // Photoshop removes a guide when it is returned to the ruler it came
+    // from. This is deliberately screen-space: it remains a 18px target at
+    // every zoom level and does not depend on document dimensions.
+    const returnedToRuler = guide.orientation === "vertical"
+      ? event.clientX - rect.left <= 18
+      : event.clientY - rect.top <= 18;
+    const limit = guide.orientation === "vertical" ? state.width : state.height;
+    kernel.documents.update<RasterDocumentState>(documentId, (current) => {
+      const guides = current.guides ?? [];
+      if (returnedToRuler) { guides.splice(index, 1); return; }
+      if (position >= 0 && position <= limit && guides[index]) guides[index] = { orientation: guide.orientation, position };
+    });
+  };
 
   const step = rulerStep(viewport.zoom);
   const horizontalTicks: number[] = [], verticalTicks: number[] = [];
@@ -99,10 +129,11 @@ export function useRasterRulerGuides(params: {
   for (let value = Math.floor(-documentOriginY / (step * viewport.zoom)) * step; value * viewport.zoom + documentOriginY < workspaceSize.height; value += step) verticalTicks.push(value);
   const guides = state.guides ?? [];
 
-  const guideOverlay = <svg className="guide-overlay" width={workspaceSize.width} height={workspaceSize.height} aria-hidden="true">
-    {[...guides, ...(guideDraft ? [guideDraft] : [])].map((guide, index) => guide.orientation === "vertical"
-      ? <line key={`${guide.orientation}-${index}`} x1={guide.position * viewport.zoom + documentOriginX} y1={0} x2={guide.position * viewport.zoom + documentOriginX} y2={workspaceSize.height}/>
-      : <line key={`${guide.orientation}-${index}`} x1={0} y1={guide.position * viewport.zoom + documentOriginY} x2={workspaceSize.width} y2={guide.position * viewport.zoom + documentOriginY}/>)}
+  const guideOverlay = <svg className="guide-overlay" data-move-guides={activeToolId === "raster.move" || undefined} width={workspaceSize.width} height={workspaceSize.height} aria-hidden="true">
+    {guides.map((guide, index) => guide.orientation === "vertical"
+      ? <line key={`${guide.orientation}-${index}`} className={activeToolId === "raster.move" ? "guide-hit-target" : undefined} x1={guide.position * viewport.zoom + documentOriginX} y1={0} x2={guide.position * viewport.zoom + documentOriginX} y2={workspaceSize.height} onPointerDown={(event) => moveExistingGuide(event, index, guide)} onPointerMove={(event) => { if (movingGuideIndex === index) moveExistingGuide(event, index, guide); }} onPointerUp={(event) => moveExistingGuide(event, index, guide, true)} />
+      : <line key={`${guide.orientation}-${index}`} className={activeToolId === "raster.move" ? "guide-hit-target" : undefined} x1={0} y1={guide.position * viewport.zoom + documentOriginY} x2={workspaceSize.width} y2={guide.position * viewport.zoom + documentOriginY} onPointerDown={(event) => moveExistingGuide(event, index, guide)} onPointerMove={(event) => { if (movingGuideIndex === index) moveExistingGuide(event, index, guide); }} onPointerUp={(event) => moveExistingGuide(event, index, guide, true)} />)}
+    {guideDraft && (guideDraft.orientation === "vertical" ? <line className="guide-draft" x1={guideDraft.position * viewport.zoom + documentOriginX} y1={0} x2={guideDraft.position * viewport.zoom + documentOriginX} y2={workspaceSize.height}/> : <line className="guide-draft" x1={0} y1={guideDraft.position * viewport.zoom + documentOriginY} x2={workspaceSize.width} y2={guideDraft.position * viewport.zoom + documentOriginY}/>)}
   </svg>;
 
   const rulers = <div className="rulers" aria-hidden="true">
