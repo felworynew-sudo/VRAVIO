@@ -455,6 +455,24 @@ describe("ModelStore", () => {
     expect(await store.isCached(spec)).toBe(false);
   });
 
+  it("picks up a cache attached after construction", async () => {
+    // apps/web/src/kernel.ts builds the store before `caches.open` (async)
+    // resolves, so a store with no cache yet must not be stuck without one
+    // forever — `setCache` is how it gets attached once the promise settles.
+    const cache = memoryCache();
+    let fetches = 0;
+    const store = new ModelStore({ consentThresholdBytes: Number.POSITIVE_INFINITY, fetch: async () => { fetches += 1; return streamingResponse(16); } });
+    await store.load(spec);
+    expect(await store.isCached(spec)).toBe(false);
+    store.setCache(cache);
+    expect(await store.isCached(spec)).toBe(false);
+    await store.load(spec);
+    expect(fetches).toBe(2);
+    expect(await store.isCached(spec)).toBe(true);
+    await store.load(spec);
+    expect(fetches).toBe(2);
+  });
+
   it("shares one download between concurrent callers", async () => {
     let fetches = 0;
     const store = new ModelStore({ consentThresholdBytes: Number.POSITIVE_INFINITY, fetch: async () => { fetches += 1; return streamingResponse(16); } });

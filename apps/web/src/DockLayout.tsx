@@ -44,6 +44,7 @@ import { AppearancePanel } from "./environments/vector/AppearancePanel";
 import { GeometryModifiersPanel } from "./environments/vector/GeometryModifiersPanel";
 import { mergeableEdit } from "./history-helpers";
 import { TextLayerProperties } from "./TextLayerProperties";
+import { RasterPixelLayerProperties } from "./RasterPixelLayerProperties";
 import "dockview-react/dist/styles/dockview.css";
 
 const LAYOUT_STORAGE_KEY = WORKSPACE_LAYOUT_STORAGE_KEY;
@@ -180,6 +181,7 @@ function InspectorPanel({ params }: IDockviewPanelProps<{ kind?: string }>) {
       if (definition) { const index = rasterState.layers.findIndex((item) => item.id === layer.id), pixels = compositeRasterDocument({ ...rasterState, layers: rasterState.layers.slice(0, Math.max(0, index)) }); return <div className="dock-panel-body property-stack adjustment-properties"><header><img src={iconUrl(definition.icon)} alt=""/><strong>{language === "ru" ? definition.name.ru : definition.name.en}</strong></header><definition.Editor value={adjustment} language={language} histogram={luminanceHistogram(pixels)} onChange={(next) => { const before = adjustment, targetId = layer.id; const write = (value: typeof adjustment) => kernel.documents.update<RasterDocumentState>(document.id, (state) => { const current = state.layers.find((item) => item.id === targetId); if (current?.adjustment) current.adjustment = value; }); write(next); const history = kernel.historyByDocument.get(document.id); if (history) void history.record(mergeableEdit(`Adjustment: ${language === "ru" ? definition.name.ru : definition.name.en}`, () => write(before), () => write(next)), true); }}/></div>; }
     }
     if (layer?.kind === "3d" && layer.scene3d) return <Scene3DProperties documentId={document.id} document={rasterState} layer={layer} language={language} />;
+    if (layer?.kind === "pixel") return <RasterPixelLayerProperties documentId={document.id} document={rasterState} layer={layer} language={language} />;
   }
   if (document && isVectorDocumentState(document.state)) {
     const vectorState = document.state;

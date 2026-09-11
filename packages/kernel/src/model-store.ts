@@ -73,7 +73,7 @@ export interface ModelStoreOptions {
  * that a frozen dialog with no way out is not acceptable.
  */
 export class ModelStore {
-  readonly #cache: ModelCacheStorage | null;
+  #cache: ModelCacheStorage | null;
   readonly #fetch: typeof fetch;
   readonly #consentThreshold: number;
   readonly #inFlight = new Map<string, Promise<ArrayBuffer>>();
@@ -82,6 +82,23 @@ export class ModelStore {
     this.#cache = options.cache ?? null;
     this.#fetch = options.fetch ?? ((...args) => globalThis.fetch(...args));
     this.#consentThreshold = options.consentThresholdBytes ?? 8 * 1024 * 1024;
+  }
+
+  /**
+   * Attaches the cache once it is ready.
+   *
+   * `openModelCache` is async (it awaits `caches.open`), but a store is
+   * typically constructed synchronously at module load, before any async
+   * work has had a chance to run — `apps/web/src/kernel.ts` built one with
+   * `{ cache: null }` for exactly this reason, and nothing ever went back to
+   * attach the real cache afterwards. The quiet cost: every model, on every
+   * load, for the life of the tab — re-downloaded from the network, because
+   * `#load` only ever consults `this.#cache`. Calling this once the promise
+   * from `openModelCache()` resolves closes that gap without changing when
+   * a `ModelStore` itself can be constructed.
+   */
+  setCache(cache: ModelCacheStorage | null): void {
+    this.#cache = cache;
   }
 
   async isCached(spec: ModelSpec): Promise<boolean> {

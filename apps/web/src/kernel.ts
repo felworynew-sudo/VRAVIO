@@ -1,4 +1,4 @@
-import { AssetStore, AutosaveManager, CommandRegistry, DocumentSnapshotStore, DocumentStore, EnvironmentRegistry, GPUContext, HistoryManager, KeymapManager, ModelStore, ResilientStorageAdapter, RoundTripManager } from "@vravio/kernel";
+import { AssetStore, AutosaveManager, CommandRegistry, DocumentSnapshotStore, DocumentStore, EnvironmentRegistry, GPUContext, HistoryManager, KeymapManager, ModelStore, openModelCache, ResilientStorageAdapter, RoundTripManager } from "@vravio/kernel";
 import { RasterEnvironment } from "@vravio/env-raster";
 import { isVectorDocumentState, reseedArtboardIdCounter, reseedPaletteIdCounter, reseedShapeIdCounters } from "@vravio/env-vector";
 import { AudioEnvironment } from "@vravio/env-audio";
@@ -34,7 +34,12 @@ const roundtrip = new RoundTripManager({
 });
 
 const gpu = new GPUContext();
-const models = new ModelStore({ cache: null });
+const models = new ModelStore();
+// `caches.open` is async, so the store starts without a cache and picks one
+// up the moment it opens — see `ModelStore.setCache`'s own doc comment for
+// why this was `{ cache: null }` forever instead. A model requested before
+// this resolves still downloads once; every one after does not.
+void openModelCache().then((cache) => models.setCache(cache));
 const platform = createWebPlatform(gpu, models);
 const autosave = new AutosaveManager(documentsStore, new DocumentSnapshotStore(sessionStorage));
 // Every vector document this session restores from a previous one needs its
