@@ -101,7 +101,22 @@ const MAX_PANELS_PER_GROUP = Math.floor(GRID_EXPANDED_MIN_WIDTH / TAB_ICON_ONLY_
 // default 4-panel preset specifically, which grew the panel group to ~850px while the canvas
 // shrank to ~380px. Raster's own 6-panel default happened not to trigger it, so this was
 // nearly shipped verified against only the environment that looked fine first.
-const GRID_EXPANDED_MIN_WIDTH_CONSTRAINTS = { minimumWidth: GRID_EXPANDED_MIN_WIDTH };
+// Dragging the left edge of an *expanded* group is how it collapses into the rail too, not
+// only the chevron button — информация.txt point 6, and reported live once a hard 220px
+// floor made it impossible to drag any further at all. The constraint's floor is this much
+// lower instead, so the sash has somewhere to go past 220px; a `ResizeObserver` (in
+// `PanelHeaderActions`, not the constraint itself) is what actually turns "still expanded but
+// very narrow" into "now the rail", on the very first observation below
+// `GRID_EXPANDED_MIN_WIDTH` — so an expanded group's own resting width, whenever it isn't
+// actively mid-drag, never leaves the 220px floor the `MAX_PANELS_PER_GROUP`/no-overflow-
+// dropdown guarantee already depends on. `maximumWidth` is set here too, not left at
+// whatever it was — Dockview's own `setConstraints` merges fields rather than replacing the
+// whole object (confirmed in its source: each field only overwrites if present in the call),
+// so without this a group returning from the rail's own labelled width (which sets its own
+// `maximumWidth:132` while collapsed) stayed capped at 132px forever after — found live
+// expanding a group that had been dragged to reveal labels just before being collapsed.
+const GRID_DRAG_MIN_WIDTH = 60;
+const GRID_EXPANDED_MIN_WIDTH_CONSTRAINTS = { minimumWidth: GRID_DRAG_MIN_WIDTH, maximumWidth: Number.MAX_SAFE_INTEGER };
 const EMPTY_LAYER_SELECTION: string[] = [];
 /** The shell owns the Tab shortcut; DockLayout owns the actual edge dock. */
 export const CLEAN_CANVAS_EVENT = "vravio-clean-canvas";
@@ -1686,6 +1701,16 @@ function PanelHeaderActions({ api, containerApi, activePanel, group, panels }: I
     if (referenceGroup) target.api.setSize({ height: 300 }); else target.api.setSize({ width: 280 });
     setMenuOpen(false);
   };
+  // The collapse half of the grid branch below, on its own so a live drag settling below
+  // `GRID_EXPANDED_MIN_WIDTH` (the effect further down) can reach the exact same transition a
+  // button click does, not a second, drifting copy of it.
+  const collapseToRail = () => {
+    group.element.classList.add("vravio-grid-rail");
+    api.setHeaderPosition("right");
+    const railWidth = railLabels ? GRID_RAIL_LABELS_MIN_WIDTH : GRID_RAIL_MIN_WIDTH;
+    requestAnimationFrame(() => { api.setConstraints({ minimumWidth: railWidth }); api.setSize({ width: railWidth }); });
+    setCollapsed(true);
+  };
   const toggleCollapsed = () => {
     if (api.location.type === "grid") {
       if (collapsed) {
@@ -1695,11 +1720,7 @@ function PanelHeaderActions({ api, containerApi, activePanel, group, panels }: I
         api.setSize({ width: 280 });
         setCollapsed(false);
       } else {
-        group.element.classList.add("vravio-grid-rail");
-        api.setHeaderPosition("right");
-        const railWidth = railLabels ? GRID_RAIL_LABELS_MIN_WIDTH : GRID_RAIL_MIN_WIDTH;
-        requestAnimationFrame(() => { api.setConstraints({ minimumWidth: railWidth }); api.setSize({ width: railWidth }); });
-        setCollapsed(true);
+        collapseToRail();
       }
       return;
     }
@@ -1718,6 +1739,27 @@ function PanelHeaderActions({ api, containerApi, activePanel, group, panels }: I
     api.setHeaderPosition(api.location.position);
     requestAnimationFrame(() => { api.collapse(); setCollapsed(true); });
   };
+  // A drag of the expanded group's own edge past `GRID_EXPANDED_MIN_WIDTH` is the second way
+  // to collapse it into the rail, not only the chevron (информация.txt point 6) — reacts on
+  // the very first `ResizeObserver` firing below that width, not after any delay: a debounced
+  // version was tried first and reported live as visibly clipping text for the time it sat
+  // waiting to decide, which point 6's own "just drag it" framing doesn't have room for.
+  useEffect(() => {
+    if (collapsed || api.location.type !== "grid") return;
+    // `ResizeObserver.observe` always fires once immediately with whatever size the element
+    // already has, before any real drag — found live: on a brand new document the group's
+    // very first layout pass hadn't yet settled to its own 280px default (that's a deferred
+    // follow-up `setSize`, not synchronous with mount) when this fired, reading a transient
+    // narrower width and auto-collapsing every fresh document on open. Only reacts from the
+    // second callback on — the first is that guaranteed initial report, never a real resize.
+    let skippedInitial = false;
+    const observer = new ResizeObserver(() => {
+      if (!skippedInitial) { skippedInitial = true; return; }
+      if (group.element.getBoundingClientRect().width < GRID_EXPANDED_MIN_WIDTH) collapseToRail();
+    });
+    observer.observe(group.element);
+    return () => observer.disconnect();
+  }, [api, api.location.type, collapsed, group]);
   // Order matches the Photoshop reference (информация.txt point 2): the collapse chevron
   // (>>) sits directly after the tab strip, then a divider, then the panel's own ☰ menu —
   // not menu-before-chevron as this rendered previously.
