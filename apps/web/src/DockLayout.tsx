@@ -1375,17 +1375,35 @@ const components = {
 // the generic default icon below.
 const panelIcons: Record<string, string> = Object.fromEntries(environmentsWithWindows.flatMap((kind) => windowsFor(kind)).map((panel) => [panel.id, iconUrl(panel.icon)]));
 panelIcons.viewport = iconUrl("/РАДИО.svg");
+/**
+ * информация.txt point 4: "architecturally the icon doesn't hold the panel at all — it
+ * creates one beside itself on click." The earlier implementation instead resized the rail's
+ * own group in place (CSS `position:absolute` overlay on the same, still-35px-collapsed
+ * DOM), which is exactly backwards — the group's real content was reflowing/repainting
+ * through the width change, producing the flash the owner flagged live. A real
+ * `addFloatingGroup` peek has no such transition to flash: the panel is structurally moved
+ * to a brand new floating group, sized and positioned in one step, then moved back the same
+ * way the instant the user clicks anywhere outside it — matching "click anywhere else, it's
+ * gone" exactly, with nothing in between for a repaint to catch.
+ */
+const peekOrigin = new Map<string, string>();
+
 function PanelTab({ api, containerApi }: IDockviewPanelHeaderProps) {
   const language = useShellStore((state) => state.language);
   const contextMenu = useContextMenu();
+  const tabRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const closePeek = (event: PointerEvent) => {
-      const group = api.group;
-      if (group.element.classList.contains("vravio-panel-peek") && !group.element.contains(event.target as Node)) group.element.classList.remove("vravio-panel-peek");
+      const originGroupId = peekOrigin.get(api.id);
+      if (!originGroupId) return;
+      if (api.group.element.contains(event.target as Node)) return;
+      peekOrigin.delete(api.id);
+      const originGroup = containerApi.groups.find((candidate) => candidate.id === originGroupId);
+      if (originGroup) api.moveTo({ group: originGroup });
     };
     document.addEventListener("pointerdown", closePeek, true);
     return () => document.removeEventListener("pointerdown", closePeek, true);
-  }, [api]);
+  }, [api, containerApi]);
   const menuItems = (): ContextMenuItem[] => {
     const panel = containerApi.getPanel(api.id);
     return [
@@ -1395,29 +1413,39 @@ function PanelTab({ api, containerApi }: IDockviewPanelHeaderProps) {
   };
   const openCollapsedPanel = () => {
     const group = api.group;
-    if (!group.api.isCollapsed() && !group.element.classList.contains("vravio-grid-rail")) return;
-    // Dockview's free edge group expands permanently when a tab is clicked.
-    // Re-collapse after its tab-selection handler, then present the same live
-    // group as an overlay extending inward from the rail. Clicking elsewhere
-    // removes only the peek class; the saved layout remains collapsed.
-    requestAnimationFrame(() => {
-      group.api.collapse();
-      group.element.classList.add("vravio-panel-peek");
-    });
+    if (!group.element.classList.contains("vravio-grid-rail")) return;
+    const panel = containerApi.getPanel(api.id);
+    const anchor = tabRef.current?.getBoundingClientRect();
+    if (!panel || !anchor) return;
+    peekOrigin.set(api.id, group.id);
+    containerApi.addFloatingGroup(panel, { x: Math.round(anchor.right + 6), y: Math.round(anchor.top), width: 280, height: 400 });
   };
-  return <><div className="panel-tab" title={api.title} onClick={openCollapsedPanel} onContextMenu={(event) => contextMenu.open(event, menuItems())}><i aria-hidden="true" style={{ "--panel-mask": `url("${panelIcons[api.id] ?? iconUrl("/ПАРАМЕТРЫ.svg")}")` } as CSSProperties}/><span>{api.title}</span></div>{contextMenu.node}</>;
+  return <><div ref={tabRef} className="panel-tab" title={api.title} onClick={openCollapsedPanel} onContextMenu={(event) => contextMenu.open(event, menuItems())}><i aria-hidden="true" style={{ "--panel-mask": `url("${panelIcons[api.id] ?? iconUrl("/ПАРАМЕТРЫ.svg")}")` } as CSSProperties}/><span>{api.title}</span></div>{contextMenu.node}</>;
 }
 
 function PanelHeaderActions({ api, containerApi, activePanel, group }: IDockviewHeaderActionsProps) {
   const language = useShellStore((state) => state.language);
-  const [collapsed, setCollapsed] = useState(() => api.isCollapsed() || (api.location.type === "grid" && (api.getHeaderPosition() === "left" || api.getHeaderPosition() === "right") && group.width <= 150));
+  // Checks our own `vravio-grid-rail` class first, before falling back to the width/header
+  // heuristic — found live: `setHeaderPosition("right")` inside `toggleCollapsed` (below)
+  // remounts this component (a fresh top-vs-right header apparently isn't just a re-render),
+  // and the fresh instance's initializer ran *before* the deferred `setSize` had actually
+  // shrunk the group, reading its still-280px pre-collapse width and concluding "not
+  // collapsed" — which then wiped the class the very setSize call was about to earn. Our own
+  // class survives the remount since it was applied to the DOM node synchronously, before
+  // `setHeaderPosition` ever ran; the geometry fallback stays for the one case with no class
+  // to read yet — a layout restored fresh from a previous session's `fromJSON` save.
+  const [collapsed, setCollapsed] = useState(() => {
+    if (api.location.type !== "grid") return api.isCollapsed();
+    if (group.element.classList.contains("vravio-grid-rail")) return true;
+    return (api.getHeaderPosition() === "left" || api.getHeaderPosition() === "right") && group.width <= 150;
+  });
   const [menuOpen, setMenuOpen] = useState(false);
   const [railLabels, setRailLabels] = useState(() => localStorage.getItem(PANEL_RAIL_LABELS_KEY) === "true");
   useCloseOnOutsideClick(menuOpen, ".panel-menu-wrap", () => setMenuOpen(false));
   useEffect(() => {
     const disposable = api.onDidCollapsedChange(({ isCollapsed }) => setCollapsed(isCollapsed));
     return () => disposable.dispose();
-  }, [api]);
+  }, [api, group]);
   useEffect(() => {
     group.element.classList.toggle("vravio-grid-rail", collapsed && api.location.type === "grid");
     // Re-applies the rail's own constraint on every mount, not only inside `toggleCollapsed`
@@ -1425,9 +1453,36 @@ function PanelHeaderActions({ api, containerApi, activePanel, group }: IDockview
     // group's serialized width, but never ran the toggle handler that pairs it with
     // `setConstraints`. Without this, a layout saved before this fix (or one that simply
     // restores collapsed) stays stuck at Dockview's 100px group floor until the user
-    // happens to toggle collapse off and back on.
-    if (collapsed && api.location.type === "grid") api.setConstraints({ minimumWidth: railLabels ? GRID_RAIL_LABELS_MIN_WIDTH : GRID_RAIL_MIN_WIDTH });
-  }, [api, api.location.type, collapsed, group, railLabels]);
+    // happens to toggle collapse off and back on. `maximumWidth` caps the sash drag itself
+    // (информация.txt point 6: dragging the rail's own left edge is how it grows to show
+    // labels — replaces the earlier dedicated toggle button, which had no place once the
+    // edge itself does the job) to the labelled width, so there is nothing to drag past.
+    if (collapsed && api.location.type === "grid") api.setConstraints({ minimumWidth: GRID_RAIL_MIN_WIDTH, maximumWidth: GRID_RAIL_LABELS_MIN_WIDTH });
+  }, [api, api.location.type, collapsed, group]);
+  // Tracks the rail's own live width while the user drags its left edge, crossfading the
+  // labels in past the midpoint — the actual "drag to reveal" gesture information.txt asks
+  // for, driven by the group's real DOM size rather than a click on a dedicated button.
+  useEffect(() => {
+    if (!collapsed || api.location.type !== "grid") return;
+    const midpoint = (GRID_RAIL_MIN_WIDTH + GRID_RAIL_LABELS_MIN_WIDTH) / 2;
+    // Deferred rather than applied straight from the observer callback — ResizeObserver can
+    // fire while React is mid-render (found live: "Cannot update a component while rendering
+    // a different component", from this same resize chain reacting to a sibling panel's own
+    // state change) — `setTimeout` rather than `queueMicrotask` because the microtask queue
+    // still drains inside the same render pass on occasion (the warning survived it live); a
+    // macrotask is a genuinely separate event-loop turn, clear of any render in flight.
+    const observer = new ResizeObserver(() => {
+      const next = group.element.getBoundingClientRect().width > midpoint;
+      setTimeout(() => setRailLabels((current) => {
+        if (current === next) return current;
+        localStorage.setItem(PANEL_RAIL_LABELS_KEY, String(next));
+        window.dispatchEvent(new CustomEvent<boolean>(PANEL_RAIL_LABELS_EVENT, { detail: next }));
+        return next;
+      }), 0);
+    });
+    observer.observe(group.element);
+    return () => observer.disconnect();
+  }, [api, api.location.type, collapsed, group]);
   const hideActivePanel = () => {
     const documentId = useShellStore.getState().activeDocumentId;
     const document = documentId ? kernel.documents.get(documentId) : undefined;
@@ -1468,19 +1523,8 @@ function PanelHeaderActions({ api, containerApi, activePanel, group }: IDockview
     if (referenceGroup) target.api.setSize({ height: 300 }); else target.api.setSize({ width: 280 });
     setMenuOpen(false);
   };
-  const toggleRailLabels = () => {
-    const next = !railLabels;
-    setRailLabels(next);
-    localStorage.setItem(PANEL_RAIL_LABELS_KEY, String(next));
-    if (api.location.type === "grid" && collapsed) {
-      api.setConstraints({ minimumWidth: next ? GRID_RAIL_LABELS_MIN_WIDTH : GRID_RAIL_MIN_WIDTH });
-      api.setSize({ width: next ? GRID_RAIL_LABELS_MIN_WIDTH : GRID_RAIL_MIN_WIDTH });
-    }
-    window.dispatchEvent(new CustomEvent<boolean>(PANEL_RAIL_LABELS_EVENT, { detail: next }));
-  };
   const toggleCollapsed = () => {
     if (api.location.type === "grid") {
-      group.element.classList.remove("vravio-panel-peek");
       if (collapsed) {
         group.element.classList.remove("vravio-grid-rail");
         api.setHeaderPosition("top");
@@ -1498,7 +1542,6 @@ function PanelHeaderActions({ api, containerApi, activePanel, group }: IDockview
     }
     if (api.location.type !== "edge") return;
     if (collapsed) {
-      group.element.classList.remove("vravio-panel-peek");
       api.expand();
       api.setHeaderPosition("top");
       setCollapsed(false);
@@ -1516,7 +1559,6 @@ function PanelHeaderActions({ api, containerApi, activePanel, group }: IDockview
   // (>>) sits directly after the tab strip, then a divider, then the panel's own ☰ menu —
   // not menu-before-chevron as this rendered previously.
   return <div className="panel-header-actions">
-    {collapsed && <button className="panel-rail-labels" onClick={toggleRailLabels} title={railLabels ? text(language, "Icons only", "Только значки") : text(language, "Icons and names", "Значки и названия")} aria-label={railLabels ? text(language, "Show icons only", "Показать только значки") : text(language, "Show icons and names", "Показать значки и названия")}><i aria-hidden="true" style={{ "--panel-rail-mask": `url("${iconUrl(railLabels ? "/ПАНЕЛИ-БЕЗ-ПОДПИСЕЙ.svg" : "/ПАНЕЛИ-С-ПОДПИСЯМИ.svg")}")` } as CSSProperties}/></button>}
     {(api.location.type === "edge" || api.location.type === "grid") && <button className="panel-collapse" onClick={toggleCollapsed} title={collapsed ? text(language, "Expand panels", "Развернуть панели") : text(language, "Collapse to icons", "Свернуть в значки")} aria-label={collapsed ? text(language, "Expand panels", "Развернуть панели") : text(language, "Collapse panels", "Свернуть панели")}><i aria-hidden="true" style={{ "--panel-collapse-mask": `url("${iconUrl(collapsed ? "/РАЗВЕРНУТЬ-ПАНЕЛИ.svg" : "/СВЕРНУТЬ-ПАНЕЛИ.svg")}")` } as CSSProperties}/></button>}
     {!collapsed && <span className="panel-header-divider" aria-hidden="true"/>}
     {!collapsed && <div className="panel-menu-wrap">
@@ -1651,7 +1693,6 @@ export function DockLayout() {
       // public `getGroup` return type deliberately omits it. Keep that one
       // bridge here instead of weakening every caller of the dock API.
       const groupElement = (group as unknown as { element?: HTMLElement }).element;
-      groupElement?.classList.remove("vravio-panel-peek");
       if (group.api.location.type === "edge") {
         if (enabled) group.api.collapse(); else group.api.expand();
         return;
