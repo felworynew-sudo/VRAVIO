@@ -101,7 +101,12 @@ function commit(context: ToolContext<PuppetWarpState>, state: PuppetWarpState): 
   if (!session || !state.pins.length) return;
   const deformed = solvePuppetMesh(session.mesh, solverPins(state.pins), session.solver);
   const pixels = puppetWarpPixels(session.basePixels, context.document.width, context.document.height, session.mesh, deformed, null);
-  const before = context.document;
+  // Cloned, not the bare `context.document` reference: `commitDocument` stores this as the
+  // undo step's own "before" in a closure, and `context.document` is the same live object
+  // `DocumentStore.update()`'s mutator writes through — sharing it here means the step's own
+  // `redo()` mutates "before" into "after" the instant it runs, the same bug move.tsx's
+  // `commitPending` had (see that fix's own comment for the full mechanism).
+  const before = structuredClone(context.document);
   const after = structuredClone(before);
   const layer = after.layers.find((item) => item.id === session.layerId);
   if (!layer) return;
