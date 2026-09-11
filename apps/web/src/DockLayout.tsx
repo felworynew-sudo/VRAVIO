@@ -69,9 +69,25 @@ const PANEL_RAIL_LABELS_EVENT = "vravio-panel-rail-labels-change";
 // is on the same public `GridviewPanelApi` interface `setSize` is, no cast
 // needed. Every `setSize` that targets the rail width must be paired with a
 // matching `setConstraints` first, or the resize is silently ignored again.
+// A collapsed rail's peek floating group came out ~23px lower than requested every time this
+// was measured live — its own title bar (`FloatingTitleBar`) apparently isn't accounted for
+// by `addFloatingGroup`'s `y`, which otherwise measured correctly (matched the dock-host
+// coordinate conversion exactly on the X axis, where there's no title bar in the way).
+const FLOATING_TITLEBAR_HEIGHT = 23;
 const GRID_RAIL_MIN_WIDTH = 35;
 const GRID_RAIL_LABELS_MIN_WIDTH = 132;
 const GRID_EXPANDED_MIN_WIDTH = 220;
+// An icon-only horizontal tab's own floor width — matches `TAB_ICON_ONLY_WIDTH` in styles.css
+// (kept as a second literal there, not imported, since CSS custom properties can't drive an
+// `@container` query's threshold). информация.txt: precompute how many panels an icon-only
+// strip can show at the group's own minimum width without ever needing Dockview's numbered
+// "∨ N" overflow dropdown, and make that number the hard cap on one group's panel count —
+// the dropdown is then structurally unreachable rather than something to react to after the
+// fact (the shrink-to-icon CSS on its own hit exactly that "react after the fact" wall: even
+// once every tab measured icon-sized, Dockview's own overflow dropdown widget did not clear
+// itself, confirmed live with its own `refreshOverflow()` called and reporting compact:true).
+const TAB_ICON_ONLY_WIDTH = 32;
+const MAX_PANELS_PER_GROUP = Math.floor(GRID_EXPANDED_MIN_WIDTH / TAB_ICON_ONLY_WIDTH);
 // информация.txt: panels need a real minimum size — text must not get clipped by dragging a
 // group narrower than it can read. Only ever applied via `setConstraints` on an already-
 // mounted group, in direct response to a real user click (the collapse/expand toggle below,
@@ -1416,14 +1432,32 @@ function PanelTab({ api, containerApi }: IDockviewPanelHeaderProps) {
     if (!group.element.classList.contains("vravio-grid-rail")) return;
     const panel = containerApi.getPanel(api.id);
     const anchor = tabRef.current?.getBoundingClientRect();
-    if (!panel || !anchor) return;
+    const host = tabRef.current?.closest(".dock-host");
+    const hostRect = host?.getBoundingClientRect();
+    if (!panel || !anchor || !hostRect) return;
     peekOrigin.set(api.id, group.id);
-    containerApi.addFloatingGroup(panel, { x: Math.round(anchor.right + 6), y: Math.round(anchor.top), width: 280, height: 400 });
+    const width = 280;
+    // Docks toward the canvas, not off past the window edge — a rail on the *right* (the
+    // common case, "right-panels") sits with icons near `window.innerWidth`, so growing the
+    // peek further right would run it straight off-screen; its right edge belongs against
+    // the icon's left edge instead. Only a left-side rail wants the mirror of that.
+    const onRightHalf = anchor.left > window.innerWidth / 2;
+    // `addFloatingGroup`'s x/y are relative to the dock-host element Dockview mounted into,
+    // not the window — found live: passing the tab's own window-relative
+    // `getBoundingClientRect()` values landed the peek dozens of pixels off from the icon it
+    // was meant to sit against.
+    const x = onRightHalf ? Math.round(anchor.left - hostRect.left - width - 6) : Math.round(anchor.right - hostRect.left + 6);
+    // The floating group's own title bar (`FloatingTitleBar`, added above whatever content
+    // sits at `y`) pushed the box down from the requested position by its own height every
+    // time this was measured live — not accounted for by any option this call can see, so
+    // subtracted by the measured constant instead of an unexplained one.
+    const y = Math.round(anchor.top - hostRect.top) - FLOATING_TITLEBAR_HEIGHT;
+    containerApi.addFloatingGroup(panel, { x, y, width, height: 400 });
   };
   return <><div ref={tabRef} className="panel-tab" title={api.title} onClick={openCollapsedPanel} onContextMenu={(event) => contextMenu.open(event, menuItems())}><i aria-hidden="true" style={{ "--panel-mask": `url("${panelIcons[api.id] ?? iconUrl("/ПАРАМЕТРЫ.svg")}")` } as CSSProperties}/><span>{api.title}</span></div>{contextMenu.node}</>;
 }
 
-function PanelHeaderActions({ api, containerApi, activePanel, group }: IDockviewHeaderActionsProps) {
+function PanelHeaderActions({ api, containerApi, activePanel, group, panels }: IDockviewHeaderActionsProps) {
   const language = useShellStore((state) => state.language);
   // Checks our own `vravio-grid-rail` class first, before falling back to the width/header
   // heuristic — found live: `setHeaderPosition("right")` inside `toggleCollapsed` (below)
@@ -1485,6 +1519,21 @@ function PanelHeaderActions({ api, containerApi, activePanel, group }: IDockview
     observer.observe(group.element);
     return () => observer.disconnect();
   }, [api, api.location.type, collapsed, group]);
+  // информация.txt: with `MAX_PANELS_PER_GROUP` panels or fewer, every tab can always reach
+  // icon-only (`TAB_ICON_ONLY_WIDTH`) within the group's own enforced minimum width — the
+  // count alone proves there's room, a guarantee that doesn't depend on measuring anything.
+  // Dockview's own numbered "∨ N" overflow widget turned out not to trust that: its own
+  // `refreshOverflow()` API, called after the tabs had genuinely already shrunk to fit
+  // (confirmed live via computed styles), still left a stale dropdown open — a live
+  // `scrollWidth` well past the strip's real content pointed to overflow bookkeeping that
+  // doesn't get cleared by a CSS-only resize the way an actual drag-driven one does. Hiding
+  // the dropdown control under this exact count keeps it available for the one case it can
+  // still be right about — a layout saved before this cap existed, carrying more panels in
+  // one group than `MAX_PANELS_PER_GROUP` allows a *new* drop to reach.
+  useEffect(() => {
+    if (api.location.type !== "grid") return;
+    group.element.classList.toggle("vravio-tabs-uncrowded", panels.length <= MAX_PANELS_PER_GROUP);
+  }, [api, api.location.type, group, panels.length]);
   const hideActivePanel = () => {
     const documentId = useShellStore.getState().activeDocumentId;
     const document = documentId ? kernel.documents.get(documentId) : undefined;
@@ -1789,6 +1838,13 @@ export function DockLayout() {
       // `onDidLayoutChange` below enforces on every later change.
       removeEmptySideGroup(event.api);
     }
+    // информация.txt: cap how many panels one group can hold, at the count `TAB_ICON_ONLY_WIDTH`
+    // says its icon-only tab strip can show at the group's own minimum width — "center" is
+    // Dockview's `Position` for "add as a tab within this group"; `left`/`right`/`top`/`bottom`
+    // split off a new group instead and are never crowded by this limit.
+    event.api.onWillDrop((dropEvent) => {
+      if (dropEvent.position === "center" && dropEvent.group && dropEvent.group.panels.length >= MAX_PANELS_PER_GROUP) dropEvent.preventDefault();
+    });
     event.api.onDidLayoutChange(() => {
       removeEmptySideGroup(event.api);
       localStorage.setItem(storageKey, JSON.stringify(event.api.toJSON()));

@@ -116,6 +116,23 @@ select{-webkit-appearance:none;appearance:none;background-image:linear-gradient(
 .history-entry.undone .history-bullet{background:var(--muted)}
 .history-footer{display:flex;justify-content:space-between;gap:8px;padding:7px 12px;border-top:1px solid var(--border);color:var(--muted);font-size:10px}.empty-row { border:1px dashed var(--border); border-radius:var(--radius-sm); padding:14px 10px; text-align:center; color:var(--muted); }
 .panel-tab{box-sizing:border-box;height:100%;min-width:0;display:flex;align-items:center;gap:5px;padding:0 4px;color:var(--muted);overflow:hidden}.panel-tab i{display:block;width:16px;height:16px;flex:none;background:currentColor;-webkit-mask:var(--panel-mask) center/contain no-repeat;mask:var(--panel-mask) center/contain no-repeat}.panel-tab span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}.panel-collapse{width:28px;height:100%;border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:17px}.panel-collapse:hover{background:var(--surface3);color:var(--text)}
+/* Expanded panels' own horizontal tab strip: name only, no icon, while there is room. As
+   more tabs share the strip each one's own `container-type:inline-size` shrinks it (flex
+   holds it at its natural content width otherwise, `max-width` only caps a very long one) —
+   its padding tracks that shrink first (`cqi` = % of the tab's own current width), then the
+   name's already-set `text-overflow:ellipsis` takes over once padding bottoms out, and only
+   once the tab itself is down near icon-sized does the name give way to the icon entirely.
+   `MAX_PANELS_PER_GROUP` (DockLayout.tsx) keeps a group's count within what this can always
+   show without Dockview's own numbered "∨ N" overflow dropdown ever having a reason to open. */
+.dv-tabs-container:not(.dv-tabs-container-vertical) .panel-tab{container-type:inline-size;flex:0 1 auto;min-width:32px;max-width:160px;padding-inline:clamp(2px,8cqi,4px)}
+.dv-tabs-container:not(.dv-tabs-container-vertical) .panel-tab i{display:none}
+@container (max-width:44px){.dv-tabs-container:not(.dv-tabs-container-vertical) .panel-tab i{display:block}.dv-tabs-container:not(.dv-tabs-container-vertical) .panel-tab span{display:none}}
+/* `vravio-tabs-uncrowded` (PanelHeaderActions): panel count alone already guarantees every
+   tab fits at icon-only width, so the dropdown has nothing real left to hide behind its
+   count — see the comment at that class's own toggle for why this counts rather than
+   measures. Left available (not hidden) for a saved layout carrying more panels in one
+   group than a fresh drop could reach today. */
+.dv-groupview.vravio-tabs-uncrowded .dv-tabs-overflow-dropdown-root{display:none!important}
 /* Dockview changes a collapsed edge header to `writing-mode:vertical-rl`.
    That is useful for its generic text tabs, but it is not Photoshop's icon
    rail and turns panel names into a vertical word. VRAVIO's collapsed state
