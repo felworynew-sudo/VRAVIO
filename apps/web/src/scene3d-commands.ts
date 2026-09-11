@@ -1,11 +1,7 @@
 import { createRasterLayer, isRasterDocumentState, layerDocumentPixels, setLayerPixels, type RasterDocumentState, type RasterLayer, type Scene3DLayerData } from "@vravio/env-raster";
-import type { ReversibleOperation } from "@vravio/kernel";
 import { kernel } from "./kernel";
 import { defaultScene3DLayer, renderScene3DLayerPixels } from "./scene3d-render";
-
-function mergeableEdit(label: string, undo: () => void, redo: () => void): ReversibleOperation {
-  return { label, undo, redo, mergeWith: (next) => next.label === label ? mergeableEdit(label, undo, next.redo) : null };
-}
+import { mergeableEdit } from "./history-helpers";
 
 type LayerSnapshot = { layers: RasterLayer[]; activeLayerId: string };
 function snapshotLayers(state: RasterDocumentState): LayerSnapshot {

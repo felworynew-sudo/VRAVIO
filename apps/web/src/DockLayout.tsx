@@ -13,7 +13,6 @@ import { appendLayer, appendRasterGroup, compositeRasterDocument, createAdjustme
 import { kernel } from "./kernel";
 import { EnvironmentIcon } from "./EnvironmentIcon";
 import { localized, text } from "./i18n";
-import { renderTextLayerPixels } from "./textRender";
 import { ColorPanel } from "./ColorPanel";
 import { NavigatorPanel } from "./NavigatorPanel";
 import { ScriptsPanel } from "./scripts/ScriptsPanel";
@@ -41,21 +40,11 @@ import { pickCommands } from "./commands/surface";
 import { convertLayerToScene3D, importModelAsLayer, updateScene3DLayer } from "./scene3d-commands";
 import { AngleDial } from "./AngleDial";
 import { Scene3DMiniPreview } from "./Scene3DMiniPreview";
-import type { ReversibleOperation } from "@vravio/kernel";
 import { AppearancePanel } from "./environments/vector/AppearancePanel";
 import { GeometryModifiersPanel } from "./environments/vector/GeometryModifiersPanel";
+import { mergeableEdit } from "./history-helpers";
+import { TextLayerProperties } from "./TextLayerProperties";
 import "dockview-react/dist/styles/dockview.css";
-
-/**
- * A history step for a continuous edit — dragging a curve point, scrubbing a slider — that
- * merges with its own immediate predecessor. The document updates on every call so the edit
- * stays live, but undo steps back to before the whole editing session started instead of one
- * micro-step per pixel of drag. `HistoryManager.record`'s `merge` flag drives this; nothing
- * in this codebase used `mergeWith` before adjustment-layer editing needed it.
- */
-function mergeableEdit(label: string, undo: () => void, redo: () => void): ReversibleOperation {
-  return { label, undo, redo, mergeWith: (next) => next.label === label ? mergeableEdit(label, undo, next.redo) : null };
-}
 
 const LAYOUT_STORAGE_KEY = WORKSPACE_LAYOUT_STORAGE_KEY;
 const PANEL_RAIL_LABELS_KEY = "vravio.panel-rail-labels";
@@ -183,8 +172,7 @@ function InspectorPanel({ params }: IDockviewPanelProps<{ kind?: string }>) {
     const rasterState = document.state;
     const layer = rasterState.layers.find((item) => item.id === rasterState.activeLayerId);
     if (layer?.kind === "text" && layer.text) {
-      const updateText = (patch: Partial<NonNullable<RasterLayer["text"]>>) => kernel.documents.update<RasterDocumentState>(document.id, (state) => { const current = state.layers.find((item) => item.id === state.activeLayerId); if (!current?.text) return; current.text = { ...current.text, ...patch }; rasterizeTextLayer(current, state.width, state.height); });
-      return <div className="dock-panel-body property-stack"><strong>Type Properties (Свойства текста)</strong><label>Text (Текст)<textarea value={layer.text.value} onChange={(event) => updateText({ value: event.target.value })} /></label><label>Type (Тип)<select value={layer.text.mode ?? (layer.text.boxWidth ? "area" : "point")} onChange={(event) => updateText({ mode: event.target.value as "point" | "area" | "path" | "dynamic" })}><option value="point">Point text (Точечный)</option><option value="area">Paragraph text (Блочный)</option>{layer.text.path && <option value="path">Text on path (Текст по контуру)</option>}{layer.text.path && <option value="dynamic">Dynamic text (Динамический)</option>}</select></label>{layer.text.mode === "dynamic" && <label>Dynamic shape (Динамическая форма)<select value={layer.text.dynamicPreset ?? "arch"} onChange={(event) => updateText({ dynamicPreset: event.target.value as "circle" | "arch" | "bow" })}><option value="circle">Circle (Круг)</option><option value="arch">Arch (Дуга)</option><option value="bow">Bow (Изгиб)</option></select></label>}{layer.text.path && <label className="export-check"><input type="checkbox" checked={layer.text.path.flip ?? false} onChange={(event) => updateText({ path: { ...layer.text!.path!, flip: event.target.checked } })}/>Flip path (Перевернуть контур)</label>}<label>Font (Шрифт)<input value={layer.text.fontFamily} onChange={(event) => updateText({ fontFamily: event.target.value })} /></label><label>Size (Кегль)<input type="number" min="1" max="1000" value={layer.text.fontSize} onChange={(event) => updateText({ fontSize: event.target.valueAsNumber })} /></label><label>Leading (Межстрочный)<input type="number" min="0.5" max="5" step="0.05" value={layer.text.lineHeight} onChange={(event) => updateText({ lineHeight: event.target.valueAsNumber })} /></label><label>Tracking (Межбуквенный)<input type="number" min="-50" max="200" value={layer.text.letterSpacing} onChange={(event) => updateText({ letterSpacing: event.target.valueAsNumber })} /></label><label>Align (Выравнивание)<select value={layer.text.align} onChange={(event) => updateText({ align: event.target.value as "left" | "center" | "right" })}><option value="left">Left (Слева)</option><option value="center">Center (По центру)</option><option value="right">Right (Справа)</option></select></label><label>Color (Цвет)<input type="color" value={layer.text.color} onChange={(event) => updateText({ color: event.target.value })} /></label><div className="text-style-toggles"><button className={layer.text.bold ? "active" : ""} onClick={() => updateText({ bold: !layer.text?.bold })} title="Bold (Полужирный)"><b>B</b></button><button className={layer.text.italic ? "active" : ""} onClick={() => updateText({ italic: !layer.text?.italic })} title="Italic (Курсив)"><i>I</i></button><button className={layer.text.underline ? "active" : ""} onClick={() => updateText({ underline: !layer.text?.underline })} title="Underline (Подчёркнутый)"><u>U</u></button></div></div>;
+      return <TextLayerProperties documentId={document.id} document={rasterState} layer={layer} language={language} />;
     }
     if (layer?.kind === "adjustment" && layer.adjustment) {
       const adjustment = layer.adjustment;
@@ -377,11 +365,6 @@ function Scene3DProperties({ documentId, document, layer, language }: { document
  *  own `/VRAVIO/` base — always route them through Vite's `BASE_URL`. */
 function iconUrl(path: string): string {
   return `${import.meta.env.BASE_URL}${path.replace(/^\//, "")}`;
-}
-
-function rasterizeTextLayer(layer: RasterLayer, width: number, height: number): void {
-  if (!layer.text) return;
-  setLayerPixels(layer, renderTextLayerPixels(layer.text, width, height), width, height);
 }
 
 /** The glyph that says what kind of layer this is, or nothing for a plain one. */

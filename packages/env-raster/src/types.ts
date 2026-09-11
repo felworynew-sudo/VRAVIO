@@ -110,7 +110,67 @@ export interface Scene3DLayerData {
 
 export interface RasterTextPath { start: { x: number; y: number }; control: { x: number; y: number }; end: { x: number; y: number }; flip?: boolean }
 export interface RasterTextTransform { a: number; b: number; c: number; d: number; e: number; f: number }
-export interface RasterTextData { value: string; x: number; y: number; fontFamily: string; fontSize: number; lineHeight: number; letterSpacing: number; align: "left" | "center" | "right"; color: string; bold?: boolean; italic?: boolean; underline?: boolean; mode?: "point" | "area" | "path" | "dynamic"; /** Paragraph (bounded) text word-wraps within this width instead of only breaking on explicit newlines. */ boxWidth?: number; boxHeight?: number; path?: RasterTextPath; dynamicPreset?: "circle" | "arch" | "bow"; /** Non-destructive affine transform applied to the live text geometry. */ transform?: RasterTextTransform; /** Cached visible raster bounds, refreshed by the text renderer. */ visualBounds?: RasterRect }
+export interface RasterTextData {
+  value: string; x: number; y: number; fontFamily: string; fontSize: number; lineHeight: number; letterSpacing: number;
+  align: "left" | "center" | "right"; color: string; bold?: boolean; italic?: boolean; underline?: boolean;
+  mode?: "point" | "area" | "path" | "dynamic";
+  /** Paragraph (bounded) text word-wraps within this width instead of only breaking on explicit newlines. */
+  boxWidth?: number; boxHeight?: number; path?: RasterTextPath; dynamicPreset?: "circle" | "arch" | "bow";
+  /** Non-destructive affine transform applied to the live text geometry. */
+  transform?: RasterTextTransform;
+  /** Cached visible raster bounds, refreshed by the text renderer. */
+  visualBounds?: RasterRect;
+  /** Photoshop's Character panel, the fields `bold`/`italic`/`underline`/`letterSpacing` above
+   *  did not already cover. `kerning` maps straight onto the Canvas 2D `fontKerning` context
+   *  property ("auto" leaves the browser's own default alone, "normal" forces metric-kerning
+   *  pairs on, "none" forces them off — Canvas has no separate "optical" mode to distinguish
+   *  from "normal", so unlike Photoshop's own three-way Metric/Optical/None this is two-way). */
+  kerning?: "auto" | "normal" | "none";
+  /** Percent, 100 = no scale — Photoshop's own "Vertical/Horizontal Scale" character fields. */
+  horizontalScale?: number; verticalScale?: number;
+  /** Points, positive lifts the glyph above the baseline (Photoshop's own convention). */
+  baselineShift?: number;
+  /** Photoshop's "All Caps"/"Small Caps" toggles. All Caps rewrites the drawn string to upper
+   *  case (there being no separate glyph set to switch to); Small Caps uses the Canvas 2D
+   *  `fontVariantCaps: "small-caps"` context property, which is real OpenType small-caps
+   *  substitution where the active font provides it and a synthesised fallback otherwise —
+   *  the same two-tier behaviour any small-caps renderer has. */
+  allCaps?: boolean; smallCaps?: boolean;
+  /** Mutually exclusive with each other, matching Photoshop; drawn by scaling the glyph and
+   *  shifting its baseline, the standard technique for a font with no dedicated sub/superscript
+   *  glyphs (see `superscriptOffset`/`SUPERSCRIPT_SCALE` in textRender.ts). */
+  superscript?: boolean; subscript?: boolean;
+  strikethrough?: boolean;
+  /**
+   * Paragraph settings, active only when `boxWidth` makes this bounded (area) text.
+   * `justify` controls how a wrapped line's own words are spaced to fill `boxWidth` — "none"
+   * leaves a line ragged at `align`'s edge (Photoshop's plain Left/Center/Right), the other four
+   * values are Photoshop's own "Justify last line Left/Center/Right/Full" family, where every
+   * line but the paragraph's last is stretched to the full width and the last line falls back to
+   * the named alignment (or is stretched too, for "full").
+   */
+  justify?: "none" | "left" | "center" | "right" | "full";
+  /** Points. `indentBefore`/`indentAfter` narrow every line's own wrap width from each edge (the
+   *  edge `align`/the paragraph's own writing direction reads as "before"/"after"); `firstLineIndent`
+   *  additionally offsets only a paragraph's opening line, the same three fields as Photoshop's
+   *  own Paragraph panel. `spaceBefore`/`spaceAfter` add blank vertical space around each
+   *  paragraph (an explicit `\n\n`-separated block), not between ordinary wrapped lines within one. */
+  indentBefore?: number; indentAfter?: number; firstLineIndent?: number; spaceBefore?: number; spaceAfter?: number;
+  /** A long word that alone overflows `boxWidth` breaks mid-word either way (`wrapParagraph`'s
+   *  own fallback) — this only controls whether that forced break shows a visible hyphen at the
+   *  break point, not real dictionary-based hyphenation (no hyphenation dictionary ships with
+   *  this project; a linguistically correct break point is out of scope, see docs/master-plan.md). */
+  hyphenate?: boolean;
+  /** Each paragraph (`\n`-separated block) gets one bullet or number, indented the same way
+   *  `indentBefore` narrows ordinary text — Photoshop's own "Bulleted/Numbered Lists" family,
+   *  restricted to the one marker style each actually needs (a dash-bullet and 1./2./3.). */
+  listType?: "none" | "bullet" | "number";
+  /** Canvas 2D's own `direction` context property ("ltr"/"rtl") — real bidi glyph-run reversal
+   *  for right-to-left scripts, not a full Unicode Bidi Algorithm implementation (mixed-direction
+   *  runs within one line are not re-ordered; a wholly-RTL string reads correctly, a mixed
+   *  Arabic/Latin one does not get per-run reordering). */
+  direction?: "ltr" | "rtl";
+}
 export interface RasterLayerEffects {
   dropShadow?: { enabled: boolean; color: string; opacity: number; offsetX: number; offsetY: number };
   innerShadow?: { enabled: boolean; color: string; opacity: number; offsetX: number; offsetY: number };
