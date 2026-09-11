@@ -194,11 +194,13 @@ select{-webkit-appearance:none;appearance:none;background-image:linear-gradient(
    icon moves only it. `.dv-void-container` is already exactly this grip functionally (a real,
    working drag-the-whole-group handle, confirmed live — it's what normally sits as leftover
    space below the icons and already relocates the entire rail when dragged), just in the
-   wrong place and the wrong shape for this reference: reordered here to sit right under the
-   collapse chevron instead of filling all the space below the last icon, and capped to a
-   small fixed height with a dot pattern so it reads as a grip instead of empty background. */
-.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-and-actions-container.dv-groupview-header-vertical>.dv-void-container{order:-1;flex:none!important;width:100%;height:13px;background-image:radial-gradient(var(--muted) 1px,transparent 1.5px);background-size:6px 4px;background-position:center;opacity:.55}
-.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-and-actions-container.dv-groupview-header-vertical>.dv-void-container:hover{opacity:.9}
+   wrong place for this reference: reordered here to sit right under the collapse chevron
+   instead of filling all the space below the last icon, capped to a small fixed height.
+   Left visually blank rather than drawn as a grip (owner: there's no mechanism yet for
+   actually splitting the rail into separate icon groups, so a drawn grip implying that
+   would be a checkbox that doesn't do anything new — CLAUDE.md's own rule) — the handle
+   still works today for the one group that already exists, dragging the whole rail. */
+.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-and-actions-container.dv-groupview-header-vertical>.dv-void-container{order:-1;flex:none!important;width:100%;height:13px}
 .dock-host[data-panel-rail-labels="true"] .dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-and-actions-container{width:132px}.dock-host[data-panel-rail-labels="true"] .dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-container-vertical .panel-tab{display:flex;justify-content:flex-start;width:131px;min-width:131px;padding:0 10px}.dock-host[data-panel-rail-labels="true"] .dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-container-vertical .panel-tab span{display:block!important;max-width:94px}
 /* A collapsed tab click peeks the panel via a real floating group (see PanelTab's own
    comment in DockLayout.tsx) rather than resizing the rail's own DOM in place, so there is
