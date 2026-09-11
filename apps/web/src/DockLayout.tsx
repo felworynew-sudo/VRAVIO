@@ -1731,7 +1731,13 @@ function PanelHeaderActions({ api, containerApi, activePanel, group, panels }: I
   const columnSiblingIds = () => {
     if (api.location.type !== "grid") return [];
     const left = Math.round(group.element.getBoundingClientRect().left);
-    return containerApi.groups.filter((candidate) => candidate.id !== group.id && candidate.api.location.type === "grid" && Math.round(candidate.element.getBoundingClientRect().left) === left).map((candidate) => candidate.id);
+    // The canvas's own group (`viewport`, created with `hideHeader:true`) must never collapse
+    // into a rail — it has no header at all, so there's normally no button to even attempt
+    // it — but a *sibling* elsewhere in its column collapsing could still sweep it in here,
+    // found live: an unrelated group's own collapse cascaded onto the canvas's group purely
+    // because they happened to share a left edge at that moment, turning the canvas itself
+    // into a 132px icon strip with no way back to it except code, not a click.
+    return containerApi.groups.filter((candidate) => candidate.id !== group.id && candidate.api.location.type === "grid" && Math.round(candidate.element.getBoundingClientRect().left) === left && !candidate.panels.some((panel) => panel.id === "viewport")).map((candidate) => candidate.id);
   };
   const collapseToRail = () => {
     collapseToRailSelf();
@@ -1745,6 +1751,9 @@ function PanelHeaderActions({ api, containerApi, activePanel, group, panels }: I
     const onCascade = (event: Event) => {
       const { groupIds, collapsed: target } = (event as CustomEvent<ColumnCascadeDetail>).detail;
       if (!groupIds.includes(group.id) || collapsed === target) return;
+      // Same guard as `columnSiblingIds`'s own, kept here too — this listener has no other
+      // way to know a *different* code path didn't put the canvas's own id in the list.
+      if (target && group.panels.some((panel) => panel.id === "viewport")) return;
       if (target) collapseToRailSelf(); else expandFromRailSelf();
     };
     window.addEventListener(COLUMN_CASCADE_EVENT, onCascade);
@@ -1780,7 +1789,15 @@ function PanelHeaderActions({ api, containerApi, activePanel, group, panels }: I
   // version was tried first and reported live as visibly clipping text for the time it sat
   // waiting to decide, which point 6's own "just drag it" framing doesn't have room for.
   useEffect(() => {
-    if (collapsed || api.location.type !== "grid") return;
+    // The canvas's own group (`viewport`, `hideHeader:true`) must never collapse into a rail
+    // — it has no header at all, normally no button to even attempt it through — but dragging
+    // the *panel* column's own edge far enough left necessarily narrows the canvas's group by
+    // the same motion, on the same shared sash. Found live: past a certain drag distance the
+    // canvas itself dropped below `GRID_EXPANDED_MIN_WIDTH` and this same effect (mounted for
+    // every grid group, viewport's included) collapsed it into a rail sitting right on top of
+    // the real toolbar, the whole workspace unusable until fixed in code — no click-driven
+    // path could have caused it, since there's no button on a header that doesn't exist.
+    if (collapsed || api.location.type !== "grid" || group.panels.some((panel) => panel.id === "viewport")) return;
     // `ResizeObserver.observe` always fires once immediately with whatever size the element
     // already has, before any real drag — found live: on a brand new document the group's
     // very first layout pass hadn't yet settled to its own 280px default (that's a deferred
