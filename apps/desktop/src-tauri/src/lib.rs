@@ -17,6 +17,12 @@ pub fn run() {
         // Supplies the desktop implementation of the home browser's read-only
         // file port; document state remains entirely in the shared web kernel.
         .plugin(tauri_plugin_fs::init())
+        // `webPlatform.ts`'s `DesktopFileSystem.saveFile` and the image converter's folder
+        // pickers both call into `@tauri-apps/plugin-dialog` (`save`/`open`) — the crate was
+        // already a Cargo dependency but never registered here, so those calls would fail at
+        // runtime with the plugin uninitialized. `tauri-plugin-fs` alone only covers file I/O
+        // once a path is already known, not the native picker that supplies one.
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             native_print::list_printers,
             native_print::print_page,

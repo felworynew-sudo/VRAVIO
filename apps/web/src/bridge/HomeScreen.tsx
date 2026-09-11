@@ -21,6 +21,7 @@ type Props = {
    * reaches into shell state on its own. */
   openDocuments: readonly VravioDocument[];
   onOpenDocument(id: string): void;
+  openConverter(): void;
 };
 
 /**
@@ -29,7 +30,7 @@ type Props = {
  * this component only maps its requests to the platform file port and maps an opened
  * file to the already-existing VRAVIO import pipeline.
  */
-export function HomeScreen({ language, requestNewDocument, openFile, openDocuments, onOpenDocument }: Props) {
+export function HomeScreen({ language, requestNewDocument, openFile, openDocuments, onOpenDocument, openConverter }: Props) {
   const providerRef = useRef(createBridgeFileSystemProvider());
   const [data, setData] = useState<BridgeEntry[]>([]);
   const [message, setMessage] = useState("");
@@ -86,6 +87,7 @@ export function HomeScreen({ language, requestNewDocument, openFile, openDocumen
       <div className="bridge-actions">
         <button onClick={() => fileRef.current?.click()}><i className="bridge-action-icon" style={{ "--icon-mask": `url("${import.meta.env.BASE_URL}ОТКРЫТЬ-ФАЙЛ.svg")` } as CSSProperties}/>{text(language, "Open files", "Открыть файлы")}</button>
         {providerRef.current.kind === "browser" && <button onClick={() => folderRef.current?.click()}><i className="bridge-action-icon" style={{ "--icon-mask": `url("${import.meta.env.BASE_URL}ОТКРЫТЬ-ПАПКУ.svg")` } as CSSProperties}/>{text(language, "Open folder", "Открыть папку")}</button>}
+        <button onClick={openConverter}>{text(language, "Convert images…", "Конвертировать изображения…")}</button>
       </div>
       <h2>{text(language, "Workspaces", "Рабочие среды")}</h2>
       <div className="bridge-environments">

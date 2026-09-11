@@ -31,6 +31,7 @@ import { rawExtensionOf, rawFileExtensions, type DecodedRaw } from "./rawDecode"
 import { CameraRawDialog } from "./CameraRawDialog";
 import { CameraRawFilterDialog } from "./CameraRawFilterDialog";
 import { ExportDialog } from "./ExportDialog";
+import { ImageConverterDialog } from "./ImageConverterDialog";
 import { PrintCenter } from "./printing/PrintCenter";
 import { ContextualBar } from "./ContextualBar";
 import { decodeImportedImage } from "./imageImport";
@@ -115,6 +116,9 @@ export function App() {
   // labelled "Export image".
   const [exportOpen, setExportOpen] = useState<false | "export" | "saveCopy">(false);
   const [printOpen, setPrintOpen] = useState(false);
+  // Reachable from Bridge, independent of any open document — it converts files on disk, not
+  // the active document, so it carries no document-shaped state of its own to restore.
+  const [converterOpen, setConverterOpen] = useState(false);
   // `targetsMask`: a mask is a layer too (CLAUDE.md's own recurring theme) — an adjustment
   // opened while a mask is being edited (`editingMaskLayerId`, the same state the color-swap
   // shortcuts below already special-case) must land on that mask's own grayscale buffer, not
@@ -834,7 +838,7 @@ export function App() {
     </>, chromeSlots.top)}
 
     <main className="workspace">
-      {active ? <DockLayout /> : <HomeScreen language={store.language} requestNewDocument={store.requestNewDocument} openFile={openBridgeFile} openDocuments={documents} onOpenDocument={store.activateDocument} />}
+      {active ? <DockLayout /> : <HomeScreen language={store.language} requestNewDocument={store.requestNewDocument} openFile={openBridgeFile} openDocuments={documents} onOpenDocument={store.activateDocument} openConverter={() => setConverterOpen(true)} />}
       {active && <ContextualBar documentId={active.id} state={active.state} language={store.language} visible={store.preferences.contextualBar} />}
     </main>
     {chromeSlots.bottom && active && createPortal(<footer className="status-bar"><span>{resolveLabel(environmentMeta[active.kind].label, store.language)}</span><span>{isAudioDocumentState(active.state) ? `${(active.state.sampleRate / 1000).toLocaleString()} kHz · ${active.state.channels === 1 ? text(store.language, "Mono", "Моно") : text(store.language, "Stereo", "Стерео")} · ${active.state.bitDepth} bit` : isVideoDocumentState(active.state) ? `${active.state.width}×${active.state.height} · ${active.state.frameRate} fps` : `${Math.round((store.viewports[active.id]?.zoom ?? 1) * 100)}% · sRGB · ${renderBackend ?? "detecting"}`}</span></footer>, chromeSlots.bottom)}
@@ -881,6 +885,7 @@ export function App() {
     {exportOpen && active && isRasterDocumentState(active.state) && <ExportDialog state={active.state} documentName={active.name} language={store.language} variant={exportOpen} onCancel={() => setExportOpen(false)} onExport={async (blob, fileName) => { download(blob, fileName); setExportOpen(false); }}/>}
     {printOpen && active && isRasterDocumentState(active.state) && <PrintCenter state={active.state} documentName={active.name} language={store.language} onCancel={() => setPrintOpen(false)} onSavePdf={async (blob, fileName) => { await kernel.platform.fs.saveFile({ name: fileName, mime: "application/pdf", data: blob }); }}/>}
     {adjustmentDialog && (() => { const document = kernel.documents.get<RasterDocumentState>(adjustmentDialog.documentId), definition = rasterAdjustmentById.get(adjustmentDialog.definitionId), layer = document?.state.layers.find((item) => item.id === adjustmentDialog.layerId); if (!document || !definition || !layer) return null; const pixels = layerDocumentPixels(layer, document.state.width, document.state.height); return <AdjustmentDialog definition={definition} initialValue={adjustmentDialog.initialValue} language={store.language} histogram={luminanceHistogram(pixels)} pixels={pixels} onPreview={previewImageAdjustment} onCancel={() => { previewImageAdjustment(null); setAdjustmentDialog(null); }} onApply={applyImageAdjustment}/>; })()}
+    {converterOpen && <ImageConverterDialog language={store.language} onClose={() => setConverterOpen(false)}/>}
   </div>;
 }
 

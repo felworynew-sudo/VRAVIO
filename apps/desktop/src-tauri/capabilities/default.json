@@ -13,7 +13,10 @@
     "fs:default",
     "fs:allow-read-dir",
     "fs:allow-read-file",
+    "fs:allow-write-file",
     "fs:allow-stat",
+    "dialog:allow-open",
+    "dialog:allow-save",
     {
       "identifier": "fs:scope",
       "allow": [
