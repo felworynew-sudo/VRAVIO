@@ -75,6 +75,19 @@ export function App() {
   // browser permission or an authorised desktop path, not portable artwork.
   // Save writes back to it; Save As explicitly discards it and asks again.
   const savedTargetByDocument = useRef(new Map<string, unknown>());
+  /** Which documents currently have a save in flight — `createWritable()`
+   * opens the File System Access handle in its default "exclusive" mode, so
+   * a second call on the same handle before the first's writable stream
+   * closes throws `NoModificationAllowedError: Failed to execute
+   * 'createWritable' on 'FileSystemFileHandle'`, reported live. Two ways to
+   * reach it exist in this file alone — Ctrl+S racing the same shortcut
+   * dispatched again before the first save's `await` chain finishes, and the
+   * effect below re-subscribing its listeners on every render (no
+   * dependency array) leaves an — however narrow — window where a
+   * dispatched event could reach a listener mid-teardown. Guarding here
+   * closes the failure regardless of which path (or another not yet found)
+   * triggers the second call, rather than chasing each one individually. */
+  const saveInFlight = useRef(new Set<string>());
   const [transformMetrics, setTransformMetrics] = useState<{ active: boolean; x: number; y: number; width: number; height: number; rotation: number; warp?: boolean } | null>(null);
   // The 3D rotation gizmo's own pending state — a parallel channel to `transformMetrics` above
   // rather than folded into it: the two are never active at once (Scene3DOrbitGizmo only mounts
@@ -256,6 +269,13 @@ export function App() {
    * formats remain in Export, matching Photoshop's project/export split. */
   const saveProject = async ({ markClean = true, saveAs = false }: { markClean?: boolean; saveAs?: boolean } = {}) => {
     if (!active) return;
+    // A second save for the same document while the first is still writing
+    // would call `createWritable()` on the same handle twice — its default
+    // "exclusive" mode throws on the second call, not queues it. Dropping
+    // the second attempt (rather than queuing it) matches what the user
+    // actually did: pressed Save once, however it ended up dispatched twice.
+    if (saveInFlight.current.has(active.id)) return;
+    saveInFlight.current.add(active.id);
     try {
       const result = await kernel.platform.fs.saveFile({ name: projectFileName(active.name), mime: "application/vnd.vravio+json", data: projectBlob(), target: saveAs ? undefined : savedTargetByDocument.current.get(active.id) });
       if (result.cancelled) return;
@@ -268,6 +288,8 @@ export function App() {
       // A save that failed silently is the worst of the three: the user walks
       // away believing the work is on disk.
       errorModal({ title: text(store.language, "Could not save", "Не удалось сохранить"), message: text(store.language, "The project was not written to disk. Nothing has been lost — try saving again, or to a different location.", "Проект не записан на диск. Ничего не потеряно — попробуйте сохранить ещё раз или в другое место."), detail: because });
+    } finally {
+      saveInFlight.current.delete(active.id);
     }
   };
   const applyFilter = (pixels: Uint8ClampedArray, label: string) => { if (!active || !isRasterDocumentState(active.state)) return; const id=active.id,layerId=active.state.activeLayerId,state0=active.state,target=state0.layers.find((item)=>item.id===layerId);if(!target)return;

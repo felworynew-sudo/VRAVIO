@@ -60,7 +60,11 @@ class WebFileSystem implements FileSystemPort {
 }
 
 function isBrowserFileHandle(value: unknown): value is BrowserFileHandle {
-  return Boolean(value) && typeof value === "object" && "createWritable" in value && typeof (value as BrowserFileHandle).createWritable === "function";
+  // `typeof value === "object"` is true for `null` too, so the previous
+  // `Boolean(value)` check — a plain truthiness test, not a type guard TS's
+  // control-flow analysis narrows on — left `value` still possibly `null`
+  // at the `in` check below. An explicit `!== null` is what actually narrows it.
+  return value !== null && typeof value === "object" && "createWritable" in value && typeof (value as BrowserFileHandle).createWritable === "function";
 }
 
 const isTauriDesktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
