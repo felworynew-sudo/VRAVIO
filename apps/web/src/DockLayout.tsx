@@ -1834,6 +1834,16 @@ function removeEmptySideGroup(api: DockviewReadyEvent["api"]): void {
   if (sideGroup && sideGroup.panels.length === 0) api.removeGroup(sideGroup);
 }
 
+// Owner's own requested default arrangement for raster's Essentials preset: History/Color/
+// Assets start as a collapsed icon rail sitting right against the canvas, Properties/
+// Navigator form the expanded group past it, and Layers is its own group stacked below that
+// one — not all six panels flattened into one tab strip the way every other preset (and every
+// other environment) still does. Matched by id, not by preset id, so a custom preset built
+// from these same panels gets the same treatment; anything not named here (another preset's
+// "effects", say) falls back into the expanded group rather than being dropped.
+const RASTER_DEFAULT_RAIL_PANEL_IDS = ["history", "color", "assets"];
+const RASTER_DEFAULT_SECONDARY_PANEL_IDS = ["layers"];
+
 function createDefaultLayout(api: DockviewReadyEvent["api"], language: Language, kind: EnvironmentKind, panelIds: readonly string[]): void {
   const viewportGroup = api.addGroup({ direction: "left", hideHeader: true });
   api.addPanel({ id: "viewport", component: "viewport", title: text(language, "Canvas", "Холст"), position: { referenceGroup: viewportGroup, direction: "within" } });
@@ -1851,6 +1861,7 @@ function createDefaultLayout(api: DockviewReadyEvent["api"], language: Language,
   const visible = new Set(panelIds);
   const initialPanels = windowsFor(kind).filter((panel) => visible.has(panel.id));
   if (initialPanels.length === 0) return;
+  if (kind === "raster") { createDefaultRasterLayout(api, language, viewportGroup, initialPanels); return; }
   // No `constraints` inline on `addGroup` — see the comment on the other `addGroup` calls in
   // this file for why (corrupts Dockview's fresh-layout width distribution; reproduced live
   // on the vector environment's default preset specifically). Applied as a follow-up call
@@ -1871,6 +1882,51 @@ function createDefaultLayout(api: DockviewReadyEvent["api"], language: Language,
   // is, narrow enough for its tab strip to spill panels into the numbered "∨ N" overflow
   // dropdown instead of showing every tab.
   sideGroup.api.setConstraints(GRID_EXPANDED_MIN_WIDTH_CONSTRAINTS);
+}
+
+type WindowDefinition = ReturnType<typeof windowsFor>[number];
+
+function createDefaultRasterLayout(api: DockviewReadyEvent["api"], language: Language, viewportGroup: ReturnType<DockviewReadyEvent["api"]["addGroup"]>, initialPanels: readonly WindowDefinition[]): void {
+  const addPanelsTo = (groupId: string, panels: readonly WindowDefinition[]) => {
+    for (const panel of panels) api.addPanel({ id: panel.id, component: panel.component, title: windowTitle(panel, language), position: { referenceGroup: groupId, direction: "within" } });
+  };
+  const railPanels = initialPanels.filter((panel) => RASTER_DEFAULT_RAIL_PANEL_IDS.includes(panel.id));
+  const secondaryPanels = initialPanels.filter((panel) => RASTER_DEFAULT_SECONDARY_PANEL_IDS.includes(panel.id));
+  const primaryPanels = initialPanels.filter((panel) => !railPanels.includes(panel) && !secondaryPanels.includes(panel));
+  // The rail sits right against the canvas — created first so the expanded groups below
+  // reference *it*, not the canvas, landing them to its right rather than on top of it.
+  let anchor = viewportGroup;
+  if (railPanels.length > 0) {
+    const railGroup = api.addGroup({ referenceGroup: viewportGroup, direction: "right", initialWidth: GRID_RAIL_MIN_WIDTH });
+    railGroup.api.setHeaderPosition("top");
+    addPanelsTo(railGroup.id, railPanels);
+    // The same transition `collapseToRailSelf` (PanelHeaderActions) makes on a real click,
+    // done imperatively here since that function is a component-local closure this module-
+    // level layout builder has no access to — `PanelHeaderActions`'s own `collapsed`
+    // initializer reads this exact `vravio-grid-rail` class on its first mount, so the group
+    // renders collapsed from the very first paint rather than flashing expanded-then-collapsed.
+    railGroup.element.classList.add("vravio-grid-rail");
+    railGroup.api.setHeaderPosition("right");
+    railGroup.api.setSize({ width: GRID_RAIL_MIN_WIDTH });
+    railGroup.api.setConstraints({ minimumWidth: GRID_RAIL_MIN_WIDTH, maximumWidth: GRID_RAIL_LABELS_MIN_WIDTH });
+    anchor = railGroup;
+  }
+  let primaryGroup: ReturnType<DockviewReadyEvent["api"]["addGroup"]> | undefined;
+  if (primaryPanels.length > 0) {
+    primaryGroup = api.addGroup({ id: "right-panels", referenceGroup: anchor, direction: "right", initialWidth: 280 });
+    primaryGroup.api.setHeaderPosition("top");
+    addPanelsTo(primaryGroup.id, primaryPanels);
+    primaryGroup.api.setSize({ width: 280 });
+    primaryGroup.api.setConstraints(GRID_EXPANDED_MIN_WIDTH_CONSTRAINTS);
+  }
+  if (secondaryPanels.length > 0) {
+    const stacked = primaryGroup !== undefined;
+    const secondaryGroup = api.addGroup(stacked ? { referenceGroup: primaryGroup, direction: "below", initialHeight: 300 } : { referenceGroup: anchor, direction: "right", initialWidth: 280 });
+    secondaryGroup.api.setHeaderPosition("top");
+    addPanelsTo(secondaryGroup.id, secondaryPanels);
+    if (stacked) secondaryGroup.api.setSize({ height: 300 });
+    else { secondaryGroup.api.setSize({ width: 280 }); secondaryGroup.api.setConstraints(GRID_EXPANDED_MIN_WIDTH_CONSTRAINTS); }
+  }
 }
 
 export function DockLayout() {
