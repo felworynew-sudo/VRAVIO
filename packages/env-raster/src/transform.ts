@@ -163,15 +163,45 @@ export function translateLayerPixels(pixels: Uint8ClampedArray, width: number, h
   return output;
 }
 
+/**
+ * Same fix as `translateLayerPixels` right above — outside `selection.bounds`
+ * the mask is all zero by that bound's own definition, so walking the whole
+ * document to copy zeroes into more zeroes was pure waste. Unlike the pixel
+ * version this one had never been given the bounds restriction: dragging an
+ * active selection calls this on every `pointermove` with no throttling
+ * (`marquee-selection.tsx`'s `onPointerMove`), so on a full-size document
+ * this was one `width*height` double loop *per event of a live drag* — the
+ * queue of pending moves grows faster than the main thread can drain it,
+ * which is what a hang bad enough to need a tab reload actually looks like
+ * (found from an owner report: lasso completion lag and a selection drag
+ * that needed a reload to recover from — this is the second half of that).
+ *
+ * Restricting the copy alone was not the whole fix: the trailing
+ * `selectionBounds(mask, width, height)` call this used to end on is its own
+ * unbounded `width*height` scan (found by measuring, not assuming — the
+ * benchmark below still failed after the copy loop was bounded, at ~9ms on a
+ * 1920x1080 fixture). The min/max are tracked inline while the bounded copy
+ * loop already visits every pixel that could possibly be non-zero, so the
+ * separate scan is redundant work, not merely uncapped work.
+ */
 export function translateSelection(selection: PixelSelection | null, width: number, height: number, dx: number, dy: number): PixelSelection | null {
   if (!selection) return null;
   const mask = new Uint8ClampedArray(width * height), offsetX = Math.round(dx), offsetY = Math.round(dy);
-  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+  const left = Math.max(0, Math.floor(selection.bounds.x)), top = Math.max(0, Math.floor(selection.bounds.y));
+  const right = Math.min(width, Math.ceil(selection.bounds.x + selection.bounds.width));
+  const bottom = Math.min(height, Math.ceil(selection.bounds.y + selection.bounds.height));
+  let minX = width, minY = height, maxX = -1, maxY = -1;
+  for (let y = top; y < bottom; y += 1) for (let x = left; x < right; x += 1) {
+    const value = selection.mask[y * width + x]!;
+    if (!value) continue;
     const targetX = x + offsetX, targetY = y + offsetY;
-    if (targetX >= 0 && targetX < width && targetY >= 0 && targetY < height) mask[targetY * width + targetX] = selection.mask[y * width + x]!;
+    if (targetX < 0 || targetX >= width || targetY < 0 || targetY >= height) continue;
+    mask[targetY * width + targetX] = value;
+    if (targetX < minX) minX = targetX; if (targetX > maxX) maxX = targetX;
+    if (targetY < minY) minY = targetY; if (targetY > maxY) maxY = targetY;
   }
-  const bounds = selectionBounds(mask, width, height);
-  return bounds.width && bounds.height ? { mask, bounds } : null;
+  if (maxX < minX) return null;
+  return { mask, bounds: { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 } };
 }
 
 /** Non-destructively remaps pixels inside sourceBounds into targetBounds. Transparent

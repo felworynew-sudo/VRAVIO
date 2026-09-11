@@ -288,18 +288,42 @@ export function fillEnclosedHoles(mask: Uint8ClampedArray, width: number, height
   return result;
 }
 
+/**
+ * Outside `current.bounds ∪ incoming.bounds` both inputs read zero for every
+ * pixel, and every mode here (`max`, `a*(255-b)/255`, `a*b/255`, `abs(a-b)`)
+ * gives zero back for a zero/zero pair — so a pixel neither mask ever touched
+ * cannot end up in the result, and visiting it is pure waste. Found the same
+ * bug, same fix, in `transform.ts`'s `translateSelection` (an owner report:
+ * a live drag of an active selection hanging badly enough to need a tab
+ * reload) while chasing a second report of lasso *completion* lagging — this
+ * is what a lasso stroke added to (or subtracted from, or intersected with)
+ * an existing selection runs through, on every keystroke of that same
+ * report. A brand new selection (`!current` or `mode === "replace"`, the
+ * common case — a first lasso trace with nothing selected yet) was already
+ * fast: it never reached this loop at all.
+ */
 export function combineSelections(current: PixelSelection | null, incoming: PixelSelection, width: number, height: number, mode: SelectionCombineMode): PixelSelection | null {
   if (!current || mode === "replace") return incoming.bounds.width && incoming.bounds.height ? { mask: incoming.mask.slice(), bounds: { ...incoming.bounds } } : null;
   const mask = new Uint8ClampedArray(width * height);
-  for (let index = 0; index < mask.length; index += 1) {
-    const a = current.mask[index]!, b = incoming.mask[index]!;
-    if (mode === "add") mask[index] = Math.max(a, b);
-    else if (mode === "subtract") mask[index] = Math.round(a * (255 - b) / 255);
-    else if (mode === "intersect") mask[index] = Math.round(a * b / 255);
-    else mask[index] = Math.abs(a - b);
+  const left = Math.max(0, Math.floor(Math.min(current.bounds.x, incoming.bounds.x)));
+  const top = Math.max(0, Math.floor(Math.min(current.bounds.y, incoming.bounds.y)));
+  const right = Math.min(width, Math.ceil(Math.max(current.bounds.x + current.bounds.width, incoming.bounds.x + incoming.bounds.width)));
+  const bottom = Math.min(height, Math.ceil(Math.max(current.bounds.y + current.bounds.height, incoming.bounds.y + incoming.bounds.height)));
+  let minX = width, minY = height, maxX = -1, maxY = -1;
+  for (let y = top; y < bottom; y += 1) for (let x = left; x < right; x += 1) {
+    const index = y * width + x, a = current.mask[index]!, b = incoming.mask[index]!;
+    let value: number;
+    if (mode === "add") value = Math.max(a, b);
+    else if (mode === "subtract") value = Math.round(a * (255 - b) / 255);
+    else if (mode === "intersect") value = Math.round(a * b / 255);
+    else value = Math.abs(a - b);
+    if (!value) continue;
+    mask[index] = value;
+    if (x < minX) minX = x; if (x > maxX) maxX = x;
+    if (y < minY) minY = y; if (y > maxY) maxY = y;
   }
-  const bounds = selectionBounds(mask, width, height);
-  return bounds.width && bounds.height ? { mask, bounds } : null;
+  if (maxX < minX) return null;
+  return { mask, bounds: { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 } };
 }
 
 /** Limits a selection to pixels that actually contain layer content. */

@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { compositeRasterDocument } from "./render";
 import { createRasterDocument, createRasterLayer } from "./document";
 import { appendLayer } from "./layer-tree";
-import { translateLayerPixels } from "./transform";
+import { translateLayerPixels, translateSelection } from "./transform";
+import { combineSelections, createEllipseSelection } from "./selection";
 import { accumulateUniquePixelBytes, layerDocumentPixels, setLayerPixels } from "./layer-bounds";
 import { duplicateLayer } from "./layer-ops";
 import { TileStore } from "./tile-store";
@@ -116,6 +117,62 @@ describe("performance floor (stage 0 of the catalogue migration)", () => {
     // back to the general per-pixel path measured ~14ms/frame before this
     // path existed, comfortably above the floor.
     expect(elapsed).toBeLessThan(5);
+  });
+
+  it("drags an active selection", () => {
+    // A large-but-not-full selection, the shape a real lasso or ellipse drag
+    // produces — not a synthetic full-canvas mask, which would hide the
+    // regression this guards: `translateSelection` used to walk the whole
+    // 1920x1080 document on every call regardless of how much of it the
+    // selection actually covered, because unlike `translateLayerPixels`
+    // right above it in transform.ts, it had never been bounded to
+    // `selection.bounds`. Called on every `pointermove` while dragging an
+    // active selection (`marquee-selection.tsx`'s own `onPointerMove`, no
+    // throttling), that queued synchronous full-canvas passes faster than
+    // the main thread could drain them — reported live as a hang bad enough
+    // to need a tab reload, not merely a slow drag.
+    const state = realisticDocument(1);
+    const selection = createEllipseSelection(state.width, state.height, 300, 200, 1200, 900);
+
+    // Measured on this fixture, bounded to the ellipse's own ~900x700 box:
+    // ~2.6ms. The unbounded version this replaces measured ~9ms on the same
+    // fixture — cheap enough on its own, as a single call, to go unnoticed;
+    // that is exactly how it survived until a sustained drag made the
+    // per-event cost compound. Still not sub-millisecond — the copy loop
+    // itself has ~630,000 pixels to visit for a selection this large — so
+    // the floor here is 5ms rather than a tight multiple of 2.6, the same
+    // reasoning the block-copy test above gives for its own floor.
+    const elapsed = fastestOf(() => {
+      translateSelection(selection, state.width, state.height, 15, -9);
+    });
+    expect(elapsed).toBeLessThan(5);
+  });
+
+  it("adds a lasso stroke to an existing selection", () => {
+    // The other half of the same class of bug, in `selection.ts`'s own
+    // `combineSelections`: outside the union of the two input bounds both
+    // masks read zero and every combine mode gives zero back for a zero
+    // pair, so the general (non-"replace") branch never needed to visit the
+    // whole document either — it always had. Only a *second* lasso stroke
+    // (add/subtract/intersect against an existing selection) reaches this
+    // branch; a first trace with nothing selected yet takes the early
+    // `mode === "replace"` return just below and was never slow.
+    const state = realisticDocument(1);
+    // Two modest, mostly-separate regions — adding a second lasso stroke
+    // somewhere else on the canvas, not one that blankets most of it.
+    const current = createEllipseSelection(state.width, state.height, 150, 150, 550, 500);
+    const incoming = createEllipseSelection(state.width, state.height, 1300, 600, 1700, 950);
+
+    // Measured on this fixture, bounded to the union of the two ellipses'
+    // own boxes (~1550x800 — most of it empty space between the two shapes
+    // the loop still has to cross, since the bound is a rectangle around
+    // both, not their actual silhouettes): ~5.5ms. A floor of 8ms leaves
+    // headroom for that without going anywhere near the ~2000x1080-ish cost
+    // an unbounded full-canvas scan (the bug this guards) would have had.
+    const elapsed = fastestOf(() => {
+      combineSelections(current, incoming, state.width, state.height, "add");
+    });
+    expect(elapsed).toBeLessThan(8);
   });
 
   it("trims a full-canvas edit down to its painted bounds", () => {
