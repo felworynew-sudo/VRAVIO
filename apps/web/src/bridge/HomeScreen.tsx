@@ -89,7 +89,7 @@ export function HomeScreen({ language, requestNewDocument, openFile }: Props) {
       <p className="bridge-source">{providerRef.current.kind === "desktop" ? text(language, "Computer files · read-only browsing", "Файлы компьютера · просмотр без изменений") : text(language, "Choose files or a folder to browse", "Выберите файлы или папку для просмотра")}</p>
     </aside>
     <div className="bridge-browser">
-      <header><div><span className="bridge-eyebrow">BRIDGE</span><h1>{text(language, "Files and recent assets", "Файлы и материалы")}</h1></div><span className="bridge-status">{loading ? text(language, "Loading…", "Загрузка…") : text(language, "Open a file to create a document", "Откройте файл, чтобы создать документ")}</span></header>
+      <header><h1>{text(language, "Files and recent assets", "Файлы и материалы")}</h1><span className="bridge-status">{loading ? text(language, "Loading…", "Загрузка…") : text(language, "Open a file to create a document", "Откройте файл, чтобы создать документ")}</span></header>
       {message && <p className="bridge-error" role="alert">{message}</p>}
       <div className="bridge-filemanager" data-preview-revision={previewRevision}>
         <Filemanager data={data} init={init} readonly preview icons={bridgeIcon} previews={(item: FilePreview) => item.id ? providerRef.current.preview(item.id) : null} extraInfo={(item: IParsedEntity) => providerRef.current.extraInfo(item.id)} />

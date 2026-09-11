@@ -284,8 +284,12 @@ select{-webkit-appearance:none;appearance:none;background-image:linear-gradient(
    reads "wx-fm-select-background" — none replaced by a generic
    "wx-color-select". "wx-fm-background" is the manager's own real chrome
    background property (distinct from the dead "wx-color-background"). */
-.bridge-filemanager{min-width:0;min-height:0;overflow:hidden;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface2);--wx-color-primary:var(--focus);--wx-color-font:var(--text);--wx-color-font-alt:var(--muted);--wx-fm-background:var(--surface2);--wx-fm-select-background:color-mix(in srgb,var(--focus) 20%,transparent);--wx-table-select-background:color-mix(in srgb,var(--focus) 20%,transparent);--wx-table-select-color:var(--text);--wx-table-select-border:inset 2px 0 var(--focus)}
-.bridge-filemanager,.bridge-filemanager .wx-root,.bridge-filemanager .wx-filemanager{height:100%}.bridge-filemanager .wx-filemanager{font-family:inherit}.bridge-filemanager button{color:inherit}.bridge-filemanager .wx-toolbar,.bridge-filemanager .wx-sidebar,.bridge-filemanager .wx-content{background:var(--surface2)!important;color:var(--text)!important}.bridge-filemanager .wx-sidebar{border-color:var(--border)!important}.bridge-filemanager [class*="item"]{color:var(--text)}.bridge-filemanager input{background:var(--surface)!important;color:var(--text)!important;border-color:var(--border)!important}
+/* No border/radius/background of its own — an owner request: it used to
+   read as a card floating on the page instead of being the page. It shares
+   `--bg` with `.bridge-home` around it, not `--surface2`, for the same
+   reason. */
+.bridge-filemanager{min-width:0;min-height:0;overflow:hidden;--wx-color-primary:var(--focus);--wx-color-font:var(--text);--wx-color-font-alt:var(--muted);--wx-fm-background:var(--bg);--wx-fm-select-background:color-mix(in srgb,var(--focus) 20%,transparent);--wx-table-select-background:color-mix(in srgb,var(--focus) 20%,transparent);--wx-table-select-color:var(--text);--wx-table-select-border:inset 2px 0 var(--focus)}
+.bridge-filemanager,.bridge-filemanager .wx-root,.bridge-filemanager .wx-filemanager{height:100%}.bridge-filemanager .wx-filemanager{font-family:inherit}.bridge-filemanager button{color:inherit}.bridge-filemanager .wx-toolbar,.bridge-filemanager .wx-sidebar,.bridge-filemanager .wx-content{background:var(--bg)!important;color:var(--text)!important}.bridge-filemanager .wx-sidebar{border-color:var(--border)!important}.bridge-filemanager [class*="item"]{color:var(--text)}.bridge-filemanager input{background:var(--surface)!important;color:var(--text)!important;border-color:var(--border)!important}
 /* SVAR's empty preview is a nested flex column. Its inner illustration used to
    inherit a max-content width from the side panel, which made it drift at the
    point where the manager switches between split and compact layouts. Constrain
