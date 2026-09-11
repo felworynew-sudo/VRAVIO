@@ -175,6 +175,10 @@ select{-webkit-appearance:none;appearance:none;background-image:linear-gradient(
    own floating group). Border and background borrowed from the active-tab treatment so it
    reads as "this one is open", not a plain hover state. */
 .panel-tab.vravio-tab-ghost{border:0;background:var(--surface3);color:var(--text);cursor:pointer}
+/* Wrapper `insertBefore`d at the ghost's remembered position within the real tab strip
+   (PanelHeaderActions) — `display:contents` keeps it out of the strip's own flex layout
+   entirely, so only the portaled ghost button inside it actually takes up space. */
+.vravio-tab-ghost-slot{display:contents}
 /* The Photoshop reference (photos 1/8) puts the "<<" expand chevron at the *top* of a
    collapsed rail, above every icon — Dockview's own column-flex header puts the right-actions
    slot (our collapse button) after the tab strip in DOM order, landing it at the bottom.

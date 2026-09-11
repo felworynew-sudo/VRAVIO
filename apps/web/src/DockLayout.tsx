@@ -1406,20 +1406,24 @@ panelIcons.viewport = iconUrl("/РАДИО.svg");
  * gone" exactly, with nothing in between for a repaint to catch.
  *
  * A second round of live feedback corrected the mental model this started from: the rail's
- * own icon must stay put and stay clickable the whole time a peek is open — clicking it again
- * is what closes the peek — not vanish along with the panel it represents. Since
- * `addFloatingGroup` really does move the panel (and with it, this exact component's own
- * instance) out of the rail, the rail's `PanelHeaderActions` renders a stand-in "ghost" icon
- * at the same spot for as long as `peekOrigin` still names it — a plain click target, not a
- * second live copy of the panel's own content. `peekOrigin` is a plain module map (one browser
- * tab, no need for anything heavier), but React only re-renders on its own state, so every
- * mutation goes through `setPeek`/`clearPeek` below and a `window` event tells every
- * `PanelHeaderActions` instance to re-check whether it owns a ghost now.
+ * own icon must stay put — same position, not just still present — and stay clickable the
+ * whole time a peek is open; clicking it again is what closes the peek, not vanish along with
+ * the panel it represents. Since `addFloatingGroup` really does move the panel (and with it,
+ * this exact component's own instance) out of the rail, the rail's `PanelHeaderActions`
+ * renders a stand-in "ghost" icon at the same spot for as long as `peekOrigin` still names
+ * it — a plain click target, not a second live copy of the panel's own content. The
+ * remembered `index` is what makes "same spot" literal rather than approximate: Dockview's
+ * own `moveTo` accepts one, so closing the peek (either path) restores the exact position it
+ * left, and the ghost portals into place immediately before whichever real tab now occupies
+ * that slot (`peekGhostTarget`). `peekOrigin` is a plain module map (one browser tab, no need
+ * for anything heavier), but React only re-renders on its own state, so every mutation goes
+ * through `setPeek`/`clearPeek` below and a `window` event tells every `PanelHeaderActions`
+ * instance to re-check whether it owns a ghost now.
  */
-const peekOrigin = new Map<string, string>();
+const peekOrigin = new Map<string, { groupId: string; index: number }>();
 const PANEL_PEEK_EVENT = "vravio-panel-peek-change";
-function setPeek(panelId: string, originGroupId: string) {
-  peekOrigin.set(panelId, originGroupId);
+function setPeek(panelId: string, originGroupId: string, index: number) {
+  peekOrigin.set(panelId, { groupId: originGroupId, index });
   window.dispatchEvent(new Event(PANEL_PEEK_EVENT));
 }
 function clearPeek(panelId: string) {
@@ -1433,12 +1437,12 @@ function PanelTab({ api, containerApi }: IDockviewPanelHeaderProps) {
   const tabRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const closePeek = (event: PointerEvent) => {
-      const originGroupId = peekOrigin.get(api.id);
-      if (!originGroupId) return;
+      const origin = peekOrigin.get(api.id);
+      if (!origin) return;
       if (api.group.element.contains(event.target as Node)) return;
       clearPeek(api.id);
-      const originGroup = containerApi.groups.find((candidate) => candidate.id === originGroupId);
-      if (originGroup) api.moveTo({ group: originGroup });
+      const originGroup = containerApi.groups.find((candidate) => candidate.id === origin.groupId);
+      if (originGroup) api.moveTo({ group: originGroup, index: origin.index });
     };
     document.addEventListener("pointerdown", closePeek, true);
     return () => document.removeEventListener("pointerdown", closePeek, true);
@@ -1471,7 +1475,7 @@ function PanelTab({ api, containerApi }: IDockviewPanelHeaderProps) {
     const host = tabRef.current?.closest(".dock-host");
     const hostRect = host?.getBoundingClientRect();
     if (!panel || !anchor || !hostRect) return;
-    setPeek(api.id, group.id);
+    setPeek(api.id, group.id, group.panels.findIndex((candidate) => candidate.id === api.id));
     const width = 280;
     // Docks toward the canvas, not off past the window edge — a rail on the *right* (the
     // common case, "right-panels") sits with icons near `window.innerWidth`, so growing the
@@ -1490,7 +1494,7 @@ function PanelTab({ api, containerApi }: IDockviewPanelHeaderProps) {
     const y = Math.round(anchor.top - hostRect.top) - FLOATING_TITLEBAR_HEIGHT;
     containerApi.addFloatingGroup(panel, { x, y, width, height: 400 });
   };
-  return <><div ref={tabRef} className="panel-tab" title={api.title} onClick={openCollapsedPanel} onContextMenu={(event) => contextMenu.open(event, menuItems())}><i aria-hidden="true" style={{ "--panel-mask": `url("${panelIcons[api.id] ?? iconUrl("/ПАРАМЕТРЫ.svg")}")` } as CSSProperties}/><span>{api.title}</span></div>{contextMenu.node}</>;
+  return <><div ref={tabRef} className="panel-tab" data-panel-id={api.id} title={api.title} onClick={openCollapsedPanel} onContextMenu={(event) => contextMenu.open(event, menuItems())}><i aria-hidden="true" style={{ "--panel-mask": `url("${panelIcons[api.id] ?? iconUrl("/ПАРАМЕТРЫ.svg")}")` } as CSSProperties}/><span>{api.title}</span></div>{contextMenu.node}</>;
 }
 
 function PanelHeaderActions({ api, containerApi, activePanel, group, panels }: IDockviewHeaderActionsProps) {
@@ -1514,14 +1518,44 @@ function PanelHeaderActions({ api, containerApi, activePanel, group, panels }: I
   // Panels currently peeking *from* this group — their own `PanelTab` moved out with them
   // (`addFloatingGroup`), so this renders a stand-in icon at the same spot for as long as
   // `peekOrigin` still names it, per the live correction that the rail's own icon must stay
-  // clickable in place the whole time a peek is open.
-  const [peekingHere, setPeekingHere] = useState<string[]>(() => [...peekOrigin.entries()].filter(([, originGroupId]) => originGroupId === group.id).map(([id]) => id));
+  // clickable in place the whole time a peek is open — "same spot" literally, not just
+  // "somewhere in this group". Read `peekingHereForGroup` below for how.
+  const peekingHereForGroup = () => [...peekOrigin.entries()].filter(([, origin]) => origin.groupId === group.id).sort(([, a], [, b]) => a.index - b.index).map(([id]) => id);
+  const [peekingHere, setPeekingHere] = useState<string[]>(peekingHereForGroup);
   useEffect(() => {
-    const sync = () => setPeekingHere([...peekOrigin.entries()].filter(([, originGroupId]) => originGroupId === group.id).map(([id]) => id));
+    const sync = () => setPeekingHere(peekingHereForGroup());
     sync();
     window.addEventListener(PANEL_PEEK_EVENT, sync);
     return () => window.removeEventListener(PANEL_PEEK_EVENT, sync);
   }, [group.id]);
+  // A `createPortal` straight into `.dv-tabs-container` would just append every ghost after
+  // Dockview's own real tabs — the panel it stands in for would visibly jump to the end of
+  // the strip the instant it started peeking. Each ghost instead gets its own tiny wrapper
+  // element, inserted via a real DOM `insertBefore` ahead of whichever real tab now occupies
+  // the remembered index (the panel right after it, before it left) — `display:contents` on
+  // the wrapper (styles.css) keeps it invisible to the tab strip's own flex layout, so the
+  // ghost button itself is the only thing that actually takes up space.
+  const [ghostSlots, setGhostSlots] = useState<Map<string, HTMLElement>>(new Map());
+  useEffect(() => {
+    const tabsContainer = group.element.querySelector(".dv-tabs-container");
+    const next = new Map<string, HTMLElement>();
+    if (tabsContainer) for (const id of peekingHere) {
+      const origin = peekOrigin.get(id);
+      const referenceId = origin ? group.panels[origin.index]?.id : undefined;
+      // `insertBefore`'s target must be an actual direct child of `tabsContainer` — Dockview
+      // wraps every real tab in its own `.dv-tab` element, so the `[data-panel-id]` match is
+      // one level further down than that; inserting relative to it directly threw
+      // `NotFoundError: ... is not a child of this node` live. `closest` climbs back up to
+      // the wrapper that actually is a direct child.
+      const referenceEl = referenceId ? tabsContainer.querySelector(`[data-panel-id="${referenceId}"]`)?.closest(".dv-tab") : null;
+      const slot = document.createElement("span");
+      slot.className = "vravio-tab-ghost-slot";
+      if (referenceEl) tabsContainer.insertBefore(slot, referenceEl); else tabsContainer.appendChild(slot);
+      next.set(id, slot);
+    }
+    setGhostSlots(next);
+    return () => { for (const slot of next.values()) slot.remove(); };
+  }, [group, peekingHere.join(",")]);
   useCloseOnOutsideClick(menuOpen, ".panel-menu-wrap", () => setMenuOpen(false));
   useEffect(() => {
     const disposable = api.onDidCollapsedChange(({ isCollapsed }) => setCollapsed(isCollapsed));
@@ -1672,10 +1706,10 @@ function PanelHeaderActions({ api, containerApi, activePanel, group, panels }: I
         {activePanel && <button role="menuitem" onClick={hideActivePanel}>{text(language, "Hide panel", "Скрыть панель")}</button>}
       </div>}
     </div>}
-  </div>{peekingHere.length > 0 && group.element.querySelector(".dv-tabs-container") && createPortal(peekingHere.map((id) => {
+  </div>{[...ghostSlots.entries()].map(([id, slot]) => {
     const panel = containerApi.getPanel(id);
-    return <button key={id} className="panel-tab vravio-tab-ghost" title={panel?.title} onClick={() => { clearPeek(id); if (panel) panel.api.moveTo({ group }); }}><i aria-hidden="true" style={{ "--panel-mask": `url("${panelIcons[id] ?? iconUrl("/ПАРАМЕТРЫ.svg")}")` } as CSSProperties}/></button>;
-  }), group.element.querySelector(".dv-tabs-container") as Element)}</>;
+    return createPortal(<button className="panel-tab vravio-tab-ghost" data-panel-id={id} title={panel?.title} onClick={() => { const origin = peekOrigin.get(id); clearPeek(id); if (panel && origin) panel.api.moveTo({ group, index: origin.index }); }}><i aria-hidden="true" style={{ "--panel-mask": `url("${panelIcons[id] ?? iconUrl("/ПАРАМЕТРЫ.svg")}")` } as CSSProperties}/></button>, slot, id);
+  })}</>;
 }
 
 /**
