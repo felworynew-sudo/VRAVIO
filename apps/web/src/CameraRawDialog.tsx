@@ -4,7 +4,7 @@ import { applyCameraRawFilter, defaultCameraRawFilterSettings, type CameraRawFil
 import { defaultCameraRawSettings, decodeRawBuffer, fallbackToEmbeddedPreview, type CameraRawSettings, type DecodedRaw } from "./rawDecode";
 import { text } from "./i18n";
 import type { Language } from "./store";
-import { CameraRawPanel, CameraRawTabs, type CameraRawTab } from "./CameraRawPanels";
+import { CameraRawPanel, CameraRawTabs, downsampleForPreview, type CameraRawTab } from "./CameraRawPanels";
 
 async function decodePreview(buffer: ArrayBuffer, filename: string, settings: CameraRawSettings): Promise<DecodedRaw | null> {
   const raw = new LibRaw();
@@ -56,10 +56,13 @@ export function CameraRawDialog({ buffer, filename, language, mode, onCancel, on
     return () => { cancelled = true; if (frameRef.current !== null) clearTimeout(frameRef.current); };
   }, [buffer, rawSettings, filename, language]);
 
-  // Runs the develop panel over the already-decoded preview — cheap enough for every slider tick.
+  // Runs the develop panel over the already-decoded preview — downsampled first (measured live:
+  // ~5s/tick at a halfSize 3000×2000 decode without this, ~0.2s at 640px) so a slider tick stays
+  // interactive instead of freezing the dialog.
   useEffect(() => {
     if (!decoded) return;
-    setPreview({ width: decoded.width, height: decoded.height, pixels: applyCameraRawFilter(decoded.pixels, decoded.width, decoded.height, filterSettings) });
+    const small = downsampleForPreview(decoded.pixels, decoded.width, decoded.height);
+    setPreview({ width: small.width, height: small.height, pixels: applyCameraRawFilter(small.pixels, small.width, small.height, filterSettings) });
   }, [decoded, filterSettings]);
 
   useEffect(() => {

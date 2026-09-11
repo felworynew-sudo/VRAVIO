@@ -15,6 +15,25 @@ const hslChannels: { key: HslChannelName; en: string; ru: string; swatch: string
 
 export type CameraRawTab = "basic" | "curve" | "detail" | "hsl" | "effects";
 
+/**
+ * `applyCameraRawFilter` runs several box-blur passes (texture/clarity/dehaze) whose cost scales
+ * with pixel count — measured live at ~5s per tick on a 3000×2000 preview (a typical halfSize
+ * decode of a 24MP RAW) versus ~0.2s at 640px. Every caller that reruns the filter on live slider
+ * input needs this cap; skipping it turns "live preview" into a multi-second freeze per tick.
+ */
+export function downsampleForPreview(pixels: Uint8ClampedArray, width: number, height: number, maxEdge = 640): { pixels: Uint8ClampedArray; width: number; height: number } {
+  const scale = Math.min(1, maxEdge / Math.max(width, height));
+  if (scale === 1) return { pixels, width, height };
+  const outWidth = Math.max(1, Math.round(width * scale)), outHeight = Math.max(1, Math.round(height * scale));
+  const output = new Uint8ClampedArray(outWidth * outHeight * 4);
+  for (let y = 0; y < outHeight; y += 1) for (let x = 0; x < outWidth; x += 1) {
+    const sourceX = Math.min(width - 1, Math.floor(x / scale)), sourceY = Math.min(height - 1, Math.floor(y / scale));
+    const from = (sourceY * width + sourceX) * 4, to = (y * outWidth + x) * 4;
+    output[to] = pixels[from]!; output[to + 1] = pixels[from + 1]!; output[to + 2] = pixels[from + 2]!; output[to + 3] = pixels[from + 3]!;
+  }
+  return { pixels: output, width: outWidth, height: outHeight };
+}
+
 function Slider({ label, value, min, max, step = 1, onChange }: { label: string; value: number; min: number; max: number; step?: number; onChange(value: number): void }) {
   return <label className="camera-raw-slider">
     <span>{label}</span>
