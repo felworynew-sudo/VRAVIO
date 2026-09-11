@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { createPortal } from "react-dom";
 import { DockviewReact, themeDark, type IDockviewHeaderActionsProps, type IDockviewPanelHeaderProps, type IDockviewPanelProps } from "dockview-react";
 import type { DockviewReadyEvent, SerializedDockview } from "dockview";
 import { environmentMeta } from "./environment";
@@ -77,16 +78,18 @@ const FLOATING_TITLEBAR_HEIGHT = 23;
 const GRID_RAIL_MIN_WIDTH = 35;
 const GRID_RAIL_LABELS_MIN_WIDTH = 132;
 const GRID_EXPANDED_MIN_WIDTH = 220;
-// An icon-only horizontal tab's own floor width — matches `TAB_ICON_ONLY_WIDTH` in styles.css
-// (kept as a second literal there, not imported, since CSS custom properties can't drive an
-// `@container` query's threshold). информация.txt: precompute how many panels an icon-only
-// strip can show at the group's own minimum width without ever needing Dockview's numbered
-// "∨ N" overflow dropdown, and make that number the hard cap on one group's panel count —
-// the dropdown is then structurally unreachable rather than something to react to after the
-// fact (the shrink-to-icon CSS on its own hit exactly that "react after the fact" wall: even
-// once every tab measured icon-sized, Dockview's own overflow dropdown widget did not clear
-// itself, confirmed live with its own `refreshOverflow()` called and reporting compact:true).
+// An icon-only horizontal tab's own floor width (`min-width` in styles.css) and the width
+// below which `PanelTab`'s own `ResizeObserver` switches a tab from its name to its icon
+// (`vravio-tab-compact`, styles.css). информация.txt: precompute how many panels an
+// icon-only strip can show at the group's own minimum width without ever needing Dockview's
+// numbered "∨ N" overflow dropdown, and make that number the hard cap on one group's panel
+// count — the dropdown is then structurally unreachable rather than something to react to
+// after the fact (the shrink-to-icon CSS on its own hit exactly that "react after the fact"
+// wall: even once every tab measured icon-sized, Dockview's own overflow dropdown widget did
+// not clear itself, confirmed live with its own `refreshOverflow()` called and reporting
+// compact:true).
 const TAB_ICON_ONLY_WIDTH = 32;
+const TAB_COMPACT_THRESHOLD = 44;
 const MAX_PANELS_PER_GROUP = Math.floor(GRID_EXPANDED_MIN_WIDTH / TAB_ICON_ONLY_WIDTH);
 // информация.txt: panels need a real minimum size — text must not get clipped by dragging a
 // group narrower than it can read. Only ever applied via `setConstraints` on an already-
@@ -1401,8 +1404,28 @@ panelIcons.viewport = iconUrl("/РАДИО.svg");
  * to a brand new floating group, sized and positioned in one step, then moved back the same
  * way the instant the user clicks anywhere outside it — matching "click anywhere else, it's
  * gone" exactly, with nothing in between for a repaint to catch.
+ *
+ * A second round of live feedback corrected the mental model this started from: the rail's
+ * own icon must stay put and stay clickable the whole time a peek is open — clicking it again
+ * is what closes the peek — not vanish along with the panel it represents. Since
+ * `addFloatingGroup` really does move the panel (and with it, this exact component's own
+ * instance) out of the rail, the rail's `PanelHeaderActions` renders a stand-in "ghost" icon
+ * at the same spot for as long as `peekOrigin` still names it — a plain click target, not a
+ * second live copy of the panel's own content. `peekOrigin` is a plain module map (one browser
+ * tab, no need for anything heavier), but React only re-renders on its own state, so every
+ * mutation goes through `setPeek`/`clearPeek` below and a `window` event tells every
+ * `PanelHeaderActions` instance to re-check whether it owns a ghost now.
  */
 const peekOrigin = new Map<string, string>();
+const PANEL_PEEK_EVENT = "vravio-panel-peek-change";
+function setPeek(panelId: string, originGroupId: string) {
+  peekOrigin.set(panelId, originGroupId);
+  window.dispatchEvent(new Event(PANEL_PEEK_EVENT));
+}
+function clearPeek(panelId: string) {
+  peekOrigin.delete(panelId);
+  window.dispatchEvent(new Event(PANEL_PEEK_EVENT));
+}
 
 function PanelTab({ api, containerApi }: IDockviewPanelHeaderProps) {
   const language = useShellStore((state) => state.language);
@@ -1413,13 +1436,26 @@ function PanelTab({ api, containerApi }: IDockviewPanelHeaderProps) {
       const originGroupId = peekOrigin.get(api.id);
       if (!originGroupId) return;
       if (api.group.element.contains(event.target as Node)) return;
-      peekOrigin.delete(api.id);
+      clearPeek(api.id);
       const originGroup = containerApi.groups.find((candidate) => candidate.id === originGroupId);
       if (originGroup) api.moveTo({ group: originGroup });
     };
     document.addEventListener("pointerdown", closePeek, true);
     return () => document.removeEventListener("pointerdown", closePeek, true);
   }, [api, containerApi]);
+  // Drives `vravio-tab-compact` (icon instead of name) off the tab's own rendered width —
+  // see the CSS comment on why this isn't a `container-type:inline-size` + `@container` pair
+  // instead. Rail tabs manage their own icon/label switch separately (drag-to-reveal on the
+  // rail's own width, not each tab's); this only touches horizontal, non-rail tabs.
+  useEffect(() => {
+    const el = tabRef.current;
+    if (!el || api.group.element.classList.contains("vravio-grid-rail")) return;
+    const observer = new ResizeObserver(() => {
+      el.classList.toggle("vravio-tab-compact", el.getBoundingClientRect().width < TAB_COMPACT_THRESHOLD);
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [api]);
   const menuItems = (): ContextMenuItem[] => {
     const panel = containerApi.getPanel(api.id);
     return [
@@ -1435,7 +1471,7 @@ function PanelTab({ api, containerApi }: IDockviewPanelHeaderProps) {
     const host = tabRef.current?.closest(".dock-host");
     const hostRect = host?.getBoundingClientRect();
     if (!panel || !anchor || !hostRect) return;
-    peekOrigin.set(api.id, group.id);
+    setPeek(api.id, group.id);
     const width = 280;
     // Docks toward the canvas, not off past the window edge — a rail on the *right* (the
     // common case, "right-panels") sits with icons near `window.innerWidth`, so growing the
@@ -1475,6 +1511,17 @@ function PanelHeaderActions({ api, containerApi, activePanel, group, panels }: I
   });
   const [menuOpen, setMenuOpen] = useState(false);
   const [railLabels, setRailLabels] = useState(() => localStorage.getItem(PANEL_RAIL_LABELS_KEY) === "true");
+  // Panels currently peeking *from* this group — their own `PanelTab` moved out with them
+  // (`addFloatingGroup`), so this renders a stand-in icon at the same spot for as long as
+  // `peekOrigin` still names it, per the live correction that the rail's own icon must stay
+  // clickable in place the whole time a peek is open.
+  const [peekingHere, setPeekingHere] = useState<string[]>(() => [...peekOrigin.entries()].filter(([, originGroupId]) => originGroupId === group.id).map(([id]) => id));
+  useEffect(() => {
+    const sync = () => setPeekingHere([...peekOrigin.entries()].filter(([, originGroupId]) => originGroupId === group.id).map(([id]) => id));
+    sync();
+    window.addEventListener(PANEL_PEEK_EVENT, sync);
+    return () => window.removeEventListener(PANEL_PEEK_EVENT, sync);
+  }, [group.id]);
   useCloseOnOutsideClick(menuOpen, ".panel-menu-wrap", () => setMenuOpen(false));
   useEffect(() => {
     const disposable = api.onDidCollapsedChange(({ isCollapsed }) => setCollapsed(isCollapsed));
@@ -1609,7 +1656,7 @@ function PanelHeaderActions({ api, containerApi, activePanel, group, panels }: I
   // Order matches the Photoshop reference (информация.txt point 2): the collapse chevron
   // (>>) sits directly after the tab strip, then a divider, then the panel's own ☰ menu —
   // not menu-before-chevron as this rendered previously.
-  return <div className="panel-header-actions">
+  return <><div className="panel-header-actions">
     {(api.location.type === "edge" || api.location.type === "grid") && <button className="panel-collapse" onClick={toggleCollapsed} title={collapsed ? text(language, "Expand panels", "Развернуть панели") : text(language, "Collapse to icons", "Свернуть в значки")} aria-label={collapsed ? text(language, "Expand panels", "Развернуть панели") : text(language, "Collapse panels", "Свернуть панели")}><i aria-hidden="true" style={{ "--panel-collapse-mask": `url("${iconUrl(collapsed ? "/РАЗВЕРНУТЬ-ПАНЕЛИ.svg" : "/СВЕРНУТЬ-ПАНЕЛИ.svg")}")` } as CSSProperties}/></button>}
     {!collapsed && <span className="panel-header-divider" aria-hidden="true"/>}
     {!collapsed && <div className="panel-menu-wrap">
@@ -1625,7 +1672,10 @@ function PanelHeaderActions({ api, containerApi, activePanel, group, panels }: I
         {activePanel && <button role="menuitem" onClick={hideActivePanel}>{text(language, "Hide panel", "Скрыть панель")}</button>}
       </div>}
     </div>}
-  </div>;
+  </div>{peekingHere.length > 0 && group.element.querySelector(".dv-tabs-container") && createPortal(peekingHere.map((id) => {
+    const panel = containerApi.getPanel(id);
+    return <button key={id} className="panel-tab vravio-tab-ghost" title={panel?.title} onClick={() => { clearPeek(id); if (panel) panel.api.moveTo({ group }); }}><i aria-hidden="true" style={{ "--panel-mask": `url("${panelIcons[id] ?? iconUrl("/ПАРАМЕТРЫ.svg")}")` } as CSSProperties}/></button>;
+  }), group.element.querySelector(".dv-tabs-container") as Element)}</>;
 }
 
 /**
