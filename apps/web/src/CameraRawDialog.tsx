@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import LibRaw from "libraw-wasm";
+import { applyCameraRawFilter, defaultCameraRawFilterSettings, type CameraRawFilterSettings } from "@vravio/env-raster";
 import { defaultCameraRawSettings, decodeRawBuffer, fallbackToEmbeddedPreview, type CameraRawSettings, type DecodedRaw } from "./rawDecode";
 import { text } from "./i18n";
 import type { Language } from "./store";
+import { CameraRawPanel, CameraRawTabs, type CameraRawTab } from "./CameraRawPanels";
 
 async function decodePreview(buffer: ArrayBuffer, filename: string, settings: CameraRawSettings): Promise<DecodedRaw | null> {
   const raw = new LibRaw();
@@ -17,28 +19,48 @@ async function decodePreview(buffer: ArrayBuffer, filename: string, settings: Ca
   } catch { raw.dispose(); return fallbackToEmbeddedPreview(buffer, filename); }
 }
 
+/**
+ * Photoshop's Camera Raw dialog is the same develop panel as Filter > Camera Raw Filter
+ * (`CameraRawPanels.tsx`), just reached with undeveloped sensor data instead of an already-
+ * rasterized layer. LibRaw does only what genuinely needs raw sensor data — demosaic, white
+ * balance at the RAW level, and highlight recovery from data an 8-bit render has already
+ * clipped — everything else (exposure, tone, texture/clarity/dehaze, curve, detail, HSL,
+ * effects) runs through the exact same `applyCameraRawFilter` the filter dialog uses, so this
+ * dialog is no longer stuck at the four raw-level knobs LibRaw itself exposes.
+ */
 export function CameraRawDialog({ buffer, filename, language, mode, onCancel, onConfirm }: { buffer: ArrayBuffer; filename: string; language: Language; mode: "open" | "reprocess"; onCancel(): void; onConfirm(result: DecodedRaw): void }) {
-  const [settings, setSettings] = useState<CameraRawSettings>(defaultCameraRawSettings);
+  const [rawSettings, setRawSettings] = useState<CameraRawSettings>(defaultCameraRawSettings);
+  const [filterSettings, setFilterSettings] = useState<CameraRawFilterSettings>(defaultCameraRawFilterSettings);
+  const [tab, setTab] = useState<CameraRawTab>("basic");
   const [loading, setLoading] = useState(true);
+  const [decoded, setDecoded] = useState<DecodedRaw | null>(null);
   const [preview, setPreview] = useState<DecodedRaw | null>(null);
   const [error, setError] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameRef = useRef<number | null>(null);
 
+  // Re-decodes from the sensor data — only needed when a raw-level setting (white balance mode,
+  // highlight recovery) changes, not on every develop-panel slider tick.
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     if (frameRef.current !== null) clearTimeout(frameRef.current);
     frameRef.current = window.setTimeout(() => {
-      decodePreview(buffer, filename, settings).then((result) => {
+      decodePreview(buffer, filename, rawSettings).then((result) => {
         if (cancelled) return;
         setLoading(false);
         if (!result) { setError(text(language, "This file could not be previewed.", "Не удалось построить превью этого файла.")); return; }
-        setPreview(result);
+        setDecoded(result);
       });
     }, 120);
     return () => { cancelled = true; if (frameRef.current !== null) clearTimeout(frameRef.current); };
-  }, [buffer, settings, language]);
+  }, [buffer, rawSettings, filename, language]);
+
+  // Runs the develop panel over the already-decoded preview — cheap enough for every slider tick.
+  useEffect(() => {
+    if (!decoded) return;
+    setPreview({ width: decoded.width, height: decoded.height, pixels: applyCameraRawFilter(decoded.pixels, decoded.width, decoded.height, filterSettings) });
+  }, [decoded, filterSettings]);
 
   useEffect(() => {
     const canvas = canvasRef.current, context = canvas?.getContext("2d");
@@ -50,32 +72,36 @@ export function CameraRawDialog({ buffer, filename, language, mode, onCancel, on
   const [applying, setApplying] = useState(false);
   const confirm = async () => {
     setApplying(true);
-    const result = await decodeRawBuffer(buffer, filename, settings);
+    const full = await decodeRawBuffer(buffer, filename, rawSettings);
     setApplying(false);
-    if (result) onConfirm(result); else setError(text(language, "Could not develop this RAW file at full resolution.", "Не удалось проявить этот RAW-файл в полном разрешении."));
+    if (!full) { setError(text(language, "Could not develop this RAW file at full resolution.", "Не удалось проявить этот RAW-файл в полном разрешении.")); return; }
+    onConfirm({ width: full.width, height: full.height, pixels: applyCameraRawFilter(full.pixels, full.width, full.height, filterSettings) });
   };
 
-  const set = <K extends keyof CameraRawSettings>(key: K, value: CameraRawSettings[K]) => setSettings((current) => ({ ...current, [key]: value }));
+  const setRaw = <K extends keyof CameraRawSettings>(key: K, value: CameraRawSettings[K]) => setRawSettings((current) => ({ ...current, [key]: value }));
+  const setFilter = <K extends keyof CameraRawFilterSettings>(key: K, value: CameraRawFilterSettings[K]) => setFilterSettings((current) => ({ ...current, [key]: value }));
 
   return <div className="dialog-backdrop camera-raw-backdrop" onMouseDown={onCancel}>
-    <section className="camera-raw-dialog" role="dialog" aria-modal="true" aria-label="Camera Raw" onMouseDown={(event) => event.stopPropagation()}>
+    <section className="camera-raw-filter-dialog" role="dialog" aria-modal="true" aria-label="Camera Raw" onMouseDown={(event) => event.stopPropagation()}>
       <header><strong>Camera Raw — {filename}</strong><button onClick={onCancel}>×</button></header>
-      <div className="camera-raw-body">
-        <div className="camera-raw-preview">
+      <div className="camera-raw-filter-body">
+        <div className="camera-raw-filter-preview">
           {loading && !preview && <div className="camera-raw-status">{text(language, "Decoding…", "Декодирование…")}</div>}
           {error && <div className="camera-raw-status error">{error}</div>}
           {preview && <canvas ref={canvasRef}/>}
         </div>
-        <aside className="camera-raw-settings">
-          <label>{text(language, "White Balance", "Баланс белого")}<select value={settings.useAutoWb ? "auto" : settings.useCameraWb ? "camera" : "asShot"} onChange={(event) => { const value = event.target.value; set("useAutoWb", value === "auto"); set("useCameraWb", value === "camera"); }}>
-            <option value="camera">{text(language, "As Shot (Camera)", "Как снято (камера)")}</option>
-            <option value="auto">{text(language, "Auto", "Авто")}</option>
-            <option value="asShot">{text(language, "Neutral", "Нейтральный")}</option>
-          </select></label>
-          <label>{text(language, "Exposure", "Экспозиция")}<input type="range" min={0.25} max={4} step={0.05} value={settings.exposure} onChange={(event) => set("exposure", event.target.valueAsNumber)}/><output>{settings.exposure.toFixed(2)}×</output></label>
-          <label>{text(language, "Brightness", "Яркость")}<input type="range" min={0.2} max={3} step={0.05} value={settings.brightness} onChange={(event) => set("brightness", event.target.valueAsNumber)}/><output>{settings.brightness.toFixed(2)}×</output></label>
-          <label>{text(language, "Highlight Recovery", "Восстановление светов")}<input type="range" min={0} max={9} step={1} value={settings.highlight} onChange={(event) => set("highlight", event.target.valueAsNumber)}/><output>{settings.highlight}</output></label>
-          <p className="camera-raw-note">{text(language, "Full demosaic RAW develop via LibRaw. Output is 8-bit sRGB.", "Полный демозаик через LibRaw. Вывод — 8-бит sRGB.")}</p>
+        <aside className="camera-raw-filter-settings">
+          <div className="camera-raw-filter-panel camera-raw-raw-panel">
+            <strong>{text(language, "Raw develop", "Проявка RAW")}</strong>
+            <label className="camera-raw-slider camera-raw-wb-select"><span>{text(language, "White Balance", "Баланс белого")}</span><select value={rawSettings.useAutoWb ? "auto" : rawSettings.useCameraWb ? "camera" : "asShot"} onChange={(event) => { const value = event.target.value; setRaw("useAutoWb", value === "auto"); setRaw("useCameraWb", value === "camera"); }}>
+              <option value="camera">{text(language, "As Shot (Camera)", "Как снято (камера)")}</option>
+              <option value="auto">{text(language, "Auto", "Авто")}</option>
+              <option value="asShot">{text(language, "Neutral", "Нейтральный")}</option>
+            </select></label>
+            <label className="camera-raw-slider"><span>{text(language, "Highlight Recovery", "Восстановление светов")}</span><input type="range" min={0} max={9} step={1} value={rawSettings.highlight} onChange={(event) => setRaw("highlight", event.target.valueAsNumber)}/><output>{rawSettings.highlight}</output></label>
+          </div>
+          <CameraRawTabs tab={tab} onChange={setTab} language={language} />
+          <CameraRawPanel tab={tab} settings={filterSettings} language={language} onChange={setFilter} />
         </aside>
       </div>
       <footer><button onClick={onCancel}>{text(language, "Cancel", "Отмена")}</button><button className="primary" disabled={applying} onClick={() => void confirm()}>{applying ? text(language, "Developing…", "Проявка…") : mode === "open" ? text(language, "Open", "Открыть") : text(language, "Apply", "Применить")}</button></footer>
