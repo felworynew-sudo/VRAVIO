@@ -1465,20 +1465,22 @@ function PanelHeaderActions({ api, containerApi, activePanel, group }: IDockview
   useEffect(() => {
     if (!collapsed || api.location.type !== "grid") return;
     const midpoint = (GRID_RAIL_MIN_WIDTH + GRID_RAIL_LABELS_MIN_WIDTH) / 2;
-    // Deferred rather than applied straight from the observer callback — ResizeObserver can
-    // fire while React is mid-render (found live: "Cannot update a component while rendering
-    // a different component", from this same resize chain reacting to a sibling panel's own
-    // state change) — `setTimeout` rather than `queueMicrotask` because the microtask queue
-    // still drains inside the same render pass on occasion (the warning survived it live); a
-    // macrotask is a genuinely separate event-loop turn, clear of any render in flight.
+    // Applied straight from the observer callback, not deferred — a deferred update lags the
+    // group's real live width during an active drag (the CSS width our own class switches
+    // between, 35px/132px, would then briefly mismatch the group's actual in-between size,
+    // clipping the label text oddly) — confirmed via isolation (temporarily disabling this
+    // whole effect) that this callback wasn't the source of a separate, unrelated React
+    // "Cannot update a component while rendering a different component" warning seen live
+    // during a plain collapse click alone; that one traces to dockview-react's own internal
+    // remount on `setHeaderPosition`, not to anything here.
     const observer = new ResizeObserver(() => {
       const next = group.element.getBoundingClientRect().width > midpoint;
-      setTimeout(() => setRailLabels((current) => {
+      setRailLabels((current) => {
         if (current === next) return current;
         localStorage.setItem(PANEL_RAIL_LABELS_KEY, String(next));
         window.dispatchEvent(new CustomEvent<boolean>(PANEL_RAIL_LABELS_EVENT, { detail: next }));
         return next;
-      }), 0);
+      });
     });
     observer.observe(group.element);
     return () => observer.disconnect();

@@ -138,6 +138,15 @@ select{-webkit-appearance:none;appearance:none;background-image:linear-gradient(
    `<span>`) for *any* vertical tab strip, unconditionally, regardless of which collapse class
    did or didn't make it onto the group in time. */
 .dv-tabs-container-vertical .panel-tab{writing-mode:horizontal-tb}
+/* Dockview already solves exactly this for its own "edge" collapsed groups (see
+   dockview.css: `.dv-groupview.dv-groupview-edge.dv-edge-collapsed > .dv-content-container
+   {display:none}`) — a grid-location group collapsed into our own rail never got the same
+   treatment, so its real panel content stayed mounted and laid out at full size underneath
+   the narrowed tab strip the whole time, and any resize (the collapse action's own width
+   animation, or the drag-to-reveal-labels gesture) could flash a sliver of it into view —
+   reported live. `display:none` removes it from layout entirely; a collapsed rail's icon is
+   architecturally just a button, it never holds a mounted panel. */
+.dv-groupview.vravio-grid-rail>.dv-content-container{display:none}
 .dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-and-actions-container{width:35px}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-container-vertical .panel-tab{display:grid;place-items:center;width:34px;height:42px;min-width:34px;min-height:42px;padding:0;writing-mode:horizontal-tb}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-container-vertical .panel-tab span{display:none!important}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .panel-collapse{writing-mode:horizontal-tb}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .panel-collapse i{transform:none}
 /* The Photoshop reference (photos 1/8) puts the "<<" expand chevron at the *top* of a
    collapsed rail, above every icon — Dockview's own column-flex header puts the right-actions
