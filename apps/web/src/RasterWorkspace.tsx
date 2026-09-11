@@ -264,7 +264,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
           renderWorkingMultiple(entry.layers);
         });
       },
-      commit: (before, after, label, target = paintTarget.kind, layerId = paintTarget.layerId, bounds = null) => commitPixels(before, after, label, target, layerId, bounds),
+      commit: (before, after, label, target = paintTarget.kind, layerId = paintTarget.layerId, bounds = null, canShrinkBounds) => commitPixels(before, after, label, target, layerId, bounds, canShrinkBounds),
       commitSelection: (before, after, label) => commitSelection(before, after, label),
       commitDocument: (before, after, label, bounds) => commitDocumentState(before, after, label, bounds),
       resetViewportToFit: () => setViewport(document.id, { mode: "fit", panX: 0, panY: 0 }),

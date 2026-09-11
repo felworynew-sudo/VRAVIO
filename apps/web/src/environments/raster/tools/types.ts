@@ -206,8 +206,19 @@ export interface ToolContext<TState> {
    * it (the whole layer *is* what changed); a dragged stroke does, or every
    * commit forces a full-canvas recomposite regardless of how small the
    * stroke actually was.
+   *
+   * `canShrinkBounds` answers a different question than `bounds` does — not
+   * "what changed" but "could this specific edit have erased existing
+   * opaque pixels, as opposed to only adding new ones". Left unset (every
+   * existing caller's own default, and the only safe one for a tool that
+   * hasn't been checked) it makes `setLayerPixels` (docs/master-plan.md
+   * §32.6) fall back to its full-canvas scan for the new layer bounds. Only
+   * the brush stroke (`paint-stroke.ts`, when it isn't the eraser) passes
+   * `false` today — its own dab can only ever add pixels, so the new bounds
+   * are just the old ones grown by `bounds`, no scan needed; the eraser
+   * shares the same code path but passes `true`, since it can shrink them.
    */
-  commit(before: Uint8ClampedArray, after: Uint8ClampedArray, label: string, target?: PaintTarget["kind"], layerId?: string, bounds?: RasterRect | null): Promise<void>;
+  commit(before: Uint8ClampedArray, after: Uint8ClampedArray, label: string, target?: PaintTarget["kind"], layerId?: string, bounds?: RasterRect | null, canShrinkBounds?: boolean): Promise<void>;
 
   /**
    * The only way a tool changes what is selected.

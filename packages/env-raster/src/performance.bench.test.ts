@@ -138,6 +138,69 @@ describe("performance floor (stage 0 of the catalogue migration)", () => {
     expect(elapsed).toBeLessThan(8 * THRESHOLD_MULTIPLIER);
   });
 
+  /** A single dab-sized rectangle of opaque paint on an otherwise transparent
+   *  canvas-sized buffer — the same shape `raster-commit.ts`'s own `assign` hands
+   *  `setLayerPixels` after a brush stroke, at whatever canvas size is asked for. */
+  function strokeShapedEdit(width: number, height: number): { pixels: Uint8ClampedArray; bounds: { x: number; y: number; width: number; height: number } } {
+    const pixels = new Uint8ClampedArray(width * height * 4);
+    const bounds = { x: Math.floor(width / 2) - 40, y: Math.floor(height / 2) - 40, width: 80, height: 80 };
+    for (let y = 0; y < bounds.height; y += 1) for (let x = 0; x < bounds.width; x += 1) {
+      const index = ((bounds.y + y) * width + (bounds.x + x)) * 4;
+      pixels[index] = 200; pixels[index + 1] = 40; pixels[index + 2] = 40; pixels[index + 3] = 255;
+    }
+    return { pixels, bounds };
+  }
+
+  it("docs/master-plan.md §32.6: an add-only edit hint skips the full-canvas scan entirely", () => {
+    const state = realisticDocument(2);
+    const layer = state.layers[1] as RasterLayer;
+    const { pixels, bounds } = strokeShapedEdit(state.width, state.height);
+
+    const scanned = fastestOf(() => setLayerPixels(layer, pixels, state.width, state.height));
+    const hinted = fastestOf(() => setLayerPixels(layer, pixels, state.width, state.height, { bounds, canShrink: false }));
+
+    // Measured on this fixture: ~8ms scanning, ~0.1ms hinted — comfortably under
+    // half, the same loose margin the rest of this file uses for "actually
+    // faster", not "faster or noise".
+    expect(hinted).toBeLessThan(scanned * 0.5);
+  });
+
+  /** A layer already trimmed to a small existing stroke — the fast path can only ever
+   *  *grow* bounds, never shrink them (that is the one thing it explicitly gives up in
+   *  exchange for skipping the scan), so a `createRasterLayer` fresh canvas-sized layer
+   *  is the wrong starting point for measuring it: real strokes land on a layer some
+   *  earlier edit already trimmed down, not on the one-time canvas-sized placeholder a
+   *  brand new layer starts as. */
+  function trimmedLayer(width: number, height: number) {
+    const layer = createRasterLayer(width, height, "Layer");
+    setLayerPixels(layer, strokeShapedEdit(width, height).pixels, width, height);
+    return layer;
+  }
+
+  it("docs/master-plan.md §32.6: a hinted add-only commit does not grow with canvas size, only with the edit itself", () => {
+    // The whole point of the fast path: a brush stroke on a 4000x3000 canvas
+    // should cost the same as the identical stroke on a 1920x1080 one, because
+    // neither ever reads a pixel outside the edit's own small rectangle. The
+    // scanning path above is the opposite of this by construction — it walks
+    // every pixel in the canvas regardless of how little the edit touched.
+    const small = createRasterDocument(1920, 1080);
+    const smallLayer = trimmedLayer(small.width, small.height);
+    const smallEdit = strokeShapedEdit(small.width, small.height);
+    const smallElapsed = fastestOf(() => setLayerPixels(smallLayer, layerDocumentPixels(smallLayer, small.width, small.height), small.width, small.height, { bounds: smallEdit.bounds, canShrink: false }));
+
+    const large = createRasterDocument(4000, 3000);
+    const largeLayer = trimmedLayer(large.width, large.height);
+    const largeEdit = strokeShapedEdit(large.width, large.height);
+    const largeElapsed = fastestOf(() => setLayerPixels(largeLayer, layerDocumentPixels(largeLayer, large.width, large.height), large.width, large.height, { bounds: largeEdit.bounds, canShrink: false }));
+
+    // Generous absolute ceiling, not a ratio — an identically-shaped edit on
+    // a ~4.3x larger canvas should not itself blow past a millisecond either
+    // way, but comparing two already-tiny numbers as a ratio is exactly the
+    // kind of assertion that goes flaky on GC noise for no real reason.
+    expect(smallElapsed).toBeLessThan(2);
+    expect(largeElapsed).toBeLessThan(2);
+  });
+
   it("keeps a 21-layer document's pixel storage proportional to what is painted, not the canvas", () => {
     const state = realisticDocument();
 

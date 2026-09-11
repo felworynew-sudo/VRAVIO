@@ -174,7 +174,13 @@ function appendPoint(context: ToolContext<PaintStrokeState>, config: PaintStroke
 
 function commitStroke(context: ToolContext<PaintStrokeState>, config: PaintStrokeConfig, stroke: Stroke): void {
   const label = stroke.target === "mask" ? "Paint Layer Mask (Рисование по маске слоя)" : config.label;
-  void context.commit(stroke.before, stroke.working, label, stroke.target, stroke.layerId, stroke.strokeBounds);
+  // The same `erase` computation `render` (above) already makes at line ~122 — whether this
+  // stroke can actually leave a formerly-opaque pixel transparent, which is what
+  // `commit`'s own `canShrinkBounds` is asking (docs/master-plan.md §32.6). A mask target
+  // never reaches `setLayerPixels` at all (raster-commit.ts's `assign` branches before it),
+  // so it does not matter which way this reads for it.
+  const erase = config.erase && stroke.target === "pixels";
+  void context.commit(stroke.before, stroke.working, label, stroke.target, stroke.layerId, stroke.strokeBounds, erase);
 }
 
 export function createPaintStrokeTool(config: PaintStrokeConfig): RasterToolDefinition<PaintStrokeState> {

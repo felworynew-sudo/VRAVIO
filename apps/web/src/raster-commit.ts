@@ -299,7 +299,7 @@ export function useRasterCommit(params: {
    * cost 16 MB per stroke on a 1920x1080 layer, and the memory budget would
    * start dropping undo depth after a dozen strokes.
    */
-  const commitPixels = async (before: Uint8ClampedArray, after: Uint8ClampedArray, label: string, target: "pixels" | "mask" = "pixels", layerId = state.activeLayerId, bounds?: RasterRect | null) => {
+  const commitPixels = async (before: Uint8ClampedArray, after: Uint8ClampedArray, label: string, target: "pixels" | "mask" = "pixels", layerId = state.activeLayerId, bounds?: RasterRect | null, canShrinkBounds = true) => {
     // Every pixel edit passes the rules before it passes anywhere else — this
     // is the door section 4.4 of the plan is about. A rule may rewrite the
     // edit (confine it to the selection) or refuse it outright (a locked
@@ -337,7 +337,12 @@ export function useRasterCommit(params: {
         // Stored at the size of what was painted, not the size of the canvas.
         // The tool worked at canvas size because a stroke can go anywhere; what
         // is kept afterwards is the part that has something in it.
-        setLayerPixels(layer, buffer, current.width, current.height);
+        //
+        // The bounds hint (docs/master-plan.md §32.6): `edit.bounds` here, not the raw
+        // `bounds` parameter — a rule can have confined the edit to something smaller (the
+        // selection), and the union has to grow around what actually got written, not what
+        // the tool originally asked for.
+        setLayerPixels(layer, buffer, current.width, current.height, !canShrinkBounds && edit.bounds ? { bounds: edit.bounds, canShrink: false } : undefined);
       });
     };
 

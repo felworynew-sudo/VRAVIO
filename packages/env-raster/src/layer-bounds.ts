@@ -81,18 +81,59 @@ export function layerDocumentPixels(layer: RasterLayer, documentWidth: number, d
  * result. An empty result keeps a single pixel rather than a zero-sized buffer,
  * so a layer always has somewhere to be painted next.
  */
-export function trimToContent(pixels: Uint8ClampedArray, documentWidth: number, documentHeight: number): { bounds: RasterRect; pixels: Uint8ClampedArray } {
-  const bounds = opaqueBoundsOf(pixels, documentWidth, documentHeight) ?? { x: 0, y: 0, width: 1, height: 1 };
-  const trimmed = new Uint8ClampedArray(bounds.width * bounds.height * 4);
-  for (let y = 0; y < bounds.height; y += 1) {
-    const from = ((bounds.y + y) * documentWidth + bounds.x) * 4;
-    trimmed.set(pixels.subarray(from, from + bounds.width * 4), y * bounds.width * 4);
+/** Crops a document-sized buffer to exactly `rect` — the copy loop `trimToContent` and
+ *  `setLayerPixels`'s own add-only fast path (§32.6, below) both need, kept in one place so
+ *  an edge-clamping mistake only needs fixing once. */
+function cropToRect(pixels: Uint8ClampedArray, documentWidth: number, rect: RasterRect): Uint8ClampedArray {
+  const cropped = new Uint8ClampedArray(rect.width * rect.height * 4);
+  for (let y = 0; y < rect.height; y += 1) {
+    const from = ((rect.y + y) * documentWidth + rect.x) * 4;
+    cropped.set(pixels.subarray(from, from + rect.width * 4), y * rect.width * 4);
   }
-  return { bounds, pixels: trimmed };
+  return cropped;
 }
 
-/** Stores a document-sized result on a layer, trimmed to what it holds. */
-export function setLayerPixels(layer: RasterLayer, pixels: Uint8ClampedArray, documentWidth: number, documentHeight: number): void {
+export function trimToContent(pixels: Uint8ClampedArray, documentWidth: number, documentHeight: number): { bounds: RasterRect; pixels: Uint8ClampedArray } {
+  const bounds = opaqueBoundsOf(pixels, documentWidth, documentHeight) ?? { x: 0, y: 0, width: 1, height: 1 };
+  return { bounds, pixels: cropToRect(pixels, documentWidth, bounds) };
+}
+
+/**
+ * Stores a document-sized result on a layer, trimmed to what it holds.
+ *
+ * `edit`, when given, is docs/master-plan.md §32.6's fast path: the caller is promising the
+ * edit rectangle it names only ever *added* opaque pixels (`canShrink: false`) — Krita's own
+ * `exactBoundsAmortized` makes the identical trade for the identical reason (a full scan on
+ * every stroke release is too slow to pay for a bound this cheap to estimate instead: "могут
+ * быть слишком медленным ... `extent()` — объединение затронутых тайлов"). The new bounds
+ * are then just the old ones grown to cover the edit rectangle, no pixels read at all; a few
+ * always-transparent pixels can end up inside that box at its own edges (a round dab inside
+ * its own square bounding rect, say), which costs nothing and breaks nothing — the
+ * buffer-length/bounds invariant (CLAUDE.md §4) holds exactly either way, since the returned
+ * buffer is always cropped to match the returned bounds precisely. Anything that can shrink
+ * the layer (the eraser, `clear`, a transparent fill, `canShrink: true`, or simply no `edit`
+ * at all) still takes the scanning path below.
+ */
+export function setLayerPixels(layer: RasterLayer, pixels: Uint8ClampedArray, documentWidth: number, documentHeight: number, edit?: { bounds: RasterRect; canShrink: boolean } | null): void {
+  if (edit && !edit.canShrink) {
+    const target = edit.bounds;
+    const grown = unionRect(layer.bounds, target.x, target.y, target.x + target.width, target.y + target.height, 0);
+    const left = Math.max(0, Math.floor(grown.x));
+    const top = Math.max(0, Math.floor(grown.y));
+    const width = Math.max(0, Math.min(documentWidth, Math.ceil(grown.x + grown.width)) - left);
+    const height = Math.max(0, Math.min(documentHeight, Math.ceil(grown.y + grown.height)) - top);
+    if (width > 0 && height > 0) {
+      const bounds: RasterRect = { x: left, y: top, width, height };
+      layer.bounds = bounds;
+      layer.width = width;
+      layer.height = height;
+      layer.pixels = cropToRect(pixels, documentWidth, bounds);
+      return;
+    }
+    // The grown rectangle collapsed (documentWidth/Height of 0, or an edit rect entirely
+    // outside the document) — falls through to the scan below rather than leaving the layer
+    // in a state the invariant above doesn't hold for.
+  }
   const { bounds, pixels: trimmed } = trimToContent(pixels, documentWidth, documentHeight);
   layer.bounds = bounds;
   layer.width = bounds.width;
