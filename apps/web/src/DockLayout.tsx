@@ -60,6 +60,8 @@ function mergeableEdit(label: string, undo: () => void, redo: () => void): Rever
 const LAYOUT_STORAGE_KEY = WORKSPACE_LAYOUT_STORAGE_KEY;
 const PANEL_RAIL_LABELS_KEY = "vravio.panel-rail-labels";
 const PANEL_RAIL_LABELS_EVENT = "vravio-panel-rail-labels-change";
+const COLUMN_CASCADE_EVENT = "vravio-column-cascade";
+interface ColumnCascadeDetail { groupIds: string[]; collapsed: boolean }
 // Dockview's own `DockviewGroupPanel` bakes in a 100px floor for every grid
 // group (`MINIMUM_DOCKVIEW_GROUP_PANEL_WIDTH`) — a `setSize({ width: 35 })`
 // call alone is silently clamped back up to 100px, so a "collapsed to icons"
@@ -1701,24 +1703,57 @@ function PanelHeaderActions({ api, containerApi, activePanel, group, panels }: I
     if (referenceGroup) target.api.setSize({ height: 300 }); else target.api.setSize({ width: 280 });
     setMenuOpen(false);
   };
-  // The collapse half of the grid branch below, on its own so a live drag settling below
-  // `GRID_EXPANDED_MIN_WIDTH` (the effect further down) can reach the exact same transition a
-  // button click does, not a second, drifting copy of it.
-  const collapseToRail = () => {
+  // Owner: a rail-collapsed group and an expanded one can never share the same vertical
+  // column — stacking a 35px icon strip directly above (or below) a 280px panel is a broken
+  // layout, reported live off exactly that shape. Collapsing or expanding one group therefore
+  // cascades to every *other* grid group sharing its column (same left edge, found by
+  // comparing `getBoundingClientRect()` — Dockview's own grid model doesn't expose "siblings
+  // in this split" directly) via a `window` event, the same cross-instance-notification
+  // pattern already used for the rail's label state and the peek ghosts. `...Self` is the
+  // imperative transition alone, used both to actually change this instance and to answer the
+  // event when some *other* instance in the column initiated it — only the non-`Self` entry
+  // points (the button, the drag-threshold effect) fire the cascade, so one collapse can't
+  // ping-pong an infinite loop of instances re-notifying each other.
+  const collapseToRailSelf = () => {
     group.element.classList.add("vravio-grid-rail");
     api.setHeaderPosition("right");
     const railWidth = railLabels ? GRID_RAIL_LABELS_MIN_WIDTH : GRID_RAIL_MIN_WIDTH;
     requestAnimationFrame(() => { api.setConstraints({ minimumWidth: railWidth }); api.setSize({ width: railWidth }); });
     setCollapsed(true);
   };
+  const expandFromRailSelf = () => {
+    group.element.classList.remove("vravio-grid-rail");
+    api.setHeaderPosition("top");
+    api.setConstraints(GRID_EXPANDED_MIN_WIDTH_CONSTRAINTS);
+    api.setSize({ width: 280 });
+    setCollapsed(false);
+  };
+  const columnSiblingIds = () => {
+    if (api.location.type !== "grid") return [];
+    const left = Math.round(group.element.getBoundingClientRect().left);
+    return containerApi.groups.filter((candidate) => candidate.id !== group.id && candidate.api.location.type === "grid" && Math.round(candidate.element.getBoundingClientRect().left) === left).map((candidate) => candidate.id);
+  };
+  const collapseToRail = () => {
+    collapseToRailSelf();
+    window.dispatchEvent(new CustomEvent<ColumnCascadeDetail>(COLUMN_CASCADE_EVENT, { detail: { groupIds: columnSiblingIds(), collapsed: true } }));
+  };
+  const expandFromRail = () => {
+    expandFromRailSelf();
+    window.dispatchEvent(new CustomEvent<ColumnCascadeDetail>(COLUMN_CASCADE_EVENT, { detail: { groupIds: columnSiblingIds(), collapsed: false } }));
+  };
+  useEffect(() => {
+    const onCascade = (event: Event) => {
+      const { groupIds, collapsed: target } = (event as CustomEvent<ColumnCascadeDetail>).detail;
+      if (!groupIds.includes(group.id) || collapsed === target) return;
+      if (target) collapseToRailSelf(); else expandFromRailSelf();
+    };
+    window.addEventListener(COLUMN_CASCADE_EVENT, onCascade);
+    return () => window.removeEventListener(COLUMN_CASCADE_EVENT, onCascade);
+  });
   const toggleCollapsed = () => {
     if (api.location.type === "grid") {
       if (collapsed) {
-        group.element.classList.remove("vravio-grid-rail");
-        api.setHeaderPosition("top");
-        api.setConstraints(GRID_EXPANDED_MIN_WIDTH_CONSTRAINTS);
-        api.setSize({ width: 280 });
-        setCollapsed(false);
+        expandFromRail();
       } else {
         collapseToRail();
       }
