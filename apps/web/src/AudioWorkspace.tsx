@@ -644,7 +644,7 @@ export function AudioWorkspace({ document }: { document: VravioDocument }) {
               const left = clip.startSample * pxPerSample, width = Math.max(4, clip.durationSamples * pxPerSample);
               return <div key={clip.id} className={`audio-clip${selected ? " selected" : ""}`} style={{ left, width, height: TRACK_HEIGHT - 6 }}
                 onPointerDown={(event) => beginDrag(event, "move", track, clip)}
-                onClick={(event) => onClipClick(track, clip, event)}>
+                onClick={(event) => { event.stopPropagation(); onClipClick(track, clip, event); }}>
                 <div className="audio-clip-trim audio-clip-trim-left" style={{ width: TRIM_HANDLE_PX }} onPointerDown={(event) => beginDrag(event, "trim-left", track, clip)} />
                 <span className="audio-clip-name">{clip.name}</span>
                 {viewMode === "spectrogram"
