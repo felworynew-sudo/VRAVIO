@@ -119,7 +119,7 @@ type MoveDrag =
    * (`renderWorkingRegion`), so a rectangle that does not cover where the *last* frame drew leaves
    * that drawing on screen. Patchy computes the same union from the same two positions
    * (`moving_layers_dirty_region(old_delta, new_delta)`, canvas_widget_move.cpp). */
-  | { kind: "move"; pointerId: number; from: Point; current: Point; previous?: Point; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean; fromOrigin?: boolean; float?: FloatingPixels; linkedBase?: readonly { layerId: string; basePixels: Uint8ClampedArray }[]; baseLive?: PendingTransform["live"] }
+  | { kind: "move"; pointerId: number; from: Point; current: Point; previous?: Point; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean; fromOrigin?: boolean; float?: FloatingPixels; linkedBase?: readonly { layerId: string; basePixels: Uint8ClampedArray }[]; baseLive?: PendingTransform["live"]; sourceBounds?: RasterRect }
   | { kind: "scale"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; session: TransformSession; handleX: -1 | 0 | 1; handleY: -1 | 0 | 1; dx: number; dy: number; text?: PendingTextTransform }
   | { kind: "rotate"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; session: TransformSession; center: Point; startAngle: number; baseRotation: number; dx: number; dy: number; handleX: -1 | 1; handleY: -1 | 1; text?: PendingTextTransform }
   | { kind: "quad"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; quadOrigin: { pixels: Uint8ClampedArray; bounds: RasterRect; selection: PixelSelection | null }; baseCorners: readonly [Point, Point, Point, Point]; handleIndex: number; mode: QuadTransformMode }
@@ -301,7 +301,11 @@ export function startPendingTransform(context: ToolContext<MoveState>): void {
   const layer = context.activeLayer;
   if (!layer) return;
   const liveText = layer.kind === "text" && Boolean(layer.text) && !state.selection;
-  const before = liveText ? state : cloneRasterState(state);
+  // Always cloned, `liveText` included: `before` ends up as `pending.before`, which
+  // `commitPending`'s text branch later hands to `context.commitDocument` as the undo step's
+  // own "before" — sharing `state`'s live reference there was the same bug fixed in
+  // `commitPending` itself below (see that fix's own comment for the mechanism).
+  const before = cloneRasterState(state);
   const target = liveText ? layer : (before.layers.find((item) => item.id === layer.id) ?? layer);
   const selection = before.selection ? restrictSelectionToContent(before.selection, materialise(target, before), state.width, state.height) : null;
   if (before.selection && !selection) { diagnostic("info", "transform", "Transform ignored: selection contains no opaque pixels", { layerId: target.id }); return; }
@@ -348,7 +352,19 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
   // document cloned from `pending.before`, which still had that layer, so the
   // deletion silently came back. Anything a transform does not itself change
   // has to survive it.
-  const current = context.document;
+  //
+  // Cloned, not the bare reference: `context.document` is the *live* state
+  // object `kernel`'s `DocumentStore.get()` hands back — the same one
+  // `DocumentStore.update()`'s `mutator(document.state)` mutates in place.
+  // `commitDocument` below stores this as the undo step's own "before", in a
+  // closure that outlives this call; without the clone, the moment the same
+  // step's `redo()` runs `Object.assign(document.state, cloneRasterState(after))`
+  // it mutates this exact object too, since they were never two objects to
+  // begin with — so "before" silently became "after" at the instant the
+  // transform committed, and every Undo afterward reapplied a no-op. Caught
+  // live: paint a stroke, drag it, commit, Undo — the layer stayed at its
+  // moved position instead of returning to where the stroke was painted.
+  const current = cloneRasterState(context.document);
   // The layer this transform belongs to may be gone entirely (deleted while
   // the frame was open). There is nothing to apply it to then, and re-adding
   // it would be the same resurrection by another route, so the transform is
@@ -413,9 +429,15 @@ function materialise(layer: RasterDocumentState["layers"][number], document: Ras
 function beginMoveDrag(context: ToolContext<MoveState>, pointer: ToolPointer, pending: PendingTransform | null, layer: NonNullable<ToolContext<MoveState>["activeLayer"]>): void {
   const state = context.document;
   const effectiveSelection = !pending ? restrictSelectionToContent(state.selection, materialise(layer, state), state.width, state.height) : null;
+  // Computed here (once, at drag start) so a fresh, unselected, non-text move below can reuse it
+  // as `live.source` instead of a second full-canvas scan — and, further down, instead of the
+  // per-frame `layerOpaqueBounds` scan `applyDragFrame`'s old plain-translate path used to redo
+  // on every single `pointermove` (docs/master-plan.md §37, the §28 audit's "Move-инструмент всё
+  // ещё трогает настоящие пиксели" finding).
+  const freshOpaqueBounds = !pending && !state.selection && layer.kind !== "text" ? layerOpaqueBounds(materialise(layer, state), state.width, state.height) : null;
   if (!pending) {
     if (state.selection && !effectiveSelection) { diagnostic("info", "move", "Move ignored: selection contains no opaque pixels", { layerId: layer.id }); return; }
-    if (!state.selection && !(layer.kind === "text" && layer.text?.visualBounds?.width ? layer.text.visualBounds : layerOpaqueBounds(materialise(layer, state), state.width, state.height))) {
+    if (!state.selection && !(layer.kind === "text" && layer.text?.visualBounds?.width ? layer.text.visualBounds : freshOpaqueBounds)) {
       diagnostic("info", "move", "Move ignored: layer is empty", { layerId: layer.id }); return;
     }
   }
@@ -432,12 +454,6 @@ function beginMoveDrag(context: ToolContext<MoveState>, pointer: ToolPointer, pe
   // second ring, once per drag, none of which was ever committed.
   const origin = next && !next.text ? next.before.layers.find((item) => item.id === next!.layerId) : null;
   const originSelection = origin ? restrictSelectionToContent(next!.before.selection ?? null, materialise(origin, state), state.width, state.height) : null;
-  // Content is lifted off the layer once and then placed, never cut again — CLAUDE.md's floating
-  // selection lesson: cutting per frame leaves a fraction of a soft edge behind at every position
-  // the pointer passed through.
-  const float = !next?.text
-    ? next?.float ?? liftSelection(origin ? materialise(origin, state) : materialise(layer, state), state.width, state.height, origin ? originSelection : effectiveSelection)
-    : undefined;
   const before = next?.before ?? cloneRasterState(pending ? state : { ...state, activeLayerId: layer.id });
   // A fresh drag moves more than just the grabbed layer in two independent cases, matching two
   // different donors: a persistent link group (Photoshop: dragging one linked layer moves all of
@@ -455,6 +471,20 @@ function beginMoveDrag(context: ToolContext<MoveState>, pointer: ToolPointer, pe
   const partnersById = new Map<string, RasterLayer>();
   for (const item of [...linkPartners, ...selectionPartners]) if (item.id !== layer.id && layerAccepts(item, "move")) partnersById.set(item.id, item);
   const linkedBase = partnersById.size ? Array.from(partnersById.values(), (item) => ({ layerId: item.id, basePixels: materialise(item, state).slice() })) : undefined;
+  // A fresh drag of a single, unselected, non-text, non-linked layer needs no floating clip at
+  // all — the whole layer is what moves, exactly the shape `PendingTransform.live` already
+  // describes for scale/rotate ("described, not resampled" — see its own doc comment). Using
+  // that path here instead of `liftSelection`/`stampFloating` skips both the one-time lift *and*
+  // the full-canvas `.slice()` + per-pixel composite `stampFloating` otherwise redoes on every
+  // single `pointermove` (docs/master-plan.md §28's "Move-инструмент всё ещё трогает настоящие
+  // пиксели" finding — measured there at ~31.6 MiB/frame on a 4K canvas).
+  const liveEligible = !next && !origin && freshOpaqueBounds && !linkedBase;
+  // Content is lifted off the layer once and then placed, never cut again — CLAUDE.md's floating
+  // selection lesson: cutting per frame leaves a fraction of a soft edge behind at every position
+  // the pointer passed through. Skipped entirely when `liveEligible`, which needs no lift at all.
+  const float = liveEligible ? undefined : (!next?.text
+    ? next?.float ?? liftSelection(origin ? materialise(origin, state) : materialise(layer, state), state.width, state.height, origin ? originSelection : effectiveSelection)
+    : undefined);
   context.setState({
     pending: next,
     drag: {
@@ -468,6 +498,7 @@ function beginMoveDrag(context: ToolContext<MoveState>, pointer: ToolPointer, pe
       ...(origin ? { fromOrigin: true } : {}),
       ...(linkedBase ? { linkedBase } : {}),
       ...(float ? { float } : {}),
+      ...(liveEligible ? { sourceBounds: freshOpaqueBounds } : {}),
       // A scale (or rotate) left the session in "described, not resampled" mode — see
       // `PendingTransform.live`'s own doc comment. Carried through so this move-drag can shift
       // that description's own target rect instead of quietly reverting to `basePixels` at its
@@ -543,6 +574,16 @@ function applyDragFrame(context: ToolContext<MoveState>, drag: MoveDrag, interpo
   if (drag.baseLive) {
     const target = { ...drag.baseLive.target, x: drag.baseLive.target.x + deltaX, y: drag.baseLive.target.y + deltaY };
     return { before: drag.before, layerId: drag.before.activeLayerId, dx, dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: drag.rotation, live: { source: drag.baseLive.source, target, rotation: drag.baseLive.rotation } };
+  }
+  // The same "described, not resampled" trade as scale/rotate (`PendingTransform.live`'s own doc
+  // comment) — `beginMoveDrag` only sets `sourceBounds` for a fresh, unselected, non-text,
+  // non-linked drag, exactly the shape a rectangle-move-with-no-rotation already is. No
+  // `schedulePreview` call here either, matching the scale/rotate branches above: the Overlay's
+  // CSS-transform on `pending.live` *is* the frame's visual update, nothing to push into the
+  // raster preview pipeline.
+  if (drag.sourceBounds) {
+    const target = { ...drag.sourceBounds, x: drag.sourceBounds.x + deltaX, y: drag.sourceBounds.y + deltaY };
+    return { before: drag.before, layerId: drag.before.activeLayerId, dx, dy, pixels: drag.basePixels, selection: null, rotation: drag.rotation, live: { source: drag.sourceBounds, target, rotation: drag.rotation } };
   }
   const shiftX = drag.float || drag.fromOrigin ? dx : deltaX;
   const shiftY = drag.float || drag.fromOrigin ? dy : deltaY;
