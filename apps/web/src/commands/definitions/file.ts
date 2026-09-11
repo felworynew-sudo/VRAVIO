@@ -55,7 +55,14 @@ const commands: readonly CommandDefinition[] = [
     category: CATEGORY_FILE,
     shortcut: "Mod+Alt+S",
     surfaces: ["menu", "palette"],
-    isEnabled: hasActiveDocument,
+    // Photoshop's own "Save a Copy" is where the delivery formats (JPEG,
+    // PNG, GIF…) live — "Save As" only offers formats that keep everything
+    // the open document currently has (for VRAVIO that is .vravio alone,
+    // the only lossless format there is), and writing a copy never
+    // retargets what the open document is saved to next. Wired to the same
+    // dialog Export already uses rather than a second flatten-and-encode
+    // pipeline — raster-only for the reason Export already is.
+    isEnabled: ({ activeDocumentId }) => kernel.documents.get(activeDocumentId ?? "")?.kind === "raster",
     execute: () => dispatch("vravio-file-save-copy"),
   },
   {

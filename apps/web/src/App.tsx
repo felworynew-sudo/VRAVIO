@@ -108,7 +108,12 @@ export function App() {
   const [cameraRawImport, setCameraRawImport] = useState<{ buffer: ArrayBuffer; name: string } | null>(null);
   const [cameraRawReopen, setCameraRawReopen] = useState<{ buffer: ArrayBuffer; name: string } | null>(null);
   const [renderBackend, setRenderBackend] = useState<RenderBackend | null>(kernel.gpu.active);
-  const [exportOpen, setExportOpen] = useState(false);
+  // "export" from the Export command, "saveCopy" from Save a Copy — same
+  // dialog underneath (flatten, pick a delivery format, write to disk,
+  // never retargets what plain Save writes to next), only the wording
+  // changes so a click on "Save a Copy…" doesn't pop up something
+  // labelled "Export image".
+  const [exportOpen, setExportOpen] = useState<false | "export" | "saveCopy">(false);
   const [printOpen, setPrintOpen] = useState(false);
   // `targetsMask`: a mask is a layer too (CLAUDE.md's own recurring theme) — an adjustment
   // opened while a mask is being edited (`editingMaskLayerId`, the same state the color-swap
@@ -540,8 +545,15 @@ export function App() {
   useEffect(() => {
     const save = () => void saveProject();
     const saveAs = () => void saveProject({ saveAs: true });
-    const saveCopy = () => void saveProject({ markClean: false, saveAs: true });
-    const openExport = () => setExportOpen(true);
+    // Photoshop's own "Save a Copy" is where JPEG/PNG/GIF live, not "Save
+    // As" — Save As only offers formats that keep everything the open
+    // document currently has (for VRAVIO, .vravio alone, the only lossless
+    // one there is), and a copy never changes what the open document saves
+    // to next. That is exactly what Export already does (flatten, pick a
+    // delivery format, write to disk, `savedTargetByDocument` untouched) —
+    // routed to the same dialog rather than a second encode pipeline.
+    const saveCopy = () => setExportOpen("saveCopy");
+    const openExport = () => setExportOpen("export");
     const openPrint = () => setPrintOpen(true);
     const openFile = () => openImageRef.current?.click();
     const openLiquify = () => { if (active && isRasterDocumentState(active.state)) setLiquifyOpen(true); };
@@ -654,8 +666,15 @@ export function App() {
           ...(active?.kind === "vector" ? [["Import SVG as Vector… (Импортировать SVG как вектор…)", "", () => importSvgAsVectorRef.current?.click()] as MainMenuItem] : []),
           ["Save (Сохранить)", "Ctrl+S", () => void saveProject(), !active],
           ["Save As… (Сохранить как…)", "Ctrl+Shift+S", () => void saveProject({ saveAs: true }), !active],
-          ["Save a Copy… (Сохранить копию…)", "Ctrl+Alt+S", () => void saveProject({ markClean: false, saveAs: true }), !active],
-          ...(active?.kind === "raster" ? [["Export… (Экспортировать…)", "Ctrl+Shift+E", () => setExportOpen(true), !isRasterDocumentState(active.state)] as MainMenuItem] : []),
+          // This array is its own separate implementation from
+          // `commands/definitions/file.ts` (menu clicks never go through
+          // `kernel.commands.execute`) — found chasing the owner's report
+          // that Save a Copy still only ever wrote .vravio after the
+          // command-level handler was already fixed to open Export's
+          // format picker: clicking the menu item never reached that fix
+          // at all, it called this array's own hardcoded `saveProject`.
+          ...(active?.kind === "raster" ? [["Save a Copy… (Сохранить копию…)", "Ctrl+Alt+S", () => setExportOpen("saveCopy"), !isRasterDocumentState(active.state)] as MainMenuItem] : []),
+          ...(active?.kind === "raster" ? [["Export… (Экспортировать…)", "Ctrl+Shift+E", () => setExportOpen("export"), !isRasterDocumentState(active.state)] as MainMenuItem] : []),
           ...(active?.kind === "vector" ? [["Export as SVG… (Экспортировать в SVG…)", "", exportActiveVectorAsSvg, !isVectorDocumentState(active.state)] as MainMenuItem] : []),
           ...(active?.kind === "raster" ? [["Print… (Печать…)", "Ctrl+P", () => setPrintOpen(true), !isRasterDocumentState(active.state)] as MainMenuItem] : []),
           ["Settings… (Настройки…)", "", () => store.setSettingsOpen(true)],
@@ -859,7 +878,7 @@ export function App() {
       onCancel={() => setCameraRawReopen(null)}
       onConfirm={(decoded) => { applyFilter(decoded.pixels, "Camera Raw"); setCameraRawReopen(null); }}
     />}
-    {exportOpen && active && isRasterDocumentState(active.state) && <ExportDialog state={active.state} documentName={active.name} language={store.language} onCancel={() => setExportOpen(false)} onExport={async (blob, fileName) => { download(blob, fileName); setExportOpen(false); }}/>}
+    {exportOpen && active && isRasterDocumentState(active.state) && <ExportDialog state={active.state} documentName={active.name} language={store.language} variant={exportOpen} onCancel={() => setExportOpen(false)} onExport={async (blob, fileName) => { download(blob, fileName); setExportOpen(false); }}/>}
     {printOpen && active && isRasterDocumentState(active.state) && <PrintCenter state={active.state} documentName={active.name} language={store.language} onCancel={() => setPrintOpen(false)} onSavePdf={async (blob, fileName) => { await kernel.platform.fs.saveFile({ name: fileName, mime: "application/pdf", data: blob }); }}/>}
     {adjustmentDialog && (() => { const document = kernel.documents.get<RasterDocumentState>(adjustmentDialog.documentId), definition = rasterAdjustmentById.get(adjustmentDialog.definitionId), layer = document?.state.layers.find((item) => item.id === adjustmentDialog.layerId); if (!document || !definition || !layer) return null; const pixels = layerDocumentPixels(layer, document.state.width, document.state.height); return <AdjustmentDialog definition={definition} initialValue={adjustmentDialog.initialValue} language={store.language} histogram={luminanceHistogram(pixels)} pixels={pixels} onPreview={previewImageAdjustment} onCancel={() => { previewImageAdjustment(null); setAdjustmentDialog(null); }} onApply={applyImageAdjustment}/>; })()}
   </div>;

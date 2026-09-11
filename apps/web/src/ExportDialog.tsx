@@ -9,10 +9,16 @@ import {
 
 const scalePresets = [0.25, 0.5, 1, 2, 3, 4] as const;
 
-export function ExportDialog({ state, documentName, language, onCancel, onExport }: {
+export function ExportDialog({ state, documentName, language, variant = "export", onCancel, onExport }: {
   state: RasterDocumentState;
   documentName: string;
   language: Language;
+  /** Same dialog, two menu entries that open it — Photoshop's own "Save a
+   * Copy" is where JPEG/PNG/GIF live (its own "Save As" only keeps formats
+   * that preserve everything the open document has), and Export is the
+   * same flatten-and-encode operation reached a different way. Only the
+   * wording should tell them apart, not a second implementation. */
+  variant?: "export" | "saveCopy";
   onCancel(): void;
   onExport(blob: Blob, fileName: string): void | Promise<void>;
 }) {
@@ -88,7 +94,7 @@ export function ExportDialog({ state, documentName, language, onCancel, onExport
   return <div className="dialog-backdrop export-backdrop" onMouseDown={onCancel}>
     <section className="export-dialog" role="dialog" aria-modal="true" aria-labelledby="export-title" onMouseDown={(event) => event.stopPropagation()}>
       <header>
-        <div><small>{text(language, "EXPORT", "ЭКСПОРТ")}</small><h2 id="export-title">{text(language, "Export image", "Экспорт изображения")}</h2></div>
+        <div><small>{variant === "saveCopy" ? text(language, "SAVE A COPY", "СОХРАНИТЬ КОПИЮ") : text(language, "EXPORT", "ЭКСПОРТ")}</small><h2 id="export-title">{variant === "saveCopy" ? text(language, "Save a copy", "Сохранить копию") : text(language, "Export image", "Экспорт изображения")}</h2></div>
         <button onClick={onCancel} aria-label={text(language, "Close", "Закрыть")}>×</button>
       </header>
 
@@ -193,7 +199,7 @@ export function ExportDialog({ state, documentName, language, onCancel, onExport
 
       <footer>
         <button onClick={onCancel}>{text(language, "Cancel", "Отмена")}</button>
-        <button className="primary" disabled={busy} onClick={() => void run()}>{busy ? text(language, "Exporting…", "Экспорт…") : text(language, "Export", "Экспортировать")}</button>
+        <button className="primary" disabled={busy} onClick={() => void run()}>{busy ? (variant === "saveCopy" ? text(language, "Saving…", "Сохранение…") : text(language, "Exporting…", "Экспорт…")) : (variant === "saveCopy" ? text(language, "Save", "Сохранить") : text(language, "Export", "Экспортировать"))}</button>
       </footer>
     </section>
   </div>;
