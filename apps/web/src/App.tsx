@@ -834,7 +834,7 @@ export function App() {
     </>, chromeSlots.top)}
 
     <main className="workspace">
-      {active ? <DockLayout /> : <HomeScreen language={store.language} requestNewDocument={store.requestNewDocument} openFile={openBridgeFile} />}
+      {active ? <DockLayout /> : <HomeScreen language={store.language} requestNewDocument={store.requestNewDocument} openFile={openBridgeFile} openDocuments={documents} onOpenDocument={store.activateDocument} />}
       {active && <ContextualBar documentId={active.id} state={active.state} language={store.language} visible={store.preferences.contextualBar} />}
     </main>
     {chromeSlots.bottom && active && createPortal(<footer className="status-bar"><span>{resolveLabel(environmentMeta[active.kind].label, store.language)}</span><span>{isAudioDocumentState(active.state) ? `${(active.state.sampleRate / 1000).toLocaleString()} kHz · ${active.state.channels === 1 ? text(store.language, "Mono", "Моно") : text(store.language, "Stereo", "Стерео")} · ${active.state.bitDepth} bit` : isVideoDocumentState(active.state) ? `${active.state.width}×${active.state.height} · ${active.state.frameRate} fps` : `${Math.round((store.viewports[active.id]?.zoom ?? 1) * 100)}% · sRGB · ${renderBackend ?? "detecting"}`}</span></footer>, chromeSlots.bottom)}

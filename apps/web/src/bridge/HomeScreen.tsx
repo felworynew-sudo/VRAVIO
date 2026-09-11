@@ -3,7 +3,7 @@ import { Filemanager, type FilePreview, type IApi, type IParsedEntity } from "@s
 import "@svar-ui/react-filemanager/all.css";
 import { kernel } from "../kernel";
 import { environmentMeta } from "../environment";
-import type { EnvironmentKind } from "@vravio/kernel";
+import type { EnvironmentKind, VravioDocument } from "@vravio/kernel";
 import type { Language } from "../store";
 import { resolveLabel, text } from "../i18n";
 import { browserFiles, createBridgeFileSystemProvider, type BridgeEntry } from "./filesystem";
@@ -13,6 +13,14 @@ type Props = {
   language: Language;
   requestNewDocument(kind: EnvironmentKind): void;
   openFile(file: File): Promise<void>;
+  /** Every document still open in this session — home only shows while none
+   * of them is active, so this is genuinely "what did I leave open", not
+   * "what did I ever touch." Passed in rather than read from the kernel
+   * directly, matching `requestNewDocument`/`openFile`'s own shape: this
+   * file stays a plain adapter with explicit inputs, not another place that
+   * reaches into shell state on its own. */
+  openDocuments: readonly VravioDocument[];
+  onOpenDocument(id: string): void;
 };
 
 /**
@@ -21,7 +29,7 @@ type Props = {
  * this component only maps its requests to the platform file port and maps an opened
  * file to the already-existing VRAVIO import pipeline.
  */
-export function HomeScreen({ language, requestNewDocument, openFile }: Props) {
+export function HomeScreen({ language, requestNewDocument, openFile, openDocuments, onOpenDocument }: Props) {
   const providerRef = useRef(createBridgeFileSystemProvider());
   const [data, setData] = useState<BridgeEntry[]>([]);
   const [message, setMessage] = useState("");
@@ -90,6 +98,16 @@ export function HomeScreen({ language, requestNewDocument, openFile }: Props) {
     </aside>
     <div className="bridge-browser">
       <header><h1>{text(language, "Files and recent assets", "Файлы и материалы")}</h1><span className="bridge-status">{loading ? text(language, "Loading…", "Загрузка…") : text(language, "Open a file to create a document", "Откройте файл, чтобы создать документ")}</span></header>
+      {openDocuments.length > 0 && <div className="bridge-open-strip" aria-label={text(language, "Open documents", "Открытые документы")}>
+        {openDocuments.map((document) => {
+          const meta = document.kind in environmentMeta ? environmentMeta[document.kind as EnvironmentKind] : null;
+          return <button key={document.id} className="bridge-open-item" onClick={() => onOpenDocument(document.id)} title={document.name}>
+            {meta && <img src={`${import.meta.env.BASE_URL}${meta.plaqueFile}`} alt=""/>}
+            <span>{document.name}</span>
+            {document.dirty && <i className="bridge-open-dirty" aria-label={text(language, "Unsaved changes", "Несохранённые изменения")}/>}
+          </button>;
+        })}
+      </div>}
       {message && <p className="bridge-error" role="alert">{message}</p>}
       <div className="bridge-filemanager" data-preview-revision={previewRevision}>
         <Filemanager data={data} init={init} readonly preview icons={bridgeIcon} previews={(item: FilePreview) => item.id ? providerRef.current.preview(item.id) : null} extraInfo={(item: IParsedEntity) => providerRef.current.extraInfo(item.id)} />
