@@ -1439,7 +1439,14 @@ function PanelTab({ api, containerApi }: IDockviewPanelHeaderProps) {
     const closePeek = (event: PointerEvent) => {
       const origin = peekOrigin.get(api.id);
       if (!origin) return;
-      if (api.group.element.contains(event.target as Node)) return;
+      const target = event.target as Node;
+      if (api.group.element.contains(target)) return;
+      // The floating group's own title bar (`.dv-floating-titlebar`) lives in a separate
+      // overlay-host subtree, not inside `group.element` — found live: pressing down on it to
+      // start a drag registered as an "outside" click by this same listener and closed the
+      // peek before the drag (and its own promote-to-permanent handling, see
+      // `openCollapsedPanel`) ever got a chance to run.
+      if (api.group.element.closest(".dv-resize-container")?.querySelector(".dv-floating-titlebar")?.contains(target)) return;
       clearPeek(api.id);
       const originGroup = containerApi.groups.find((candidate) => candidate.id === origin.groupId);
       if (originGroup) api.moveTo({ group: originGroup, index: origin.index });
@@ -1493,6 +1500,30 @@ function PanelTab({ api, containerApi }: IDockviewPanelHeaderProps) {
     // subtracted by the measured constant instead of an unexplained one.
     const y = Math.round(anchor.top - hostRect.top) - FLOATING_TITLEBAR_HEIGHT;
     containerApi.addFloatingGroup(panel, { x, y, width, height: 400 });
+    // информация.txt: grabbing the peek window's own title bar to actually move it
+    // "requalifies" it into a real, permanently expanded panel — the one gesture that does
+    // *not* snap it back to the rail on the next outside click. Dockview's own drag handling
+    // for a floating group isn't reachable through the public API (`onDidStartFloatingGroupDrag`
+    // exists only on the internal component, confirmed live — the earlier attempt to bridge it
+    // crashed every reload with "is not a function"), so this watches the drag gesture
+    // directly on `.dv-floating-titlebar` instead: a `pointerdown` there followed by real
+    // movement (a small threshold rules out a stray click that never actually drags) clears
+    // this panel's peek state before Dockview's own drag takes over.
+    const titlebar = panel.api.group.element.closest(".dv-resize-container")?.querySelector(".dv-floating-titlebar");
+    if (titlebar) {
+      const onPointerDown = (downEvent: Event) => {
+        const { clientX: startX, clientY: startY } = downEvent as PointerEvent;
+        const onPointerMove = (moveEvent: PointerEvent) => {
+          if (Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY) <= 4) return;
+          clearPeek(api.id);
+          cleanup();
+        };
+        const cleanup = () => { window.removeEventListener("pointermove", onPointerMove); window.removeEventListener("pointerup", cleanup); };
+        window.addEventListener("pointermove", onPointerMove);
+        window.addEventListener("pointerup", cleanup, { once: true });
+      };
+      titlebar.addEventListener("pointerdown", onPointerDown, { once: true });
+    }
   };
   return <><div ref={tabRef} className="panel-tab" data-panel-id={api.id} title={api.title} onClick={openCollapsedPanel} onContextMenu={(event) => contextMenu.open(event, menuItems())}><i aria-hidden="true" style={{ "--panel-mask": `url("${panelIcons[api.id] ?? iconUrl("/ПАРАМЕТРЫ.svg")}")` } as CSSProperties}/><span>{api.title}</span></div>{contextMenu.node}</>;
 }
