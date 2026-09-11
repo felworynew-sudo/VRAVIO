@@ -39,4 +39,5 @@ export * from "./ml-tensor";
 export * from "./ml-inference";
 export * from "./layer-ops";
 export * from "./layer-bounds";
+export * from "./tile-store";
 export * from "./psd-import";

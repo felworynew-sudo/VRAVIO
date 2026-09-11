@@ -5,6 +5,7 @@ import { appendLayer } from "./layer-tree";
 import { translateLayerPixels } from "./transform";
 import { accumulateUniquePixelBytes, layerDocumentPixels, setLayerPixels } from "./layer-bounds";
 import { duplicateLayer } from "./layer-ops";
+import { TileStore } from "./tile-store";
 import type { RasterDocumentState, RasterLayer } from "./types";
 
 /**
@@ -220,6 +221,26 @@ describe("performance floor (stage 0 of the catalogue migration)", () => {
 
     // Generous absolute ceiling, not a ratio, for the same reason as the hinted-edit benchmark
     // above: two already-small numbers compared as a ratio goes flaky on GC noise for nothing.
+    expect(smallElapsed).toBeLessThan(2);
+    expect(largeElapsed).toBeLessThan(2);
+  });
+
+  it("docs/master-plan.md §37.3 item 1, step 1: TileStore.clone() + a small write does not scale with canvas size", () => {
+    // Krita's own KisTileData trade, at the primitive level rather than the whole-layer level
+    // duplicateLayer's benchmark above already covers: cloning a store and writing a small
+    // region into the clone should cost the same on a 4000x3000 canvas as on a 1920x1080 one,
+    // because only the handful of touched tiles are ever copied.
+    const small = TileStore.fromPixels(new Uint8ClampedArray(1920 * 1080 * 4), 1920, 1080);
+    const smallPatch = new Uint8ClampedArray(1920 * 1080 * 4);
+    const smallElapsed = fastestOf(() => { small.clone().writeRegion({ x: 900, y: 500, width: 40, height: 40 }, smallPatch, 1920); });
+
+    const large = TileStore.fromPixels(new Uint8ClampedArray(4000 * 3000 * 4), 4000, 3000);
+    const largePatch = new Uint8ClampedArray(4000 * 3000 * 4);
+    const largeElapsed = fastestOf(() => { large.clone().writeRegion({ x: 1900, y: 1400, width: 40, height: 40 }, largePatch, 4000); });
+
+    // Generous absolute ceiling, not a ratio, for the same reason the rest of this file uses one
+    // for already-tiny numbers: comparing two sub-millisecond timings as a ratio goes flaky on
+    // GC noise for nothing.
     expect(smallElapsed).toBeLessThan(2);
     expect(largeElapsed).toBeLessThan(2);
   });
