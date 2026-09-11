@@ -1610,11 +1610,10 @@ function createDefaultLayout(api: DockviewReadyEvent["api"], language: Language,
   const visible = new Set(panelIds);
   const initialPanels = windowsFor(kind).filter((panel) => visible.has(panel.id));
   if (initialPanels.length === 0) return;
-  // No `constraints` at creation — see the comment on the other `addGroup` calls in this
-  // file for why (corrupts Dockview's fresh-layout width distribution; reproduced live on
-  // the vector environment's default preset specifically). The group still gets a real floor
-  // the moment a user actually collapses/expands it (`toggleCollapsed`), which is the only
-  // point a group this size is at any real risk of being dragged narrow enough to clip.
+  // No `constraints` inline on `addGroup` — see the comment on the other `addGroup` calls in
+  // this file for why (corrupts Dockview's fresh-layout width distribution; reproduced live
+  // on the vector environment's default preset specifically). Applied as a follow-up call
+  // below instead, the same safe pattern the `setSize` right after it already relies on.
   const sideGroup = api.addGroup({ id: "right-panels", referenceGroup: viewportGroup, direction: "right", initialWidth: 280 });
   sideGroup.api.setHeaderPosition("top");
   for (const panel of initialPanels) api.addPanel({ id: panel.id, component: panel.component, title: windowTitle(panel, language), position: { referenceGroup: sideGroup.id, direction: "within" } });
@@ -1625,6 +1624,12 @@ function createDefaultLayout(api: DockviewReadyEvent["api"], language: Language,
   // exists is the same fix already relied on elsewhere in this file for exactly this kind of
   // Dockview sizing gap.
   sideGroup.api.setSize({ width: 280 });
+  // A real floor from the start, not only from the moment a user first collapses/expands the
+  // group (`toggleCollapsed`'s own `setConstraints` call) — found live: the *never-toggled*
+  // default group could still be dragged down to whatever Dockview's own unconstrained floor
+  // is, narrow enough for its tab strip to spill panels into the numbered "∨ N" overflow
+  // dropdown instead of showing every tab.
+  sideGroup.api.setConstraints(GRID_EXPANDED_MIN_WIDTH_CONSTRAINTS);
 }
 
 export function DockLayout() {
@@ -1678,6 +1683,8 @@ export function DockLayout() {
           if (!viewportGroup) return;
           const group = api.addGroup({ id: "right-panels", referenceGroup: viewportGroup, direction: "right", initialWidth: 280 });
           group.api.setHeaderPosition("top");
+          group.api.setSize({ width: 280 });
+          group.api.setConstraints(GRID_EXPANDED_MIN_WIDTH_CONSTRAINTS);
           groupId = group.id;
         }
         api.addPanel({ id: definition.id, component: definition.component, title: windowTitle(definition, language), position: { referenceGroup: groupId, direction: "within" } });
@@ -1760,6 +1767,8 @@ export function DockLayout() {
           if (!viewportGroup) continue;
           const group = event.api.addGroup({ id: "right-panels", referenceGroup: viewportGroup, direction: "right", initialWidth: 280 });
           group.api.setHeaderPosition("top");
+          group.api.setSize({ width: 280 });
+          group.api.setConstraints(GRID_EXPANDED_MIN_WIDTH_CONSTRAINTS);
           groupId = group.id;
         }
         event.api.addPanel({ id: definition.id, component: definition.component, title: windowTitle(definition, language), position: { referenceGroup: groupId, direction: "within" } });
