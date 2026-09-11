@@ -6525,8 +6525,8 @@ VRAVIO уже не страдает от отсутствия «базы Photosh
 
 ### 28.1. Raster
 
-1. **Перетаскивание слоя всё ещё трогает настоящие пиксели.** `Move`-инструмент делает `materialise(...).slice()` до размера документа перед drag — сам benchmark честно не включает это в замер `translateLayerPixels`. На 4K это ~31.6 MiB на каждый новый буфер; на 8K — ~126.6 MiB. Решение: во время жеста не менять пиксели вообще — держать `TransientTransform` (matrix) и показывать исходный bitmap через transform, коммитить один раз на pointerup. У VRAVIO уже есть ровно такой механизм для текстового слоя (`text.tsx`'s floating cropped-canvas + CSS-transform, растеризация только на commit) — распространить на обычный raster layer. Донор: https://github.com/KDE/krita (Instant Preview для Transform/Move), https://github.com/GraphiteEditor/Graphite.
-2. **Scale/Rotate/Perspective создают по два полных буфера документа на кадр.** `scaleLayerPixels`/`rotateLayerPixels`/`quadLayerPixels` делают `pixels.slice()` для source и output до ресемплинга — на 4K это ~63.3 MiB/кадр, на 8K ~253 MiB/кадр, ещё до самого resampling/compositing/masks. Решение: interactive-preview через GPU/CSS-transform с bilinear, полный качественный resampling — только на pointerup/Enter. Донор: https://github.com/KDE/krita, https://github.com/GraphiteEditor/Graphite.
+1. ~~**Перетаскивание слоя всё ещё трогает настоящие пиксели.**~~ **Сделано 11 сентября 2026.** `beginMoveDrag`/`applyDragFrame` (`move.tsx`) теперь заводят `PendingTransform.live` для свежего, невыделенного, нетекстового, несвязанного перетаскивания — тот же «описано, не пересчитано» путь, что уже был у Scale/Rotate (см. пункт 2 ниже — он оказался уже сделан раньше этой сессии), вместо `stampFloating`'s полнохолстовой пересборки на каждый `pointermove`. Коммит `b11bf4a`. Не покрыто (осталось как было, честно, не тихо): перетаскивание с активным выделением (float) и связанных/множественно выбранных слоёв — оба продолжают пересчитывать буфер целиком.
+2. **Уточнение аудита: этот пункт уже был решён до текущей сессии.** `scaleLayerPixels`/`rotateLayerPixels` для интерактивного превью **уже** идут через `PendingTransform.live` (см. его собственный doc-комментарий в `move.tsx`, донор Krita/`trans_infos`+`gimp_transform_grid_tool_commit`) — полный ресемпл раз в сессию, на commit, не за кадр. Только Quad/Warp (Skew/Distort/Perspective) всё ещё реземплируют весь буфер на каждый кадр жеста (`quadLayerPixels`/`meshLayerPixels` в `applyDragFrame`) — это реальный остаток находки, донор тот же.
 3. **Эффекты слоя ломают преимущество dirty-region.** Для слоя с `effects` рендер ставит `wholeCanvas = true` и вызывает `renderLayerEffects` на размер всего документа, даже когда compositor просил маленький regióн. Решение: ROI-aware effect API — `requiredInputRect(outputRect)` + `render(inputRect, outputRect)`, с кэшем промежуточных тайлов по цепочке эффектов. Донор: https://gitlab.gnome.org/GNOME/gegl (data-flow graph, chunk-wise processing, subgraph cache).
 4. **Healing/восстанавливающая кисть читает весь canvas.** Точечный препросмотр spot-heal вызывает `getImageData(0, 0, state.width, state.height)` ради маленькой маски. Решение: читать только dirty-rect, ещё лучше — держать превью на отдельном overlay canvas, не трогая композитный. Донор: https://github.com/KDE/krita.
 5. **`RasterTileCache` считает собственный размер и инвалидацию неэффективно.** `bytes` каждый раз обходит все тайлы; `#evict()` вызывает этот геттер внутри цикла удаления (потенциально квадратично при массовом вытеснении); invalidation для каждого dirty (col,row) перебирает все cache keys вместо прямого доступа по координате+mip. Решение: держать счётчик `usedBytes`, обновляемый при insert/delete; хранить кэш как `Map<координата, Map<mip, Tile>>`. Донор: https://github.com/KDE/krita, https://gitlab.gnome.org/GNOME/gegl.
@@ -8421,3 +8421,58 @@ Uint8ClampedArray(width*height)`, 1 байт на пиксель). Кеш мат
 пункты 1–4 не отмечены сделанными здесь же — это не техническое
 ограничение инструмента, а прямое решение владельца о порядке,
 записанное в начале раздела 37.3.
+
+---
+
+## 38. Undo после любой трансформации молча не делал ничего — найдено и исправлено 11 сентября 2026
+
+Найдено не по жалобе, а живой проверкой попутно с §28.1's пунктом 1 (перенос
+Move на `PendingTransform.live`) — ровно то, что раздел 2 CLAUDE.md требует:
+не полагать, а проверить. Нашлось на самом обычном сценарии: нарисовать мазок,
+перетащить его, отпустить, Ctrl+Z — слой оставался на новом месте.
+
+**Что не так.** `commitPending` (`move.tsx`) брал `const current =
+context.document` и передавал его как «до» в `context.commitDocument`. Это не
+снимок — `context.document` это тот же самый живой объект, что
+`DocumentStore.get()` (`packages/kernel/src/document-store.ts`) отдаёт, а
+`DocumentStore.update()`'s мутатор правит **на месте**
+(`mutator(document.state)`). Шаг истории держит `before`/`after` в замыкании;
+в момент, когда `redo()` того же шага делает `Object.assign(document.state,
+cloneRasterState(after))`, это мутирует и `before` — потому что это один и тот
+же объект. «До» никогда не было снимком, оно тихо стало «после» в момент
+коммита. `startPendingTransform`'s `liveText`-ветка (Ctrl+T на текстовом слое)
+несла тот же баг, и независимо от него — `puppet-warp.tsx`'s `commit()`.
+
+Задевало любую трансформацию: Move, Scale, Rotate, Quad/Warp, Free Transform
+текстового слоя, Puppet Warp — везде, где коммит идёт через
+`context.commitDocument` с целым снимком документа (в отличие от кисти,
+которая коммитит через `commitPixels`'s поточечный обмен региона, у него
+такой болезни нет — см. §32.5).
+
+**Почему не поймано раньше.** Ни один существующий тест не гонял «правка →
+commitDocument → undo → сравнить с исходником» через реальный `commitPending`
+целиком — обычные тесты про Move и Transform проверяют результат коммита, не
+последующую отмену.
+
+**Как исправлено.** `const current = cloneRasterState(context.document)` в
+обоих местах `move.tsx` (`commitPending`, `startPendingTransform`) и в
+`puppet-warp.tsx`'s `commit()`. Три строки, три места, тот же диагноз.
+
+**Как проверено.** Не поверил на слово собственному диагнозу — временно
+откатил однострочный фикс в `move.tsx`, новый регресс-тест
+(`move-undo-snapshot.test.ts`) упал ровно так, как предсказано, вернул фикс —
+тест снова зелёный. Живая проверка в браузере: нарисовать мазок → переместить
+→ закоммитить → `history.undo()` восстанавливает исходные `bounds` слоя точно;
+`history.redo()` возвращает перемещённое положение точно. Полный прогон —
+144 файла (env-raster/web/kernel/env-vector), 1834 теста (плюс 2 новых из
+`move-undo-snapshot.test.ts`), все зелёные (два бенчмарка мигнули из-за
+загрузки машины, перепрогнаны в изоляции чисто — тот же класс, что уже
+документирован в CLAUDE.md §8). Коммиты `b11bf4a` (move.tsx, вместе с
+переносом Move на `live`) и `a5b561d` (puppet-warp.tsx).
+
+**Что не проверено и стоит держать в уме.** `crop.tsx`, `shape.tsx`, `text.tsx`
+уже клонировали `context.document` до этой сессии — их отдельно не трогал,
+но и не перепроверял с тем же прицелом. Если где-то ещё в каталоге
+инструментов найдётся `const before = context.document` (или любой другой
+прямой захват без `cloneRasterState`/`structuredClone`) перед
+`context.commitDocument` — тот же баг, тот же фикс.
