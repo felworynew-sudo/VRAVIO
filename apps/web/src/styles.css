@@ -170,6 +170,15 @@ select{-webkit-appearance:none;appearance:none;background-image:linear-gradient(
    architecturally just a button, it never holds a mounted panel. */
 .dv-groupview.vravio-grid-rail>.dv-content-container{display:none}
 .dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-and-actions-container{width:35px}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-container-vertical .panel-tab{display:grid;place-items:center;width:34px;height:42px;min-width:34px;min-height:42px;padding:0;writing-mode:horizontal-tb}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-container-vertical .panel-tab span{display:none!important}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .panel-collapse{writing-mode:horizontal-tb}.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .panel-collapse i{transform:none}
+/* Dockview's own default padding for a vertical tab wrapper (`.dv-tabs-container-vertical
+   .dv-tab{padding:.5rem .25rem}`, 8px/4px) leaves a 27px content box for our fixed 34px
+   `.panel-tab` above to sit in — 7px too narrow, so the real tab silently overflowed its own
+   wrapper to the left. The peek's ghost icon (no such wrapper, no such padding) didn't share
+   that overflow, so the *same* icon visibly shifted a few pixels — and looked like it resized
+   — the instant it toggled between "real tab in the rail" and "ghost standing in for it",
+   confirmed live via `getBoundingClientRect()` on both. Zeroing the wrapper's padding here
+   gives the real tab the same unobstructed box the ghost already has, so both agree exactly.*/
+.dv-groupview:is(.dv-edge-collapsed,.vravio-grid-rail) .dv-tabs-container-vertical .dv-tab{padding:0}
 /* The rail icon for a panel that's currently peeking beside it (PanelHeaderActions'
    `vravio-tab-ghost`, a stand-in — the real `panel-tab` moved out with the panel into its
    own floating group). Border and background borrowed from the active-tab treatment so it
