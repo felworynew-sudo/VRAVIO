@@ -43,6 +43,46 @@ function isImage(entry: BridgeEntry): boolean {
   return entry.type === "file" && imageExtensions.has(extensionOf(entry.value));
 }
 
+/**
+ * SVAR's own file manager asks for a preview at a fixed slot size (214×163
+ * for its card view, confirmed by reading the library's own call site) and
+ * draws whatever URL comes back at native resolution with no resizing of
+ * its own — its docs' own example generates a right-sized image server-side
+ * for exactly this reason. This project's `previews` prop used to hand it
+ * `URL.createObjectURL(file)` on the raw, full-resolution file — a 24
+ * megapixel photo rendered into a 214×163 box by nothing but browser CSS
+ * scaling, which is the actual cause of "images compress unattractively":
+ * nothing here was compressing anything, the full-size bitmap was just
+ * being crushed down by the `<img>` element with no say in how.
+ */
+const PREVIEW_MAX_SIDE = 320;
+
+/** Vector images have no "too large" resolution to downscale away from —
+ * rasterizing an SVG into a fixed-size preview would trade its one actual
+ * advantage (crisp at any size) for exactly the blurriness this is fixing. */
+function isVectorImage(entry: BridgeEntry): boolean {
+  return extensionOf(entry.value) === "svg";
+}
+
+async function downscaledPreviewUrl(file: File): Promise<string> {
+  const bitmap = await createImageBitmap(file);
+  try {
+    const scale = Math.min(1, PREVIEW_MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+    if (scale >= 1) return URL.createObjectURL(file);
+    const width = Math.max(1, Math.round(bitmap.width * scale)), height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = new OffscreenCanvas(width, height);
+    const context = canvas.getContext("2d");
+    if (!context) return URL.createObjectURL(file);
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.drawImage(bitmap, 0, 0, width, height);
+    const blob = await canvas.convertToBlob({ type: "image/webp", quality: 0.85 });
+    return URL.createObjectURL(blob);
+  } finally {
+    bitmap.close();
+  }
+}
+
 abstract class BaseProvider implements BridgeFileSystemProvider {
   abstract readonly kind: "desktop" | "browser";
   protected readonly previews = new Map<string, string>();
@@ -60,7 +100,14 @@ abstract class BaseProvider implements BridgeFileSystemProvider {
     for (const entry of entries.filter(isImage).slice(0, 48)) {
       if (this.previews.has(entry.id)) continue;
       const file = await this.read(entry.id);
-      if (file) this.previews.set(entry.id, URL.createObjectURL(file));
+      if (!file) continue;
+      // A decode failure (a corrupt file, a format the browser's own image
+      // decoder does not support even though the extension says "image")
+      // falls back to the original object URL rather than showing nothing —
+      // the old behaviour, still correct as a fallback, just no longer the
+      // only path.
+      const url = isVectorImage(entry) ? URL.createObjectURL(file) : await downscaledPreviewUrl(file).catch(() => URL.createObjectURL(file));
+      this.previews.set(entry.id, url);
     }
   }
 

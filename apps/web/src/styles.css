@@ -271,7 +271,20 @@ select{-webkit-appearance:none;appearance:none;background-image:linear-gradient(
 .bridge-environments{display:grid;gap:2px}.bridge-environments button{display:flex;align-items:center;gap:9px;border:0;border-radius:var(--radius-sm);padding:6px;background:transparent;color:var(--text);text-align:left}.bridge-environments button:hover{background:var(--surface3)}.bridge-environments button img{width:24px;height:24px;object-fit:contain}
 .bridge-source{margin:auto 5px 0;color:var(--muted);font-size:10px;line-height:1.45}
 .bridge-browser{min-width:0;min-height:0;display:grid;grid-template-rows:auto minmax(0,1fr);padding:22px 24px 24px;gap:18px;overflow:hidden}.bridge-browser header{display:flex;align-items:end;justify-content:space-between;gap:16px}.bridge-browser h1{margin:2px 0 0;font-size:24px;letter-spacing:-.025em}.bridge-eyebrow{color:var(--focus);font-size:10px;font-weight:800;letter-spacing:.14em}.bridge-status{color:var(--muted);font-size:11px;white-space:nowrap}.bridge-error{margin:0;padding:8px 10px;border:1px solid var(--danger);border-radius:var(--radius-sm);color:var(--danger);background:color-mix(in srgb,var(--danger) 10%,transparent)}
-.bridge-filemanager{min-width:0;min-height:0;overflow:hidden;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface2);--wx-color-primary:var(--focus);--wx-color-background:var(--surface2);--wx-color-font:var(--text);--wx-color-font-alt:var(--muted);--wx-color-border:var(--border);--wx-color-hover:var(--surface3);--wx-color-select:color-mix(in srgb,var(--focus) 22%,transparent);--wx-color-select-font:var(--text)}
+/* The five "wx-color-background/border/hover/select/select-font" custom
+   properties this block used to set are never actually read anywhere in
+   SVAR's own shipped CSS (checked by grepping the installed
+   dist-full/index.css for every custom property it actually consumes) — a
+   setting with nothing behind it, CLAUDE.md §3's own "checkbox that does
+   nothing." The real selection properties are per-view-mode and none of
+   them were set at all, which is the actual reason a selected row looked
+   unselected: cards mode reads only a 1px "wx-color-primary" outline
+   (already wired, just subtle), but table/list mode reads
+   "wx-table-select-background"/"-color"/"-border" and the folder-tree panel
+   reads "wx-fm-select-background" — none replaced by a generic
+   "wx-color-select". "wx-fm-background" is the manager's own real chrome
+   background property (distinct from the dead "wx-color-background"). */
+.bridge-filemanager{min-width:0;min-height:0;overflow:hidden;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface2);--wx-color-primary:var(--focus);--wx-color-font:var(--text);--wx-color-font-alt:var(--muted);--wx-fm-background:var(--surface2);--wx-fm-select-background:color-mix(in srgb,var(--focus) 20%,transparent);--wx-table-select-background:color-mix(in srgb,var(--focus) 20%,transparent);--wx-table-select-color:var(--text);--wx-table-select-border:inset 2px 0 var(--focus)}
 .bridge-filemanager,.bridge-filemanager .wx-root,.bridge-filemanager .wx-filemanager{height:100%}.bridge-filemanager .wx-filemanager{font-family:inherit}.bridge-filemanager button{color:inherit}.bridge-filemanager .wx-toolbar,.bridge-filemanager .wx-sidebar,.bridge-filemanager .wx-content{background:var(--surface2)!important;color:var(--text)!important}.bridge-filemanager .wx-sidebar{border-color:var(--border)!important}.bridge-filemanager [class*="item"]{color:var(--text)}.bridge-filemanager input{background:var(--surface)!important;color:var(--text)!important;border-color:var(--border)!important}
 /* SVAR's empty preview is a nested flex column. Its inner illustration used to
    inherit a max-content width from the side panel, which made it drift at the

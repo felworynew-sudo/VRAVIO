@@ -7,6 +7,7 @@ import type { EnvironmentKind } from "@vravio/kernel";
 import type { Language } from "../store";
 import { resolveLabel, text } from "../i18n";
 import { browserFiles, createBridgeFileSystemProvider, type BridgeEntry } from "./filesystem";
+import { bridgeIcon } from "./icons";
 
 type Props = {
   language: Language;
@@ -91,7 +92,7 @@ export function HomeScreen({ language, requestNewDocument, openFile }: Props) {
       <header><div><span className="bridge-eyebrow">BRIDGE</span><h1>{text(language, "Files and recent assets", "Файлы и материалы")}</h1></div><span className="bridge-status">{loading ? text(language, "Loading…", "Загрузка…") : text(language, "Open a file to create a document", "Откройте файл, чтобы создать документ")}</span></header>
       {message && <p className="bridge-error" role="alert">{message}</p>}
       <div className="bridge-filemanager" data-preview-revision={previewRevision}>
-        <Filemanager data={data} init={init} readonly preview previews={(item: FilePreview) => item.id ? providerRef.current.preview(item.id) : null} extraInfo={(item: IParsedEntity) => providerRef.current.extraInfo(item.id)} />
+        <Filemanager data={data} init={init} readonly preview icons={bridgeIcon} previews={(item: FilePreview) => item.id ? providerRef.current.preview(item.id) : null} extraInfo={(item: IParsedEntity) => providerRef.current.extraInfo(item.id)} />
       </div>
     </div>
     {draggingFiles && <div className="bridge-drop-target" role="status"><strong>{text(language, "Open in VRAVIO", "Открыть в VRAVIO")}</strong><span>{text(language, "Release to import the files into their matching workspace", "Отпустите, чтобы импортировать файлы в подходящую среду")}</span></div>}
