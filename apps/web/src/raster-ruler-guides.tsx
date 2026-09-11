@@ -1,8 +1,9 @@
 import { useEffect, useState, type RefObject } from "react";
 import type { RasterDocumentState, RasterGuide } from "@vravio/env-raster";
-import { pointFromNativeEvent, rulerStep } from "./raster-coordinates";
+import { pointFromNativeEvent, rulerLocalPosition, rulerStep } from "./raster-coordinates";
 import { kernel } from "./kernel";
 import type { DocumentViewport } from "./store";
+import { useShellStore, type RulerUnit } from "./store";
 
 /**
  * The ruler bars and draggable guide lines — split out of `RasterWorkspace.tsx`
@@ -41,6 +42,21 @@ export function useRasterRulerGuides(params: {
 }) {
   const { documentId, state, viewport, workspaceRef, workspaceSize, documentOriginX, documentOriginY } = params;
   const [guideDraft, setGuideDraft] = useState<RasterGuide | null>(null);
+  const [unitMenu, setUnitMenu] = useState<{ x: number; y: number } | null>(null);
+  const rulerUnit = useShellStore((shell) => shell.preferences.rulerUnit);
+  const updatePreferences = useShellStore((shell) => shell.updatePreferences);
+  const ppi = state.resolutionUnit === "ppcm" ? state.resolution * 2.54 : state.resolution;
+  const formatTick = (pixels: number) => {
+    if (rulerUnit === "px" || !Number.isFinite(ppi) || ppi <= 0) return `${Math.round(pixels)}`;
+    const value = rulerUnit === "in" ? pixels / ppi : rulerUnit === "mm" ? pixels / ppi * 25.4 : pixels / ppi * 2.54;
+    return `${Math.round(value * 100) / 100}`;
+  };
+  const openUnitMenu = (event: React.MouseEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const workspace = workspaceRef.current?.getBoundingClientRect();
+    if (!workspace) return;
+    setUnitMenu({ x: event.clientX - workspace.left, y: event.clientY - workspace.top });
+  };
 
   // Image ▸ Clear Guides has no canvas gesture of its own to hang a handler
   // off, so it reaches this hook the same way raster.move's Ctrl+T does its
@@ -51,7 +67,21 @@ export function useRasterRulerGuides(params: {
     return () => window.removeEventListener("vravio-guides-clear", clear);
   }, [documentId]);
 
+  // A context menu should behave like a native menu: selecting an entry or
+  // clicking anywhere else closes it. Keeping this separate from pointer
+  // capture also prevents a right-click from beginning a guide drag.
+  useEffect(() => {
+    if (!unitMenu) return;
+    const close = (event: PointerEvent) => {
+      if ((event.target as HTMLElement | null)?.closest(".ruler-unit-menu")) return;
+      setUnitMenu(null);
+    };
+    window.addEventListener("pointerdown", close, true);
+    return () => window.removeEventListener("pointerdown", close, true);
+  }, [unitMenu]);
+
   const guidePointer = (event: React.PointerEvent<HTMLDivElement>, orientation: RasterGuide["orientation"], finish = false) => {
+    if (event.button !== 0) return;
     const workspace = workspaceRef.current;
     if (!workspace) return;
     const point = pointFromNativeEvent(workspace, viewport, state.width, state.height, event.nativeEvent), position = orientation === "vertical" ? point.x : point.y;
@@ -77,12 +107,13 @@ export function useRasterRulerGuides(params: {
 
   const rulers = <div className="rulers" aria-hidden="true">
     <div className="ruler-corner"/>
-    <div className="ruler-horizontal" onPointerDown={(event) => guidePointer(event, "horizontal")} onPointerMove={(event) => { if (guideDraft?.orientation === "horizontal") guidePointer(event, "horizontal"); }} onPointerUp={(event) => guidePointer(event, "horizontal", true)}>
-      {horizontalTicks.map((value) => <i key={value} style={{ left: value * viewport.zoom + documentOriginX }}><span>{Math.round(value)}</span></i>)}
+    <div className="ruler-horizontal" onContextMenu={openUnitMenu} onPointerDown={(event) => guidePointer(event, "horizontal")} onPointerMove={(event) => { if (guideDraft?.orientation === "horizontal") guidePointer(event, "horizontal"); }} onPointerUp={(event) => guidePointer(event, "horizontal", true)}>
+      {horizontalTicks.map((value) => <i key={value} style={{ left: rulerLocalPosition(value * viewport.zoom + documentOriginX) }}><span>{formatTick(value)}</span></i>)}
     </div>
-    <div className="ruler-vertical" onPointerDown={(event) => guidePointer(event, "vertical")} onPointerMove={(event) => { if (guideDraft?.orientation === "vertical") guidePointer(event, "vertical"); }} onPointerUp={(event) => guidePointer(event, "vertical", true)}>
-      {verticalTicks.map((value) => <i key={value} style={{ top: value * viewport.zoom + documentOriginY }}><span>{Math.round(value)}</span></i>)}
+    <div className="ruler-vertical" onContextMenu={openUnitMenu} onPointerDown={(event) => guidePointer(event, "vertical")} onPointerMove={(event) => { if (guideDraft?.orientation === "vertical") guidePointer(event, "vertical"); }} onPointerUp={(event) => guidePointer(event, "vertical", true)}>
+      {verticalTicks.map((value) => <i key={value} style={{ top: rulerLocalPosition(value * viewport.zoom + documentOriginY) }}><span>{formatTick(value)}</span></i>)}
     </div>
+    {unitMenu && <div className="ruler-unit-menu" style={{ left: unitMenu.x, top: unitMenu.y }} role="menu">{(["px", "in", "mm", "cm"] as const).map((unit) => <button key={unit} className={rulerUnit === unit ? "active" : ""} onClick={() => { updatePreferences({ rulerUnit: unit as RulerUnit }); setUnitMenu(null); }}>{unit === "px" ? "Pixels (Пиксели)" : unit === "in" ? "Inches (Дюймы)" : unit === "mm" ? "Millimeters (Миллиметры)" : "Centimeters (Сантиметры)"}</button>)}</div>}
   </div>;
 
   return { guideOverlay, rulers };

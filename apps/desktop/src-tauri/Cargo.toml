@@ -15,6 +15,13 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+
+[target.'cfg(windows)'.dependencies]
+# WebView2 already powers the Tauri window. Its Print API accepts a named
+# printer, so Windows can submit VRAVIO's prepared page without a second UI.
+webview2-com = "0.38"
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Printing"] }
 
 [profile.release]
 opt-level = "s"

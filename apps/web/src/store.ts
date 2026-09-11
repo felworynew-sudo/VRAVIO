@@ -24,6 +24,7 @@ export interface InterfacePalette {
 export type Language = "en" | "ru" | "uk" | "es" | "de" | "ja" | "zh";
 export type RendererPreference = "auto" | "webgpu" | "webgl2" | "canvas2d";
 export type ViewportMode = "fit" | "actual" | "custom";
+export type RulerUnit = "px" | "in" | "mm" | "cm";
 
 export interface DocumentViewport {
   zoom: number;
@@ -76,6 +77,8 @@ export interface ShellPreferences {
    * that isn't "edit the source." */
   snapSensitivity: number;
   showRulers: boolean;
+  /** Display-only unit: document geometry and guides are always stored in px. */
+  rulerUnit: RulerUnit;
   showGuides: boolean;
   /** A soft glow just inside the selection edge, drawn under the marching ants.
    * On by default: the owner asked for it as a trait of this editor's ants
@@ -121,7 +124,7 @@ export const interfacePaletteForTheme = (theme: Theme): InterfacePalette => {
 
 const defaultPreferences: ShellPreferences = {
   renderer: "auto", memoryBudgetMb: 1024, workerCount: Math.max(1, Math.min(8, detectedConcurrency - 1)),
-  dragZoom: true, showTooltips: true, contextualBar: true, showCommandPaletteButton: true, showPerformanceOverlay: false, snapToGuides: true, smartGuides: true, snapToGrid: false, snapGridSize: 20, snapSensitivity: 8, showRulers: false, showGuides: true, selectionGlow: true,
+  dragZoom: true, showTooltips: true, contextualBar: true, showCommandPaletteButton: true, showPerformanceOverlay: false, snapToGuides: true, smartGuides: true, snapToGrid: false, snapGridSize: 20, snapSensitivity: 8, showRulers: false, rulerUnit: "px", showGuides: true, selectionGlow: true,
   guideColor: "#00a8ff", canvasSurround: "#2b2f36", focusColor: "#84a8ff",
   rasterColor: "#a100ff", vectorColor: "#0068ff", audioColor: "#ffb600", videoColor: "#ff0000",
   interfacePalette: interfacePaletteForTheme("dark"), useCustomInterfacePalette: false, confirmPreferences: {},

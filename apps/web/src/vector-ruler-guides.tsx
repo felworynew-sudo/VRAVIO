@@ -1,6 +1,6 @@
 import { useState, type RefObject } from "react";
 import { addGuide, removeGuide, setRulerOrigin, visibleGuides, type VectorDocumentState, type VectorGuide } from "@vravio/env-vector";
-import { rulerStep } from "./raster-coordinates";
+import { rulerLocalPosition, rulerStep } from "./raster-coordinates";
 import { toDocumentPoint } from "./vector-coordinates";
 import { changeVectorDocument } from "./vector-commands";
 import type { DocumentViewport } from "./store";
@@ -107,10 +107,10 @@ export function useVectorRulerGuides(params: {
   const rulers = <div className="rulers" aria-hidden="true">
     <div className="ruler-corner" onPointerDown={cornerPointerDown} onPointerMove={cornerPointerMove} onPointerUp={cornerPointerUp} onDoubleClick={cornerDoubleClick} title="Drag to set the ruler's zero point, double-click to reset"/>
     <div className="ruler-horizontal" onPointerDown={(event) => guidePointer(event, "horizontal")} onPointerMove={(event) => { if (guideDraft?.orientation === "horizontal") guidePointer(event, "horizontal"); }} onPointerUp={(event) => guidePointer(event, "horizontal", true)}>
-      {horizontalTicks.map((value) => <i key={value} style={{ left: value * viewport.zoom + documentOriginX }}><span>{Math.round(value - labelOrigin.x)}</span></i>)}
+      {horizontalTicks.map((value) => <i key={value} style={{ left: rulerLocalPosition(value * viewport.zoom + documentOriginX) }}><span>{Math.round(value - labelOrigin.x)}</span></i>)}
     </div>
     <div className="ruler-vertical" onPointerDown={(event) => guidePointer(event, "vertical")} onPointerMove={(event) => { if (guideDraft?.orientation === "vertical") guidePointer(event, "vertical"); }} onPointerUp={(event) => guidePointer(event, "vertical", true)}>
-      {verticalTicks.map((value) => <i key={value} style={{ top: value * viewport.zoom + documentOriginY }}><span>{Math.round(value - labelOrigin.y)}</span></i>)}
+      {verticalTicks.map((value) => <i key={value} style={{ top: rulerLocalPosition(value * viewport.zoom + documentOriginY) }}><span>{Math.round(value - labelOrigin.y)}</span></i>)}
     </div>
   </div>;
 

@@ -134,7 +134,10 @@ export function calculatePrintPlacement(state: RasterDocumentState, settings: Pr
 
 /** Physical-to-pixel density for the rasterized page — independent of the document's own
  * resolution (a 72 ppi document scaled to fill a page still deserves a crisp printed page). */
-const PRINT_RASTER_DPI = 300;
+/** The full-resolution page sent to the operating system. */
+export const PRINT_OUTPUT_DPI = 300;
+/** Screen-sized preview: deliberately independent from output quality. */
+export const PRINT_PREVIEW_DPI = 96;
 const CROP_MARK_LENGTH_IN = 0.25, CROP_MARK_GAP_IN = 0.07;
 
 function drawCropMarks(context: CanvasRenderingContext2D, dpi: number, x: number, y: number, width: number, height: number): void {
@@ -160,18 +163,24 @@ function drawCropMarks(context: CanvasRenderingContext2D, dpi: number, x: number
 
 /**
  * Rasterizes one full print page — background, placed artwork, optional crop marks — at
- * `PRINT_RASTER_DPI`. `drawPrintableGuide` overlays a dashed outline of the margin box; it is
+ * `PRINT_OUTPUT_DPI`. `drawPrintableGuide` overlays a dashed outline of the margin box; it is
  * a preview-only aid (mirrors Patchy's own `draw_printable_guide` flag) and must be left off
  * for the page that actually gets handed to the printer.
  */
-export function renderPrintPage(state: RasterDocumentState, settings: PrintSettings, drawPrintableGuide = false): HTMLCanvasElement {
+export function renderPrintPageFromPixels(
+  state: RasterDocumentState,
+  settings: PrintSettings,
+  pixels: Uint8ClampedArray,
+  drawPrintableGuide = false,
+  dpi = PRINT_OUTPUT_DPI,
+): HTMLCanvasElement {
   const page = pageLayoutFor(settings);
   const placement = calculatePrintPlacement(state, settings, page);
-  const dpi = PRINT_RASTER_DPI;
+  const safeDpi = Math.max(36, Math.min(PRINT_OUTPUT_DPI, Math.round(dpi)));
 
   const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(page.widthIn * dpi));
-  canvas.height = Math.max(1, Math.round(page.heightIn * dpi));
+  canvas.width = Math.max(1, Math.round(page.widthIn * safeDpi));
+  canvas.height = Math.max(1, Math.round(page.heightIn * safeDpi));
   const context = canvas.getContext("2d");
   if (!context) throw new Error("Canvas 2D is not available");
   context.fillStyle = "#ffffff";
@@ -183,22 +192,28 @@ export function renderPrintPage(state: RasterDocumentState, settings: PrintSetti
     source.width = state.width; source.height = state.height;
     const sourceContext = source.getContext("2d");
     if (!sourceContext) throw new Error("Canvas 2D is not available");
-    sourceContext.putImageData(new ImageData(compositeRasterDocument(state) as Uint8ClampedArray<ArrayBuffer>, state.width, state.height), 0, 0);
+    sourceContext.putImageData(new ImageData(pixels as Uint8ClampedArray<ArrayBuffer>, state.width, state.height), 0, 0);
 
-    const targetX = placement.targetXIn * dpi, targetY = placement.targetYIn * dpi;
-    const targetWidth = placement.targetWidthIn * dpi, targetHeight = placement.targetHeightIn * dpi;
+    const targetX = placement.targetXIn * safeDpi, targetY = placement.targetYIn * safeDpi;
+    const targetWidth = placement.targetWidthIn * safeDpi, targetHeight = placement.targetHeightIn * safeDpi;
     context.imageSmoothingEnabled = true; context.imageSmoothingQuality = "high";
     context.drawImage(source, sourceRect.x, sourceRect.y, sourceRect.width, sourceRect.height, targetX, targetY, targetWidth, targetHeight);
-    if (settings.cropMarks) drawCropMarks(context, dpi, targetX, targetY, targetWidth, targetHeight);
+    if (settings.cropMarks) drawCropMarks(context, safeDpi, targetX, targetY, targetWidth, targetHeight);
   }
 
   if (drawPrintableGuide) {
     context.save();
     context.strokeStyle = "#cdcdcd"; context.setLineDash([6, 4]); context.lineWidth = 1;
-    context.strokeRect(page.marginLeftIn * dpi, page.marginTopIn * dpi, page.printableWidthIn * dpi, page.printableHeightIn * dpi);
+    context.strokeRect(page.marginLeftIn * safeDpi, page.marginTopIn * safeDpi, page.printableWidthIn * safeDpi, page.printableHeightIn * safeDpi);
     context.restore();
   }
   return canvas;
+}
+
+/** Convenience path for one-off renders. Interactive consumers should composite once and use
+ * `renderPrintPageFromPixels` while the user changes layout controls. */
+export function renderPrintPage(state: RasterDocumentState, settings: PrintSettings, drawPrintableGuide = false, dpi = PRINT_OUTPUT_DPI): HTMLCanvasElement {
+  return renderPrintPageFromPixels(state, settings, compositeRasterDocument(state), drawPrintableGuide, dpi);
 }
 
 /** A hidden iframe with an `@page` rule sized to the physical page and a full-bleed image of
@@ -209,7 +224,12 @@ export function openPrintPreview(pageDataUrl: string, page: PageLayout): void {
   iframe.style.position = "fixed"; iframe.style.right = "0"; iframe.style.bottom = "0";
   iframe.style.width = "0"; iframe.style.height = "0"; iframe.style.border = "0"; iframe.style.visibility = "hidden";
   document.body.appendChild(iframe);
-  const cleanup = () => { window.setTimeout(() => iframe.remove(), 1000); };
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    iframe.remove();
+  };
   const html = `<!doctype html><html><head><meta charset="utf-8"><style>
     @page { size: ${page.widthIn}in ${page.heightIn}in; margin: 0; }
     html, body { margin: 0; padding: 0; }
@@ -219,7 +239,13 @@ export function openPrintPreview(pageDataUrl: string, page: PageLayout): void {
   if (!target) { cleanup(); throw new Error("Could not open the print preview frame"); }
   target.document.open(); target.document.write(html); target.document.close();
   const image = target.document.querySelector("img");
-  const triggerPrint = () => { target.focus(); target.print(); cleanup(); };
+  const triggerPrint = () => {
+    target.addEventListener("afterprint", cleanup, { once: true });
+    target.focus(); target.print();
+    // Some browser engines do not dispatch `afterprint` for a hidden frame. Keep it alive while
+    // the native dialog is open, then release it even on those engines.
+    window.setTimeout(cleanup, 60_000);
+  };
   if (image && !image.complete) image.addEventListener("load", triggerPrint, { once: true });
   else triggerPrint();
 }

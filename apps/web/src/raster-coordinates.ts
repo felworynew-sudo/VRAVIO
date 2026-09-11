@@ -18,6 +18,15 @@ export function rulerStep(zoom: number): number {
   return (normalized <= 1 ? 1 : normalized <= 2 ? 2 : normalized <= 5 ? 5 : 10) * power;
 }
 
+/** Rulers begin after the shared 18px corner square. Tick positions are CSS
+ * coordinates *inside* their respective bar, while document origins are
+ * workspace coordinates. Keeping this conversion explicit prevents the zero
+ * tick drifting one ruler-width away from the document after any zoom/pan. */
+export const RULER_CORNER_SIZE = 18;
+export function rulerLocalPosition(workspacePosition: number): number {
+  return workspacePosition - RULER_CORNER_SIZE;
+}
+
 /**
  * How hard the pointer is pressing, on a scale the brush can use.
  *

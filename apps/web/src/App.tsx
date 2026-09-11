@@ -31,7 +31,7 @@ import { rawExtensionOf, rawFileExtensions, type DecodedRaw } from "./rawDecode"
 import { CameraRawDialog } from "./CameraRawDialog";
 import { CameraRawFilterDialog } from "./CameraRawFilterDialog";
 import { ExportDialog } from "./ExportDialog";
-import { PrintDialog } from "./PrintDialog";
+import { PrintCenter } from "./printing/PrintCenter";
 import { ContextualBar } from "./ContextualBar";
 import { decodeImportedImage } from "./imageImport";
 import { PerformanceOverlay } from "./PerformanceOverlay";
@@ -814,7 +814,7 @@ export function App() {
       onConfirm={(decoded) => { applyFilter(decoded.pixels, "Camera Raw"); setCameraRawReopen(null); }}
     />}
     {exportOpen && active && isRasterDocumentState(active.state) && <ExportDialog state={active.state} documentName={active.name} language={store.language} onCancel={() => setExportOpen(false)} onExport={async (blob, fileName) => { download(blob, fileName); setExportOpen(false); }}/>}
-    {printOpen && active && isRasterDocumentState(active.state) && <PrintDialog state={active.state} language={store.language} onCancel={() => setPrintOpen(false)}/>}
+    {printOpen && active && isRasterDocumentState(active.state) && <PrintCenter state={active.state} documentName={active.name} language={store.language} onCancel={() => setPrintOpen(false)} onSavePdf={async (blob, fileName) => { await kernel.platform.fs.saveFile({ name: fileName, mime: "application/pdf", data: blob }); }}/>}
     {adjustmentDialog && (() => { const document = kernel.documents.get<RasterDocumentState>(adjustmentDialog.documentId), definition = rasterAdjustmentById.get(adjustmentDialog.definitionId), layer = document?.state.layers.find((item) => item.id === adjustmentDialog.layerId); if (!document || !definition || !layer) return null; const pixels = layerDocumentPixels(layer, document.state.width, document.state.height); return <AdjustmentDialog definition={definition} initialValue={adjustmentDialog.initialValue} language={store.language} histogram={luminanceHistogram(pixels)} pixels={pixels} onPreview={previewImageAdjustment} onCancel={() => { previewImageAdjustment(null); setAdjustmentDialog(null); }} onApply={applyImageAdjustment}/>; })()}
   </div>;
 }
