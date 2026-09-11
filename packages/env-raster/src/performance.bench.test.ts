@@ -4,6 +4,7 @@ import { createRasterDocument, createRasterLayer } from "./document";
 import { appendLayer } from "./layer-tree";
 import { translateLayerPixels } from "./transform";
 import { accumulateUniquePixelBytes, layerDocumentPixels, setLayerPixels } from "./layer-bounds";
+import { duplicateLayer } from "./layer-ops";
 import type { RasterDocumentState, RasterLayer } from "./types";
 
 /**
@@ -197,6 +198,28 @@ describe("performance floor (stage 0 of the catalogue migration)", () => {
     // a ~4.3x larger canvas should not itself blow past a millisecond either
     // way, but comparing two already-tiny numbers as a ratio is exactly the
     // kind of assertion that goes flaky on GC noise for no real reason.
+    expect(smallElapsed).toBeLessThan(2);
+    expect(largeElapsed).toBeLessThan(2);
+  });
+
+  it("docs/master-plan.md §37.3 item 1: duplicating a layer does not scale with canvas size", () => {
+    // Krita's copy-on-write trade for KisTileData, applied to layer-ops.ts's duplicateLayer:
+    // the copy shares the source's buffer at the moment it is created, so the cost is the
+    // layer-tree entry, not a memcpy of the pixels. Comparable in spirit to the §32.6 benchmark
+    // above (an edit that doesn't scan the whole canvas) — this is the same claim about a
+    // different operation: duplicating a layer should cost the same on a 4000x3000 canvas as
+    // on a 1920x1080 one, because neither copies a single pixel.
+    const small = realisticDocument(2);
+    const smallElapsed = fastestOf(() => { duplicateLayer(small, small.layers[1]!.id); });
+
+    const large = createRasterDocument(4000, 3000);
+    const largeLayer = createRasterLayer(large.width, large.height, "Layer");
+    setLayerPixels(largeLayer, strokeShapedEdit(large.width, large.height).pixels, large.width, large.height);
+    appendLayer(large, largeLayer);
+    const largeElapsed = fastestOf(() => { duplicateLayer(large, largeLayer.id); });
+
+    // Generous absolute ceiling, not a ratio, for the same reason as the hinted-edit benchmark
+    // above: two already-small numbers compared as a ratio goes flaky on GC noise for nothing.
     expect(smallElapsed).toBeLessThan(2);
     expect(largeElapsed).toBeLessThan(2);
   });

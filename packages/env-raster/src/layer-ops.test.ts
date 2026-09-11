@@ -3,7 +3,7 @@ import {
   appendLayer, createRasterDocument, createRasterGroup, createRasterLayer, createRasterLayerMask,
   createRectangleSelection, duplicateLayer, groupLayers, layerFromSelection, mergeLayerDown,
   mergeVisibleLayers, moveLayerInStack, placeLayer, rasterLayerRows, stampVisibleLayers, ungroupLayer,
-  dropPositionInRow, dropTargetForRow, toggleLayerLink, linkedLayers, layerDocumentPixels,
+  dropPositionInRow, dropTargetForRow, toggleLayerLink, linkedLayers, layerDocumentPixels, setLayerPixels,
 } from "./index";
 import type { RasterDocumentState, RasterLayer } from "./types";
 
@@ -44,17 +44,27 @@ describe("duplicating a layer", () => {
     expect(names(state)).toEqual(["Top", "Middle copy (копия)", "Middle", "Bottom"]);
   });
 
-  it("gives the copy its own pixels", () => {
+  it("docs/master-plan.md §37.3 item 1: shares the source's buffer until either side is actually painted on", () => {
     const state = doc();
     const source = add(state, "Source", (layer) => fill(layer, 10, 20, 30));
 
     const copy = duplicateLayer(state, source.id)!;
-    copy.pixels[0] = 200;
 
-    // Sharing the buffer would make the two layers the same layer as soon as
-    // either was painted on.
+    // The whole point of copy-on-write: duplicating costs nothing more than the
+    // layer-tree entry until someone writes, so the two start out as the same buffer.
+    expect(copy.pixels).toBe(source.pixels);
+
+    // The one path every real edit goes through (`setLayerPixels`) always replaces
+    // the array rather than writing through it — so committing a paint on the copy
+    // via that path, not a raw in-place write nothing in this codebase ever does,
+    // is what actually has to leave the source untouched.
+    const repainted = source.pixels.slice();
+    repainted[0] = 200;
+    setLayerPixels(copy, repainted, state.width, state.height);
+
     expect(source.pixels[0]).toBe(10);
     expect(copy.pixels).not.toBe(source.pixels);
+    expect(copy.pixels[0]).toBe(200);
   });
 
   it("copies the mask and drops the asset binding", () => {
@@ -68,7 +78,8 @@ describe("duplicating a layer", () => {
     const copy = duplicateLayer(state, source.id)!;
 
     expect(copy.mask?.pixels[0]).toBe(128);
-    expect(copy.mask?.pixels).not.toBe(source.mask?.pixels);
+    // Same copy-on-write trade as the layer's own pixels above: shared until written.
+    expect(copy.mask?.pixels).toBe(source.mask?.pixels);
     // The copy is a new buffer and must not claim the original's revisions.
     expect(copy.pixelAssetId).toBeUndefined();
   });

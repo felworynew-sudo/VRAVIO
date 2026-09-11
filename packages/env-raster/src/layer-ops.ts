@@ -81,9 +81,17 @@ function releaseBrokenClipping(state: RasterDocumentState, layerId: string, befo
 /**
  * Copies a layer, its mask and its style, and puts the copy directly above it.
  *
- * Photoshop's Duplicate Layer. The pixels are copied rather than shared: the
- * two layers are independent from the moment they exist, and a snapshot taken
- * later would otherwise see one buffer standing for both.
+ * Photoshop's Duplicate Layer. docs/master-plan.md §37.3 item 1 (Krita's `KisTileData`
+ * copy-on-write): the pixel buffer is *shared*, not copied, at the moment the duplicate
+ * is created — cloning a 1920x1080 layer used to cost a full-buffer memcpy for a document
+ * that, at this instant, has literally nothing new in it. Sharing is safe only because of
+ * an invariant that already holds everywhere else in this codebase (the same one
+ * `document-edits.ts`'s `changeRasterDocument` snapshot relies on): no path in this package
+ * ever mutates a layer's `pixels`/`mask.pixels` array in place — `setLayerPixels` and its
+ * mask equivalent always *replace* the array, never write through the one a sibling might
+ * still be holding (see the `layer.pixels[i] = ...`/`mask.pixels[i] = ...` audit in the
+ * §37 commit message). The two layers diverge the moment either one is actually painted on,
+ * exactly Krita's "copy on write, not on read" trade — free until someone writes.
  */
 export function duplicateLayer(state: RasterDocumentState, layerId: string): RasterLayer | null {
   const source = find(state, layerId);
@@ -95,8 +103,8 @@ export function duplicateLayer(state: RasterDocumentState, layerId: string): Ras
       ...layer,
       id: crypto.randomUUID(),
       parentId,
-      pixels: layer.pixels.slice(),
-      ...(layer.mask ? { mask: { ...layer.mask, pixels: layer.mask.pixels.slice(), assetId: null } } : {}),
+      pixels: layer.pixels,
+      ...(layer.mask ? { mask: { ...layer.mask, pixels: layer.mask.pixels, assetId: null } } : {}),
       ...(layer.text ? { text: structuredClone(layer.text) } : {}),
       ...(layer.adjustment ? { adjustment: structuredClone(layer.adjustment) } : {}),
       effects: structuredClone(layer.effects ?? {}),
