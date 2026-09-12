@@ -162,10 +162,15 @@ function applyHsl(r: number, g: number, b: number, hsl: CameraRawFilterSettings[
 function boxBlur(source: Float32Array, width: number, height: number, channels: number, radius: number): Float32Array {
   if (radius < 1) return source.slice();
   const output = new Float32Array(source.length), horizontal = new Float32Array(source.length);
+  // Reuse this small accumulator for every row and column. A 4K Camera Raw
+  // pass otherwise creates thousands of tiny typed arrays for the GC despite
+  // needing only one at a time; keeping it typed also preserves Float32
+  // accumulation semantics.
+  const sums = new Float32Array(channels);
   const r = Math.max(1, Math.round(radius)), diameter = r * 2 + 1;
   const clampX = (x: number) => Math.max(0, Math.min(width - 1, x));
   for (let y = 0; y < height; y += 1) {
-    const sums = new Float32Array(channels);
+    sums.fill(0);
     for (let dx = -r; dx <= r; dx += 1) { const index = (y * width + clampX(dx)) * channels; for (let c = 0; c < channels; c += 1) sums[c]! += source[index + c]!; }
     for (let x = 0; x < width; x += 1) {
       const outIndex = (y * width + x) * channels;
@@ -176,7 +181,7 @@ function boxBlur(source: Float32Array, width: number, height: number, channels: 
   }
   const clampY = (y: number) => Math.max(0, Math.min(height - 1, y));
   for (let x = 0; x < width; x += 1) {
-    const sums = new Float32Array(channels);
+    sums.fill(0);
     for (let dy = -r; dy <= r; dy += 1) { const index = (clampY(dy) * width + x) * channels; for (let c = 0; c < channels; c += 1) sums[c]! += horizontal[index + c]!; }
     for (let y = 0; y < height; y += 1) {
       const outIndex = (y * width + x) * channels;
