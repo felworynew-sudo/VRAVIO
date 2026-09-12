@@ -217,8 +217,17 @@ export function appendLassoPoint(points: readonly Point[], point: Point, minSpac
 export function createPolygonSelection(width: number, height: number, points: readonly { x: number; y: number }[], feather = 0): PixelSelection {
   const mask = new Uint8ClampedArray(width * height);
   if (points.length < 3) return { mask, bounds: { x: 0, y: 0, width: 0, height: 0 } };
-  const minY = Math.max(0, Math.floor(Math.min(...points.map((point) => point.y))));
-  const maxY = Math.min(height - 1, Math.ceil(Math.max(...points.map((point) => point.y))));
+  // Freehand lassos can contain many thousands of vertices. Building a second
+  // y-coordinate array and spreading it into Math.min/Math.max is both extra
+  // work and eventually exceeds the engine's argument limit. Find the bounds
+  // in the same single pass that keeps the original points untouched.
+  let lowestY = Infinity, highestY = -Infinity;
+  for (const point of points) {
+    if (point.y < lowestY) lowestY = point.y;
+    if (point.y > highestY) highestY = point.y;
+  }
+  const minY = Math.max(0, Math.floor(lowestY));
+  const maxY = Math.min(height - 1, Math.ceil(highestY));
   for (let y = minY; y <= maxY; y += 1) {
     const scanY = y + 0.5, intersections: number[] = [];
     for (let index = 0; index < points.length; index += 1) {
