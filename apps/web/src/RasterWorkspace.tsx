@@ -172,7 +172,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   // a linked-layer group drag (raster.move) previews several layers' buffers as one composite,
   // a different shape of work than previewFrameRef's single {target,layerId,working} slot, and
   // the two never fire in the same gesture.
-  const previewLayersFrameRef = useRef<{ frame: number | null; layers: readonly { layerId: string; pixels: Uint8ClampedArray }[] } | null>(null);
+  const previewLayersFrameRef = useRef<{ frame: number | null; dirty: RasterRect | null; layers: readonly { layerId: string; pixels: Uint8ClampedArray }[] } | null>(null);
   // Backs ToolContext.scheduleWork: one RAF-coalesced "run the latest fn" queue, generic across
   // whichever tool is calling it — a transform resample today, potentially another tool's own
   // expensive per-frame recompute later.
@@ -254,14 +254,20 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
           else renderWorking(entry.working, entry.target, entry.layerId);
         });
       },
-      schedulePreviewLayers: (layers) => {
+      schedulePreviewLayers: (layers, dirty) => {
         const current = previewLayersFrameRef.current;
-        if (current) { current.layers = layers; if (current.frame !== null) return; }
-        const entry = current ?? { frame: null, layers };
+        if (current) {
+          current.layers = layers;
+          if (dirty) current.dirty = current.dirty ? unionRect(current.dirty, dirty.x, dirty.y, dirty.x + dirty.width, dirty.y + dirty.height, 0) : dirty;
+          if (current.frame !== null) return;
+        }
+        const entry = current ?? { frame: null, dirty: dirty ?? null, layers };
         previewLayersFrameRef.current = entry;
         entry.frame = requestAnimationFrame(() => {
           entry.frame = null;
-          renderWorkingMultiple(entry.layers);
+          const region = entry.dirty;
+          entry.dirty = null;
+          renderWorkingMultiple(entry.layers, region);
         });
       },
       commit: (before, after, label, target = paintTarget.kind, layerId = paintTarget.layerId, bounds = null, canShrinkBounds) => commitPixels(before, after, label, target, layerId, bounds, canShrinkBounds),

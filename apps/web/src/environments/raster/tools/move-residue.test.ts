@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createRasterDocument, layerDocumentPixels, layerOpaqueBounds, setLayerPixels, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
+import { appendLayer, createRasterDocument, createRasterLayer, layerDocumentPixels, layerOpaqueBounds, setLayerPixels, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
 import move, { type MoveState } from "./definitions/move";
 import type { ToolContext, ToolPointer } from "./types";
 
@@ -55,11 +55,12 @@ function pointerAt(x: number, y: number): ToolPointer {
 interface Recorded {
   state: MoveState;
   previews: { pixels: Uint8ClampedArray; dirty: RasterRect | null }[];
+  layerPreviews: { layers: readonly { layerId: string; pixels: Uint8ClampedArray }[]; dirty: RasterRect | null }[];
   documentCommits: { after: RasterDocumentState; bounds: RasterRect | null }[];
 }
 
-function driveMove(document: RasterDocumentState, path: readonly { x: number; y: number }[]): Recorded {
-  const recorded: Recorded = { state: move.createState!() as MoveState, previews: [], documentCommits: [] };
+function driveMove(document: RasterDocumentState, path: readonly { x: number; y: number }[], selectedLayers?: readonly string[]): Recorded {
+  const recorded: Recorded = { state: move.createState!() as MoveState, previews: [], layerPreviews: [], documentCommits: [] };
   const layer = document.layers.find((item) => item.id === document.activeLayerId)!;
   const context = {
     documentId: "test-document",
@@ -68,7 +69,7 @@ function driveMove(document: RasterDocumentState, path: readonly { x: number; y:
     options: { autoSelect: false },
     activeLayer: layer,
     selection: document.selection,
-    selectedLayers: [layer.id],
+    selectedLayers: selectedLayers ?? [layer.id],
     paintTarget: { kind: "pixels", layerId: layer.id },
     get state() { return recorded.state; },
     setState: (next: MoveState) => { recorded.state = next; },
@@ -76,7 +77,7 @@ function driveMove(document: RasterDocumentState, path: readonly { x: number; y:
     layerPixels: () => layerDocumentPixels(layer, document.width, document.height),
     targetPixels: () => layerDocumentPixels(layer, document.width, document.height),
     schedulePreview: (pixels: Uint8ClampedArray, _target: string, _layerId: string, dirty?: RasterRect | null) => { recorded.previews.push({ pixels, dirty: dirty ?? null }); },
-    schedulePreviewLayers: () => {},
+    schedulePreviewLayers: (layers: readonly { layerId: string; pixels: Uint8ClampedArray }[], dirty?: RasterRect | null) => { recorded.layerPreviews.push({ layers, dirty: dirty ?? null }); },
     previewWithLayerHidden: () => {},
     commit: async () => {},
     commitSelection: async () => {},
@@ -115,6 +116,18 @@ function opaquePoints(pixels: Uint8ClampedArray, width: number, height: number):
     if (pixels[(y * width + x) * 4 + 3]! > 0) points.add(`${x},${y}`);
   }
   return points;
+}
+
+function addPartnerBlob(document: RasterDocumentState): string {
+  const partner = createRasterLayer(DOCUMENT_WIDTH, DOCUMENT_HEIGHT, "Partner");
+  const pixels = new Uint8ClampedArray(DOCUMENT_WIDTH * DOCUMENT_HEIGHT * 4);
+  for (let y = 30; y < 36; y += 1) for (let x = 42; x < 49; x += 1) {
+    const index = (y * DOCUMENT_WIDTH + x) * 4;
+    pixels[index] = 200; pixels[index + 1] = 100; pixels[index + 2] = 30; pixels[index + 3] = 255;
+  }
+  setLayerPixels(partner, pixels, DOCUMENT_WIDTH, DOCUMENT_HEIGHT);
+  appendLayer(document, partner);
+  return partner.id;
 }
 
 describe("move tool leaves nothing behind", () => {
@@ -216,5 +229,20 @@ describe("move tool leaves nothing behind", () => {
       if (previous && !contains(dirty, previous)) uncovered.push(`frame ${index} repaints ${JSON.stringify(dirty)}, missing where frame ${index - 1} drew: ${JSON.stringify(previous)}`);
     }
     expect(uncovered).toEqual([]);
+  });
+
+  it("includes every linked partner's old and new position in the preview region", () => {
+    const document = softBlobDocument();
+    const primaryId = document.layers[0]!.id;
+    const partnerId = addPartnerBlob(document);
+    const partnerBefore = layerOpaqueBounds(layerDocumentPixels(document.layers.find((layer) => layer.id === partnerId)!, DOCUMENT_WIDTH, DOCUMENT_HEIGHT), DOCUMENT_WIDTH, DOCUMENT_HEIGHT)!;
+    const shiftX = 6, shiftY = -4;
+    const recorded = driveMove(document, [{ x: 16, y: 16 }, { x: 16 + shiftX, y: 16 + shiftY }], [primaryId, partnerId]);
+    const preview = recorded.layerPreviews.at(-1)!;
+    expect(preview.layers.map((layer) => layer.layerId)).toEqual([primaryId, partnerId]);
+    const dirty = preview.dirty!;
+    const contains = (rect: RasterRect, x: number, y: number, width: number, height: number) => x >= rect.x && y >= rect.y && x + width <= rect.x + rect.width && y + height <= rect.y + rect.height;
+    expect(contains(dirty, partnerBefore.x, partnerBefore.y, partnerBefore.width, partnerBefore.height)).toBe(true);
+    expect(contains(dirty, partnerBefore.x + shiftX, partnerBefore.y + shiftY, partnerBefore.width, partnerBefore.height)).toBe(true);
   });
 });

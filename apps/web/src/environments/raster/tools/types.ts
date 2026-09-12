@@ -140,7 +140,7 @@ export interface ToolContext<TState> {
    * `schedulePreview` stays untouched for the paint-stroke hot path this
    * would otherwise risk regressing (CLAUDE.md section 5).
    */
-  schedulePreviewLayers(layers: readonly { readonly layerId: string; readonly pixels: Uint8ClampedArray }[]): void;
+  schedulePreviewLayers(layers: readonly { readonly layerId: string; readonly pixels: Uint8ClampedArray }[], dirty?: RasterRect | null): void;
 
   /**
    * Coalesces expensive per-frame *work* to once per animation frame — the

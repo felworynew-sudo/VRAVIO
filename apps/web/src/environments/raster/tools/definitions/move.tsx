@@ -119,7 +119,7 @@ type MoveDrag =
    * (`renderWorkingRegion`), so a rectangle that does not cover where the *last* frame drew leaves
    * that drawing on screen. Patchy computes the same union from the same two positions
    * (`moving_layers_dirty_region(old_delta, new_delta)`, canvas_widget_move.cpp). */
-  | { kind: "move"; pointerId: number; from: Point; current: Point; previous?: Point; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean; fromOrigin?: boolean; float?: FloatingPixels; linkedBase?: readonly { layerId: string; basePixels: Uint8ClampedArray }[]; baseLive?: PendingTransform["live"]; sourceBounds?: RasterRect }
+  | { kind: "move"; pointerId: number; from: Point; current: Point; previous?: Point; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean; fromOrigin?: boolean; float?: FloatingPixels; linkedBase?: readonly { layerId: string; basePixels: Uint8ClampedArray; baseBounds: RasterRect | null }[]; baseLive?: PendingTransform["live"]; sourceBounds?: RasterRect }
   | { kind: "scale"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; session: TransformSession; handleX: -1 | 0 | 1; handleY: -1 | 0 | 1; dx: number; dy: number; shiftKey: boolean; text?: PendingTextTransform }
   | { kind: "rotate"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; session: TransformSession; center: Point; startAngle: number; baseRotation: number; dx: number; dy: number; handleX: -1 | 1; handleY: -1 | 1; shiftKey: boolean; text?: PendingTextTransform }
   | { kind: "quad"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; quadOrigin: { pixels: Uint8ClampedArray; bounds: RasterRect; selection: PixelSelection | null }; baseCorners: readonly [Point, Point, Point, Point]; handleIndex: number; mode: QuadTransformMode }
@@ -515,7 +515,10 @@ function beginMoveDrag(context: ToolContext<MoveState>, pointer: ToolPointer, pe
     : [];
   const partnersById = new Map<string, RasterLayer>();
   for (const item of [...linkPartners, ...selectionPartners]) if (item.id !== layer.id && layerAccepts(item, "move")) partnersById.set(item.id, item);
-  const linkedBase = partnersById.size ? Array.from(partnersById.values(), (item) => ({ layerId: item.id, basePixels: materialise(item, state).slice() })) : undefined;
+  const linkedBase = partnersById.size ? Array.from(partnersById.values(), (item) => {
+    const basePixels = materialise(item, state).slice();
+    return { layerId: item.id, basePixels, baseBounds: layerOpaqueBounds(basePixels, state.width, state.height) };
+  }) : undefined;
   // A fresh drag of a single, unselected, non-text, non-linked layer needs no floating clip at
   // all — the whole layer is what moves, exactly the shape `PendingTransform.live` already
   // describes for scale/rotate ("described, not resampled" — see its own doc comment). Using
@@ -644,13 +647,24 @@ function applyDragFrame(context: ToolContext<MoveState>, drag: MoveDrag, interpo
   const previousShiftY = drag.previous ? (drag.float || drag.fromOrigin ? drag.startDy + (drag.previous.y - drag.from.y) : drag.previous.y - drag.from.y) : null;
   const then = was && previousShiftX !== null && previousShiftY !== null ? { ...was, x: was.x + previousShiftX, y: was.y + previousShiftY } : null;
   const touched = [was, then, now].filter((rect): rect is RasterRect => Boolean(rect));
+  // Linked/multi-selected partners paint their own old, previous and current
+  // positions into the same preview composite. Their bounds belong in its dirty
+  // union too; otherwise a region render clears the primary layer correctly
+  // but leaves a partner's old pixels behind.
+  for (const partner of drag.linkedBase ?? []) {
+    const partnerWas = partner.baseBounds;
+    if (!partnerWas) continue;
+    touched.push(partnerWas);
+    if (previousShiftX !== null && previousShiftY !== null) touched.push({ ...partnerWas, x: partnerWas.x + previousShiftX, y: partnerWas.y + previousShiftY });
+    touched.push({ ...partnerWas, x: partnerWas.x + shiftX, y: partnerWas.y + shiftY });
+  }
   const dirty = touched.length ? touched.reduce<RasterRect | null>((accumulated, rect) => unionRect(accumulated, rect.x, rect.y, rect.x + rect.width, rect.y + rect.height, 1), null) : null;
   const moved = translateSelection(drag.baseSelection, state.width, state.height, shiftX, shiftY);
   // A linked partner has no selection of its own to restrict the drag to — the selection, if any,
   // belongs to the layer the pointer actually grabbed — so it always translates its whole buffer.
   const linked = drag.linkedBase?.map((entry) => ({ layerId: entry.layerId, pixels: translateLayerPixels(entry.basePixels, state.width, state.height, shiftX, shiftY, null) }));
   const pending: PendingTransform = { before: drag.before, layerId: drag.before.activeLayerId, dx, dy, pixels: working, selection: moved, rotation: drag.rotation, ...(drag.float ? { float: drag.float } : {}), ...(linked ? { linked } : {}) };
-  if (linked?.length) context.schedulePreviewLayers([{ layerId: pending.layerId, pixels: working }, ...linked]);
+  if (linked?.length) context.schedulePreviewLayers([{ layerId: pending.layerId, pixels: working }, ...linked], dirty);
   else context.schedulePreview(working, "pixels", pending.layerId, dirty);
   return pending;
 }

@@ -135,18 +135,19 @@ export function useRasterCommit(params: {
     putPixels(canvas, direct ? pixels : compositeRasterDocument(withActiveLayerPixels(state, pixels)), state.width, state.height);
   };
 
-  /**
-   * The multi-layer counterpart of `renderWorking`, for a linked-layer group
-   * drag: swaps every dragged layer's working buffer in at once and paints
-   * one composite. No region fast-path (unlike `renderWorkingRegion`) —
-   * a linked-group drag is a comparatively rare gesture, not the per-pixel
-   * brush hot path CLAUDE.md §5's region optimisation exists for.
-   */
-  const renderWorkingMultiple = (layers: readonly { layerId: string; pixels: Uint8ClampedArray }[]) => {
+  /** The multi-layer counterpart of `renderWorkingRegion`: one preview composite for every
+   * linked layer, limited to their old/current/previous union during a drag. */
+  const renderWorkingMultiple = (layers: readonly { layerId: string; pixels: Uint8ClampedArray }[], dirty?: RasterRect | null) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const updates = new Map(layers.map((entry) => [entry.layerId, entry.pixels] as const));
-    putPixels(canvas, compositeRasterDocument(withLayersPixels(state, updates)), state.width, state.height);
+    const preview = withLayersPixels(state, updates);
+    const region = dirty ? clampRegionToDocument(state, dirty) : null;
+    if (region?.width && region.height) {
+      putRegionPixels(canvas, compositeRasterRegion(preview, region), region);
+      return;
+    }
+    putPixels(canvas, compositeRasterDocument(preview), state.width, state.height);
   };
 
   /**
