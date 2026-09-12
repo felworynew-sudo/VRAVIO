@@ -1555,6 +1555,33 @@ body.pk_stndln{padding-bottom:600px;overflow:hidden}
 	.pk_lcldrf .pk_lcla{margin-left:14px;font-size:12px}
 }
 
+/* The editor may be embedded in a narrow VRAVIO document area on a desktop.
+   AudioMass' original toolbar has a desktop-only intrinsic width.  Reflow its
+   actual controls here rather than switching to its standalone phone mode:
+   that mode uses fixed positioning and clips the embedded frame. */
+@media only screen and (max-width:720px){
+	.pk_hdr{overflow-x:auto;scrollbar-width:thin;scrollbar-color:var(--bd-h) var(--bg-0)}
+	.pk_hdr .pk_btn{flex:0 0 auto;margin:0 5px;min-width:auto}
+	.pk_mt_on .pk_tbc{overflow:visible}
+	.pk_mt_on .pk_tb{
+		display:flex;align-items:center;flex-wrap:wrap;gap:4px;
+		width:100%;min-width:0;height:auto;padding:5px 6px;
+		box-sizing:border-box;white-space:normal;
+	}
+	.pk_mt_on .pk_timecontainer,
+	.pk_mt_on .pk_btngroup,
+	.pk_mt_on .pk_ctns,
+	.pk_mt_on .pk_transport,
+	.pk_mt_on .pk_mtbeat{flex:0 0 auto;margin:0}
+	.pk_mt_on .pk_timecontainer{width:154px;height:34px}
+	.pk_mt_on .pk_timing{padding:8px 0 0 7px;font-size:18px;letter-spacing:0}
+	.pk_mt_on .pk_total_dur,.pk_mt_on .pk_hover_dur{right:6px;font-size:10px}
+	.pk_mt_on .pk_hover_dur{top:20px}
+	.pk_mt_on .pk_tb .pk_btn{width:27px;height:28px;margin:0;font-size:14px;line-height:26px}
+	.pk_mt_on .pk_ctns,.pk_mt_on .pk_transport{height:30px}
+	.pk_mt_side{flex-basis:132px;width:132px}
+}
+
 @media only screen and (max-width:400px){
 	.pk_hdr .pk_btn{margin:2px 4px 0}
 	.pk_timecontainer{width:160px}
