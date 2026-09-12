@@ -145,6 +145,10 @@ export function App() {
   const interfacePalette = store.preferences.interfacePalette ?? interfacePaletteForTheme(store.theme);
   const customInterfaceStyle: Record<string, string> = store.preferences.useCustomInterfacePalette ? { "--bg": interfacePalette.background, "--surface": interfacePalette.surface, "--surface2": interfacePalette.raisedSurface, "--surface3": interfacePalette.hoverSurface, "--border": interfacePalette.border, "--text": interfacePalette.text, "--muted": interfacePalette.mutedText, "--success": interfacePalette.success, "--warning": interfacePalette.warning, "--danger": interfacePalette.danger } : {};
   const themeStyle = { "--focus": active ? environmentColorByKind[active.kind] : store.preferences.focusColor, "--raster": store.preferences.rasterColor, "--vector": store.preferences.vectorColor, "--audio": store.preferences.audioColor, "--video": store.preferences.videoColor, "--canvas-surround": store.preferences.canvasSurround, "--guide": store.preferences.guideColor, ...customInterfaceStyle } as CSSProperties & Record<string, string>;
+  // AudioMass stays in its own document so its Web Audio graph is intact, but
+  // its commands are deliberately invoked through VRAVIO's single menu bar.
+  // The event is listened to only by the mounted audio iframe.
+  const audioMassCommand = (menu: string, item: string) => window.dispatchEvent(new CustomEvent("vravio-audiomass-command", { detail: { menu, item } }));
 
   const openDecodedRaster = (name: string, decoded: DecodedRaw): string => {
     store.openDocument("raster", { name, width: decoded.width, height: decoded.height, resolution: 72, resolutionUnit: "ppi", backgroundColor: null, pixelAspectRatio: 1 });
@@ -664,12 +668,19 @@ export function App() {
             instead of "these don't apply here." Audio/Video each already have their own real
             Import/Export in their own toolbar, not a gap this menu needs to fill. */}
         <Menu label="File (Файл)" language={store.language} open={openMenu === "file"} onToggle={() => setOpenMenu(openMenu === "file" ? null : "file")} items={[
-          ["New… (Новый…)", "Ctrl+N", () => store.requestNewDocument("raster")],
-          ["Open… (Открыть…)", "Ctrl+O", () => openImageRef.current?.click()],
+          active?.kind === "audio" ? ["New Audio Session… (Новая аудиосессия…)", "Ctrl+N", () => store.requestNewDocument("audio")] : ["New… (Новый…)", "Ctrl+N", () => store.requestNewDocument("raster")],
+          active?.kind === "audio" ? ["Open Audio… (Открыть аудио…)", "Ctrl+O", () => audioMassCommand("File", "Load from Computer")] : ["Open… (Открыть…)", "Ctrl+O", () => openImageRef.current?.click()],
           ...(active?.kind === "raster" || active?.kind === "vector" ? [["Import… (Импортировать…)", "", () => openImageRef.current?.click()] as MainMenuItem] : []),
           ...(active?.kind === "vector" ? [["Import SVG as Vector… (Импортировать SVG как вектор…)", "", () => importSvgAsVectorRef.current?.click()] as MainMenuItem] : []),
-          ["Save (Сохранить)", "Ctrl+S", () => void saveProject(), !active],
-          ["Save As… (Сохранить как…)", "Ctrl+Shift+S", () => void saveProject({ saveAs: true }), !active],
+          ...(active?.kind === "audio" ? [
+            ["Export Audio… (Экспортировать аудио…)", "Ctrl+Shift+E", () => audioMassCommand("File", "Export / Download")] as MainMenuItem,
+            ["New Recording (Новая запись)", "", () => audioMassCommand("File", "New Recording")] as MainMenuItem,
+            ["Save Audio Draft Locally (Сохранить аудиочерновик локально)", "", () => audioMassCommand("File", "Save Draft Locally")] as MainMenuItem,
+            ["Open Local Drafts (Открыть локальные черновики)", "", () => audioMassCommand("File", "Open Local Drafts")] as MainMenuItem,
+          ] : [
+            ["Save (Сохранить)", "Ctrl+S", () => void saveProject(), !active] as MainMenuItem,
+            ["Save As… (Сохранить как…)", "Ctrl+Shift+S", () => void saveProject({ saveAs: true }), !active] as MainMenuItem,
+          ]),
           // This array is its own separate implementation from
           // `commands/definitions/file.ts` (menu clicks never go through
           // `kernel.commands.execute`) — found chasing the owner's report
@@ -685,14 +696,29 @@ export function App() {
           ["Close (Закрыть)", "Ctrl+W", () => active && store.closeDocument(active.id), !active],
         ]}/>
         <Menu label="Edit (Правка)" language={store.language} open={openMenu === "edit"} onToggle={() => setOpenMenu(openMenu === "edit" ? null : "edit")} items={[
-          ["Undo (Отменить)", "Ctrl+Z", () => void kernel.commands.execute("edit.undo", activeCommandContext())],
-          ["Redo (Повторить)", "Ctrl+Shift+Z", () => void kernel.commands.execute("edit.redo", activeCommandContext())],
+          ...(active?.kind === "audio" ? [
+            ["Undo (Отменить)", "Ctrl+Z", () => audioMassCommand("Edit", "Undo")] as MainMenuItem,
+            ["Redo (Повторить)", "Ctrl+Shift+Z", () => audioMassCommand("Edit", "Redo")] as MainMenuItem,
+            ["Play (Воспроизвести)", "Space", () => audioMassCommand("Edit", "Play")] as MainMenuItem,
+            ["Stop (Стоп)", "", () => audioMassCommand("Edit", "Stop")] as MainMenuItem,
+            ["Select All (Выделить всё)", "Ctrl+A", () => audioMassCommand("Edit", "Select All")] as MainMenuItem,
+            ["Deselect All (Снять выделение)", "", () => audioMassCommand("Edit", "Deselect All")] as MainMenuItem,
+          ] : [
+            ["Undo (Отменить)", "Ctrl+Z", () => void kernel.commands.execute("edit.undo", activeCommandContext())] as MainMenuItem,
+            ["Redo (Повторить)", "Ctrl+Shift+Z", () => void kernel.commands.execute("edit.redo", activeCommandContext())] as MainMenuItem,
+          ]),
           // Free Transform is raster/vector's own interactive transform tool
           // (`vravio-transform-start`) — meaningless for Audio/Video, which have their own
           // transform controls (clip keyframes, the Video Inspector's x/y/scale fields) already
           // reachable in their own workspace, not through this menu at all.
           ...(active?.kind === "raster" || active?.kind === "vector" ? [["Free Transform (Свободная трансформация)", "Ctrl+T", () => window.dispatchEvent(new Event("vravio-transform-start"))] as MainMenuItem] : []),
         ]}/>
+        {active?.kind === "audio" && <Menu label="Effects (Эффекты)" language={store.language} open={openMenu === "audio-effects"} onToggle={() => setOpenMenu(openMenu === "audio-effects" ? null : "audio-effects")} items={[
+          ["Gain… (Усиление…)", "", () => audioMassCommand("Effects", "Gain")], ["Fade In (Плавное появление)", "", () => audioMassCommand("Effects", "Fade In")], ["Fade Out (Плавное затухание)", "", () => audioMassCommand("Effects", "Fade Out")], ["Compressor… (Компрессор…)", "", () => audioMassCommand("Effects", "Compressor")], ["Normalize (Нормализация)", "", () => audioMassCommand("Effects", "Normalize")], ["Graphic EQ… (Графический эквалайзер…)", "", () => audioMassCommand("Effects", "Graphic EQ")], ["Hard Limiter… (Лимитер…)", "", () => audioMassCommand("Effects", "Hard Limiter")], ["Delay… (Задержка…)", "", () => audioMassCommand("Effects", "Delay")], ["Reverb… (Реверберация…)", "", () => audioMassCommand("Effects", "Reverb")], ["Reverse (Реверс)", "", () => audioMassCommand("Effects", "Reverse")], ["Remove Silence (Удалить тишину)", "", () => audioMassCommand("Effects", "Remove Silence")],
+        ]}/>}
+        {active?.kind === "audio" && <Menu label="View (Просмотр)" language={store.language} open={openMenu === "audio-view"} onToggle={() => setOpenMenu(openMenu === "audio-view" ? null : "audio-view")} items={[
+          ["Frequency Analyser (Анализатор частот)", "", () => audioMassCommand("View", "Frequency Analyser")], ["Spectrum Analyser (Спектральный анализатор)", "", () => audioMassCommand("View", "Spectrum Analyser")], ["Multitrack Mixer (Микшер мультитрека)", "", () => audioMassCommand("View", "Multitrack Mixer")], ["Tempo Tools (Инструменты темпа)", "", () => audioMassCommand("View", "Tempo Tools")], ["ID3 Tags (Теги ID3)", "", () => audioMassCommand("View", "ID3 Tags")], ["Center to Cursor (Центрировать по курсору)", "Tab", () => audioMassCommand("View", "Center to Cursor")], ["Reset Zoom (Сбросить масштаб)", "0", () => audioMassCommand("View", "Reset Zoom")],
+        ]}/>}
         {active?.kind === "raster" && <Menu label="Image (Изображение)" language={store.language} open={openMenu === "image"} onToggle={() => setOpenMenu(openMenu === "image" ? null : "image")} items={[
           { label: "Adjustments (Коррекция)", items: [
             ...rasterAdjustments.map((definition) => [`${definition.name.en}… (${definition.name.ru}…)`, definition.shortcut ?? "", () => openImageAdjustment(definition), !activeRasterState || activeRasterState.layers.find((layer) => layer.id === activeRasterState.activeLayerId)?.kind !== "pixel"] as MainMenuItem),
@@ -749,7 +775,7 @@ export function App() {
           ["Create Work Path (Создать рабочий контур)", "", () => {}, true],
         ]}/>}
         {active?.kind === "raster" && <Menu label="Filter (Фильтр)" language={store.language} open={openMenu === "filter"} onToggle={() => setOpenMenu(openMenu === "filter" ? null : "filter")} items={[["Filter Gallery… (Галерея фильтров…)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Camera Raw Filter… (Фильтр Camera Raw…)", "", () => setCameraRawFilterOpen(true), !active || !isRasterDocumentState(active.state)], ["Reprocess Original RAW… (Переобработать исходный RAW…)", "", () => void openCameraRawReprocess(), !activeRawOrigin], ["Liquify… (Пластика…)", "Ctrl+Shift+X", () => setLiquifyOpen(true), !active || !isRasterDocumentState(active.state)], ["Blur Gallery (Галерея размытия)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Sharpen (Усиление резкости)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Noise (Шум)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Stylize (Стилизация)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"]]}/>}
-        <Menu label="Plugins (Плагины)" language={store.language} open={openMenu === "plugins"} onToggle={() => setOpenMenu(openMenu === "plugins" ? null : "plugins")} items={[
+        {active?.kind !== "audio" && <Menu label="Plugins (Плагины)" language={store.language} open={openMenu === "plugins"} onToggle={() => setOpenMenu(openMenu === "plugins" ? null : "plugins")} items={[
           // The active environment's plugins, and only those: `pluginsFor`
           // answers from each plugin's own manifest, and returns nothing at all
           // for an environment with no plugin surface. Nothing here lists
@@ -764,7 +790,7 @@ export function App() {
             false,
           ] as MainMenuItem),
           ["Manage Plugins… (Управление плагинами…)", "", () => {}, true],
-        ]}/>
+        ]}/>}
         <Menu label="Window (Окно)" language={store.language} open={openMenu === "window"} onToggle={() => setOpenMenu(openMenu === "window" ? null : "window")} items={[
           ...(active && workspacePresetsFor(active.kind).length ? [{ label: "Workspace (Рабочая среда)", items: [
             ...workspacePresetsFor(active.kind).map((preset) => [
@@ -778,7 +804,10 @@ export function App() {
           ["Settings (Настройки)", "", () => store.setSettingsOpen(true)],
           ["Command Palette (Палитра команд)", "Ctrl+K", () => store.setPaletteOpen(true)],
         ]}/>
-        <Menu label="Help (Справка)" language={store.language} open={openMenu === "help"} onToggle={() => setOpenMenu(openMenu === "help" ? null : "help")} items={[["Diagnostics log (Журнал диагностики)", "", () => setDiagnosticsOpen(true)], ["About VRAVIO (О VRAVIO)", "", () => window.alert("VRAVIO — local-first creative suite")]]}/>
+        <Menu label="Help (Справка)" language={store.language} open={openMenu === "help"} onToggle={() => setOpenMenu(openMenu === "help" ? null : "help")} items={[
+          ...(active?.kind === "audio" ? [["AudioMass Help (Справка AudioMass)", "", () => audioMassCommand("Help", "See Welcome Message")] as MainMenuItem, ["About AudioMass (О AudioMass)", "", () => audioMassCommand("Help", "About AudioMass")] as MainMenuItem] : []),
+          ["Diagnostics log (Журнал диагностики)", "", () => setDiagnosticsOpen(true)], ["About VRAVIO (О VRAVIO)", "", () => window.alert("VRAVIO — local-first creative suite")],
+        ]}/>
       </nav>
       <button className="settings-button" onClick={() => store.setSettingsOpen(true)} aria-label={store.language === "ru" ? "Настройки" : "Settings"} title={store.language === "ru" ? "Настройки" : "Settings"}><img src={`${import.meta.env.BASE_URL}НАСТРОЙКИ.svg`} alt=""/></button>
       {/* Fills the gap between the menu and the window controls (or, on the

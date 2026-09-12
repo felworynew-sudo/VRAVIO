@@ -114,6 +114,11 @@ a{
 	touch-action:manipulation;
 }
 .pk_app{width:100%;height:100%}
+/* In VRAVIO AudioMass owns the editor canvas and processing engine, while the
+   application owns the single shared menu bar.  The vendor header is kept in
+   the DOM for command routing through vravio-bridge.js, but is not rendered a
+   second time. */
+html.vravio-embedded .pk_hdr{display:none}
 
 .pk_inact,.pk_app .pk_inact,.pk_btn.pk_inact{opacity:.45;cursor:default}
 
