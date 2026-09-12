@@ -7,7 +7,7 @@ import { windowsFor } from "./registry";
  * reconciled against the live catalogue elsewhere (readVisiblePanelIds)" — true of what this
  * function computes, false of whether anything downstream acted on it: a serialized dockview
  * layout was trusted whole, so a panel the catalogue gained after that layout was last saved
- * (`environments/audio/windows/definitions/properties.ts`, added alongside this test) never
+ * (`environments/vector/windows/definitions/properties.ts`, added alongside this test) never
  * actually appeared on screen no matter what this function returned. That half of the fix lives
  * in `DockLayout.tsx`'s `onReady`; this file is the half that was actually testable without a
  * running dockview instance — the same "known ids" reconciliation `toolbar/layout.test.ts`
@@ -23,8 +23,9 @@ function withLocalStorage(entries: Record<string, string>, run: () => void): voi
   try { run(); } finally { delete (globalThis as { localStorage?: unknown }).localStorage; }
 }
 
-const audioIds = () => windowsFor("audio").map((panel) => panel.id);
-const audioDefaultVisibleIds = () => windowsFor("audio").filter((panel) => panel.defaultVisible).map((panel) => panel.id);
+const vectorIds = () => windowsFor("vector").map((panel) => panel.id);
+const vectorDefaultVisibleIds = () => windowsFor("vector").filter((panel) => panel.defaultVisible).map((panel) => panel.id);
+const reconciledVectorIds = (stored: readonly string[]) => [...new Set([...stored, ...vectorDefaultVisibleIds()])].sort();
 
 describe("readVisiblePanelIds reconciling a stored layout against a catalogue that moved", () => {
   it("falls back to the catalogue's own defaults with nothing stored at all", () => {
@@ -33,17 +34,17 @@ describe("readVisiblePanelIds reconciling a stored layout against a catalogue th
       // was found live sitting open with nothing in it, taking up half the screen for a document
       // that had just been opened (docs/master-plan.md's own honest-progress notes). A brand new
       // profile should only ever get the panels actually worth opening unasked.
-      expect([...readVisiblePanelIds("audio")].sort()).toEqual([...audioDefaultVisibleIds()].sort());
+      expect([...readVisiblePanelIds("vector")].sort()).toEqual([...vectorDefaultVisibleIds()].sort());
     });
   });
 
   it("adopts a panel the catalogue gained since this browser last saw it — the properties panel this test was written for", () => {
     // A pre-Inspector install: only "history" was ever stored, and (an older build, or one run
     // before the "known" bookkeeping existed at all) nothing recorded what the catalogue held
-    // back then either — audio's real catalogue now has "properties" too, and it must be adopted
+    // back then either — vector's real catalogue now has "properties" too, and it must be adopted
     // rather than treated as a panel the user once hid.
-    withLocalStorage({ "vravio.audio-panels.visible": JSON.stringify(["history"]) }, () => {
-      const reconciled = readVisiblePanelIds("audio");
+    withLocalStorage({ "vravio.vector-panels.visible": JSON.stringify(["history"]) }, () => {
+      const reconciled = readVisiblePanelIds("vector");
       expect(reconciled.has("properties")).toBe(true);
       expect(reconciled.has("history")).toBe(true);
     });
@@ -53,10 +54,10 @@ describe("readVisiblePanelIds reconciling a stored layout against a catalogue th
     // "properties" is in `known` (this browser has seen it before) but missing from the visible
     // list — a real hide, not a gap left by a catalogue that has not caught up yet.
     withLocalStorage({
-      "vravio.audio-panels.visible": JSON.stringify(["history"]),
-      "vravio.audio-panels.known": JSON.stringify(audioIds()),
+      "vravio.vector-panels.visible": JSON.stringify(["history"]),
+      "vravio.vector-panels.known": JSON.stringify(vectorIds()),
     }, () => {
-      const reconciled = readVisiblePanelIds("audio");
+      const reconciled = readVisiblePanelIds("vector");
       expect(reconciled.has("properties")).toBe(false);
       expect(reconciled.has("history")).toBe(true);
     });
@@ -64,29 +65,29 @@ describe("readVisiblePanelIds reconciling a stored layout against a catalogue th
 
   it("drops a panel the catalogue no longer declares", () => {
     withLocalStorage({
-      "vravio.audio-panels.visible": JSON.stringify(["history", "properties", "a-panel-nobody-declares-any-more"]),
-      "vravio.audio-panels.known": JSON.stringify(["history", "properties", "a-panel-nobody-declares-any-more"]),
+      "vravio.vector-panels.visible": JSON.stringify(["history", "properties", "a-panel-nobody-declares-any-more"]),
+      "vravio.vector-panels.known": JSON.stringify(["history", "properties", "a-panel-nobody-declares-any-more"]),
     }, () => {
-      const reconciled = readVisiblePanelIds("audio");
+      const reconciled = readVisiblePanelIds("vector");
       expect(reconciled.has("a-panel-nobody-declares-any-more")).toBe(false);
-      expect([...reconciled].sort()).toEqual([...audioIds()].sort());
+      expect([...reconciled].sort()).toEqual(reconciledVectorIds(["history", "properties"]));
     });
   });
 
   it("persists the reconciled result, so the same gap is not rediscovered on every read", () => {
-    withLocalStorage({ "vravio.audio-panels.visible": JSON.stringify(["history"]) }, () => {
-      readVisiblePanelIds("audio");
-      expect(JSON.parse(localStorage.getItem("vravio.audio-panels.visible")!).sort()).toEqual([...audioIds()].sort());
-      expect(JSON.parse(localStorage.getItem("vravio.audio-panels.known")!).sort()).toEqual([...audioIds()].sort());
+    withLocalStorage({ "vravio.vector-panels.visible": JSON.stringify(["history"]) }, () => {
+      readVisiblePanelIds("vector");
+      expect(JSON.parse(localStorage.getItem("vravio.vector-panels.visible")!).sort()).toEqual(reconciledVectorIds(["history"]));
+      expect(JSON.parse(localStorage.getItem("vravio.vector-panels.known")!).sort()).toEqual([...vectorIds()].sort());
     });
   });
 
   it("leaves an already-reconciled layout alone", () => {
     withLocalStorage({
-      "vravio.audio-panels.visible": JSON.stringify(["history"]),
-      "vravio.audio-panels.known": JSON.stringify(audioIds()),
+      "vravio.vector-panels.visible": JSON.stringify(["history"]),
+      "vravio.vector-panels.known": JSON.stringify(vectorIds()),
     }, () => {
-      expect([...readVisiblePanelIds("audio")]).toEqual(["history"]);
+      expect([...readVisiblePanelIds("vector")]).toEqual(["history"]);
     });
   });
 });

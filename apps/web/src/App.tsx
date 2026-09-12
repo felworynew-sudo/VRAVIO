@@ -789,7 +789,7 @@ export function App() {
       <div className="titlebar-drag" data-tauri-drag-region="true"/>
       {active && store.preferences.showCommandPaletteButton && <button className="palette-button" onClick={() => store.setPaletteOpen(true)} title={store.language === "ru" ? "Палитра команд (Ctrl+K)" : "Command Palette (Ctrl+K)"} aria-label={store.language === "ru" ? "Палитра команд, Ctrl+K" : "Command Palette, Ctrl+K"}><i aria-hidden="true" style={{ "--icon-mask": `url("${import.meta.env.BASE_URL}ПАЛИТРА-КОМАНД.svg")` } as CSSProperties}/></button>}
       {active && <WorkspaceSwitcher kind={active.kind} language={store.language}/>} 
-      <input ref={openImageRef} hidden type="file" accept={`image/png,image/jpeg,image/webp,image/gif,image/avif,image/svg+xml,.svg,.psd,.psb,${rawFileExtensions.map((extension) => `.${extension}`).join(",")}`} onChange={(event) => { const file = event.target.files?.[0]; if (file) void importImage(file); event.currentTarget.value = ""; }}/>
+      <input ref={openImageRef} hidden type="file" accept={`image/png,image/jpeg,image/webp,image/gif,image/avif,image/svg+xml,.svg,.psd,.psb,audio/*,video/*,.mp3,.wav,.flac,.ogg,.aac,.m4a,.mp4,.mov,.mkv,.webm,.avi,${rawFileExtensions.map((extension) => `.${extension}`).join(",")}`} onChange={(event) => { const file = event.target.files?.[0]; if (file) void openBridgeFile(file); event.currentTarget.value = ""; }}/>
       <input ref={importSvgAsVectorRef} hidden type="file" accept="image/svg+xml,.svg" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importSvgAsVector(file); event.currentTarget.value = ""; }}/>
       {/* Native window chrome, folded into the same row as the menu — the
           OS title bar is switched off entirely (tauri.conf.json's

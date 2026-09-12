@@ -8,7 +8,7 @@ import { environmentsWithWindows, windowsFor } from "./registry";
  */
 describe("window catalogues", () => {
   it("finds a catalogue for each environment that has one", () => {
-    expect(environmentsWithWindows).toEqual(["audio", "raster", "vector", "video"]);
+    expect(environmentsWithWindows).toEqual(["raster", "vector", "video"]);
   });
 
   it("discovers unique raster panels with components and themeable icons", () => {
@@ -44,14 +44,11 @@ describe("window catalogues", () => {
     expect(shared).toEqual(["properties", "layers", "history", "color", "scripts"]);
   });
 
-  it("discovers the media panels audio and video actually declare", () => {
-    // Audio gained a real Inspector (docs/master-plan.md §33.2's "правая колонка" — clip
-    // start/gain/fades, or project format with nothing selected) during the Audio donor pass;
-    // video has not yet. The version of this test that arrived with the Bridge work asked for
-    // `["properties", "tracks", "history", "assets"]` for both, but no such definitions existed
-    // then — not under `environments/audio/windows/`, not under `environments/video/`. A
-    // catalogue test that names panels nobody wrote measures a wish, not the catalogue.
-    expect(windowsFor("audio").map((panel) => panel.id)).toEqual(["properties", "history"]);
+  it("keeps AudioMass free of inherited VRAVIO panels", () => {
+    // AudioMass is a complete, isolated editor. Keeping an old VRAVIO Inspector next to it
+    // duplicated controls and made the workspace narrower, so audio intentionally has no
+    // catalogue; video keeps only the panel it genuinely declares.
+    expect(windowsFor("audio")).toEqual([]);
     expect(windowsFor("video").map((panel) => panel.id)).toEqual(["history"]);
   });
 

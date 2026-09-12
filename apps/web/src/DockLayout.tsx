@@ -7,7 +7,7 @@ import { useShellStore } from "./store";
 import { useDocuments } from "./useDocuments";
 import { RasterWorkspace } from "./RasterWorkspace";
 import { VectorWorkspace } from "./VectorWorkspace";
-import { AudioWorkspace } from "./AudioWorkspace";
+import { AudioMassWorkspace } from "./AudioMassWorkspace";
 import { VideoWorkspace } from "./VideoWorkspace";
 import { appendLayer, appendRasterGroup, compositeRasterDocument, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, createRasterLayerMaskFromSelection, defaultScene3DGround, isRasterDocumentState, layerDocumentPixels, punchSelectionIntoMask, rasterLayerDescendantIds, rasterLayerRows, renderLayerEffects, setLayerPixels, dropPositionInRow, dropTargetForRow, placeLayer, toggleLayerLink, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerEffects, type RasterLayerMask } from "@vravio/env-raster";
 import { kernel } from "./kernel";
@@ -155,7 +155,7 @@ function ViewportPanel() {
   const workspace = !active ? null
     : active.kind === "raster" ? <RasterWorkspace document={active} />
     : active.kind === "vector" ? <VectorWorkspace document={active} />
-    : active.kind === "audio" ? <AudioWorkspace document={active} />
+    : active.kind === "audio" ? <AudioMassWorkspace document={active} />
     : <VideoWorkspace document={active} />;
   return <div className="viewport-chrome">
     <div className="viewport-chrome-top" ref={(node) => setCanvasChromeSlot("top", node)}/>
@@ -2059,6 +2059,13 @@ export function DockLayout() {
       createDefaultLayout(event.api, language, kind, preset?.panels ?? [...readVisiblePanelIds(kind)]);
     }
     else {
+      // AudioMass owns the whole audio workspace.  Remove the old Inspector
+      // from layouts saved before the replacement; otherwise a stale Dockview
+      // snapshot keeps consuming space even though its catalogue definition
+      // has deliberately gone away.
+      if (kind === "audio") for (const panel of [...event.api.panels]) {
+        if (panel.id !== "viewport" && !windowById(kind, panel.id)) event.api.removePanel(panel);
+      }
       // A restored layout's panels carry whatever title was serialized the last time this
       // ran — a catalogue rename (definitions/*.ts's own `title`) never reaches an already-
       // saved layout otherwise, the same "saved order disagrees with a catalogue that moved

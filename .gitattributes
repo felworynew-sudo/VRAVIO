@@ -1,0 +1,3 @@
+# AudioMass is a vendored MIT application.  Preserve its upstream whitespace
+# exactly so upstream diffs remain meaningful; it is not VRAVIO source style.
+icons/audiomass/** -whitespace
