@@ -72,8 +72,11 @@ describe("tiles at a mip level", () => {
     cache.invalidate({ x: 100, y: 100, width: 20, height: 20 });
 
     // Keeping one level would show the edit at some zooms and not others.
-    expect(cache.update(state, { x: 0, y: 0, width: W, height: H }, 0).repainted.length).toBeGreaterThan(0);
-    expect(cache.update(state, { x: 0, y: 0, width: W, height: H }, 1).repainted.length).toBeGreaterThan(0);
+    // Only the one touched coordinate is refreshed at each level; this also
+    // guards the direct coordinate index used by invalidate against marking
+    // unrelated cache entries stale.
+    expect(cache.update(state, { x: 0, y: 0, width: W, height: H }, 0).repainted).toHaveLength(1);
+    expect(cache.update(state, { x: 0, y: 0, width: W, height: H }, 1).repainted).toHaveLength(1);
   });
 });
 

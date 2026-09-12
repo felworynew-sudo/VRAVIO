@@ -92,6 +92,7 @@ export interface TileUpdateOptions {
 }
 
 const key = (col: number, row: number, mip: number) => `${col},${row},${mip}`;
+const coordinateKey = (col: number, row: number) => `${col},${row}`;
 
 /**
  * How far to subsample for a given zoom.
@@ -122,6 +123,8 @@ export class RasterTileCache {
   readonly tileSize: number;
   readonly #budgetBytes: number;
   readonly #tiles = new Map<string, RasterTile>();
+  /** Every cached mip key at one document-tile coordinate. Keeps invalidation O(changed tiles). */
+  readonly #keysByCoordinate = new Map<string, Set<string>>();
   readonly #invalid = new Set<string>();
   #documentWidth = 0;
   #documentHeight = 0;
@@ -149,15 +152,17 @@ export class RasterTileCache {
     // Every level of a covered tile goes stale together: they are all views of
     // the same pixels, and keeping one would show the edit at some zooms only.
     for (const { col, row } of this.#coveringTiles(rect)) {
-      for (const cacheKey of this.#tiles.keys()) {
-        if (cacheKey.startsWith(`${col},${row},`)) this.#invalid.add(cacheKey);
-      }
+      // This used to scan every cached key and check a string prefix here.
+      // A tiny brush mark on a large document then cost changed×cached tiles,
+      // even though only the mip entries at this coordinate can be stale.
+      for (const cacheKey of this.#keysByCoordinate.get(coordinateKey(col, row)) ?? []) this.#invalid.add(cacheKey);
     }
   }
 
   /** Drops everything; used when the document itself is resized or replaced. */
   reset(): void {
     this.#tiles.clear();
+    this.#keysByCoordinate.clear();
     this.#invalid.clear();
   }
 
@@ -194,6 +199,10 @@ export class RasterTileCache {
       const tile: RasterTile = { col, row, rect, pixels: compositeRasterRegion(state, rect, { step }), step };
       this.#tiles.delete(cacheKey);
       this.#tiles.set(cacheKey, tile);
+      const coordinate = coordinateKey(col, row);
+      let coordinateKeys = this.#keysByCoordinate.get(coordinate);
+      if (!coordinateKeys) { coordinateKeys = new Set(); this.#keysByCoordinate.set(coordinate, coordinateKeys); }
+      coordinateKeys.add(cacheKey);
       this.#invalid.delete(cacheKey);
       visible.push(tile);
       repainted.push(tile);
@@ -213,7 +222,14 @@ export class RasterTileCache {
     for (const cacheKey of this.#tiles.keys()) {
       if (this.bytes <= this.#budgetBytes) return;
       if (protectedKeys.has(cacheKey)) continue;
+      const tile = this.#tiles.get(cacheKey);
       this.#tiles.delete(cacheKey);
+      if (tile) {
+        const coordinate = coordinateKey(tile.col, tile.row);
+        const keys = this.#keysByCoordinate.get(coordinate);
+        keys?.delete(cacheKey);
+        if (keys?.size === 0) this.#keysByCoordinate.delete(coordinate);
+      }
       this.#invalid.delete(cacheKey);
     }
   }
