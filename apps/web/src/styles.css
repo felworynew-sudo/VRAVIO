@@ -475,9 +475,9 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .video-workspace .media-control-group button.active{border-color:var(--video)!important;background:color-mix(in srgb,var(--video) 30%,var(--surface2))!important}
 .video-transport-sep{width:1px;height:18px;background:var(--border)}
 .video-shuttle-rate{font-size:11px;font-weight:600;color:var(--video);border:1px solid var(--video);border-radius:var(--radius-sm);padding:1px 6px;white-space:nowrap}
-.video-body{flex:1;min-height:0;display:grid;grid-template-columns:220px minmax(0,1fr);grid-template-rows:auto 1fr;overflow:hidden}
-.video-preview{grid-column:1;grid-row:1;box-sizing:border-box;padding:8px;border-right:1px solid var(--border);border-bottom:1px solid var(--border);background:#000;display:flex;align-items:center;justify-content:center}
-.video-preview canvas{max-width:100%;max-height:180px;object-fit:contain}
+.video-body{flex:1;min-height:0;display:grid;grid-template-columns:minmax(190px,240px) minmax(360px,1fr) minmax(230px,310px);grid-template-rows:minmax(230px,1fr) minmax(170px,.72fr);overflow:hidden}
+.video-preview{grid-column:2;grid-row:1;box-sizing:border-box;padding:8px;border-right:1px solid var(--border);border-bottom:1px solid var(--border);background:#000;display:flex;align-items:center;justify-content:center;min-width:0;min-height:0}
+.video-preview canvas{max-width:100%;max-height:100%;object-fit:contain}
 .video-clip-inspector{flex:0 0 auto;display:flex;flex-wrap:wrap;align-items:center;gap:10px 14px;padding:5px 10px;border-bottom:1px solid var(--border);background:var(--surface2);font-size:11px;color:var(--muted)}
 .video-clip-inspector label{display:flex;align-items:center;gap:6px;white-space:nowrap}
 .video-clip-inspector input[type=range]{width:100px;accent-color:var(--video)}
@@ -499,7 +499,7 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .video-effect-param{display:grid;grid-template-columns:1fr 2fr auto;align-items:center;gap:6px;font-size:9.5px;color:var(--muted)}
 .video-effect-param input[type=range]{width:100%;accent-color:var(--video)}
 .video-effect-param output{min-width:28px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text)}
-.video-track-headers{grid-column:1;grid-row:2;min-width:0;overflow-y:auto;border-right:1px solid var(--border);background:var(--surface)}
+.video-track-headers{grid-column:1;grid-row:1 / 3;min-width:0;overflow-y:auto;border-right:1px solid var(--border);background:var(--surface)}
 .video-ruler-spacer{height:26px;border-bottom:1px solid var(--border)}
 .video-track-header{box-sizing:border-box;display:flex;flex-direction:column;gap:3px;padding:6px 8px;border-bottom:1px solid var(--border)}
 .video-track-header[data-track-kind="audio"]{background:color-mix(in srgb,var(--audio) 8%,transparent)}
@@ -510,7 +510,7 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .video-track-controls button.active{background:color-mix(in srgb,var(--video) 35%,var(--surface2));color:var(--text);border-color:var(--video)}
 .video-track-slider{display:flex;align-items:center;gap:5px;color:var(--muted);font-size:9px}
 .video-track-slider input{flex:1;accent-color:var(--video)}
-.video-timeline-scroll{grid-column:2;grid-row:1/3;min-width:0;overflow:auto;position:relative}
+.video-timeline-scroll{grid-column:2;grid-row:2;min-width:0;overflow:auto;position:relative}
 .video-ruler{position:relative;height:26px;border-bottom:1px solid var(--border);background:var(--surface);cursor:pointer}
 .video-ruler-tick{position:absolute;top:6px;color:var(--muted);font-size:9px;white-space:nowrap;transform:translateX(2px)}
 .video-tracks{position:relative}
@@ -534,6 +534,13 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .audio-crossfade-marker.active button{opacity:1;background:color-mix(in srgb,var(--audio) 45%,var(--surface2));color:var(--text);border-color:var(--audio)}
 .video-playhead{position:absolute;top:0;bottom:0;width:1px;background:var(--video);pointer-events:none;z-index:3}
 .video-playhead-body{position:absolute}
+.video-inspector-panel{grid-column:3;grid-row:1 / 3;min-width:0;overflow:auto;border-left:1px solid var(--border);background:var(--surface);display:flex;flex-direction:column}
+.video-inspector-panel>header{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:30px;padding:0 9px;border-bottom:1px solid var(--border);background:var(--surface2)}
+.video-inspector-panel>header strong{font-size:11px;color:var(--text)}.video-inspector-panel>header span{overflow:hidden;color:var(--muted);font-size:10px;text-overflow:ellipsis;white-space:nowrap}
+.video-inspector-empty{margin:0;padding:12px;color:var(--muted);font-size:11px;line-height:1.45}.video-inspector-summary{display:flex;justify-content:space-between;gap:8px;padding:10px;border-bottom:1px solid var(--border);font-size:11px;color:var(--text)}.video-inspector-summary small{color:var(--muted);font-variant-numeric:tabular-nums}
+.video-inspector-field{display:grid;grid-template-columns:78px minmax(0,1fr);align-items:center;gap:8px;padding:7px 10px;color:var(--muted);font-size:10px}.video-inspector-field input[type=number]{min-width:0;width:100%;box-sizing:border-box;padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface3);color:var(--text)}.video-inspector-field input[type=range]{width:100%;accent-color:var(--video)}
+.video-inspector-effects{display:flex;flex-direction:column;gap:6px;margin-top:4px;padding:10px;border-top:1px solid var(--border)}.video-inspector-effects strong{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}.video-inspector-effects select{width:100%;height:26px;padding:0 5px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface3);color:var(--text);font-size:10px}.video-inspector-effect{display:flex;align-items:center;gap:6px;padding:5px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface2);font-size:10px}.video-inspector-effect span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.video-inspector-effect button{width:20px;height:20px;padding:0;border:0;background:transparent;color:var(--video);cursor:pointer}.video-inspector-reset{margin:10px;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface3);color:var(--text);font-size:10px;cursor:pointer}
+.video-color-strip{background:color-mix(in srgb,#a56cff 9%,var(--surface2))}
 .audio-automation-point:hover{fill:var(--focus)}
 .shape-draft rect,.shape-draft ellipse,.shape-draft line{fill:color-mix(in srgb,var(--focus) 22%,transparent);stroke:var(--focus)}
 
@@ -1016,7 +1023,8 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
    More instead of being silently clipped by the title-bar controls. */
 .audio-menu-overflow{display:none}
 @media (max-width:720px){.menu-bar{gap:3px;padding-inline:4px}.brand{margin-inline:2px}.menu-bar nav{flex:1 1 auto;min-width:0;overflow:visible}.titlebar-drag{flex:0 1 0;min-width:0}.workspace-switcher-trigger span{display:none}.main-menu.audio-menu-optional{display:none}.main-menu.audio-menu-overflow{display:block}}
-@media (max-width:620px){.media-edit-toolbar{flex-wrap:wrap;gap:4px;padding:4px 6px}.media-edit-toolbar .media-project-actions{margin-left:0}.media-workspace-switcher{padding:0 5px}.media-workspace-switcher button{padding:0 7px}.audio-body{grid-template-columns:146px minmax(0,1fr)}.video-body{grid-template-columns:156px minmax(0,1fr)}.audio-track-header,.video-track-header{padding-left:5px;padding-right:5px}}
+@media (max-width:900px){.video-body{grid-template-columns:minmax(156px,190px) minmax(300px,1fr);grid-template-rows:minmax(210px,1fr) minmax(160px,.72fr)}.video-inspector-panel{display:none}.video-preview{grid-column:2}.video-timeline-scroll{grid-column:2}.video-track-headers{grid-column:1}}
+@media (max-width:620px){.media-edit-toolbar{flex-wrap:wrap;gap:4px;padding:4px 6px}.media-edit-toolbar .media-project-actions{margin-left:0}.media-workspace-switcher{padding:0 5px}.media-workspace-switcher button{padding:0 7px}.audio-body{grid-template-columns:146px minmax(0,1fr)}.video-body{grid-template-columns:138px minmax(260px,1fr)}.audio-track-header,.video-track-header{padding-left:5px;padding-right:5px}}
 /* `viewport-chrome-canvas` is a regular block, not a flex container. `flex:1`
    therefore never affected this child and the iframe fell back to HTML's
    intrinsic 150px height, leaving most of the canvas column blank. The

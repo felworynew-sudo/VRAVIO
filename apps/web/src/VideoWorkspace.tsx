@@ -12,7 +12,7 @@ import {
   importToBin, insertBinItemToTimeline, moveVideoMarker, previewClipEffectParam, previewMoveClip, previewTrimClip, removeBinItem,
   removeClipEffect, removeTransition, removeVideoMarker, removeVideoTrack, renameVideoMarker, reorderClipEffect, resetClipTransform,
   setClipCrop, setClipEffectEnabled, setClipParamAtPlayhead, setSelection, setTitleStyle, setTitleText, setTrackHidden, setTrackLocked,
-  setTrackMuted, setTrackVolume, splitClipAt, toggleClipKeyframeAtPlayhead,
+  setTrackMuted, setTrackSolo, setTrackVolume, splitClipAt, toggleClipKeyframeAtPlayhead,
 } from "./video-commands";
 import { probeVideoMetadata } from "./videoImport";
 import { assetUrl, VideoCompositor } from "./videoCompositor";
@@ -51,7 +51,7 @@ interface DragState {
 
 export function VideoWorkspace({ document }: { document: VravioDocument }) {
   const language = useShellStore((shell) => shell.language);
-  const [workspaceMode, setWorkspaceMode] = useState<"edit" | "effects" | "audio" | "export">("edit");
+  const [workspaceMode, setWorkspaceMode] = useState<"edit" | "color" | "effects" | "audio" | "export">("edit");
   const [pixelsPerSecond, setPixelsPerSecond] = useState(DEFAULT_PIXELS_PER_SECOND);
   const [playheadFrame, setPlayheadFrame] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -65,11 +65,15 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
   const [sourceInFrame, setSourceInFrame] = useState(0);
   const [sourceOutFrame, setSourceOutFrame] = useState(0);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const previewPanelRef = useRef<HTMLDivElement>(null);
   const compositorRef = useRef<VideoCompositor | null>(null);
   const sourceVideoRef = useRef<HTMLVideoElement>(null);
   const dragRef = useRef<DragState | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const markerDragRef = useRef<{ markerId: string; before: VideoDocumentState } | null>(null);
+  const timelineScrollRef = useRef<HTMLDivElement>(null);
+  const trackHeadersRef = useRef<HTMLDivElement>(null);
+  const syncingTimelineScrollRef = useRef(false);
 
   if (!isVideoDocumentState(document.state)) return <div className="workspace-error">Invalid video document state</div>;
   const state = document.state;
@@ -90,6 +94,21 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
   // correctly, because the new compositor instance's `#canvas` was simply never set.
   useEffect(() => { if (canvasRef.current) compositor().attachCanvas(canvasRef.current); }, [document.id]);
   useEffect(() => () => { compositorRef.current?.dispose(); compositorRef.current = null; }, [document.id]);
+  // Keep the compositor's backing store at monitor resolution rather than project resolution.
+  // `ResizeObserver` also covers changing a dock width without waiting for a new playhead frame.
+  useEffect(() => {
+    const panel = previewPanelRef.current;
+    if (!panel || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => {
+      const box = entry?.contentRect;
+      // Header + padding are chrome, not drawable Program-monitor area.  Observing the stable
+      // panel rather than the canvas avoids a feedback loop where changing the backing store
+      // changes the canvas box, which changes the backing store again.
+      if (box) compositor().setPreviewSize(Math.max(2, box.width - 16), Math.max(2, box.height - 41));
+    });
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, [document.id]);
 
   const stopPlayback = useCallback(() => {
     compositorRef.current?.pause();
@@ -283,16 +302,25 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
   const selectedTrack = state.selection ? state.tracks.find((track) => track.id === state.selection!.trackId) : undefined;
   const selectedClip = selectedTrack && state.selection!.clipIds.length === 1 ? selectedTrack.clips.find((clip) => clip.id === state.selection!.clipIds[0]) : undefined;
   const clipCount = state.tracks.reduce((count, track) => count + track.clips.length, 0);
+  const syncTimelineScroll = (from: "timeline" | "headers") => {
+    if (syncingTimelineScrollRef.current) return;
+    const source = from === "timeline" ? timelineScrollRef.current : trackHeadersRef.current;
+    const target = from === "timeline" ? trackHeadersRef.current : timelineScrollRef.current;
+    if (!source || !target || target.scrollTop === source.scrollTop) return;
+    syncingTimelineScrollRef.current = true;
+    target.scrollTop = source.scrollTop;
+    requestAnimationFrame(() => { syncingTimelineScrollRef.current = false; });
+  };
 
   return <div className="video-workspace">
     <header className="media-workspace-switcher" aria-label={text(language, "Video workspaces", "Рабочие среды видео")}>
       {([
         ["edit", "Edit", "Монтаж"],
+        ["color", "Color", "Цвет"],
         ["effects", "Effects", "Эффекты"],
         ["audio", "Audio", "Аудио"],
         ["export", "Export", "Экспорт"],
       ] as const).map(([id, en, ru]) => <button key={id} className={workspaceMode === id ? "active" : ""} onClick={() => setWorkspaceMode(id)}>{text(language, en, ru)}</button>)}
-      <button className="media-workspace-planned" disabled title={text(language, "Colour tools need the planned colour-management and scopes stage", "Инструменты цвета появятся после этапа управления цветом и scopes")}>{text(language, "Color", "Цвет")}</button>
       <span className="media-workspace-meta">{state.width}×{state.height} · {frameRate} fps · {state.tracks.length} {text(language, "tracks", "дорожек")}</span>
     </header>
     <div className="video-transport">
@@ -329,6 +357,10 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
     {workspaceMode === "audio" && <section className="video-workspace-strip" aria-label={text(language, "Audio timeline", "Аудиодорожки")}>
       <strong>{text(language, "Audio timeline", "Аудиодорожки")}</strong>
       <span>{text(language, "Audio clips and tracks use amber; mute and volume remain available in each track header.", "Аудиоклипы и дорожки отмечены янтарным; заглушение и громкость доступны в заголовке каждой дорожки.")}</span>
+    </section>}
+    {workspaceMode === "color" && <section className="video-workspace-strip video-color-strip" aria-label={text(language, "Color workspace", "Рабочая среда цвета")}>
+      <strong>{text(language, "Color", "Цвет")}</strong>
+      <span>{text(language, "Select a clip, then use its non-destructive colour effects in the Inspector. Scopes and LUT management are the next render-engine stage.", "Выберите клип и применяйте неразрушающие цветовые эффекты в инспекторе. Scopes и управление LUT — следующий этап движка рендеринга.")}</span>
     </section>}
     {workspaceMode === "effects" && <section className="video-effects-panel" aria-label={text(language, "Effect stack", "Стек эффектов")}>
       {!selectedClip
@@ -396,7 +428,7 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
     </div>}
 
     <div className="video-body">
-      <div className="video-preview">
+      <div className="video-preview" ref={previewPanelRef}>
         <header>
           <span className="video-preview-tabs">
             <button className={previewMode === "program" ? "active" : ""} onClick={() => setPreviewMode("program")}>{text(language, "Program", "Программа")}</button>
@@ -421,7 +453,7 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
         </div>}
       </div>
 
-      <div className="video-track-headers">
+      <div className="video-track-headers" ref={trackHeadersRef} onScroll={() => syncTimelineScroll("headers")}>
         <div className="video-bin" aria-label={text(language, "Project bin", "Корзина проекта")}>
           <strong>{text(language, "Bin", "Корзина")}</strong>
           {state.bin.length === 0
@@ -438,6 +470,7 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
           <div className="video-track-controls">
             {track.kind === "video" && <button className={track.hidden ? "active" : ""} onClick={() => setTrackHidden(document.id, track.id, !track.hidden)} title={text(language, "Hide", "Скрыть")}>👁</button>}
             <button className={track.muted ? "active" : ""} onClick={() => setTrackMuted(document.id, track.id, !track.muted)} title={text(language, "Mute", "Заглушить")}>M</button>
+            <button className={track.solo ? "active" : ""} onClick={() => setTrackSolo(document.id, track.id, !track.solo)} title={text(language, "Solo this track in preview and export", "Соло этой дорожки в предпросмотре и экспорте")}>S</button>
             <button className={track.locked ? "active" : ""} onClick={() => setTrackLocked(document.id, track.id, !track.locked)} title={text(language, "Lock", "Заблокировать")}>🔒</button>
             <button disabled={state.tracks.length <= 1} onClick={() => removeVideoTrack(document.id, track.id)} title={text(language, "Delete track", "Удалить дорожку")}>×</button>
           </div>
@@ -445,7 +478,7 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
         </div>)}
       </div>
 
-      <div className="video-timeline-scroll">
+      <div className="video-timeline-scroll" ref={timelineScrollRef} onScroll={() => syncTimelineScroll("timeline")}>
         <div className="video-ruler" style={{ width: timelineWidthPx }} onClick={onRulerClick}>
           {Array.from({ length: Math.ceil(timelineWidthPx / pixelsPerSecond) + 1 }, (_, second) => <span key={second} className="video-ruler-tick" style={{ left: second * pixelsPerSecond }}>{formatTime(second)}</span>)}
           <div className="video-playhead" style={{ left: playheadFrame * pxPerFrame }} />
@@ -494,6 +527,30 @@ export function VideoWorkspace({ document }: { document: VravioDocument }) {
           })}
         </div>
       </div>
+      <aside className="video-inspector-panel" aria-label={text(language, "Inspector", "Инспектор")}>
+        <header><strong>{workspaceMode === "effects" ? text(language, "Effects", "Эффекты") : workspaceMode === "color" ? text(language, "Color", "Цвет") : text(language, "Inspector", "Инспектор")}</strong><span>{selectedClip ? selectedClip.name : text(language, "No selection", "Нет выделения")}</span></header>
+        {!selectedClip
+          ? <p className="video-inspector-empty">{text(language, "Select a clip to edit its properties, effects and keyframes.", "Выберите клип, чтобы редактировать его свойства, эффекты и ключевые кадры.")}</p>
+          : <>
+              <section className="video-inspector-summary">
+                <span>{selectedClip.title ? text(language, "Title", "Титр") : text(language, "Clip", "Клип")}</span>
+                <small>{formatTime(selectedClip.durationFrames / frameRate)} · {selectedTrack?.name}</small>
+              </section>
+              <label className="video-inspector-field"><span>{text(language, "Position X", "Позиция X")}</span><input type="number" value={Math.round(effectiveClipValue(selectedClip, "x", playheadFrame))} onChange={(event) => setClipParamAtPlayhead(document.id, selectedTrack!.id, selectedClip.id, "x", playheadFrame, event.target.valueAsNumber || 0)} /></label>
+              <label className="video-inspector-field"><span>{text(language, "Position Y", "Позиция Y")}</span><input type="number" value={Math.round(effectiveClipValue(selectedClip, "y", playheadFrame))} onChange={(event) => setClipParamAtPlayhead(document.id, selectedTrack!.id, selectedClip.id, "y", playheadFrame, event.target.valueAsNumber || 0)} /></label>
+              <label className="video-inspector-field"><span>{text(language, "Scale", "Масштаб")}</span><input type="range" min={0.05} max={3} step={0.01} value={effectiveClipValue(selectedClip, "scale", playheadFrame)} onChange={(event) => setClipParamAtPlayhead(document.id, selectedTrack!.id, selectedClip.id, "scale", playheadFrame, event.target.valueAsNumber)} /></label>
+              <label className="video-inspector-field"><span>{text(language, "Opacity", "Непрозрачность")}</span><input type="range" min={0} max={1} step={0.01} value={effectiveClipValue(selectedClip, "opacity", playheadFrame)} onChange={(event) => setClipParamAtPlayhead(document.id, selectedTrack!.id, selectedClip.id, "opacity", playheadFrame, event.target.valueAsNumber)} /></label>
+              {(workspaceMode === "effects" || workspaceMode === "color") && !selectedClip.title && <section className="video-inspector-effects">
+                <strong>{workspaceMode === "color" ? text(language, "Color effects", "Цветовые эффекты") : text(language, "Effect stack", "Стек эффектов")}</strong>
+                <select value="" onChange={(event) => { if (event.target.value) addClipEffect(document.id, selectedTrack!.id, selectedClip.id, event.target.value as VideoEffectId); }}>
+                  <option value="">{text(language, "+ Add effect…", "+ Добавить эффект…")}</option>
+                  {videoEffectCatalog.map((effect) => <option key={effect.id} value={effect.id}>{effect.name}</option>)}
+                </select>
+                {selectedClip.effects.map((effect) => <div className="video-inspector-effect" key={effect.id}><span>{videoEffectCatalog.find((item) => item.id === effect.effectId)?.name ?? effect.effectId}</span><button onClick={() => setClipEffectEnabled(document.id, selectedTrack!.id, selectedClip.id, effect.id, !effect.enabled)} title={text(language, "Bypass", "Обойти")}>{effect.enabled ? "●" : "○"}</button></div>)}
+              </section>}
+              <button className="video-inspector-reset" onClick={() => resetClipTransform(document.id, selectedTrack!.id, selectedClip.id)}>{text(language, "Reset transform", "Сбросить трансформацию")}</button>
+            </>}
+      </aside>
     </div>
     <footer className="video-workspace-footer"><span>{text(language, "Timeline", "Таймлайн")}: {clipCount} {text(language, "clips", "клипов")}</span><span>{snapMode ? text(language, "Snapping on", "Прилипание включено") : text(language, "Snapping off", "Прилипание выключено")}</span></footer>
   </div>;

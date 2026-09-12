@@ -42,6 +42,7 @@ describe("track and clip creation", () => {
     expect(b.kind).toBe("audio");
     expect(a.volume).toBe(1);
     expect(a.muted).toBe(false);
+    expect(a.solo).toBe(false);
     expect(a.hidden).toBe(false);
     expect(a.locked).toBe(false);
   });
@@ -118,6 +119,13 @@ describe("migrateVideoDocumentState", () => {
     state.tracks[0]!.hidden = true;
     migrateVideoDocumentState(state);
     expect(state.tracks[0]!.hidden).toBe(true);
+  });
+
+  it("adds solo=false to a track saved before solo existed", () => {
+    const state = createVideoDocument();
+    delete (state.tracks[0] as { solo?: unknown }).solo;
+    migrateVideoDocumentState(state);
+    expect(state.tracks[0]!.solo).toBe(false);
   });
 });
 

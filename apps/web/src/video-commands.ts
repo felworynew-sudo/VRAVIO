@@ -151,6 +151,17 @@ export function setTrackMuted(documentId: string, trackId: string, muted: boolea
   });
 }
 
+/** OpenCut's timeline keeps mute and solo as independent buttons.  This is the one document
+ * mutation door so the setting is undoable and affects both preview and export via audioHitsAt. */
+export function setTrackSolo(documentId: string, trackId: string, solo: boolean): void {
+  void changeVideoDocument(documentId, solo ? "Solo Track (Соло дорожки)" : "Unsolo Track (Выключить соло)", (state) => {
+    const track = state.tracks.find((item) => item.id === trackId);
+    if (!track || track.solo === solo) return false;
+    track.solo = solo;
+    return true;
+  });
+}
+
 export function setTrackHidden(documentId: string, trackId: string, hidden: boolean): void {
   void changeVideoDocument(documentId, hidden ? "Hide Track (Скрыть дорожку)" : "Show Track (Показать дорожку)", (state) => {
     const track = state.tracks.find((item) => item.id === trackId);
@@ -194,7 +205,12 @@ export function addTitleClip(documentId: string, trackId: string | undefined, at
     const track = trackId ? state.tracks.find((item) => item.id === trackId) : createVideoTrack("video", "Titles (Титры)");
     if (!track) return false;
     if (!trackId) state.tracks.push(track);
-    track.clips.push(createVideoTitleClip(text, durationFrames, { startFrame: atFrame }));
+    const clip = createVideoTitleClip(text, durationFrames, { startFrame: atFrame });
+    track.clips.push(clip);
+    // The just-created title is the user's active object.  Without this, its Inspector stayed
+    // empty until a second click on the tiny timeline item — an interaction mismatch with the
+    // donor timeline and an unnecessary extra action before text could be edited.
+    state.selection = { trackId: track.id, clipIds: [clip.id] };
     return true;
   });
 }

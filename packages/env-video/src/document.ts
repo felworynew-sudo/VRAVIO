@@ -8,7 +8,7 @@ export function createVideoTrack(kind: "video" | "audio", name?: string): VideoT
   return {
     id: crypto.randomUUID(),
     name: name ?? (kind === "video" ? "Video 1 (Видео 1)" : "Audio 1 (Аудио 1)"),
-    kind, volume: 1, muted: false, hidden: false, locked: false, clips: [],
+    kind, volume: 1, muted: false, solo: false, hidden: false, locked: false, clips: [],
   };
 }
 
@@ -146,6 +146,7 @@ export function migrateVideoDocumentState(state: VideoDocumentState): VideoDocum
   if (!Array.isArray(state.transitions)) state.transitions = [];
   for (const track of state.tracks) {
     if (typeof track.hidden !== "boolean") track.hidden = false;
+    if (typeof track.solo !== "boolean") track.solo = false;
     if (typeof track.volume !== "number") track.volume = 1;
     for (const clip of track.clips) {
       if (typeof clip.x !== "number") clip.x = 0;

@@ -44,8 +44,9 @@ export function visualHitsAt(tracks: readonly VideoTrack[], frame: number): Acti
  * excluded from every asset-decode path, not just skipped later at the point of use. */
 export function audioHitsAt(tracks: readonly VideoTrack[], frame: number): ActiveHit[] {
   const hits: ActiveHit[] = [];
+  const hasSolo = tracks.some((track) => track.solo === true);
   for (const track of tracks) {
-    if (track.muted) continue;
+    if (track.muted || (hasSolo && !track.solo)) continue;
     const clip = track.clips.find((item) => !item.title && frame >= item.startFrame && frame < item.startFrame + item.durationFrames);
     if (clip) hits.push({ track, clip });
   }
@@ -88,6 +89,11 @@ export class VideoCompositor {
   #onFrame: ((frame: number) => void) | null = null;
   #currentFrame = 0;
   #lastRenderState: VideoDocumentState | null = null;
+  /** Backing-store resolution of the Program monitor.  It is deliberately separate from
+   * `state.width/height`: a 4K project shown in a 900 px monitor must not composite 8.3M pixels
+   * just to have CSS shrink them afterwards (master-plan performance audit §28.4). */
+  #previewWidth = 0;
+  #previewHeight = 0;
 
   constructor() {
     this.#container = document.createElement("div");
@@ -101,6 +107,16 @@ export class VideoCompositor {
   onFrame(callback: ((frame: number) => void) | null): void { this.#onFrame = callback; }
 
   attachCanvas(canvas: HTMLCanvasElement): void { this.#canvas = canvas; }
+
+  setPreviewSize(width: number, height: number, devicePixelRatio = window.devicePixelRatio || 1): void {
+    if (width < 2 || height < 2) return;
+    const nextWidth = Math.max(2, Math.round(width * Math.min(2, devicePixelRatio)));
+    const nextHeight = Math.max(2, Math.round(height * Math.min(2, devicePixelRatio)));
+    if (nextWidth === this.#previewWidth && nextHeight === this.#previewHeight) return;
+    this.#previewWidth = nextWidth;
+    this.#previewHeight = nextHeight;
+    if (this.#lastRenderState) this.#paint(this.#lastRenderState, visualHitsAt(this.#lastRenderState.tracks, this.#currentFrame));
+  }
 
   #ensureElement(clip: VideoClip): HTMLVideoElement {
     let element = this.#pool.get(clip.id);
@@ -135,11 +151,25 @@ export class VideoCompositor {
     return element;
   }
 
-  /** Removes pooled elements for clips no longer active — a small, immediate GC rather than a
-   * time-based eviction, so the pool never grows past what the current frame actually needs. */
-  #gc(activeClipIds: ReadonlySet<string>): void {
+  /**
+   * Keeps a deliberately small decode-ahead window around the playhead.  Browser video decoders
+   * own their compressed-frame cache, but retaining the elements means they retain decoded
+   * metadata/keyframes instead of being destroyed and reopened on each adjacent scrub.  This is
+   * a bounded preview cache, not a dishonest claim of generated proxy media.
+   */
+  #retainedClipIds(state: VideoDocumentState, frame: number, activeClipIds: ReadonlySet<string>): Set<string> {
+    const horizon = Math.max(state.frameRate * 3, 1);
+    const candidates = state.tracks.flatMap((track) => track.clips.filter((clip) => !clip.title).map((clip) => ({ clip, distance: Math.max(0, clip.startFrame - frame, frame - (clip.startFrame + clip.durationFrames)) })))
+      .filter(({ clip, distance }) => activeClipIds.has(clip.id) || distance <= horizon)
+      .sort((a, b) => a.distance - b.distance || a.clip.startFrame - b.clip.startFrame)
+      .slice(0, 12);
+    return new Set(candidates.map(({ clip }) => clip.id));
+  }
+
+  /** Removes elements outside the bounded decode-ahead window. */
+  #gc(retainedClipIds: ReadonlySet<string>): void {
     for (const [clipId, element] of this.#pool) {
-      if (activeClipIds.has(clipId)) continue;
+      if (retainedClipIds.has(clipId)) continue;
       element.pause();
       element.remove();
       this.#pool.delete(clipId);
@@ -154,7 +184,9 @@ export class VideoCompositor {
     const visual = visualHitsAt(state.tracks, frame);
     const audio = audioHitsAt(state.tracks, frame);
     const activeIds = new Set([...visual, ...audio].map((hit) => hit.clip.id));
-    this.#gc(activeIds);
+    const retainedIds = this.#retainedClipIds(state, frame, activeIds);
+    this.#gc(retainedIds);
+    for (const track of state.tracks) for (const clip of track.clips) if (retainedIds.has(clip.id)) this.#ensureElement(clip);
 
     for (const hit of audio) {
       const element = this.#ensureElement(hit.clip);
@@ -210,12 +242,21 @@ export class VideoCompositor {
   #paint(state: VideoDocumentState, visual: readonly ActiveHit[]): void {
     const canvas = this.#canvas;
     if (!canvas) return;
-    if (canvas.width !== state.width) canvas.width = state.width;
-    if (canvas.height !== state.height) canvas.height = state.height;
+    // The canvas coordinates stay in document pixels, while its backing store follows the
+    // monitor's actual viewport.  All compositor math can therefore remain project-addressed;
+    // only this final raster target changes with the panel size.
+    const scale = this.#previewWidth > 0 && this.#previewHeight > 0
+      ? Math.min(this.#previewWidth / state.width, this.#previewHeight / state.height)
+      : 1;
+    const renderWidth = Math.max(2, Math.round(state.width * scale));
+    const renderHeight = Math.max(2, Math.round(state.height * scale));
+    if (canvas.width !== renderWidth) canvas.width = renderWidth;
+    if (canvas.height !== renderHeight) canvas.height = renderHeight;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    ctx.setTransform(renderWidth / state.width, 0, 0, renderHeight / state.height, 0, 0);
     ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, state.width, state.height);
 
     // Normally one hit per track; exactly two only where a `VideoTransition` has overlapped a
     // clip's start with the previous clip's own end (`visualHitsAt`'s own doc comment) — grouped
@@ -295,7 +336,9 @@ export class VideoCompositor {
       const visual = visualHitsAt(state.tracks, frame);
       const audio = nativePlayback ? audioHitsAt(state.tracks, frame) : [];
       const activeIds = new Set([...visual, ...audio].map((hit) => hit.clip.id));
-      this.#gc(activeIds);
+      const retainedIds = this.#retainedClipIds(state, frame, activeIds);
+      this.#gc(retainedIds);
+      for (const track of state.tracks) for (const clip of track.clips) if (retainedIds.has(clip.id)) this.#ensureElement(clip);
 
       const wantsAudio = new Set(audio.map((hit) => hit.clip.id));
       for (const hit of [...visual, ...audio.filter((item) => !visual.some((v) => v.clip.id === item.clip.id))]) {

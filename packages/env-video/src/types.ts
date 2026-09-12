@@ -128,6 +128,10 @@ export interface VideoTrack {
    * independent of any embedded-clip `gain`. */
   volume: number;
   muted: boolean;
+  /** Solo is intentionally separate from mute: when any audio-capable track is soloed, only
+   * soloed tracks enter the live/export mix. Optional keeps older saved video documents readable
+   * without a schema-breaking migration. */
+  solo?: boolean;
   /** Visual visibility — meaningless for an `"audio"` track (kept on every track for a single
    * uniform shape, the same reason `AudioTrack.pan` exists even though nothing reads it for a
    * track that never has stereo content of its own). */
