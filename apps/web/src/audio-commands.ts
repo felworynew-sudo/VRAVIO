@@ -450,6 +450,32 @@ export async function addClipFromAsset(documentId: string, assetId: string, name
 }
 
 /**
+ * AudioMass exports flatten whatever multitrack state the user built inside the donor editor
+ * into one file — there is no per-track/per-clip structure left to preserve, so bringing that
+ * result back is a wholesale replacement, not an insert. Every previously referenced asset is
+ * dropped in the same `changeAudioDocument` step, matching what `commitPixels` does for a
+ * raster edit (CLAUDE.md section 4: the document consumers read must be the one that changed,
+ * not a copy left stale beside it) — a `Ctrl+S` right after this now serializes the audio the
+ * user actually hears in AudioMass, not the asset the document was opened with.
+ */
+export async function replaceWithExportedAudio(documentId: string, assetId: string, name: string, durationSamples: number, sourceSampleRate: number): Promise<void> {
+  const document = kernel.documents.get<AudioDocumentState>(documentId);
+  if (!document) return;
+  const previousAssetIds = [...new Set(document.state.tracks.flatMap((track) => track.clips.map((clip) => clip.assetId)))];
+  await changeAudioDocument(documentId, "Update from Audio Editor (Обновить из аудиоредактора)", (state) => {
+    const track = createAudioTrack(name);
+    track.clips.push(createAudioClip(assetId, durationSamples, durationSamples, sourceSampleRate, { name, startSample: 0 }));
+    state.tracks = [track];
+    state.selection = null;
+    return true;
+  });
+  kernel.documents.addAssetRef(documentId, assetId as AssetId);
+  for (const previousAssetId of previousAssetIds) {
+    if (previousAssetId !== assetId) kernel.documents.removeAssetRef(documentId, previousAssetId as AssetId);
+  }
+}
+
+/**
  * Applies a destructive effect (`packages/env-audio`'s `audioEffectCatalog`) to a clip's
  * audible window — the region actually heard, `[offsetSamples, offsetSamples + durationSamples
  * worth of source samples)`, not the whole decoded source, the same "process the clip, not the

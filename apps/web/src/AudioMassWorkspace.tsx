@@ -4,6 +4,8 @@ import { decodeWav, encodeWav, isAudioDocumentState, mixdownAudioDocument } from
 import { kernel } from "./kernel";
 import { text } from "./i18n";
 import { useShellStore } from "./store";
+import { decodeAudioFileToWav } from "./audioImport";
+import { replaceWithExportedAudio } from "./audio-commands";
 
 const AUDIO_MASS_PATH = `${import.meta.env.BASE_URL}audiomass/index.html?multitrack=1&skipintro=1`;
 
@@ -26,9 +28,17 @@ export function AudioMassWorkspace({ document }: { document: VravioDocument }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const state = isAudioDocumentState(document.state) ? document.state : null;
   const requestId = useMemo(() => `audio-${document.id}`, [document.id]);
+  // Set right before `replaceWithExportedAudio` writes the new document revision this same
+  // component is about to observe below — without it, the source-rebuild effect would notice
+  // the new asset and `deliverSource` would push it straight back into AudioMass as an
+  // `open-file`, wiping the very editing session (undo history, unsaved selection) the user
+  // just exported from. The document itself is still updated; only the round-trip reload is
+  // skipped, once, for the revision this component's own write produced.
+  const skipNextReloadRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
+    if (skipNextReloadRef.current) { skipNextReloadRef.current = false; return; }
     if (!state) { setSource(null); return; }
     const clips = state.tracks.flatMap((track) => track.clips);
     if (clips.length === 0) { setSource(null); return; }
@@ -57,6 +67,32 @@ export function AudioMassWorkspace({ document }: { document: VravioDocument }) {
     })();
     return () => { cancelled = true; };
   }, [document.id, document.name, state]);
+
+  // The only channel back out of the iframe: vravio-bridge.js intercepts AudioMass's own
+  // download-triggering click() (export to WAV/MP3/FLAC/OGG, from whichever of AudioMass's own
+  // three call sites drove it) and relays the bytes here instead of just letting them leave as
+  // a browser download. Re-decoding through the browser's own audio stack keeps the asset in
+  // VRAVIO's single internal format (WAV) regardless of which format AudioMass exported, the
+  // same path a dropped MP3/FLAC file already goes through on import (`audioImport.ts`).
+  useEffect(() => {
+    const handleExport = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      if (event.source !== frameRef.current?.contentWindow) return;
+      const data = event.data as { type?: string; filename?: string; mime?: string; buffer?: ArrayBuffer } | null;
+      if (!data || data.type !== "vravio:audiomass:export" || !data.buffer) return;
+      void (async () => {
+        const file = new File([data.buffer!], data.filename ?? "export.wav", { type: data.mime ?? "audio/wav" });
+        const wav = await decodeAudioFileToWav(file);
+        if (!wav) return;
+        const decoded = decodeWav(wav);
+        const assetId = await kernel.assets.importAsset(wav, { kind: "audio", mime: "audio/wav", name: file.name });
+        skipNextReloadRef.current = true;
+        await replaceWithExportedAudio(document.id, assetId, file.name, decoded.channelData[0]?.length ?? 0, decoded.sampleRate);
+      })();
+    };
+    window.addEventListener("message", handleExport);
+    return () => window.removeEventListener("message", handleExport);
+  }, [document.id]);
 
   const deliverSource = useCallback(() => {
     const target = frameRef.current?.contentWindow;
