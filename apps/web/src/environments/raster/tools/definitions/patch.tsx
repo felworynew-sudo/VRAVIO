@@ -332,7 +332,7 @@ const patch: RasterToolDefinition<PatchState> = {
     if (!stroke || !selection) return null;
     const offsetX = stroke.pending.x - stroke.curveStart.x, offsetY = stroke.pending.y - stroke.curveStart.y;
     if (offsetX === 0 && offsetY === 0) return null;
-    const path = selectionOutlinePath(selection.mask, document.width, document.height);
+    const path = selectionOutlinePath(selection.mask, document.width, document.height, 127, selection.bounds);
     if (!path) return null;
     // Where the patch is reading from. The destination keeps its own
     // marching ants, so the pair shows both halves of the operation at

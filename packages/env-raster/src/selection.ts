@@ -39,10 +39,18 @@ export interface SelectionOutlineLoop { readonly points: readonly Point[] }
  * every closed rectilinear loop has horizontal edges, and a given horizontal
  * edge carries either East or West traffic, never both.
  */
-export function traceSelectionOutlines(mask: Uint8ClampedArray, width: number, height: number, threshold = 127): SelectionOutlineLoop[] {
+/**
+ * `knownBounds` lets a caller that already has a `PixelSelection` — its `bounds` field is kept
+ * current by every function that produces one (`translateSelection`, `combineSelections`, …) —
+ * skip `selectionBounds`'s own full `width×height` scan here. Without it, a caller that re-runs
+ * this on every render while a selection is simply sitting there (the committed marching-ants
+ * outline, recomputed unconditionally and unmemoized in `RasterWorkspace.tsx`) pays a full-canvas
+ * scan for information the selection object already carried for free.
+ */
+export function traceSelectionOutlines(mask: Uint8ClampedArray, width: number, height: number, threshold = 127, knownBounds?: RasterRect): SelectionOutlineLoop[] {
   const loops: SelectionOutlineLoop[] = [];
   if (width <= 0 || height <= 0) return loops;
-  const bounds = selectionBounds(mask, width, height);
+  const bounds = knownBounds ?? selectionBounds(mask, width, height);
   if (!bounds.width || !bounds.height) return loops;
 
   const selected = (x: number, y: number) => x >= 0 && x < width && y >= 0 && y < height && mask[y * width + x]! > threshold;
@@ -98,8 +106,8 @@ export function traceSelectionOutlines(mask: Uint8ClampedArray, width: number, h
 }
 
 /** The traced boundary as an SVG path — one closed subpath per loop. */
-export function selectionOutlinePath(mask: Uint8ClampedArray, width: number, height: number, threshold = 127): string {
-  return traceSelectionOutlines(mask, width, height, threshold)
+export function selectionOutlinePath(mask: Uint8ClampedArray, width: number, height: number, threshold = 127, knownBounds?: RasterRect): string {
+  return traceSelectionOutlines(mask, width, height, threshold, knownBounds)
     .map((loop) => `M${loop.points.map((point) => `${point.x} ${point.y}`).join("L")}Z`)
     .join("");
 }

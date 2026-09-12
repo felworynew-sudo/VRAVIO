@@ -490,7 +490,18 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   // over the selection instead (see selection-brush.tsx's own Overlay), and
   // this baseline ants outline sitting underneath a raster tint read as two
   // disagreeing representations of the same selection at once.
-  const committedSelectionPath = displayedSelection && !selectionEdgesHidden && activeToolId !== "raster.selectionBrush" ? selectionOutlinePath(displayedSelection.mask, state.width, state.height) : "";
+  // Memoized on the selection's own identity, not recomputed on every unrelated re-render of
+  // this (large) component: `selectionOutlinePath` was being called fresh on every render while
+  // any selection was simply active (cursor moves, tool-option changes, anything), each call
+  // re-deriving a bounding box via `selectionBounds`'s own full `width×height` scan even though
+  // `displayedSelection.bounds` already carries it — measured live as visible stutter on a
+  // committed selection with nothing being dragged, reported after §41's drag/lasso fix shipped.
+  // `displayedSelection.bounds` is passed through so the scan is skipped entirely, not just
+  // memoized away.
+  const committedSelectionPath = useMemo(() => {
+    if (!displayedSelection || selectionEdgesHidden || activeToolId === "raster.selectionBrush") return "";
+    return selectionOutlinePath(displayedSelection.mask, state.width, state.height, 127, displayedSelection.bounds);
+  }, [displayedSelection, selectionEdgesHidden, activeToolId, state.width, state.height]);
   const brushLike = activeToolId === "raster.brush" || activeToolId === "raster.pencil" || activeToolId === "raster.highlighter" || activeToolId === "raster.eraser" || activeToolId === "raster.clone" || activeToolId === "raster.spotHeal" || activeToolId === "raster.blur" || activeToolId === "raster.smudge" || activeToolId === "raster.dodge" || activeToolId === "raster.burn";
   const selectionLike = activeToolId === "raster.marquee" || activeToolId === "raster.ellipseMarquee" || activeToolId === "raster.lasso";
   const activeLayer3D = activeRasterLayer(state)?.kind === "3d" ? activeRasterLayer(state) ?? null : null;
