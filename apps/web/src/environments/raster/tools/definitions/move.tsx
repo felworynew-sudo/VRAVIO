@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import {
-  cloneRasterState, compositeRasterDocument, flattenRasterLayers, layerAccepts, layerLockReason, layerOpaqueBounds, liftSelection, linkedLayers, meshLayerPixels, meshSelection,
+  cloneRasterState, compositeRasterDocument, flattenRasterLayers, layerAccepts, layerDocumentPixels, layerLockReason, layerOpaqueBounds, liftSelection, linkedLayers, meshLayerPixels, meshSelection,
   pickLayerAt, quadLayerPixels, quadSelection, regularMesh, restrictSelectionToContent, rotateLayerPixels, rotateSelection,
   rotatedDestinationBounds, scaleLayerPixels, scaleSelection, setLayerPixels, stampFloating, transformLayerPixels, translateLayerPixels, translateSelection, unionRect, WARP_GRID, warpPresetMesh,
   type WarpPresetId,
@@ -418,19 +418,35 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
   const after = cloneRasterState(current);
   const layer = after.layers.find((item) => item.id === pending.layerId);
   let bounds: RasterRect | null = null;
-  // The session's one and only resample. Everything the hand did — every scale, every turn, at
-  // however many stops — is one description, applied once to the pixels the session started with.
-  // Doing it per gesture instead cost a pass at every release *and* compounded the interpolation;
-  // see `PendingTransform.live` for the measurement and the donors.
-  const resolved = pending.live
-    ? transformLayerPixels(pending.pixels, pending.before.width, pending.before.height, pending.live.source, pending.live.target, pending.live.rotation, pending.selection)
-    : pending.pixels;
+  const sourceLayer = pending.before.layers.find((item) => item.id === pending.layerId);
+  // A plain Move must not become a document-sized translate at commit: that
+  // path can only represent pixels inside the canvas and therefore silently
+  // throws away the part the user dragged over an edge. A whole-layer move is
+  // just a new origin for the layer's own buffer. Keep that buffer and shift
+  // its bounds instead; scale/rotation and selected-pixel transforms still
+  // deliberately take the resampling path below.
+  const storedTranslation = layer && pending.live && !pending.selection && pending.live.rotation === 0
+    && pending.live.source.width === pending.live.target.width
+    && pending.live.source.height === pending.live.target.height;
   if (layer) {
-    const sourceLayer = pending.before.layers.find((item) => item.id === pending.layerId);
     const wasThere = sourceLayer ? layerOpaqueBounds(materialise(sourceLayer, pending.before), pending.before.width, pending.before.height) : null;
-    const isThere = layerOpaqueBounds(resolved, pending.before.width, pending.before.height);
+    let isThere: RasterRect | null;
+    if (storedTranslation) {
+      const offsetX = Math.round(pending.live!.target.x - pending.live!.source.x);
+      const offsetY = Math.round(pending.live!.target.y - pending.live!.source.y);
+      layer.bounds = { ...layer.bounds, x: layer.bounds.x + offsetX, y: layer.bounds.y + offsetY };
+      isThere = layerOpaqueBounds(materialise(layer, after), after.width, after.height);
+    } else {
+      // The session's one and only resample. Everything the hand did — every
+      // scale, turn or selected-pixel transform — is applied once here, never
+      // once per pointer frame.
+      const resolved = pending.live
+        ? transformLayerPixels(pending.pixels, pending.before.width, pending.before.height, pending.live.source, pending.live.target, pending.live.rotation, pending.selection)
+        : pending.pixels;
+      isThere = layerOpaqueBounds(resolved, pending.before.width, pending.before.height);
+      setLayerPixels(layer, resolved, pending.before.width, pending.before.height);
+    }
     bounds = wasThere && isThere ? unionRect(wasThere, isThere.x, isThere.y, isThere.x + isThere.width, isThere.y + isThere.height, 1) : wasThere ?? isThere;
-    setLayerPixels(layer, resolved, pending.before.width, pending.before.height);
   }
   // A linked group's partners commit the same way as the primary layer — their own opaque
   // bounds fold into the same dirty-rect union the history step and tile cache repaint from.
@@ -460,12 +476,7 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
  * a *different* layer's `before` snapshot (auto-select mid-transform, or committing after the
  * active layer has since changed), so this reads any layer directly off a given document. */
 function materialise(layer: RasterDocumentState["layers"][number], document: RasterDocumentState): Uint8ClampedArray {
-  const out = new Uint8ClampedArray(document.width * document.height * 4);
-  for (let y = 0; y < layer.bounds.height; y += 1) {
-    const from = y * layer.bounds.width * 4;
-    out.set(layer.pixels.subarray(from, from + layer.bounds.width * 4), ((layer.bounds.y + y) * document.width + layer.bounds.x) * 4);
-  }
-  return out;
+  return layerDocumentPixels(layer, document.width, document.height);
 }
 
 /** Starts (or continues) an ordinary translate drag — the shared tail both "no pending transform
@@ -479,7 +490,19 @@ function beginMoveDrag(context: ToolContext<MoveState>, pointer: ToolPointer, pe
   // per-frame `layerOpaqueBounds` scan `applyDragFrame`'s old plain-translate path used to redo
   // on every single `pointermove` (docs/master-plan.md §37, the §28 audit's "Move-инструмент всё
   // ещё трогает настоящие пиксели" finding).
-  const freshOpaqueBounds = !pending && !state.selection && layer.kind !== "text" ? layerOpaqueBounds(materialise(layer, state), state.width, state.height) : null;
+  const visibleBounds = !pending && !state.selection && layer.kind !== "text"
+    ? layerOpaqueBounds(materialise(layer, state), state.width, state.height)
+    : null;
+  // If a prior move carried the whole layer outside the canvas, its
+  // materialised document buffer is correctly transparent. That is not an
+  // empty layer: retain its own local opaque bounds so the active layer can be
+  // dragged back in and its stored pixels never enter a clipping path.
+  const storedBounds = !pending && !state.selection && layer.kind !== "text"
+    ? layerOpaqueBounds(layer.pixels, layer.bounds.width, layer.bounds.height)
+    : null;
+  const freshOpaqueBounds = visibleBounds ?? (storedBounds
+    ? { ...storedBounds, x: layer.bounds.x + storedBounds.x, y: layer.bounds.y + storedBounds.y }
+    : null);
   if (!pending) {
     if (state.selection && !effectiveSelection) { diagnostic("info", "move", "Move ignored: selection contains no opaque pixels", { layerId: layer.id }); return; }
     if (!state.selection && !(layer.kind === "text" && layer.text?.visualBounds?.width ? layer.text.visualBounds : freshOpaqueBounds)) {
