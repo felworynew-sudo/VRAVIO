@@ -6,7 +6,13 @@ export function selectionBounds(mask: Uint8ClampedArray, width: number, height: 
   let left = width, top = height, right = -1, bottom = -1;
   for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
     if (mask[y * width + x]! === 0) continue;
-    left = Math.min(left, x); top = Math.min(top, y); right = Math.max(right, x); bottom = Math.max(bottom, y);
+    // This scans the whole selection mask after every operation that changes
+    // it. Direct comparisons avoid four function calls for every covered
+    // pixel on a large, solid selection.
+    if (x < left) left = x;
+    if (y < top) top = y;
+    if (x > right) right = x;
+    if (y > bottom) bottom = y;
   }
   return right < left ? { x: 0, y: 0, width: 0, height: 0 } : { x: left, y: top, width: right - left + 1, height: bottom - top + 1 };
 }
