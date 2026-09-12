@@ -161,7 +161,17 @@ export function applyAdjustment(pixels: Uint8ClampedArray, adjustment: RasterAdj
   const lut = buildPointLut(adjustment);
   for (let index = 0; index < pixels.length; index += 4) {
     if (!pixels[index + 3]) continue;
-    const [r, g, b] = lut ? [lut[0][pixels[index]!]!, lut[1][pixels[index + 1]!]!, lut[2][pixels[index + 2]!]!] : adjustRgb(pixels[index]!, pixels[index + 1]!, pixels[index + 2]!, adjustment);
+    // Point adjustments use lookup tables. Keep their hot path scalar: creating
+    // a three-item array per pixel turns a multi-megapixel live preview into
+    // millions of short-lived allocations.
+    let r: number, g: number, b: number;
+    if (lut) {
+      r = lut[0][pixels[index]!]!;
+      g = lut[1][pixels[index + 1]!]!;
+      b = lut[2][pixels[index + 2]!]!;
+    } else {
+      [r, g, b] = adjustRgb(pixels[index]!, pixels[index + 1]!, pixels[index + 2]!, adjustment);
+    }
     const dither = adjustment.kind === "gradientMap" && adjustment.dither ? ((index / 4 * 73) % 5 - 2) * .35 : 0;
     pixels[index] = byte(pixels[index]! + (r - pixels[index]!) * mix + dither);
     pixels[index + 1] = byte(pixels[index + 1]! + (g - pixels[index + 1]!) * mix + dither);
