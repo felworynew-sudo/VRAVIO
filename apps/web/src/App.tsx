@@ -716,7 +716,7 @@ export function App() {
         {active?.kind === "audio" && <Menu label="Effects (Эффекты)" language={store.language} open={openMenu === "audio-effects"} onToggle={() => setOpenMenu(openMenu === "audio-effects" ? null : "audio-effects")} items={[
           ["Gain… (Усиление…)", "", () => audioMassCommand("Effects", "Gain")], ["Fade In (Плавное появление)", "", () => audioMassCommand("Effects", "Fade In")], ["Fade Out (Плавное затухание)", "", () => audioMassCommand("Effects", "Fade Out")], ["Compressor… (Компрессор…)", "", () => audioMassCommand("Effects", "Compressor")], ["Normalize (Нормализация)", "", () => audioMassCommand("Effects", "Normalize")], ["Graphic EQ… (Графический эквалайзер…)", "", () => audioMassCommand("Effects", "Graphic EQ")], ["Hard Limiter… (Лимитер…)", "", () => audioMassCommand("Effects", "Hard Limiter")], ["Delay… (Задержка…)", "", () => audioMassCommand("Effects", "Delay")], ["Reverb… (Реверберация…)", "", () => audioMassCommand("Effects", "Reverb")], ["Reverse (Реверс)", "", () => audioMassCommand("Effects", "Reverse")], ["Remove Silence (Удалить тишину)", "", () => audioMassCommand("Effects", "Remove Silence")],
         ]}/>}
-        {active?.kind === "audio" && <Menu label="View (Просмотр)" language={store.language} open={openMenu === "audio-view"} onToggle={() => setOpenMenu(openMenu === "audio-view" ? null : "audio-view")} items={[
+        {active?.kind === "audio" && <Menu className="audio-menu-optional" label="View (Просмотр)" language={store.language} open={openMenu === "audio-view"} onToggle={() => setOpenMenu(openMenu === "audio-view" ? null : "audio-view")} items={[
           ["Frequency Analyser (Анализатор частот)", "", () => audioMassCommand("View", "Frequency Analyser")], ["Spectrum Analyser (Спектральный анализатор)", "", () => audioMassCommand("View", "Spectrum Analyser")], ["Multitrack Mixer (Микшер мультитрека)", "", () => audioMassCommand("View", "Multitrack Mixer")], ["Tempo Tools (Инструменты темпа)", "", () => audioMassCommand("View", "Tempo Tools")], ["ID3 Tags (Теги ID3)", "", () => audioMassCommand("View", "ID3 Tags")], ["Center to Cursor (Центрировать по курсору)", "Tab", () => audioMassCommand("View", "Center to Cursor")], ["Reset Zoom (Сбросить масштаб)", "0", () => audioMassCommand("View", "Reset Zoom")],
         ]}/>}
         {active?.kind === "raster" && <Menu label="Image (Изображение)" language={store.language} open={openMenu === "image"} onToggle={() => setOpenMenu(openMenu === "image" ? null : "image")} items={[
@@ -791,7 +791,7 @@ export function App() {
           ] as MainMenuItem),
           ["Manage Plugins… (Управление плагинами…)", "", () => {}, true],
         ]}/>}
-        <Menu label="Window (Окно)" language={store.language} open={openMenu === "window"} onToggle={() => setOpenMenu(openMenu === "window" ? null : "window")} items={[
+        <Menu className={active?.kind === "audio" ? "audio-menu-optional" : undefined} label="Window (Окно)" language={store.language} open={openMenu === "window"} onToggle={() => setOpenMenu(openMenu === "window" ? null : "window")} items={[
           ...(active && workspacePresetsFor(active.kind).length ? [{ label: "Workspace (Рабочая среда)", items: [
             ...workspacePresetsFor(active.kind).map((preset) => [
               `${preset.label.en} (${preset.label.ru})${selectedWorkspacePreset(active.kind) === preset.id ? " ✓" : ""}`,
@@ -804,10 +804,17 @@ export function App() {
           ["Settings (Настройки)", "", () => store.setSettingsOpen(true)],
           ["Command Palette (Палитра команд)", "Ctrl+K", () => store.setPaletteOpen(true)],
         ]}/>
-        <Menu label="Help (Справка)" language={store.language} open={openMenu === "help"} onToggle={() => setOpenMenu(openMenu === "help" ? null : "help")} items={[
+        <Menu className={active?.kind === "audio" ? "audio-menu-optional" : undefined} label="Help (Справка)" language={store.language} open={openMenu === "help"} onToggle={() => setOpenMenu(openMenu === "help" ? null : "help")} items={[
           ...(active?.kind === "audio" ? [["AudioMass Help (Справка AudioMass)", "", () => audioMassCommand("Help", "See Welcome Message")] as MainMenuItem, ["About AudioMass (О AudioMass)", "", () => audioMassCommand("Help", "About AudioMass")] as MainMenuItem] : []),
           ["Diagnostics log (Журнал диагностики)", "", () => setDiagnosticsOpen(true)], ["About VRAVIO (О VRAVIO)", "", () => window.alert("VRAVIO — local-first creative suite")],
         ]}/>
+        {active?.kind === "audio" && <Menu className="audio-menu-overflow" label="More (Ещё)" language={store.language} open={openMenu === "audio-more"} onToggle={() => setOpenMenu(openMenu === "audio-more" ? null : "audio-more")} items={[
+          { label: "View (Просмотр)", items: [
+            ["Frequency Analyser (Анализатор частот)", "", () => audioMassCommand("View", "Frequency Analyser")], ["Spectrum Analyser (Спектральный анализатор)", "", () => audioMassCommand("View", "Spectrum Analyser")], ["Multitrack Mixer (Микшер мультитрека)", "", () => audioMassCommand("View", "Multitrack Mixer")], ["Tempo Tools (Инструменты темпа)", "", () => audioMassCommand("View", "Tempo Tools")], ["ID3 Tags (Теги ID3)", "", () => audioMassCommand("View", "ID3 Tags")], ["Reset Zoom (Сбросить масштаб)", "0", () => audioMassCommand("View", "Reset Zoom")],
+          ] },
+          { label: "Window (Окно)", items: [["Settings (Настройки)", "", () => store.setSettingsOpen(true)], ["Command Palette (Палитра команд)", "Ctrl+K", () => store.setPaletteOpen(true)]] },
+          { label: "Help (Справка)", items: [["AudioMass Help (Справка AudioMass)", "", () => audioMassCommand("Help", "See Welcome Message")], ["About AudioMass (О AudioMass)", "", () => audioMassCommand("Help", "About AudioMass")], ["Diagnostics log (Журнал диагностики)", "", () => setDiagnosticsOpen(true)], ["About VRAVIO (О VRAVIO)", "", () => window.alert("VRAVIO — local-first creative suite")]] },
+        ]}/>}
       </nav>
       <button className="settings-button" onClick={() => store.setSettingsOpen(true)} aria-label={store.language === "ru" ? "Настройки" : "Settings"} title={store.language === "ru" ? "Настройки" : "Settings"}><img src={`${import.meta.env.BASE_URL}НАСТРОЙКИ.svg`} alt=""/></button>
       {/* Fills the gap between the menu and the window controls (or, on the
@@ -959,8 +966,8 @@ function windowMenuItems(kind: string | undefined, language: Language): readonly
 type MainMenuItem = readonly [label: string, shortcut: string, action: () => void, disabled?: boolean];
 type MainMenuGroup = { label: string; items: readonly MainMenuItem[] };
 const isMainMenuItem = (item: MainMenuItem | MainMenuGroup): item is MainMenuItem => Array.isArray(item);
-function Menu({ label, language, open, onToggle, items }: { label: string; language: Language; open: boolean; onToggle(): void; items: readonly (MainMenuItem | MainMenuGroup)[] }) {
-  return <div className="main-menu"><button className={open ? "active" : ""} onClick={onToggle}>{localized(label, language)}</button>{open && <div className="main-menu-dropdown">{items.map((item) => isMainMenuItem(item) ? <button key={item[0]} disabled={item[3]} onClick={() => { item[2](); onToggle(); }}><span>{localized(item[0], language)}</span><kbd>{item[1]}</kbd></button> : <div className="main-menu-submenu" key={item.label}><button><span>{localized(item.label, language)}</span><kbd>›</kbd></button><div>{item.items.map(([itemLabel, shortcut, action, disabled]) => <button key={itemLabel} disabled={disabled} onClick={() => { action(); onToggle(); }}><span>{localized(itemLabel, language)}</span><kbd>{shortcut}</kbd></button>)}</div></div>)}</div>}</div>;
+function Menu({ className, label, language, open, onToggle, items }: { className?: string | undefined; label: string; language: Language; open: boolean; onToggle(): void; items: readonly (MainMenuItem | MainMenuGroup)[] }) {
+  return <div className={`main-menu${className ? ` ${className}` : ""}`}><button className={open ? "active" : ""} onClick={onToggle}>{localized(label, language)}</button>{open && <div className="main-menu-dropdown">{items.map((item) => isMainMenuItem(item) ? <button key={item[0]} disabled={item[3]} onClick={() => { item[2](); onToggle(); }}><span>{localized(item[0], language)}</span><kbd>{item[1]}</kbd></button> : <div className="main-menu-submenu" key={item.label}><button><span>{localized(item.label, language)}</span><kbd>›</kbd></button><div>{item.items.map(([itemLabel, shortcut, action, disabled]) => <button key={itemLabel} disabled={disabled} onClick={() => { action(); onToggle(); }}><span>{localized(itemLabel, language)}</span><kbd>{shortcut}</kbd></button>)}</div></div>)}</div>}</div>;
 }
 
 function ToolGlyph({ tool }: { tool: ToolDefinition }) {
