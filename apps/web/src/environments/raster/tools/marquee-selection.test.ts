@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import ellipseMarquee from "./definitions/ellipse-marquee";
 import marquee from "./definitions/marquee";
 import type { MarqueeState } from "./marquee-selection";
-import type { PixelSelection, RasterDocumentState } from "@vravio/env-raster";
+import { createRectangleSelection, type PixelSelection, type RasterDocumentState } from "@vravio/env-raster";
 import type { RasterToolDefinition, ToolContext, ToolPointer } from "./types";
 
 /**
@@ -146,5 +146,23 @@ describe("marquee move-selection drag defers the expensive recompute", () => {
     marquee.onGestureEnd!(context, pointerAt(20, 25));
     const after = context.selection!;
     expect(after.bounds).toMatchObject({ x: 15, y: 20, width: 20, height: 20 });
+  });
+
+  it("clears an existing marquee on a click instead of committing a zero-distance move", () => {
+    let state = marquee.createState!() as MarqueeState;
+    const document: RasterDocumentState = { width: WIDTH, height: HEIGHT } as RasterDocumentState;
+    let selection: PixelSelection | null = createRectangleSelection(WIDTH, HEIGHT, 10, 10, 30, 30);
+    const context = {
+      documentId: "test-document", document,
+      viewport: { zoom: 1, rotation: 0, panX: 0, panY: 0, mode: "actual" }, options: {}, spaceHeld: false,
+      get selection() { return selection; }, get state() { return state; },
+      setState: (next: MarqueeState) => { state = next; }, capturePointer: () => {},
+      commitSelection: async (_before: PixelSelection | null, after: PixelSelection | null) => { selection = after; },
+      scheduleWork: (fn: () => void) => fn(),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any as ToolContext<MarqueeState>;
+    marquee.onPointerDown!(context, pointerAt(15, 15));
+    marquee.onGestureEnd!(context, pointerAt(15, 15));
+    expect(context.selection).toBeNull();
   });
 });

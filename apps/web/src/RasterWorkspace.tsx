@@ -483,6 +483,8 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     : null;
   const movePending = (toolStates["raster.move"] as MoveState | undefined)?.pending;
   const displayedSelection = catalogueMarqueePreview ?? movePending?.selection ?? state.selection;
+  const activeToolState = activeToolId && catalogueTool ? toolStates[activeToolId] ?? catalogueTool.createState() : null;
+  const toolHidesCommittedSelection = Boolean(catalogueTool && activeToolId && activeToolState !== null && catalogueTool.hidesCommittedSelection?.(activeToolState, toolContextFor(activeToolId, canvasRef.current)));
   // Cmd/Ctrl+H hides the marching ants without dropping the selection, so an
   // edge can be judged without the animation crawling over it. The Selection
   // Brush hides them the same way, but for a different reason and only while
@@ -499,9 +501,9 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   // `displayedSelection.bounds` is passed through so the scan is skipped entirely, not just
   // memoized away.
   const committedSelectionPath = useMemo(() => {
-    if (!displayedSelection || selectionEdgesHidden || activeToolId === "raster.selectionBrush") return "";
+    if (!displayedSelection || selectionEdgesHidden || activeToolId === "raster.selectionBrush" || toolHidesCommittedSelection) return "";
     return selectionOutlinePath(displayedSelection.mask, state.width, state.height, 127, displayedSelection.bounds);
-  }, [displayedSelection, selectionEdgesHidden, activeToolId, state.width, state.height]);
+  }, [displayedSelection, selectionEdgesHidden, activeToolId, state.width, state.height, toolHidesCommittedSelection]);
   const brushLike = activeToolId === "raster.brush" || activeToolId === "raster.pencil" || activeToolId === "raster.highlighter" || activeToolId === "raster.eraser" || activeToolId === "raster.clone" || activeToolId === "raster.spotHeal" || activeToolId === "raster.blur" || activeToolId === "raster.smudge" || activeToolId === "raster.dodge" || activeToolId === "raster.burn";
   const selectionLike = activeToolId === "raster.marquee" || activeToolId === "raster.ellipseMarquee" || activeToolId === "raster.lasso";
   const activeLayer3D = activeRasterLayer(state)?.kind === "3d" ? activeRasterLayer(state) ?? null : null;

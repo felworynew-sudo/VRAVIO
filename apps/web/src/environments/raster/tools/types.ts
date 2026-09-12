@@ -449,6 +449,14 @@ export interface RasterToolDefinition<TState = unknown> {
    * the brush ring and the clone stamp's source marker already use.
    */
   readonly ScreenOverlay?: (props: { state: TState; document: RasterDocumentState; options: Readonly<Record<string, string | number | boolean>>; context: ToolContext<TState> }) => ReactNode;
+
+  /**
+   * A live tool may replace the committed marching-ants outline with its own
+   * transient representation. Patch uses this while its selected source is
+   * being dragged: leaving the old outline underneath a moved preview makes
+   * the cursor appear detached from the region it is actually operating on.
+   */
+  readonly hidesCommittedSelection?: (state: TState, context: ToolContext<TState>) => boolean;
 }
 
 export interface RasterToolModule<TState = unknown> {

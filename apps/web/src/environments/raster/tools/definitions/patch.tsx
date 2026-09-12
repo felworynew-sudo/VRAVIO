@@ -58,6 +58,16 @@ export interface PatchState {
 
 const empty: PatchState = { fallbackLasso: null, stroke: null };
 
+function selectionContainsPoint(context: ToolContext<PatchState>, point: Point): boolean {
+  const selection = context.selection;
+  if (!selection) return false;
+  const x = Math.floor(point.x), y = Math.floor(point.y);
+  return x >= selection.bounds.x && y >= selection.bounds.y
+    && x < selection.bounds.x + selection.bounds.width && y < selection.bounds.y + selection.bounds.height
+    && x >= 0 && y >= 0 && x < context.document.width && y < context.document.height
+    && selection.mask[y * context.document.width + x]! > 0;
+}
+
 /**
  * How much of the multigrid solve's own sweep budget a live drag frame gets —
  * `solveHealMembrane`'s own `sweepScale` (heal_membrane.ts). The membrane
@@ -203,12 +213,16 @@ const patch: RasterToolDefinition<PatchState> = {
     if (context.paintTarget.kind === "mask") return;
     if (locksRefuse(context, "paint", "raster.patch")) return;
     context.capturePointer(pointer.pointerId);
-    // No selection yet, or Shift/Alt held — draw a new lasso instead of starting a patch drag,
+    // No selection, a modifier, or a press outside the selected pixels — draw a new lasso
+    // instead of starting a patch drag. A Patch source can only be dragged by
+    // grabbing that actual source region; starting it from arbitrary canvas
+    // coordinates made the user steer an invisible patch and prevented normal
+    // new/add/subtract selection gestures outside the current region.
     // the same rule `marquee-selection.tsx`'s own lasso already follows for a click that lands
     // inside its current selection (Shift/Alt held always means "a fresh shape to combine", never
     // "move what's already there"). Without this, Patch could only ever draw a first selection
     // with nothing existing yet — there was no way to add more, the way Lasso already lets you.
-    if (!context.selection || pointer.shiftKey || pointer.altKey) {
+    if (!context.selection || pointer.shiftKey || pointer.altKey || !selectionContainsPoint(context, pointer.point)) {
       context.setState({ fallbackLasso: { pointerId: pointer.pointerId, points: [pointer.point] }, stroke: null });
       return;
     }
@@ -268,7 +282,10 @@ const patch: RasterToolDefinition<PatchState> = {
       // A click that never became a drag draws nothing, as it does for
       // lasso itself — a one-pixel selection is never what anyone wanted.
       const travelled = Math.max(...points.map((item) => Math.hypot(item.x - first.x, item.y - first.y)), 0);
-      if (travelled < 2) return;
+      if (travelled < 2) {
+        if (context.selection) void context.commitSelection(context.selection, null, "Deselect (Снять выделение)");
+        return;
+      }
       const feather = Number(context.options.feather ?? 0);
       const incoming = createPolygonSelection(context.document.width, context.document.height, points, feather);
       // Shift/Alt read the same way `marquee-selection.tsx`'s own lasso does — this fallback
@@ -282,6 +299,12 @@ const patch: RasterToolDefinition<PatchState> = {
     const stroke = state.stroke;
     if (!stroke || stroke.pointerId !== pointer.pointerId) return;
     context.setState(empty);
+    if (Math.hypot(pointer.point.x - stroke.curveStart.x, pointer.point.y - stroke.curveStart.y) < 2) {
+      // Patch is also a selection tool while a source region is active. A
+      // single click is therefore deselect, never a zero-offset heal commit.
+      if (context.selection) void context.commitSelection(context.selection, null, "Deselect (Снять выделение)");
+      return;
+    }
     // Cancels whatever live-preview solve might still be in flight in the Worker before this
     // tool's own synchronous, full-quality solve runs — otherwise that stale preview could
     // resolve after the commit below and repaint over it (`applyPatchPreviewAsync`'s own comment
@@ -319,6 +342,10 @@ const patch: RasterToolDefinition<PatchState> = {
     if (state.fallbackLasso || state.stroke) context.setState(empty);
   },
 
+  hidesCommittedSelection(state) {
+    return state.stroke !== null;
+  },
+
   Overlay({ state, document, context }) {
     if (state.fallbackLasso) {
       return <svg className="selection-overlay" viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
@@ -334,15 +361,15 @@ const patch: RasterToolDefinition<PatchState> = {
     if (offsetX === 0 && offsetY === 0) return null;
     const path = selectionOutlinePath(selection.mask, document.width, document.height, 127, selection.bounds);
     if (!path) return null;
-    // Where the patch is reading from. The destination keeps its own
-    // marching ants, so the pair shows both halves of the operation at
-    // once — otherwise a drag looks like it is moving the selection.
-    // Screen measurements, divided back out of the stage's zoom — the dash
-    // lengths as much as the width, since a dash pattern in document units
-    // stretches with the zoom exactly like the line it is drawn on.
-    const zoom = context.viewport.zoom;
-    return <svg className="patch-source-overlay" viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
-      <path className="patch-source-path" strokeWidth={1.5 / zoom} strokeDasharray={`${5 / zoom} ${4 / zoom}`} d={path} transform={`translate(${offsetX} ${offsetY})`}/>
+    // The source outline follows the cursor as one visible selection. The
+    // workspace suppresses the committed ants for this state via
+    // `hidesCommittedSelection`, so the user is not asked to infer which of
+    // two outlines is being dragged. Pixels at the original selection still
+    // receive the live healing preview underneath this moved outline.
+    return <svg className="selection-overlay patch-selection-overlay" viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
+      <MarchingAnts zoom={context.viewport.zoom}>
+        <path d={path} transform={`translate(${offsetX} ${offsetY})`}/>
+      </MarchingAnts>
     </svg>;
   },
 };

@@ -137,7 +137,15 @@ export function createMarqueeTool(id: string, kind: MarqueeKind): RasterToolDefi
         // can land before the last `scheduleWork` callback from `onPointerMove` runs, and the
         // release position is the one the user actually meant (same reasoning as `crop.tsx`'s
         // own `onGestureEnd`).
-        const moved = translateSelection(drag.base, context.document.width, context.document.height, pointer.point.x - drag.from.x, pointer.point.y - drag.from.y);
+        const dx = pointer.point.x - drag.from.x, dy = pointer.point.y - drag.from.y;
+        // A click on the canvas is a deselect gesture, including when it lands
+        // inside the current marquee. The old branch treated that click as a
+        // zero-pixel "move" and silently kept the selection alive.
+        if (Math.hypot(dx, dy) < 2) {
+          void context.commitSelection(drag.base, null, "Deselect (Снять выделение)");
+          return;
+        }
+        const moved = translateSelection(drag.base, context.document.width, context.document.height, dx, dy);
         if (moved) void context.commitSelection(drag.base, moved, "Move Selection (Перемещение выделения)");
         return;
       }

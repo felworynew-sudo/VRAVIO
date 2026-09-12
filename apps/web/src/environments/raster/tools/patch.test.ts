@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { HistoryManager } from "@vravio/kernel";
 import { createEllipseSelection, type PixelSelection } from "@vravio/env-raster";
 import patch, { type PatchState } from "./definitions/patch";
 import type { ToolContext, ToolPointer } from "./types";
@@ -38,7 +39,7 @@ function baseContext(selection: PixelSelection | null) {
   let state: PatchState = patch.createState!() as PatchState;
   let currentSelection = selection;
   const scheduled: (() => void)[] = [];
-  const commits: { before: Uint8ClampedArray; after: Uint8ClampedArray }[] = [];
+  const commits: { before: Uint8ClampedArray; after: Uint8ClampedArray; label: string }[] = [];
   const selectionCommits: { before: PixelSelection | null; after: PixelSelection | null }[] = [];
   const context = {
     documentId: "test-document",
@@ -46,7 +47,10 @@ function baseContext(selection: PixelSelection | null) {
     viewport: { zoom: 1, rotation: 0, panX: 0, panY: 0, mode: "actual" },
     options: {},
     paintTarget: { kind: "pixels", layerId: "layer-1" },
-    paintMask: undefined,
+    // RasterWorkspace supplies the active selection as paintMask. Keeping the
+    // harness faithful is essential here: Patch deliberately refuses to heal
+    // without this mask, so `undefined` only tests its no-op safety path.
+    paintMask: selection?.mask,
     get selection() { return currentSelection; },
     get state() { return state; },
     setState: (next: PatchState) => { state = next; },
@@ -56,7 +60,7 @@ function baseContext(selection: PixelSelection | null) {
     schedulePreview: () => {},
     // Counts instead of running inline — the point of this harness for test 1.
     scheduleWork: (fn: () => void) => { scheduled.push(fn); },
-    commit: async (b: Uint8ClampedArray, a: Uint8ClampedArray) => { commits.push({ before: b, after: a }); },
+    commit: async (b: Uint8ClampedArray, a: Uint8ClampedArray, label: string) => { commits.push({ before: b, after: a, label }); },
     commitSelection: async (b: PixelSelection | null, a: PixelSelection | null) => { selectionCommits.push({ before: b, after: a }); currentSelection = a; },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any as ToolContext<PatchState>;
@@ -103,6 +107,42 @@ describe("patch tool: Shift/Alt add to an existing selection like Lasso does", (
     expect(state.fallbackLasso).toBeNull();
   });
 
+  it("starts a patch drag only when the press is inside the selected pixels", () => {
+    const selection = createEllipseSelection(WIDTH, HEIGHT, 10, 10, 30, 30, 0);
+    const { context } = baseContext(selection);
+    patch.onPointerDown!(context, pointerAt(42, 42));
+    const state = context.state as PatchState;
+    expect(state.stroke).toBeNull();
+    expect(state.fallbackLasso).not.toBeNull();
+  });
+
+  it("uses a click without a drag to deselect instead of applying a zero-offset patch", () => {
+    const selection = createEllipseSelection(WIDTH, HEIGHT, 10, 10, 30, 30, 0);
+    const { context, commits, selectionCommits } = baseContext(selection);
+    patch.onPointerDown!(context, pointerAt(20, 20));
+    patch.onGestureEnd!(context, pointerAt(20, 20));
+    expect(commits).toHaveLength(0);
+    expect(selectionCommits).toHaveLength(1);
+    expect(context.selection).toBeNull();
+  });
+
+  it("also deselects when an outside click begins but does not complete a new lasso", () => {
+    const selection = createEllipseSelection(WIDTH, HEIGHT, 10, 10, 30, 30, 0);
+    const { context, selectionCommits } = baseContext(selection);
+    patch.onPointerDown!(context, pointerAt(42, 42));
+    patch.onGestureEnd!(context, pointerAt(42, 42));
+    expect(selectionCommits).toHaveLength(1);
+    expect(context.selection).toBeNull();
+  });
+
+  it("marks only a live patch drag as replacing the committed outline", () => {
+    const selection = createEllipseSelection(WIDTH, HEIGHT, 10, 10, 30, 30, 0);
+    const { context } = baseContext(selection);
+    expect(patch.hidesCommittedSelection?.(context.state as PatchState, context)).toBe(false);
+    patch.onPointerDown!(context, pointerAt(20, 20));
+    expect(patch.hidesCommittedSelection?.(context.state as PatchState, context)).toBe(true);
+  });
+
   it("Shift held, even with a selection already in place, draws a new lasso instead", () => {
     const selection = createEllipseSelection(WIDTH, HEIGHT, 10, 10, 30, 30, 0);
     const { context } = baseContext(selection);
@@ -127,5 +167,46 @@ describe("patch tool: Shift/Alt add to an existing selection like Lasso does", (
     // "replace" that would have thrown the original ellipse away.
     expect(after.mask[10 * WIDTH + 10]).toBeGreaterThan(0); // inside the original ellipse
     expect(after.mask[37 * WIDTH + 37]).toBeGreaterThan(0); // inside the newly-drawn square
+  });
+});
+
+describe("patch tool: history", () => {
+  it("produces one reversible pixel edit that undo and redo restore exactly", async () => {
+    const selection = createEllipseSelection(WIDTH, HEIGHT, 10, 10, 30, 30, 0);
+    const { context, commits } = baseContext(selection);
+    // A spatially varying source makes a dragged patch observably distinct
+    // from its destination. A uniform test image would make a correct patch
+    // look like a no-op and would not prove that history has two real sides.
+    const source = context.layerPixels();
+    for (let y = 0; y < HEIGHT; y += 1) for (let x = 0; x < WIDTH; x += 1) {
+      const offset = (y * WIDTH + x) * 4;
+      source[offset] = (x * 17 + y * 3) % 256;
+      source[offset + 1] = (x * 5 + y * 19) % 256;
+      source[offset + 2] = (x * 11 + y * 7) % 256;
+      source[offset + 3] = 255;
+    }
+    // Feed the texture to the tool's snapshot without exposing a mutable
+    // canvas — the production tool also receives a copy from layerPixels().
+    (context as unknown as { layerPixels: () => Uint8ClampedArray }).layerPixels = () => source.slice();
+
+    patch.onPointerDown!(context, pointerAt(20, 20));
+    patch.onPointerMove!(context, pointerAt(31, 24));
+    patch.onGestureEnd!(context, pointerAt(31, 24));
+
+    expect(commits).toHaveLength(1);
+    const edit = commits[0]!;
+    expect(edit.label).toBe("Patch (Заплатка)");
+    expect(edit.after).not.toEqual(edit.before);
+
+    let pixels = edit.after.slice(); // Patch has already applied this side before it records history.
+    let swap = edit.before.slice();
+    const history = new HistoryManager();
+    const exchange = () => { const current = pixels; pixels = swap; swap = current; };
+    await history.record({ label: "Patch (Заплатка)", memoryEstimate: swap.byteLength, redo: exchange, undo: exchange });
+
+    expect(await history.undo()).toBe(true);
+    expect(pixels).toEqual(edit.before);
+    expect(await history.redo()).toBe(true);
+    expect(pixels).toEqual(edit.after);
   });
 });
