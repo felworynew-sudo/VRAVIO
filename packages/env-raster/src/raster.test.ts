@@ -46,7 +46,7 @@ describe("adjustments", () => {
     }
   });
 });
-import { appendLayer, appendRasterGroup, applyRasterFilter, blurDab, combineSelections, DirtyRegion, RasterTileCache, TileCompositor, extractTile, findSmartCrop, planTiles, saliencyMap, builtInLuts, formatCubeLut, generateLut, identityLut, parseCubeLut, sampleColorLookup, expandRectForFilter, filterPassCount, filterSpecById, filterSpecs, hasGpuFilter, clampRegionToDocument, compositeRasterDocument, compositeRasterRegion, compositeRasterThumbnail, createAdjustmentLayer, createContiguousColorSelection, createEllipseSelection, createPolygonSelection, createRasterDocument, createRasterLayer, createRectangleSelection, cropRasterDocument, accumulateDab, accumulateStrokeSegment, compositeCoverage, drawShape, floodFill, invertPixelSelection, isRasterDocumentState, parseHexColor, patchFromSelection, rasterLayerDescendantIds, rasterLayerRows, renderLayerEffects, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectAllPixels, selectOpaquePixels, selectionOutlinePath, smudgeStrokeSegment, translateLayerPixels, translateSelection } from "./index";
+import { appendLayer, appendRasterGroup, applyRasterFilter, blurDab, combineSelections, DirtyRegion, RasterTileCache, TileCompositor, extractTile, findSmartCrop, planTiles, saliencyMap, builtInLuts, formatCubeLut, generateLut, identityLut, parseCubeLut, sampleColorLookup, expandRectForFilter, filterPassCount, filterSpecById, filterSpecs, hasGpuFilter, clampRegionToDocument, compositeRasterDocument, compositeRasterRegion, compositeRasterThumbnail, createAdjustmentLayer, createContiguousColorSelection, createEllipseSelection, createPolygonSelection, createRasterDocument, createRasterLayer, createRectangleSelection, cropRasterDocument, accumulateDab, accumulateStrokeSegment, compositeCoverage, drawShape, floodFill, invertPixelSelection, isRasterDocumentState, layerDocumentPixels, parseHexColor, patchFromSelection, rasterLayerDescendantIds, rasterLayerRows, renderLayerEffects, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectAllPixels, selectOpaquePixels, selectionOutlinePath, smudgeStrokeSegment, translateLayerPixels, translateSelection } from "./index";
 import { createLiquifyState, liquifyWarp, renderLiquify } from "./liquify";
 import type { RgbaColor } from "./types";
 
@@ -432,20 +432,17 @@ describe("raster transform", () => {
     expect(cropped.layers[0]?.bounds).toEqual({ x: 1, y: 1, width: 2, height: 2 });
   });
 
-  it("drops the part of a layer that would land at a negative bounds.x/y when deleteCroppedPixels is false", () => {
-    // A full-canvas layer's bounds.x/y is always 0 — shifting by (-left,-top) for any
-    // crop with left>0 or top>0 would go negative, which nothing else in this codebase
-    // can represent (layerDocumentPixels indexes bounds.x/y directly into the
-    // destination buffer — see slideLayerBounds's own comment). This reproduces the
-    // exact crash ("offset is out of bounds") a live crop-then-Enter hit before the fix.
+  it("retains pixels left and above the new canvas when deleteCroppedPixels is false", () => {
     const document = createRasterDocument(4, 3, { backgroundColor: "#112233" });
+    const beforePixels = document.layers[0]!.pixels;
     const cropped = cropRasterDocument(document, { x: 1, y: 1, width: 2, height: 2 });
     expect(cropped).toMatchObject({ width: 2, height: 2 });
     const layer = cropped.layers[0]!;
-    expect(layer.bounds.x).toBeGreaterThanOrEqual(0);
-    expect(layer.bounds.y).toBeGreaterThanOrEqual(0);
-    // The surviving buffer's own reported size always matches its pixel array.
-    expect(layer.pixels).toHaveLength(layer.bounds.width * layer.bounds.height * 4);
+    expect(layer.pixels).toBe(beforePixels);
+    expect(layer.bounds).toEqual({ x: -1, y: -1, width: 4, height: 3 });
+    // The compositor sees only the crop's visible intersection and does not
+    // throw on a negative layer origin.
+    expect(layerDocumentPixels(layer, 2, 2)[3]).toBe(255);
   });
 
   it("crops a layer mask to the new canvas regardless of deleteCroppedPixels", () => {

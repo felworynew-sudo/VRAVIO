@@ -60,13 +60,18 @@ export function layerDocumentPixels(layer: RasterLayer, documentWidth: number, d
     && cached.bounds.width === bounds.width && cached.bounds.height === bounds.height) return cached.pixels;
 
   const pixels = new Uint8ClampedArray(documentWidth * documentHeight * 4);
-  const rowBytes = Math.max(0, Math.min(bounds.width, documentWidth - bounds.x)) * 4;
+  // Non-destructive crop can put retained pixels left/above the canvas. Read
+  // only the visible intersection, never using a negative destination offset.
+  const visibleLeft = Math.max(0, bounds.x);
+  const visibleRight = Math.min(documentWidth, bounds.x + bounds.width);
+  const rowBytes = Math.max(0, visibleRight - visibleLeft) * 4;
+  const sourceOffset = Math.max(0, visibleLeft - bounds.x) * 4;
   if (rowBytes > 0) {
     for (let y = 0; y < bounds.height; y += 1) {
       const documentY = bounds.y + y;
       if (documentY < 0 || documentY >= documentHeight) continue;
-      const from = y * bounds.width * 4;
-      pixels.set(layer.pixels.subarray(from, from + rowBytes), (documentY * documentWidth + bounds.x) * 4);
+      const from = y * bounds.width * 4 + sourceOffset;
+      pixels.set(layer.pixels.subarray(from, from + rowBytes), (documentY * documentWidth + visibleLeft) * 4);
     }
   }
   materialised.set(layer.pixels, { width: documentWidth, height: documentHeight, bounds: { ...bounds }, pixels });

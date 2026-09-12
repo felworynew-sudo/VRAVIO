@@ -6140,7 +6140,7 @@ Adobe документирует: (1) многопоточный компози�
 | 🔴 Perspective Crop | Кадрирование четырёхугольником с исправлением перспективы | Adobe Help | GIMP Perspective+Crop |
 | 🟠 Нормальный Crop Options Bar | **Уже начато в этой сессии** — engine-часть (`cropRasterDocument`'s `deleteCroppedPixels`) готова, pending-rect UI с ручками/ratio/thirds ещё нет, см. §2.1 | Adobe Help | Patchy |
 | 🔴 Straighten in Crop | Провёл линию по горизонту → авто-выравнивание | Adobe Help | Patchy — `canvas_widget_crop.cpp`'s rotate-outside-box жест, уже читан в этой сессии |
-| 🟠 Non-destructive Crop | **Engine-часть готова** в этой сессии (`deleteCroppedPixels=false` default) — Delete Cropped Pixels toggle в UI ещё нет | Adobe Help | Krita |
+| 🟠 Non-destructive Crop | `deleteCroppedPixels=false` по умолчанию: crop только меняет canvas и сдвигает bounds, не переписывая буферы слоёв (включая left/top overhang); при включённой опции каждый слой реально обрезается. Toggle есть в Crop Tool Options. Layer-mask storage пока canvas-sized и при crop пересобирается отдельно. | Adobe Help | GIMP / Krita |
 | 🔴 Content-Aware Crop expansion | Расширить canvas за фото, алгоритмически заполнить пустоту | Adobe Help | Resynthesizer |
 | 🔴 Puppet Warp | Pins+mesh для локальной деформации персонажей/объектов | Adobe Help | puppet-warp |
 | 🔴 Frame Tool | Контейнер, в который помещается/заменяется изображение с авто-обрезкой | Adobe Help | Penpot frames |

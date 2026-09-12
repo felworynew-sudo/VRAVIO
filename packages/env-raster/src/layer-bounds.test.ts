@@ -91,3 +91,19 @@ describe("setLayerPixels' §32.6 add-only fast path", () => {
     expectBoundsMatchBuffer(layer);
   });
 });
+
+describe("layerDocumentPixels outside the canvas", () => {
+  it("composites the visible intersection of a layer with a negative origin", () => {
+    const layer = createRasterLayer(3, 2, "Retained crop pixels");
+    layer.bounds = { x: -1, y: -1, width: 3, height: 2 };
+    layer.width = 3; layer.height = 2;
+    layer.pixels.fill(0);
+    // Local (1,1) lands at document (0,0); local (0,0) remains off-canvas.
+    layer.pixels[(1 * 3 + 1) * 4 + 3] = 255;
+    layer.pixels[3] = 255;
+
+    const canvas = layerDocumentPixels(layer, 2, 2);
+    expect(canvas[3]).toBe(255);
+    expect(canvas[7]).toBe(0);
+  });
+});
