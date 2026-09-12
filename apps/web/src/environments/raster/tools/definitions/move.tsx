@@ -120,8 +120,8 @@ type MoveDrag =
    * that drawing on screen. Patchy computes the same union from the same two positions
    * (`moving_layers_dirty_region(old_delta, new_delta)`, canvas_widget_move.cpp). */
   | { kind: "move"; pointerId: number; from: Point; current: Point; previous?: Point; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean; fromOrigin?: boolean; float?: FloatingPixels; linkedBase?: readonly { layerId: string; basePixels: Uint8ClampedArray }[]; baseLive?: PendingTransform["live"]; sourceBounds?: RasterRect }
-  | { kind: "scale"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; session: TransformSession; handleX: -1 | 0 | 1; handleY: -1 | 0 | 1; dx: number; dy: number; text?: PendingTextTransform }
-  | { kind: "rotate"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; session: TransformSession; center: Point; startAngle: number; baseRotation: number; dx: number; dy: number; handleX: -1 | 1; handleY: -1 | 1; text?: PendingTextTransform }
+  | { kind: "scale"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; session: TransformSession; handleX: -1 | 0 | 1; handleY: -1 | 0 | 1; dx: number; dy: number; shiftKey: boolean; text?: PendingTextTransform }
+  | { kind: "rotate"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; session: TransformSession; center: Point; startAngle: number; baseRotation: number; dx: number; dy: number; handleX: -1 | 1; handleY: -1 | 1; shiftKey: boolean; text?: PendingTextTransform }
   | { kind: "quad"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; quadOrigin: { pixels: Uint8ClampedArray; bounds: RasterRect; selection: PixelSelection | null }; baseCorners: readonly [Point, Point, Point, Point]; handleIndex: number; mode: QuadTransformMode }
   | { kind: "warp"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; meshOrigin: { pixels: Uint8ClampedArray; bounds: RasterRect; selection: PixelSelection | null }; baseSelection: PixelSelection | null; baseMesh: readonly Point[]; pointIndex: number };
 
@@ -179,6 +179,51 @@ function applyQuadHandleDelta(base: readonly [Point, Point, Point, Point], handl
     corners[vPartner]!.y = base[vPartner]!.y - dy;
   }
   return corners;
+}
+
+/**
+ * The rectangle a Free Transform scale handle describes. Shift locks the
+ * source aspect ratio, matching Photoshop's classic constrain gesture; side
+ * handles grow the opposite dimension around the centre rather than silently
+ * ignoring the modifier. Calculated from the drag's start rectangle every
+ * frame, so pressing Shift halfway through immediately changes the preview
+ * without accumulating numerical error.
+ */
+function scaleTargetForPointer(source: RasterRect, handleX: -1 | 0 | 1, handleY: -1 | 0 | 1, point: Point, keepAspect: boolean): RasterRect {
+  let left = source.x, right = source.x + source.width, top = source.y, bottom = source.y + source.height;
+  if (!keepAspect) {
+    if (handleX === -1) left = point.x; else if (handleX === 1) right = point.x;
+    if (handleY === -1) top = point.y; else if (handleY === 1) bottom = point.y;
+    return { x: Math.min(left, right), y: Math.min(top, bottom), width: Math.max(1, Math.abs(right - left)), height: Math.max(1, Math.abs(bottom - top)) };
+  }
+
+  const aspect = source.width / Math.max(1e-6, source.height);
+  if (handleX !== 0 && handleY !== 0) {
+    const anchorX = handleX === 1 ? source.x : source.x + source.width;
+    const anchorY = handleY === 1 ? source.y : source.y + source.height;
+    const scaleX = (point.x - anchorX) / (handleX * source.width);
+    const scaleY = (point.y - anchorY) / (handleY * source.height);
+    const scale = Math.abs(scaleX) >= Math.abs(scaleY) ? scaleX : scaleY;
+    const endX = anchorX + handleX * source.width * scale;
+    const endY = anchorY + handleY * source.height * scale;
+    return { x: Math.min(anchorX, endX), y: Math.min(anchorY, endY), width: Math.max(1, Math.abs(endX - anchorX)), height: Math.max(1, Math.abs(endY - anchorY)) };
+  }
+
+  if (handleX !== 0) {
+    const anchorX = handleX === 1 ? source.x : source.x + source.width;
+    const scale = (point.x - anchorX) / (handleX * source.width);
+    const width = Math.max(1, Math.abs(source.width * scale));
+    const height = Math.max(1, width / aspect);
+    const endX = anchorX + handleX * source.width * scale;
+    return { x: Math.min(anchorX, endX), y: source.y + (source.height - height) / 2, width, height };
+  }
+
+  const anchorY = handleY === 1 ? source.y : source.y + source.height;
+  const scale = (point.y - anchorY) / (handleY * source.height);
+  const height = Math.max(1, Math.abs(source.height * scale));
+  const width = Math.max(1, height * aspect);
+  const endY = anchorY + handleY * source.height * scale;
+  return { x: source.x + (source.width - width) / 2, y: Math.min(anchorY, endY), width, height };
 }
 
 /** The frame a pending transform's handles sit on — text uses its own live-typed bounds, a
@@ -520,10 +565,7 @@ function applyDragFrame(context: ToolContext<MoveState>, drag: MoveDrag, interpo
   const point = drag.current;
   if (drag.kind === "scale") {
     const source = drag.sourceBounds;
-    let left = source.x, right = source.x + source.width, top = source.y, bottom = source.y + source.height;
-    if (drag.handleX === -1) left = point.x; else if (drag.handleX === 1) right = point.x;
-    if (drag.handleY === -1) top = point.y; else if (drag.handleY === 1) bottom = point.y;
-    const target = { x: Math.min(left, right), y: Math.min(top, bottom), width: Math.max(1, Math.abs(right - left)), height: Math.max(1, Math.abs(bottom - top)) };
+    const target = scaleTargetForPointer(source, drag.handleX, drag.handleY, point, drag.shiftKey);
     if (drag.text) return { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: 0, text: { ...drag.text, targetBounds: target } };
     // Described, never resampled — at any point of the gesture, release included. The session's
     // own source rectangle and rotation carry through; only where it has been carried changes.
@@ -537,7 +579,9 @@ function applyDragFrame(context: ToolContext<MoveState>, drag: MoveDrag, interpo
     return { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: session.rotation, live: { source: session.source, target: scaled, rotation: session.rotation } };
   }
   if (drag.kind === "rotate") {
-    const angle = drag.baseRotation + (Math.atan2(point.y - drag.center.y, point.x - drag.center.x) - drag.startAngle) * 180 / Math.PI;
+    const rawDelta = (Math.atan2(point.y - drag.center.y, point.x - drag.center.x) - drag.startAngle) * 180 / Math.PI;
+    // Photoshop: Shift constrains a Free Transform rotation to 15° steps.
+    const angle = drag.baseRotation + (drag.shiftKey ? Math.round(rawDelta / 15) * 15 : rawDelta);
     if (drag.text) return { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: angle, text: drag.text };
     // The angle is the session's, absolute — nothing about the layer's pixels changes here.
     return { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: angle, live: { source: drag.session.source, target: drag.session.target, rotation: angle } };
@@ -648,7 +692,7 @@ const move: RasterToolDefinition<MoveState> = {
         const handle = findScaleHandle(bounds, point, tolerance);
         if (handle) {
           context.capturePointer(pointer.pointerId);
-          context.setState({ pending, drag: { kind: "scale", pointerId: pointer.pointerId, from: point, current: point, before: pending.before, basePixels: pending.text ? pending.pixels : pending.pixels.slice(), baseSelection: cloneSelection(pending.selection), sourceBounds: { ...bounds }, session: sessionFor(pending, bounds), handleX: handle[0], handleY: handle[1], dx: pending.dx, dy: pending.dy, ...(pending.text ? { text: pending.text } : {}) } });
+          context.setState({ pending, drag: { kind: "scale", pointerId: pointer.pointerId, from: point, current: point, before: pending.before, basePixels: pending.text ? pending.pixels : pending.pixels.slice(), baseSelection: cloneSelection(pending.selection), sourceBounds: { ...bounds }, session: sessionFor(pending, bounds), handleX: handle[0], handleY: handle[1], dx: pending.dx, dy: pending.dy, shiftKey: pointer.shiftKey, ...(pending.text ? { text: pending.text } : {}) } });
           return;
         }
         // Outside the frame rotates — see `findRotateCorner`, which carries the donor reading.
@@ -657,7 +701,7 @@ const move: RasterToolDefinition<MoveState> = {
         if (rotateCorner) {
           context.capturePointer(pointer.pointerId);
           const center = { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
-          context.setState({ pending, drag: { kind: "rotate", pointerId: pointer.pointerId, from: point, current: point, before: pending.before, basePixels: pending.text ? pending.pixels : pending.pixels.slice(), baseSelection: cloneSelection(pending.selection), sourceBounds: { ...bounds }, session: sessionFor(pending, bounds), center, startAngle: Math.atan2(point.y - center.y, point.x - center.x), baseRotation: pending.rotation, dx: pending.dx, dy: pending.dy, handleX: rotateCorner[0] as -1 | 1, handleY: rotateCorner[1] as -1 | 1, ...(pending.text ? { text: pending.text } : {}) } });
+          context.setState({ pending, drag: { kind: "rotate", pointerId: pointer.pointerId, from: point, current: point, before: pending.before, basePixels: pending.text ? pending.pixels : pending.pixels.slice(), baseSelection: cloneSelection(pending.selection), sourceBounds: { ...bounds }, session: sessionFor(pending, bounds), center, startAngle: Math.atan2(point.y - center.y, point.x - center.x), baseRotation: pending.rotation, dx: pending.dx, dy: pending.dy, handleX: rotateCorner[0] as -1 | 1, handleY: rotateCorner[1] as -1 | 1, shiftKey: pointer.shiftKey, ...(pending.text ? { text: pending.text } : {}) } });
           return;
         }
         // "Click away to accept" still holds, but it is decided at the *end* of the gesture now:
@@ -707,7 +751,7 @@ const move: RasterToolDefinition<MoveState> = {
   onPointerMove(context, pointer) {
     const drag = context.state.drag;
     if (!drag || drag.pointerId !== pointer.pointerId) return;
-    const nextDrag = { ...drag, current: pointer.point, previous: drag.current } as MoveDrag;
+    const nextDrag = { ...drag, current: pointer.point, previous: drag.current, ...((drag.kind === "scale" || drag.kind === "rotate") ? { shiftKey: pointer.shiftKey } : {}) } as MoveDrag;
     context.setState({ pending: context.state.pending, drag: nextDrag });
     // `context.state` is a snapshot taken when this context was built, not a live view — reading
     // it back inside the deferred callback would see the drag as it was *before* the line above,

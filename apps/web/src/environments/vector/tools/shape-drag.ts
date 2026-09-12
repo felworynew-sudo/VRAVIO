@@ -1,6 +1,7 @@
 import { addShape, createShape, emptyVectorStyle, solidFill, solidStroke, updateShape, type VectorShapeKind } from "@vravio/env-vector";
 import { cssToColor } from "@vravio/kernel";
 import type { VectorSnapshot } from "../../../vector-commands";
+import { boxFromDrag } from "../../../gesture-constraints";
 import { constrainVectorTo45Degrees } from "./angle-constrain";
 import type { ToolContext, ToolPointer, VectorToolDefinition } from "./types";
 
@@ -74,9 +75,8 @@ export function createShapeDragTool(id: string, kind: VectorShapeKind): VectorTo
         context.mutate((draft) => updateShape(draft, shapeId, { x1: start.x, y1: start.y, x2: start.x + dx, y2: start.y + dy }));
         return;
       }
-      const x = Math.min(start.x, pointer.point.x), y = Math.min(start.y, pointer.point.y);
-      const width = Math.abs(pointer.point.x - start.x), height = Math.abs(pointer.point.y - start.y);
-      context.mutate((draft) => updateShape(draft, shapeId, { x, y, width: Math.max(1, width), height: Math.max(1, height) }));
+      const box = boxFromDrag(start, pointer.point, { shiftKey: pointer.shiftKey, altKey: pointer.altKey });
+      context.mutate((draft) => updateShape(draft, shapeId, { x: box.x, y: box.y, width: Math.max(1, box.width), height: Math.max(1, box.height) }));
     },
 
     onGestureEnd(context: ToolContext<ShapeDragState>) {

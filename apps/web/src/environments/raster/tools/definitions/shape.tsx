@@ -1,4 +1,5 @@
 import { appendLayer, cloneRasterState, createRasterLayer, drawShape, parseHexColor, setLayerPixels, type Point, type ShapeKind } from "@vravio/env-raster";
+import { boxFromDrag } from "../../../../gesture-constraints";
 import type { RasterToolDefinition } from "../types";
 
 /**
@@ -15,6 +16,8 @@ interface Draft {
   readonly pointerId: number;
   readonly from: Point;
   readonly current: Point;
+  readonly shiftKey: boolean;
+  readonly altKey: boolean;
 }
 
 interface ShapeState {
@@ -36,13 +39,13 @@ const shape: RasterToolDefinition<ShapeState> = {
   onPointerDown(context, pointer) {
     if (context.activeLayer?.locked) return;
     context.capturePointer(pointer.pointerId);
-    context.setState({ draw: { pointerId: pointer.pointerId, from: pointer.point, current: pointer.point } });
+    context.setState({ draw: { pointerId: pointer.pointerId, from: pointer.point, current: pointer.point, shiftKey: pointer.shiftKey, altKey: pointer.altKey } });
   },
 
   onPointerMove(context, pointer) {
     const draw = context.state.draw;
     if (!draw || draw.pointerId !== pointer.pointerId) return;
-    context.setState({ draw: { ...draw, current: pointer.point } });
+    context.setState({ draw: { ...draw, current: pointer.point, shiftKey: pointer.shiftKey, altKey: pointer.altKey } });
   },
 
   onGestureEnd(context, pointer) {
@@ -50,7 +53,8 @@ const shape: RasterToolDefinition<ShapeState> = {
     context.setState(empty);
     if (!draw || draw.pointerId !== pointer.pointerId) return;
 
-    const rect = { x: draw.from.x, y: draw.from.y, width: draw.current.x - draw.from.x, height: draw.current.y - draw.from.y };
+    const box = boxFromDrag(draw.from, draw.current, { shiftKey: pointer.shiftKey, altKey: pointer.altKey });
+    const rect = { x: box.x, y: box.y, width: box.width, height: box.height };
     // A click that never became a drag draws nothing — there is no sane
     // shape to fit into a zero-area box.
     if (Math.abs(rect.width) < 1 && Math.abs(rect.height) < 1) return;
@@ -91,9 +95,9 @@ const shape: RasterToolDefinition<ShapeState> = {
   Overlay({ state, document, options, context }) {
     const draw = state.draw;
     if (!draw) return null;
-    const rect = { x: draw.from.x, y: draw.from.y, width: draw.current.x - draw.from.x, height: draw.current.y - draw.from.y };
-    if (Math.abs(rect.width) <= 0 && Math.abs(rect.height) <= 0) return null;
-    const box = { x: Math.min(rect.x, rect.x + rect.width), y: Math.min(rect.y, rect.y + rect.height), width: Math.abs(rect.width), height: Math.abs(rect.height) };
+    const box = boxFromDrag(draw.from, draw.current, { shiftKey: draw.shiftKey, altKey: draw.altKey });
+    if (box.width <= 0 && box.height <= 0) return null;
+    const rect = { x: box.x, y: box.y, width: box.width, height: box.height };
     const kind = String(options.shapeKind ?? "rectangle");
     // Matches the old preview exactly, simplification included: a triangle,
     // polygon or star drafts as its bounding box, not its real outline —

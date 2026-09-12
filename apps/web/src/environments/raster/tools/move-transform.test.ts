@@ -32,8 +32,8 @@ function blockDocument(): RasterDocumentState {
   return state;
 }
 
-function pointerAt(x: number, y: number): ToolPointer {
-  return { point: { x, y }, screenX: x, screenY: y, pointerId: 1, shiftKey: false, altKey: false, ctrlKey: false, metaKey: false, button: 0, pressure: 1 };
+function pointerAt(x: number, y: number, shiftKey = false): ToolPointer {
+  return { point: { x, y }, screenX: x, screenY: y, pointerId: 1, shiftKey, altKey: false, ctrlKey: false, metaKey: false, button: 0, pressure: 1 };
 }
 
 function harness(document: RasterDocumentState) {
@@ -76,10 +76,10 @@ function pendingInQuadMode(context: ToolContext<MoveState>, box: { state: MoveSt
 }
 
 /** One whole handle drag: press on the handle, move, release. */
-function dragHandle(context: ToolContext<MoveState>, from: { x: number; y: number }, to: { x: number; y: number }) {
+function dragHandle(context: ToolContext<MoveState>, from: { x: number; y: number }, to: { x: number; y: number }, shiftKey = false) {
   move.onPointerDown!(context, pointerAt(from.x, from.y));
-  move.onPointerMove!(context, pointerAt(to.x, to.y));
-  move.onGestureEnd!(context, pointerAt(to.x, to.y));
+  move.onPointerMove!(context, pointerAt(to.x, to.y, shiftKey));
+  move.onGestureEnd!(context, pointerAt(to.x, to.y, shiftKey));
 }
 
 describe("free transform is a function of its corners, not of how it got there", () => {
@@ -161,6 +161,34 @@ describe("scale and rotate handles across separate drags", () => {
     let farApart = 0;
     for (let index = 0; index < back.length; index += 1) if (Math.abs(back[index]! - original[index]!) > 64) farApart += 1;
     expect(farApart / (WIDTH * HEIGHT * 4)).toBeLessThan(0.05);
+  });
+
+  it("keeps a Free Transform layer's aspect ratio while Shift is held", () => {
+    const { context, box } = harness(blockDocument());
+    move.onPointerDown!(context, pointerAt(24, 20));
+    move.onPointerMove!(context, pointerAt(24, 20));
+    move.onGestureEnd!(context, pointerAt(24, 20));
+    const bounds = pendingBounds(box.state.pending!, WIDTH, HEIGHT)!;
+    const corner = handleAt(bounds, 1, 1);
+
+    // Deliberately uneven pointer movement: the constraint must make the
+    // outcome proportional, not merely round both dimensions independently.
+    dragHandle(context, corner, { x: corner.x + 10, y: corner.y + 1 }, true);
+    const scaled = pendingBounds(box.state.pending!, WIDTH, HEIGHT)!;
+    expect(scaled.width / scaled.height).toBeCloseTo(bounds.width / bounds.height, 6);
+  });
+
+  it("snaps Free Transform rotation to 15-degree increments while Shift is held", () => {
+    const { context, box } = harness(blockDocument());
+    move.onPointerDown!(context, pointerAt(24, 20));
+    move.onPointerMove!(context, pointerAt(24, 20));
+    move.onGestureEnd!(context, pointerAt(24, 20));
+    const bounds = pendingBounds(box.state.pending!, WIDTH, HEIGHT)!;
+    move.onPointerDown!(context, pointerAt(bounds.x - 20, bounds.y - 20));
+    move.onPointerMove!(context, pointerAt(bounds.x + bounds.width + 17, bounds.y - 13, true));
+
+    const rotation = box.state.pending!.live!.rotation;
+    expect(rotation / 15).toBeCloseTo(Math.round(rotation / 15), 8);
   });
 });
 
