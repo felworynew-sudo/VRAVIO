@@ -132,9 +132,15 @@ function basicAndCurve(r: number, g: number, b: number, s: CameraRawFilterSettin
   return [rr * 255, gg * 255, bb * 255];
 }
 
+function hasHslAdjustment(hsl: CameraRawFilterSettings["hsl"]): boolean {
+  for (const { name } of hslCenters) {
+    const adjustment = hsl[name];
+    if (adjustment.hue || adjustment.saturation || adjustment.luminance) return true;
+  }
+  return false;
+}
+
 function applyHsl(r: number, g: number, b: number, hsl: CameraRawFilterSettings["hsl"]): [number, number, number] {
-  const hasAdjustment = hslCenters.some(({ name }) => hsl[name].hue || hsl[name].saturation || hsl[name].luminance);
-  if (!hasAdjustment) return [r, g, b];
   const [hue, saturation, luminance] = rgbToHsl(r, g, b);
   let hueShift = 0, satShift = 0, lumShift = 0, totalWeight = 0;
   for (const { name, hue: center } of hslCenters) {
@@ -190,12 +196,16 @@ function mulberry32(seed: number): () => number {
 export function applyCameraRawFilter(source: Uint8ClampedArray, width: number, height: number, settings: CameraRawFilterSettings): Uint8ClampedArray {
   const s = settings;
   const pixels = new Uint8ClampedArray(source.length);
+  // Most Camera Raw adjustments leave the colour-mixer panel untouched.  Do
+  // not pay for RGB→HSL→RGB conversion (and its temporary triples) once per
+  // pixel when all eight HSL channels are neutral.
+  const applyHslAdjustment = hasHslAdjustment(s.hsl);
 
   // Pass 1: Basic + Tone Curve + Dehaze + Vibrance/Saturation + HSL, all per-pixel.
   for (let i = 0; i < width * height; i += 1) {
     const at = i * 4;
     let [r, g, b] = basicAndCurve(source[at]!, source[at + 1]!, source[at + 2]!, s);
-    [r, g, b] = applyHsl(r, g, b, s.hsl);
+    if (applyHslAdjustment) [r, g, b] = applyHsl(r, g, b, s.hsl);
     pixels[at] = byte(r); pixels[at + 1] = byte(g); pixels[at + 2] = byte(b); pixels[at + 3] = source[at + 3]!;
   }
 
