@@ -87,3 +87,64 @@ describe("marquee/ellipse live preview under Shift (square/circle constrain)", (
     expect(committed.bounds.width).toBeCloseTo(committed.bounds.height, 0);
   });
 });
+
+/**
+ * Dragging from *inside* an existing selection moves it (`onPointerDown`'s `inside` branch) —
+ * `translateSelection` walks and reallocates a full document-sized mask, measured live at
+ * 10-22ms on a 2000×2000 document, so `onPointerMove` defers it through `context.scheduleWork`
+ * instead of calling it on every native pointermove (RasterWorkspace dispatches once per
+ * *coalesced* event, several of which land inside one frame — calling this synchronously
+ * visibly stuttered the whole tab). Regression coverage for that fix: the drag branch must
+ * actually go through `scheduleWork`, and `onGestureEnd` must recompute synchronously from the
+ * release point rather than trust a `drag.preview` that a fast pointer-up could outrun.
+ */
+describe("marquee move-selection drag defers the expensive recompute", () => {
+  it("moving an existing selection schedules the recompute instead of doing it inline, and commits the right offset", () => {
+    let state = marquee.createState!() as MarqueeState;
+    const document: RasterDocumentState = { width: WIDTH, height: HEIGHT } as RasterDocumentState;
+    let selection: PixelSelection | null = null;
+    let scheduledCount = 0;
+    const context = {
+      documentId: "test-document",
+      document,
+      viewport: { zoom: 1, rotation: 0, panX: 0, panY: 0, mode: "actual" },
+      options: {},
+      spaceHeld: false,
+      get selection() { return selection; },
+      get state() { return state; },
+      setState: (next: MarqueeState) => { state = next; },
+      capturePointer: () => {},
+      commitSelection: async (_before: PixelSelection | null, after: PixelSelection | null) => { selection = after; },
+      // The test's own RAF stand-in: runs the callback immediately, same as the project's other
+      // tool-contract tests already do (CLAUDE.md's own note — this harness drives gestures
+      // synchronously, with no real RAF between frames) — enough to prove the drag branch
+      // routes through `scheduleWork` at all and that the resulting math is correct, not to
+      // reproduce real coalesced-event timing.
+      scheduleWork: (fn: () => void) => { scheduledCount += 1; fn(); },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any as ToolContext<MarqueeState>;
+
+    // Draw and commit an initial 20x20 selection at (10,10).
+    marquee.onPointerDown!(context, pointerAt(10, 10));
+    marquee.onPointerMove!(context, pointerAt(30, 30));
+    marquee.onGestureEnd!(context, pointerAt(30, 30));
+    const before = context.selection!;
+    expect(before.bounds).toMatchObject({ x: 10, y: 10, width: 20, height: 20 });
+
+    // Press inside the committed selection and drag it — this must take the "drag" branch, not
+    // start a brand-new "draw".
+    marquee.onPointerDown!(context, pointerAt(15, 15));
+    expect(state.drag).not.toBeNull();
+    expect(state.draw).toBeNull();
+
+    // Pressed at (15,15), dragging to (20,25): dx=5, dy=10 — the base (10,10) rect lands at (15,20).
+    scheduledCount = 0;
+    marquee.onPointerMove!(context, pointerAt(20, 25));
+    expect(scheduledCount).toBe(1);
+    expect(state.drag!.preview!.bounds).toMatchObject({ x: 15, y: 20, width: 20, height: 20 });
+
+    marquee.onGestureEnd!(context, pointerAt(20, 25));
+    const after = context.selection!;
+    expect(after.bounds).toMatchObject({ x: 15, y: 20, width: 20, height: 20 });
+  });
+});

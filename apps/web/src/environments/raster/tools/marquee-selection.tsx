@@ -101,8 +101,18 @@ export function createMarqueeTool(id: string, kind: MarqueeKind): RasterToolDefi
     onPointerMove(context, pointer) {
       const { drag, draw } = context.state;
       if (drag && drag.pointerId === pointer.pointerId) {
-        const moved = translateSelection(drag.base, context.document.width, context.document.height, pointer.point.x - drag.from.x, pointer.point.y - drag.from.y);
-        context.setState({ drag: { ...drag, preview: moved }, draw: null });
+        // `translateSelection` allocates and walks a full document-sized mask — measured live at
+        // 10-22ms on a 2000×2000 document — and `RasterWorkspace`'s dispatch calls
+        // `onPointerMove` once per *coalesced* native event, several of which can land inside one
+        // animation frame. Running that synchronously here made a selection drag visibly stutter
+        // the whole browser tab. `scheduleWork` runs only the most recently scheduled closure once
+        // per frame, the same fix `crop.tsx`'s own `onPointerMove` already uses for its identical
+        // "native pointermove outruns the frame rate" problem.
+        const point = pointer.point;
+        context.scheduleWork(() => {
+          const moved = translateSelection(drag.base, context.document.width, context.document.height, point.x - drag.from.x, point.y - drag.from.y);
+          context.setState({ drag: { ...drag, preview: moved }, draw: null });
+        });
         return;
       }
       if (draw && draw.pointerId === pointer.pointerId) {
@@ -123,7 +133,12 @@ export function createMarqueeTool(id: string, kind: MarqueeKind): RasterToolDefi
       const { drag, draw } = context.state;
       if (drag && drag.pointerId === pointer.pointerId) {
         context.setState(empty);
-        if (drag.preview) void context.commitSelection(drag.base, drag.preview, "Move Selection (Перемещение выделения)");
+        // Recomputed synchronously from `pointer.point`, not `drag.preview` — a fast pointer-up
+        // can land before the last `scheduleWork` callback from `onPointerMove` runs, and the
+        // release position is the one the user actually meant (same reasoning as `crop.tsx`'s
+        // own `onGestureEnd`).
+        const moved = translateSelection(drag.base, context.document.width, context.document.height, pointer.point.x - drag.from.x, pointer.point.y - drag.from.y);
+        if (moved) void context.commitSelection(drag.base, moved, "Move Selection (Перемещение выделения)");
         return;
       }
       if (!draw || draw.pointerId !== pointer.pointerId) return;
