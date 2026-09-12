@@ -82,7 +82,7 @@ function regionWeight(luminance: number, towardWhite: boolean): number {
   return t * t * (3 - 2 * t);
 }
 
-function basicAndCurve(r: number, g: number, b: number, s: CameraRawFilterSettings): [number, number, number] {
+function basicAndCurve(r: number, g: number, b: number, s: CameraRawFilterSettings, exposureGain: number): [number, number, number] {
   // White balance: a simple opposed-channel gain — real WB is a full CCT/tint remap, but this is
   // the standard cheap approximation every RGB-space "raw-style" filter uses when there's no
   // scene-referred data to work from.
@@ -90,7 +90,6 @@ function basicAndCurve(r: number, g: number, b: number, s: CameraRawFilterSettin
   const temp = s.temperature / 100 * 0.3, tint = s.tint / 100 * 0.3;
   rr = clamp01(rr + temp); bb = clamp01(bb - temp); gg = clamp01(gg + tint); rr = clamp01(rr - tint * 0.5); bb = clamp01(bb - tint * 0.5);
 
-  const exposureGain = Math.pow(2, s.exposure);
   rr = clamp01(rr * exposureGain); gg = clamp01(gg * exposureGain); bb = clamp01(bb * exposureGain);
 
   let luminance = 0.2126 * rr + 0.7152 * gg + 0.0722 * bb;
@@ -205,11 +204,14 @@ export function applyCameraRawFilter(source: Uint8ClampedArray, width: number, h
   // not pay for RGB→HSL→RGB conversion (and its temporary triples) once per
   // pixel when all eight HSL channels are neutral.
   const applyHslAdjustment = hasHslAdjustment(s.hsl);
+  // Exposure is constant for the entire render. Computing this exponent in
+  // `basicAndCurve` would otherwise repeat it for every pixel in the image.
+  const exposureGain = Math.pow(2, s.exposure);
 
   // Pass 1: Basic + Tone Curve + Dehaze + Vibrance/Saturation + HSL, all per-pixel.
   for (let i = 0; i < width * height; i += 1) {
     const at = i * 4;
-    let [r, g, b] = basicAndCurve(source[at]!, source[at + 1]!, source[at + 2]!, s);
+    let [r, g, b] = basicAndCurve(source[at]!, source[at + 1]!, source[at + 2]!, s, exposureGain);
     if (applyHslAdjustment) [r, g, b] = applyHsl(r, g, b, s.hsl);
     pixels[at] = byte(r); pixels[at + 1] = byte(g); pixels[at + 2] = byte(b); pixels[at + 3] = source[at + 3]!;
   }
