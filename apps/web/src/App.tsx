@@ -9,6 +9,7 @@ import type { EnvironmentKind, RenderBackend } from "@vravio/kernel";
 import { CLEAN_CANVAS_EVENT, DockLayout, useCanvasChromeSlots } from "./DockLayout";
 import { environmentMeta } from "./environment";
 import { toolById, toolsFor, type ToolDefinition, type ToolOption } from "./tools";
+import { keepsZoomAfterShortcut, zoomToolForShortcutCommand } from "./tool-shortcut-gesture";
 import { smartCropRatios } from "./environments/raster/commands/definitions/smart-crop";
 import { pluginsFor } from "./plugins/registry";
 import { PLUGIN_RUN_EVENT } from "./plugins/usePluginRuns";
@@ -71,6 +72,7 @@ export function App() {
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [cleanCanvas, setCleanCanvas] = useState(false);
   const openImageRef = useRef<HTMLInputElement>(null);
+  const temporaryZoomRef = useRef<{ readonly code: string; readonly documentId: string; readonly previousToolId: string | undefined; readonly zoomToolId: string; readonly startedAt: number; start: { x: number; y: number } | null; dragged: boolean } | null>(null);
   const importSvgAsVectorRef = useRef<HTMLInputElement>(null);
   // A platform handle is deliberately kept outside document state: it is a
   // browser permission or an authorised desktop path, not portable artwork.
@@ -603,6 +605,18 @@ export function App() {
       const editing = target?.tagName === "INPUT" || target?.tagName === "SELECT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
       const scopes = active ? ["global", active.kind] : ["global"];
       let mappedCommand = kernel.keymap.resolve(event, scopes);
+      // A quick tap selects Zoom like every other tool shortcut. Holding its
+      // assigned shortcut turns it into Photoshop's temporary Zoom tool and
+      // returns to the previous tool on release. The lookup is command-based,
+      // so rebinding Zoom in Settings does not lose this behaviour.
+      const activeDocument = !editing ? active : null;
+      const zoomToolId = activeDocument ? zoomToolForShortcutCommand(mappedCommand ?? undefined, activeDocument.kind, activeToolId, event.shiftKey) : null;
+      if (zoomToolId && activeDocument && !event.repeat) {
+        event.preventDefault();
+        temporaryZoomRef.current = { code: event.code, documentId: activeDocument.id, previousToolId: activeToolId, zoomToolId, startedAt: performance.now(), start: null, dragged: false };
+        store.setTool(activeDocument.id, zoomToolId);
+        return;
+      }
       // Photoshop treats a bare Backspace as Delete's alias on Windows — the
       // owner's own reference table: "Backspace — то же самое, что Delete в
       // большинстве случаев". Left unbound (the catalogue carries one shortcut
@@ -655,6 +669,32 @@ export function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [store, active]);
+
+  useEffect(() => {
+    const pointerDown = (event: PointerEvent) => {
+      const gesture = temporaryZoomRef.current;
+      if (gesture) gesture.start = { x: event.clientX, y: event.clientY };
+    };
+    const pointerMove = (event: PointerEvent) => {
+      const gesture = temporaryZoomRef.current;
+      if (!gesture?.start || gesture.dragged) return;
+      gesture.dragged = Math.hypot(event.clientX - gesture.start.x, event.clientY - gesture.start.y) >= 2;
+    };
+    const keyUp = (event: KeyboardEvent) => {
+      const gesture = temporaryZoomRef.current;
+      if (!gesture || event.code !== gesture.code) return;
+      temporaryZoomRef.current = null;
+      if (keepsZoomAfterShortcut(performance.now() - gesture.startedAt, gesture.dragged)) return;
+      const current = useShellStore.getState();
+      // Do not overwrite a deliberate tool change made while the temporary
+      // shortcut was held, or a document the user switched away from.
+      if (current.activeToolByDocument[gesture.documentId] === gesture.zoomToolId && gesture.previousToolId) current.setTool(gesture.documentId, gesture.previousToolId);
+    };
+    window.addEventListener("pointerdown", pointerDown, true);
+    window.addEventListener("pointermove", pointerMove, true);
+    window.addEventListener("keyup", keyUp);
+    return () => { window.removeEventListener("pointerdown", pointerDown, true); window.removeEventListener("pointermove", pointerMove, true); window.removeEventListener("keyup", keyUp); };
+  }, []);
 
   return <div className="app" data-theme={store.theme} data-clean-canvas={cleanCanvas || undefined} data-has-toolbar={active?.kind === "raster" || active?.kind === "vector"} style={themeStyle}>
     <header className="menu-bar">
