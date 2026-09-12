@@ -6191,6 +6191,28 @@ Adobe документирует: (1) многопоточный компози�
 
 **Явная рекомендация аудита:** сделать Generic Live Effect framework фундаментом Vector v2 раньше остальных пунктов этого списка — один хороший LPE-граф потом закрывает Offset/Corner/Bend/Repeat/Pattern Along Path/Roughen и десятки будущих операций на одной архитектуре, а не как отдельные костыли каждый раз.
 
+#### 26.6.1. Уточнение архитектуры: общий Live Effect Graph, а не перечень `GeometryModifier`
+
+Текущее направление с `GeometryModifier` правильно, но его нельзя оставлять
+закрытым union из нескольких вручную перечисленных эффектов (`roundCorners |
+offset | simplify | zigzag | boolean`). Каждый новый modifier в такой модели
+требует отдельной инфраструктуры, сериализации, UI и веток рендера. Vector v2
+должен ввести общий неразрушаемый граф операций, скрывая его от обычного
+пользователя за привычными инструментами и панелью Appearance.
+
+| Семейство | Примеры | Где может висеть | Донор |
+|---|---|---|---|
+| Geometry effects | Offset, Corners, Roughen, Zigzag, Boolean, Envelope | path/группа | Inkscape LPE |
+| Layout effects | Repeat, Blend, Objects on Path, Pattern Along Path | объект/группа | Illustrator + Inkscape |
+| Appearance effects | Blur, Shadow, Feather, Rasterize effect | fill, stroke или весь объект | Illustrator Appearance |
+
+`RepeatModifier` должен быть одной живой сущностью с `mode: grid | radial |
+mirror`, исходным artwork и on-canvas controls (`rows`, `columns`, spacing,
+angle, axis), а не тремя несвязанными командами. Expand — явная точка, в
+которой live-граф становится обычной геометрией. Главный архитектурный донор
+для неразрушаемой внутренней модели — **Graphite**: node graph допустим в
+engine, но не должен навязываться пользователю как UI.
+
 ### 26.7. Live Shapes и объектные удобства Illustrator
 
 | Что | Описание | Adobe | Донор |
@@ -6198,35 +6220,76 @@ Adobe документирует: (1) многопоточный компози�
 | 🟠 Per-corner radius | Четыре независимых радиуса вместо одного числа на все углы | Adobe Help | Penpot data model (r1/r2/r3/r4) |
 | 🔴 Ellipse Arc/Pie controls | Start/End angle, pie/arc как свойства ellipse | Adobe Help | Inkscape |
 | 🟠 Numeric X/Y/W/H/rotation panel | Точная геометрия выделения через числа | Adobe Help | Penpot |
+| 🔴 Precision Transform workflow | Align to Selection / Key Object / Artboard, exact Distribute Spacing, Transform Each, custom pivot, skew/shear, Reflect Copy и Repeat Transform | Adobe Help | Illustrator UX |
 | 🔴 Stroke alignment | Inside/Center/Outside | Adobe Help | Inkscape |
 | 🔴 Dash presets/advanced stroke | Dash/gap sequence, caps, joins, arrowheads/markers | Adobe Help | Inkscape markers/strokes |
 | 🔴 Custom Start/Middle/End markers | Стрелки и любые SVG markers на stroke | Adobe Help | Inkscape |
 | 🔴 Create marker from selected object | Свой arrowhead/marker из вектора | Adobe Help | Inkscape |
 | 🔴 Objects on Path | Раскладка объектов вдоль пути с живым перемещением | Adobe Help | Inkscape Pattern Along Path/clones |
 
-### 26.8. Appearance — недооценённая дыра относительно Illustrator
+### 26.8. Appearance — довести существующий фундамент до уровня Illustrator
 
-Illustrator позволяет одному объекту иметь несколько fills, несколько strokes и несколько effects в одном appearance stack без дублирования объекта. У VRAVIO отдельной Appearance-системы не видно.
+Ранее этот раздел ошибочно говорил, что у VRAVIO «не видно» отдельной
+Appearance-системы и ставил multiple fills/strokes как задачу с нуля. Это
+устарело. `packages/env-vector/src/appearance.ts` уже содержит `VectorStyle`
+с массивами `fills` и `strokes`; у каждого слоя есть `opacity`, `blendMode` и
+`visible`, а stroke хранит `dash`, `cap`, `join` и `alignment`. `resolveAppearance`
+и тесты подтверждают, что несколько заливок/обводок, включая независимые
+градиенты, уже являются данными документа и доходят до рендера. Это фундамент
+Appearance, не отсутствие фундамента.
 
-| Что | Описание | Adobe | Донор |
+Остаётся не «сделать несколько заливок», а **довести этот фундамент до
+настоящего Illustrator Appearance**. Целевая миграция — не дополнительное
+поле рядом с `fills`/`strokes`, а единый ordered Appearance Stack:
+
+```ts
+type AppearanceItem = FillItem | StrokeItem | EffectItem;
+// пример порядка: Stroke 20px → Blur → Fill → Stroke 2px → Drop Shadow
+```
+
+Каждый элемент имеет id, visibility, opacity и blend mode; effect может
+висеть на конкретном fill, конкретном stroke либо на объекте в целом. Это
+разрешает нормальный paint order, делает Graphic Styles полным снимком одного
+стека и даёт корректную основу для Expand Appearance. Миграция должна сохранить
+совместимость существующих документов: старые `fills[]`/`strokes[]` читаются и
+однократно переводятся в упорядоченный список без визуального изменения.
+
+| Что | Статус / описание | Adobe | Донор |
 |---|---|---|---|
-| 🔴 Appearance Panel | Центральный stack визуальных атрибутов объекта | Adobe Help | Penpot |
-| 🔴 Multiple fills | Несколько независимых заливок на одном path | Adobe Help | Penpot |
-| 🔴 Multiple strokes | Напр. белая 8px + чёрная 2px на одном объекте | Adobe Help | Penpot |
-| 🔴 Effects per fill/stroke/object | Один blur только на fill, другой effect на весь объект | Adobe Help | Inkscape LPE architecture |
-| 🔴 Graphic Styles | Сохранить весь Appearance, применить одним кликом | Adobe Help | Penpot components/tokens |
+| ✅ Multiple fills / strokes — data + renderer | Уже есть: отдельные массивы слоёв, opacity/blend/visibility, gradient defs; проверить и сохранить это при следующих изменениях | Adobe Help | существующий `appearance.ts` |
+| 🔴 Ordered Appearance Stack | Каноническая модель `Fill \| Stroke \| Effect` вместо двух несвязанных списков; миграция старых документов | Illustrator Appearance | существующий `appearance.ts` как источник миграции |
+| 🟠 Appearance Panel | Добавление, удаление, drag-порядок, видимость и opacity каждого AppearanceItem | Adobe Help | Illustrator / Penpot |
+| 🔴 Interleaved paint order | Stroke под fill и произвольный единый порядок, а не «все fill, потом все stroke» | Adobe Help | SVG paint order / Illustrator |
+| 🔴 Effects per fill/stroke/object | Один blur только на fill, другой effect на весь объект; связать с Live Effect Graph §26.6 | Adobe Help | Inkscape LPE architecture |
+| 🔴 Graphic Styles | Сохранить полный Appearance, применить одним кликом | Adobe Help | Penpot components/tokens |
 | 🔴 Graphic Style Libraries | Отдельные reusable библиотеки styles | Adobe Help | Penpot |
-| 🔴 Copy complete appearance (Eyedropper) | Перенос fill/stroke/effects/style между объектами | Adobe Help | Inkscape |
+| 🟠 Copy complete appearance (Eyedropper) | Переносить fill/stroke/effects/style между объектами через одну команду | Adobe Help | Inkscape |
+
+#### 26.8.1. Transparency, Opacity Mask и групповой композитинг
+
+Обычный clipping — не замена прозрачностной маске. Нужны отдельные сущности
+`ClippingMask` и `OpacityMask`; opacity mask может быть градиентной и вложенной.
+Для группы нужны `isolateBlending` и `knockout`, а UI — переключатель
+edit-art/edit-mask, `Clip` и `Invert Mask`. Это важно и для Illustrator-feel,
+и для честного SVG round-trip (`clipPath` и `mask` имеют разную семантику).
+
+#### 26.8.2. Три типа bounds — обязательный фундамент Appearance
+
+Один `boundingBox` перестаёт быть достаточным после нескольких strokes, blur,
+shadow и masks. До сложных appearance-effects модель должна явно различать:
+`geometryBounds` (исходный path), `inkBounds` (реально нарисованные stroke и
+effects) и `hitBounds`/`hitRegion` (выбор и взаимодействие). Это предотвращает
+непредсказуемый выбор «тени вместо объекта» и неверные invalidation/scroll-to-fit.
 
 ### 26.9. Image Trace, Live Paint и «магические» Illustrator workflow
 
 | Что | Описание | Adobe | Донор |
 |---|---|---|---|
-| 🔴 Image Trace | Растр → редактируемые векторные paths | Adobe Help | Inkscape/Potrace |
-| 🔴 Image Trace presets | Logo/B&W/Photo/Color + пользовательские | Adobe Help | Inkscape Trace Bitmap |
+| 🔴 Image Trace | `Image → live Trace modifier → settings → Expand`, а не сразу необратимые paths | Adobe Help | **VTracer** для color/photo, Potrace для B/W |
+| 🔴 Image Trace presets | Logo/B&W/Photo/Color + пользовательские; VTracer — основной цветной/фото backend, Potrace — fallback для бинарного trace | Adobe Help | VTracer + Potrace |
 | 🔴 Live Trace → Expand workflow | Параметры меняются пока trace живой, Expand фиксирует paths | Adobe Help | Inkscape |
-| 🔴 Live Paint | Пересекающиеся paths → «раскраска» визуальных областей, даже не отдельных shapes | Adobe Help | Inkscape bounded fill (приблизительно) |
-| 🔴 Live Paint Selection | Выбирать конкретные faces/edges Live Paint group | Adobe Help | Inkscape |
+| 🔴 Live Paint Group | Исходные paths формируют planar arrangement; faces и edges имеют собственные paints, а изменение path перестраивает topology с сохранением назначений, где возможно | Adobe Help | отдельная data model, не bucket-fill |
+| 🔴 Live Paint Selection | Выбирать/заливать конкретные faces и edges `LivePaintGroup`, не отдельные исходные shapes | Adobe Help | Illustrator UX |
 | 🔴 Perspective Grid | 1/2/3-point grid, horizon, VP, working plane, snap | Adobe Help | Inkscape grids (приближённо) |
 | 🔴 Рисование прямо на perspective plane | Новая фигура автоматически проецируется на выбранную плоскость | Adobe Help | Krita assistants (частичный аналог) |
 
@@ -6237,13 +6300,45 @@ Symbols panel и symbol refs уже есть — здесь про глубин�
 | Что | Описание | Adobe | Донор |
 |---|---|---|---|
 | 🟠 Dynamic Symbols | Общий master + локальные изменения свойств instance | Adobe Help | Penpot Components |
-| 🟠 Instance overrides | Цвет/текст/части экземпляра без разрыва связи с master | Adobe Help | Penpot |
+| 🟠 Instance overrides | Группы overrides: Text, Fill, Stroke, Visibility, Geometry; Reset override/Reset all/Swap symbol, nested symbols и expose-property на master | Adobe Help | **Penpot Components** |
 | 🔴 9-slice scaling | Растягивать UI-symbol без искажения углов | Adobe Help | Penpot components |
 | 🔴 Symbol Libraries | Пользовательские reusable библиотеки | Adobe Help | Penpot libraries |
 | 🔴 Pattern creation/editing | Бесшовный pattern с live preview, сохранение swatch | Adobe Help | Inkscape |
 | 🔴 Pattern library | Сохранение/поиск/переиспользование паттернов | Adobe Help | Inkscape |
 | 🔴 Swatches panel/libraries | Сохраняемые process/global/spot цвета и группы | Adobe Help | Inkscape |
 | 🔴 Gradient preset library | Сохранять и переиспользовать градиенты | Adobe Help | Inkscape |
+
+#### 26.10.1. Одна ресурсная архитектура вместо шести изолированных библиотек
+
+Не создавать отдельные механизмы хранения для swatches, gradients, patterns,
+brushes, graphic styles и symbols. Нужна общая `VectorResourceLibrary<T>` с
+ID, именем, document/global scope, ссылочностью и import/export; типы ресурсов:
+`Color | Gradient | Pattern | Brush | GraphicStyle | Symbol`. Тогда Global Color
+не является отдельным исключением: artwork ссылается на Color Resource,
+изменение ресурса обновляет все ссылки. Это же подготовит Package/Links workflow.
+
+#### 26.10.2. Pattern — самостоятельный Paint, не побочный repeat
+
+`Paint` сейчас допускает только `color | gradient`; его нужно расширить до
+`color | gradient | pattern`. Pattern — reusable resource с отдельным Pattern
+Editing Mode: tile boundary, preview copies, Grid / Brick by Row / Brick by
+Column / Hex Row / Hex Column и независимая трансформация pattern относительно
+объекта. Это отличать от Repeat: Repeat дублирует live-объекты, Pattern рисует
+заливку.
+
+#### 26.10.3. Векторные кисти и градиенты
+
+Width Tool и Blob Brush не заменяют Illustrator Brush system. Нужны
+`BrushDefinition`, ссылка из Stroke, reusable Width Profile, создание кисти из
+выбранного artwork и параметры pressure/tilt/random. Виды: Calligraphic,
+Scatter, Art, Bristle и Pattern Brush; у Pattern Brush отдельно side, inner
+corner, outer corner, start и end tiles. Доноры: Illustrator UX, Inkscape
+PowerStroke и Pattern Along Path.
+
+Gradient должен вырасти в систему: on-canvas stops и midpoint, opacity каждого
+stop, reusable swatches, Freeform point/line gradients, а для stroke — режимы
+within / along / across. Gradient Mesh остаётся отдельной более дорогой
+сущностью, не заменой этого базового workflow.
 
 ### 26.11. Recolor Artwork и управление цветом (вектор)
 
@@ -6255,6 +6350,15 @@ Symbols panel и symbol refs уже есть — здесь про глубин�
 | 🔴 Color Theme Picker | Снять палитру с другой картинки, перекрасить artwork | Adobe Help | Krita |
 | 🔴 Global colors | Изменил swatch — обновились все объекты с этим цветом | Adobe Help | Penpot design tokens |
 
+#### 26.11.1. Selection как профессиональный workflow
+
+Добавить Select Same по Fill, Stroke, Stroke Weight, Opacity, Style, Symbol
+Instance и Blend Mode; Magic Wand с tolerance; Lasso по anchors/segments;
+Group Selection и выбор по object type. Отдельный P1-workflow — **Global Edit**:
+находить геометрически похожие копии объектов/групп, даже не превращённые заранее
+в Symbol, и редактировать их синхронно. Это особенно важно для логотипов, UI и
+паттернов.
+
 ### 26.12. Текст и типографика — второй очень большой пласт
 
 Векторный Type Tool сейчас буквально имеет Color + Font Size. Растровый текст богаче, но единого профессионального Text Engine нет — прямое пересечение с §3 этого документа, здесь детализация недостающих полей.
@@ -6262,6 +6366,7 @@ Symbols panel и symbol refs уже есть — здесь про глубин�
 | Что | Описание | Adobe | Донор |
 |---|---|---|---|
 | 🟠 Unified Text Engine | Растр и вектор должны использовать одну модель текста/layout | Adobe Help | Scribus |
+| 🔴 WYSIWYG text editing on canvas | Настоящий caret между glyphs, mouse/Shift-arrow selection, IME, double/triple-click — не боковой textarea | Adobe Help | Scribus + HarfBuzz/Parley |
 | 🔴 Полный font browser | Семейство/style/поиск/preview/favorites/recent | Adobe Help | Scribus |
 | 🔴 Leading | Межстрочный интервал | Adobe Help | Scribus |
 | 🔴 Kerning | Расстояние конкретной пары символов | Adobe Help | Scribus |
@@ -6280,6 +6385,7 @@ Symbols panel и symbol refs уже есть — здесь про глубин�
 | 🔴 Character Styles | Сохраняемые стили символов | Adobe Help | Scribus styles |
 | 🔴 Paragraph Styles | Сохраняемые paragraph layouts | Adobe Help | Scribus styles |
 | 🟠 Vector Area Type | Настоящий текстовый frame с reflow | Adobe Help | Scribus |
+| 🔴 Text-frame layout | fixed / auto-height / auto-size, columns, insets и overflow indicator | Adobe Help | Scribus |
 | 🟠 Vector Type on Path | В растре есть задел, в Vector tool options нет | Adobe Help | Inkscape |
 | 🔴 Move/Flip text on path | Интерактивные brackets начала/конца/центра | Adobe Help | Inkscape |
 | 🔴 Type on Path effects | Rainbow, Skew, 3D Ribbon, Stair Step, Gravity | Adobe Help | Inkscape |
@@ -6331,6 +6437,7 @@ LibRaw-декодирование уже есть — не дыра сама п�
 | 🔴 PSD vector mask/path round-trip | Shapes/paths остаются настоящим vector data | Adobe Help | Patchy |
 | 🔴 PDF import/export профессионального уровня | Не bitmap-рендер, а vectors/text/profiles | Adobe Help | Inkscape |
 | 🔴 AI/EPS import | Открывать существующие Illustrator-ассеты | Adobe Help | Inkscape |
+| 🔴 SVG/PDF round-trip compatibility matrix | Fixtures для `clipPath`, opacity mask, patterns, markers, textPath, nested transforms, symbols/use, gradients, filters и blend modes: VRAVIO → Inkscape/resvg → VRAVIO с визуальным и структурным сравнением | SVG/PDF specs | Inkscape + resvg |
 | 🔴 DWG/DXF import/export | CAD exchange | Adobe Help | LibreCAD |
 | 🔴 EXR/HDR/high-bit-depth форматы | VFX/HDR pipeline | Adobe Help | OpenImageIO |
 | 🟠 Большая матрица raster-форматов | TIFF/AVIF/HEIF/JXL/JP2/TGA/DICOM/Cineon и т.д. — уже детально расписана в §7.1 этого документа | Adobe Help | OpenImageIO |
@@ -6343,6 +6450,14 @@ LibRaw-декодирование уже есть — не дыра сама п�
 | 🔴 Linked vs Embedded assets | Не обязательно физически тащить каждый bitmap внутрь документа | Adobe Help | Scribus |
 | 🔴 Package/Collect for Output | Собрать документ + links + fonts/resources в одну папку | Adobe Help | Scribus |
 | 🔴 Missing asset badge/relink workflow | Явное визуальное состояние потерянного source | Adobe Help | Scribus |
+
+#### 26.16.1. Asset Export / Export for Screens
+
+P1-панель для логотипов, UI и иконок: persistent export entries из artboards
+или произвольных объектов, именованные presets, `0.5x/1x/2x/3x`, SVG/PNG/WebP/
+PDF, suffix/prefix и пакетный экспорт. Это не дубль обычного Export As, а
+производственный список ресурсов, который дизайнер собирает один раз и
+повторно экспортирует после каждого изменения.
 
 ### 26.17. Automation — Illustrator (data-driven graphics)
 
@@ -6463,25 +6578,32 @@ VRAVIO уже имеет persistent 3D layer — это НЕ дыра "нет 3D
 🔥 P0 — меняет класс программы
 ├ Smart Object / linked asset architecture           (§26.1)
 ├ Non-destructive filter/effect stack                (§26.1)
-├ Vector LPE/live-effect architecture                (§26.6 — фундамент Vector v2)
+├ Ordered Appearance Stack + opacity/clipping masks  (§26.8 — фундамент Vector v2)
+├ Vector Live Effect Graph                            (§26.6 — geometry/layout/appearance)
+├ Vector Resource Library                             (§26.10.1)
+├ Precision Transform / Align / Isolation Mode        (§26.7, §26.8.1)
 ├ Brush Engine + .abr                                (§26.3)
-├ Character/Paragraph/Text Engine                    (§26.12, §3)
+├ WYSIWYG Character/Paragraph/Text Engine            (§26.12, §3)
 ├ Quick Selection / Object Selection / Select & Mask  (§26.2)
 ├ Quick Mask + Channels + Vector Masks                (§26.2)
 ├ 16/32-bit raster                                    (§26.13)
 ├ CMYK + ICC                                          (§26.13)
 ├ PSD write + нормальный round-trip                   (§26.15)
 ├ Gradient Tool в Raster и Vector                     (§26.4, §2.4)
-├ Appearance: multiple fills/strokes/effects           (§26.8)
-├ Image Trace                                         (§26.9)
+├ Retained GPU Vector Renderer + transient transforms (§28.2)
+├ Appearance panel, paint order, effects and styles   (§26.8; multiple fills/strokes already exist)
 ├ Live Boolean                                        (§26.6)
 └ Professional Crop                                   (§26.4, §2.1 — engine-часть уже начата этой сессией)
 
-🟠 P1 — программа начинает ощущаться зрелой
-Live Paint, Mesh Gradient, Width Tool, Compound Paths, Blend, Envelope,
-Recolor Artwork, полноценные Symbols, Actions, Clone Source, Brush
-libraries, Swatches, Graphic Styles, RAW development workspace,
-workspace presets, docking, Photoshop-жесты (§26.21).
+🟠 P1 — Illustrator-feel и зрелый production workflow
+Vector Brushes, Patterns, Width Tool, Compound Paths, Blend, Envelope, Repeat,
+Objects on Path, Freeform Gradient, Symbol Overrides, Global Edit / Select
+Same, Image Trace/VTracer, Recolor Artwork, Asset Export / Export for Screens,
+Graphic Styles, Swatches, Live Paint, RAW development workspace, workspace
+presets, docking, Photoshop-жесты (§26.21).
+
+SVG/PDF round-trip matrix (§26.15) — сквозная P1-обязанность каждой новой
+векторной сущности, а не финальная разовая задача перед релизом.
 
 🟡 P2 — ширина Illustrator/Photoshop
 Perspective Grid, Graph Tool, Data Merge, Dimension Tool, Layer Comps,
@@ -6501,11 +6623,29 @@ VRAVIO уже не страдает от отсутствия «базы Photosh
 Растр:  Layer → editable source → masks → live effects →
         reusable presets/styles → contextual UI → нормальный round-trip
 
-Вектор: Path → live operations/effects → Appearance →
-        reusable styles/symbols → typography → export
+Вектор: Path → generic live operations → ordered Appearance →
+        masks/transparency → reusable resources → symbols/styles →
+        professional text → GPU renderer → export
 ```
 
-Явная рекомендация: не бросаться реализовывать Graph Tool/Red Eye/ещё двадцать мелких Adobe-инструментов — один хороший Live Effect/LPE framework (вектор) и Smart/linked content + GEGL-подобный effect graph + полноценная mask attachment model (растр) стоят больше, потому что после них десятки «фич Photoshop» добавляются не как отдельные костыли, а как новые узлы одной уже существующей системы. Отдельно: `.abr` + PSD interoperability + Photoshop-жесты — не самые технически красивые задачи, но именно они сильнее всего снижают социальную цену перехода (пользователь не переучивает руки, не теряет коллекцию кистей, не боится открыть клиентский PSD) — для открытого конкурента Adobe это местами важнее, чем быть технологически «умнее» Adobe в отдельных нишах.
+Явная рекомендация: не бросаться реализовывать Graph Tool/Red Eye/ещё двадцать мелких Adobe-инструментов — один хороший Live Effect Graph, ordered Appearance Stack, opacity-mask model и Resource Library (вектор), а также Smart/linked content + GEGL-подобный effect graph + полноценная mask attachment model (растр) стоят больше, потому что после них десятки фич добавляются как новые узлы уже существующей системы. Retained GPU renderer нужно вести до либо параллельно с Appearance Effects/Patterns/Brushes/Live Paint: они кратно увеличивают сложность сцены, а SVG/DOM уже является измеренным bottleneck. Отдельно: `.abr` + PSD interoperability + Photoshop-жесты — не самые технически красивые задачи, но именно они сильнее всего снижают социальную цену перехода.
+
+#### 26.28.1. Карта доноров для Vector v2
+
+| Задача | Главный донор |
+|---|---|
+| Live geometry / LPE | Inkscape |
+| Общая non-destructive архитектура и GPU scene | Graphite / Vello |
+| Symbols, components, overrides, resources/tokens | Penpot |
+| Brushes | Illustrator UX + Inkscape PowerStroke / Pattern Along Path |
+| Image Trace | VTracer + Potrace |
+| Typography/layout | Scribus + HarfBuzz/Parley |
+| SVG import/export | Inkscape / resvg |
+| UI поведения selection/appearance | Illustrator |
+
+Донор определяет проверяемое поведение и архитектурный ориентир, а не лицензионно
+несовместимое копирование исходников. Перед переносом конкретного кода всегда
+проверять лицензию и границы допустимого использования.
 
 ## 27. Установка/удаление плагинов и рабочих сред через лаунчер в Настройках — согласовать с владельцем, 8 сентября 2026
 
