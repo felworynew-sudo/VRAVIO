@@ -2404,7 +2404,7 @@
 							var url = (window.URL || window.webkitURL).createObjectURL(new Blob([out], {type:'audio/mpeg'}));
 							var a = document.createElement ('a');
 							a.href = url;
-							a.download = ((st.file && st.file.name) || 'audiomass.mp3').replace(/\.[^\.]+$/, '') + '-tagged.mp3';
+							a.download = ((st.file && st.file.name) || 'vravio-audio.mp3').replace(/\.[^\.]+$/, '') + '-tagged.mp3';
 							a.style.display = 'none';
 							document.body.appendChild (a);
 							a.click ();
@@ -3048,7 +3048,7 @@
 							"location=no,status=no,menubar=no,scrollbars=no,resizable=no,width=" + size[0] + ",height=" + size[1] + extra);
 
 					if (!wnd) {
-						OneUp ('Please allow pop-ups for AudioMass!', 3600, 'pk_r');
+						OneUp ('Please allow pop-ups for the audio editor!', 3600, 'pk_r');
 						return ;
 					}
 

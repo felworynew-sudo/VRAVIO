@@ -7,7 +7,7 @@
 		var dec = new TextDecoder ();
 
 		function nameOf ( name ) {
-			name = (name || 'audiomass-session').trim ();
+			name = (name || 'vravio-audio-session').trim ();
 			return /\.amss$/i.test ( name ) ? name : name + '.amss';
 		}
 

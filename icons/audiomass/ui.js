@@ -329,7 +329,7 @@
 									}
 								  ],
 								  body:'<div class="pk_row"><label for="k0">File Name</label>' + 
-									'<input style="min-width:250px" placeholder="mp3 filename" value="audiomass-output.mp3" ' +
+									'<input style="min-width:250px" placeholder="mp3 filename" value="vravio-audio.mp3" ' +
 									'class="pk_txt" type="text" id="k0" /></div>'+
 
 									'<div class="pk_row" id="frmtex" style="padding-bottom:4px"><label style="display:inline">Format</label>'+

@@ -805,7 +805,6 @@ export function App() {
           ["Command Palette (Палитра команд)", "Ctrl+K", () => store.setPaletteOpen(true)],
         ]}/>
         <Menu className={active?.kind === "audio" ? "audio-menu-optional" : undefined} label="Help (Справка)" language={store.language} open={openMenu === "help"} onToggle={() => setOpenMenu(openMenu === "help" ? null : "help")} items={[
-          ...(active?.kind === "audio" ? [["AudioMass Help (Справка AudioMass)", "", () => audioMassCommand("Help", "See Welcome Message")] as MainMenuItem, ["About AudioMass (О AudioMass)", "", () => audioMassCommand("Help", "About AudioMass")] as MainMenuItem] : []),
           ["Diagnostics log (Журнал диагностики)", "", () => setDiagnosticsOpen(true)], ["About VRAVIO (О VRAVIO)", "", () => window.alert("VRAVIO — local-first creative suite")],
         ]}/>
         {active?.kind === "audio" && <Menu className="audio-menu-overflow" label="More (Ещё)" language={store.language} open={openMenu === "audio-more"} onToggle={() => setOpenMenu(openMenu === "audio-more" ? null : "audio-more")} items={[
@@ -813,7 +812,7 @@ export function App() {
             ["Frequency Analyser (Анализатор частот)", "", () => audioMassCommand("View", "Frequency Analyser")], ["Spectrum Analyser (Спектральный анализатор)", "", () => audioMassCommand("View", "Spectrum Analyser")], ["Multitrack Mixer (Микшер мультитрека)", "", () => audioMassCommand("View", "Multitrack Mixer")], ["Tempo Tools (Инструменты темпа)", "", () => audioMassCommand("View", "Tempo Tools")], ["ID3 Tags (Теги ID3)", "", () => audioMassCommand("View", "ID3 Tags")], ["Reset Zoom (Сбросить масштаб)", "0", () => audioMassCommand("View", "Reset Zoom")],
           ] },
           { label: "Window (Окно)", items: [["Settings (Настройки)", "", () => store.setSettingsOpen(true)], ["Command Palette (Палитра команд)", "Ctrl+K", () => store.setPaletteOpen(true)]] },
-          { label: "Help (Справка)", items: [["AudioMass Help (Справка AudioMass)", "", () => audioMassCommand("Help", "See Welcome Message")], ["About AudioMass (О AudioMass)", "", () => audioMassCommand("Help", "About AudioMass")], ["Diagnostics log (Журнал диагностики)", "", () => setDiagnosticsOpen(true)], ["About VRAVIO (О VRAVIO)", "", () => window.alert("VRAVIO — local-first creative suite")]] },
+          { label: "Help (Справка)", items: [["Diagnostics log (Журнал диагностики)", "", () => setDiagnosticsOpen(true)], ["About VRAVIO (О VRAVIO)", "", () => window.alert("VRAVIO — local-first creative suite")]] },
         ]}/>}
       </nav>
       <button className="settings-button" onClick={() => store.setSettingsOpen(true)} aria-label={store.language === "ru" ? "Настройки" : "Settings"} title={store.language === "ru" ? "Настройки" : "Settings"}><img src={`${import.meta.env.BASE_URL}НАСТРОЙКИ.svg`} alt=""/></button>

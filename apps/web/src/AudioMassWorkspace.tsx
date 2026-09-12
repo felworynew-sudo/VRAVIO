@@ -5,7 +5,7 @@ import { kernel } from "./kernel";
 import { text } from "./i18n";
 import { useShellStore } from "./store";
 
-const AUDIO_MASS_PATH = `${import.meta.env.BASE_URL}audiomass/index.html?multitrack=1`;
+const AUDIO_MASS_PATH = `${import.meta.env.BASE_URL}audiomass/index.html?multitrack=1&skipintro=1`;
 
 /**
  * AudioMass is deliberately kept in its own document (an iframe), rather than
@@ -105,7 +105,7 @@ export function AudioMassWorkspace({ document }: { document: VravioDocument }) {
   useEffect(() => { syncChrome(); }, [syncChrome]);
 
   return <section className="audiomass-workspace" aria-label={text(language, "Audio editor", "Аудиоредактор")}>
-    {loadError && <div className="audiomass-notice" role="status">{text(language, "The prior session could not be transferred automatically. Open its source file in AudioMass.", "Прошлую сессию не удалось передать автоматически. Откройте исходный файл в AudioMass.")}<small>{loadError}</small></div>}
-    <iframe ref={frameRef} src={AUDIO_MASS_PATH} title="AudioMass" onLoad={() => { deliverSource(); syncChrome(); }} />
+    {loadError && <div className="audiomass-notice" role="status">{text(language, "The prior session could not be transferred automatically. Open its source file in the audio editor.", "Прошлую сессию не удалось передать автоматически. Откройте исходный файл в аудиоредакторе.")}<small>{loadError}</small></div>}
+    <iframe ref={frameRef} src={AUDIO_MASS_PATH} title={text(language, "VRAVIO audio editor", "Аудиоредактор VRAVIO")} onLoad={() => { deliverSource(); syncChrome(); }} />
   </section>;
 }
