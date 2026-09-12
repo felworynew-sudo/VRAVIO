@@ -4,15 +4,19 @@ import type { RasterLayer, RgbaColor } from "./types";
 
 const clampByte = (value: number) => Math.max(0, Math.min(255, Math.round(value)));
 
-function overlayPixel(pixels: Uint8ClampedArray, index: number, color: RgbaColor, alpha: number): void {
-  const sourceAlpha = Math.max(0, Math.min(1, alpha * color.a / 255));
+function overlayChannels(pixels: Uint8ClampedArray, index: number, red: number, green: number, blue: number, colorAlpha: number, alpha: number): void {
+  const sourceAlpha = Math.max(0, Math.min(1, alpha * colorAlpha / 255));
   const destinationAlpha = pixels[index + 3]! / 255;
   const outputAlpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha);
   if (outputAlpha <= 0) return;
-  pixels[index] = clampByte((color.r * sourceAlpha + pixels[index]! * destinationAlpha * (1 - sourceAlpha)) / outputAlpha);
-  pixels[index + 1] = clampByte((color.g * sourceAlpha + pixels[index + 1]! * destinationAlpha * (1 - sourceAlpha)) / outputAlpha);
-  pixels[index + 2] = clampByte((color.b * sourceAlpha + pixels[index + 2]! * destinationAlpha * (1 - sourceAlpha)) / outputAlpha);
+  pixels[index] = clampByte((red * sourceAlpha + pixels[index]! * destinationAlpha * (1 - sourceAlpha)) / outputAlpha);
+  pixels[index + 1] = clampByte((green * sourceAlpha + pixels[index + 1]! * destinationAlpha * (1 - sourceAlpha)) / outputAlpha);
+  pixels[index + 2] = clampByte((blue * sourceAlpha + pixels[index + 2]! * destinationAlpha * (1 - sourceAlpha)) / outputAlpha);
   pixels[index + 3] = clampByte(outputAlpha * 255);
+}
+
+function overlayPixel(pixels: Uint8ClampedArray, index: number, color: RgbaColor, alpha: number): void {
+  overlayChannels(pixels, index, color.r, color.g, color.b, color.a, alpha);
 }
 
 /**
@@ -107,14 +111,16 @@ export function renderLayerEffects(layer: RasterLayer, width: number, height: nu
       overlayPixel(output, index, color, (neighborhoodAlpha(source, width, height, x, y, disc) - own) * outer.opacity);
     }
   }
-  for (let index = 0; index < source.length; index += 4) overlayPixel(output, index, { r: source[index]!, g: source[index + 1]!, b: source[index + 2]!, a: 255 }, source[index + 3]! / 255);
+  for (let index = 0; index < source.length; index += 4) {
+    overlayChannels(output, index, source[index]!, source[index + 1]!, source[index + 2]!, 255, source[index + 3]! / 255);
+  }
   const gradient = effects.gradientOverlay;
   if (gradient?.enabled) {
     const from = parseHexColor(gradient.from), to = parseHexColor(gradient.to), radians = gradient.angle * Math.PI / 180, dx = Math.cos(radians), dy = Math.sin(radians), extent = Math.max(1, Math.abs(dx) * width + Math.abs(dy) * height);
     for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
       const index = (y * width + x) * 4; if (!source[index + 3]) continue;
       const t = Math.max(0, Math.min(1, .5 + ((x - width / 2) * dx + (y - height / 2) * dy) / extent));
-      overlayPixel(output, index, { r: from.r + (to.r - from.r) * t, g: from.g + (to.g - from.g) * t, b: from.b + (to.b - from.b) * t, a: 255 }, gradient.opacity);
+      overlayChannels(output, index, from.r + (to.r - from.r) * t, from.g + (to.g - from.g) * t, from.b + (to.b - from.b) * t, 255, gradient.opacity);
     }
   }
   const innerShadow = effects.innerShadow;
@@ -138,7 +144,8 @@ export function renderLayerEffects(layer: RasterLayer, width: number, height: nu
     if (bevel?.enabled) {
       const left = x > 0 ? source[(y * width + x - 1) * 4 + 3]! : 0, top = y > 0 ? source[((y - 1) * width + x) * 4 + 3]! : 0;
       const shade = ((left + top) / 510 - own) * bevel.strength;
-      overlayPixel(output, index, shade >= 0 ? { r: 255, g: 255, b: 255, a: 255 } : { r: 0, g: 0, b: 0, a: 255 }, Math.min(1, Math.abs(shade)));
+      const channel = shade >= 0 ? 255 : 0;
+      overlayChannels(output, index, channel, channel, channel, 255, Math.min(1, Math.abs(shade)));
     }
   }
   // Keyed on the layer's own buffer, not the materialised copy: that copy is
