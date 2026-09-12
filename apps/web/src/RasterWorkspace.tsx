@@ -105,7 +105,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     [state.selection, activeLayerForMask?.pixels, activeLayerForMask?.lockTransparent, state.width, state.height],
   );
   const paintColor = editingMaskLayer ? (maskForegroundIsWhite ? "#ffffff" : "#000000") : foregroundColor;
-  const { renderWorking, renderWorkingMultiple, renderWorkingRegion, renderSpotHealOverlay, renderSelectionBrushOverlay, commitPixels, commitDocumentState, commitSelection } = useRasterCommit({ document, state, viewport, canvasRef, canvasPixels });
+  const { renderWorking, renderWorkingMultiple, renderWorkingRegion, renderSpotHealOverlay, renderSelectionBrushOverlay, commitPixels, commitDocumentState, commitSelection } = useRasterCommit({ document, state, viewport, workspaceSize, canvasRef, canvasPixels });
 
   // CapsLock toggles the precise (crosshair) cursor instead of the ring —
   // Photoshop's own shortcut. Space-bar navigation and its Photoshop zoom

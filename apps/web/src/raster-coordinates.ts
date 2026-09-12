@@ -73,6 +73,34 @@ export function pointFromNativeEvent(workspace: HTMLDivElement, viewport: Docume
   return { x: (cosine * dx + sine * dy) / viewport.zoom + width / 2, y: (-sine * dx + cosine * dy) / viewport.zoom + height / 2, pressure: strokePressure(event) };
 }
 
+/**
+ * The document-space rectangle visible through the workspace.
+ *
+ * This is `pointFromNativeEvent` applied to all four workspace corners, then
+ * bounded. Rotation makes the true viewport a quadrilateral; its axis-aligned
+ * bounding box is intentionally conservative so the tile renderer can never
+ * leave a visible corner stale.
+ */
+export function visibleRasterDocumentRect(workspaceSize: { width: number; height: number }, viewport: DocumentViewport, width: number, height: number) {
+  if (workspaceSize.width <= 0 || workspaceSize.height <= 0) return { x: 0, y: 0, width: 0, height: 0 };
+  const radians = viewport.rotation * Math.PI / 180;
+  const cosine = Math.cos(radians), sine = Math.sin(radians);
+  const toDocument = (localX: number, localY: number) => {
+    const dx = localX - workspaceSize.width / 2 - viewport.panX;
+    const dy = localY - workspaceSize.height / 2 - viewport.panY;
+    return { x: (cosine * dx + sine * dy) / viewport.zoom + width / 2, y: (-sine * dx + cosine * dy) / viewport.zoom + height / 2 };
+  };
+  const corners = [toDocument(0, 0), toDocument(workspaceSize.width, 0), toDocument(0, workspaceSize.height), toDocument(workspaceSize.width, workspaceSize.height)];
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+  for (const corner of corners) {
+    if (corner.x < left) left = corner.x;
+    if (corner.y < top) top = corner.y;
+    if (corner.x > right) right = corner.x;
+    if (corner.y > bottom) bottom = corner.y;
+  }
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
 export function zoomAroundClient(workspace: HTMLDivElement, viewport: DocumentViewport, zoom: number, clientX: number, clientY: number): Partial<DocumentViewport> {
   const rect = workspace.getBoundingClientRect();
   const x = clientX - rect.left - rect.width / 2, y = clientY - rect.top - rect.height / 2;

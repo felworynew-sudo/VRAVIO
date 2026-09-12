@@ -9,6 +9,7 @@ import { createBufferRevisionOperation, type AssetId, type VravioDocument } from
 import { kernel } from "./kernel";
 import { diagnostic } from "./diagnostics";
 import { applyRasterRules } from "./environments/raster/rules/registry";
+import { visibleRasterDocumentRect } from "./raster-coordinates";
 import { cropPixels, fromBytes, putPixels, putRegionPixels, rgbaToMask, stateDeltaBytes, toBytes, withActiveLayerPixels, withLayerMaskPixels, withLayerMaskRegion, withLayersPixels } from "./raster-pixel-buffers";
 import type { DocumentViewport } from "./store";
 
@@ -35,10 +36,11 @@ export function useRasterCommit(params: {
   document: VravioDocument;
   state: RasterDocumentState;
   viewport: DocumentViewport;
+  workspaceSize: { width: number; height: number };
   canvasRef: RefObject<HTMLCanvasElement | null>;
   canvasPixels: (layer: ReturnType<typeof activeRasterLayer>) => Uint8ClampedArray;
 }) {
-  const { document, state, viewport, canvasRef, canvasPixels } = params;
+  const { document, state, viewport, workspaceSize, canvasRef, canvasPixels } = params;
   /** Serializes the storage half of pixel commits; see commitPixels. */
   const commitQueue = useRef<Promise<void>>(Promise.resolve());
   const tiles = useRef(new RasterTileCache({ tileSize: 256 }));
@@ -97,7 +99,8 @@ export function useRasterCommit(params: {
      */
     let next: ReturnType<typeof setTimeout> | undefined;
     const drain = (budgetMs: number) => {
-      const { repainted, pending } = tiles.current.update(state, { x: 0, y: 0, width: state.width, height: state.height }, { mip, budgetMs });
+      const visible = visibleRasterDocumentRect(workspaceSize, viewport, state.width, state.height);
+      const { repainted, pending } = tiles.current.update(state, visible, { mip, budgetMs });
       for (const tile of repainted) putRegionPixels(canvas, tile.pixels, tile.rect, tile.step);
       // A timer, not `requestAnimationFrame`: frames stop in a hidden window, and the first
       // version of this left the tail of a stroke unpainted for exactly that reason — the canvas
@@ -107,7 +110,7 @@ export function useRasterCommit(params: {
     };
     drain(TILE_BUDGET_MS);
     return () => clearTimeout(next);
-  }, [document.revision, state, viewport.zoom]);
+  }, [document.revision, state, viewport, workspaceSize.width, workspaceSize.height]);
 
   // Destructive adjustment dialogs render a transient composite here. The
   // document, layer pixels and history remain untouched until the dialog's OK
