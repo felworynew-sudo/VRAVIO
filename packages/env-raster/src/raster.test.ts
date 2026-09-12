@@ -596,6 +596,20 @@ describe("tile cache", () => {
     expect(narrow.visible).toHaveLength(1);
     expect(cache.bytes).toBeLessThanOrEqual(32 * 32 * 4 * 4);
   });
+
+  it("tracks cached mip bytes through replacement and reset", () => {
+    const document = createRasterDocument(64, 64, { backgroundColor: "#3366ff" });
+    const cache = new RasterTileCache({ tileSize: 32 });
+    cache.update(document, { x: 0, y: 0, width: 64, height: 64 }, 0);
+    const fullBytes = cache.bytes;
+    cache.update(document, { x: 0, y: 0, width: 64, height: 64 }, 1);
+    expect(cache.bytes).toBeGreaterThan(fullBytes);
+    cache.invalidate({ x: 0, y: 0, width: 1, height: 1 });
+    cache.update(document, { x: 0, y: 0, width: 32, height: 32 }, 0);
+    expect(cache.bytes).toBeGreaterThan(fullBytes);
+    cache.reset();
+    expect(cache.bytes).toBe(0);
+  });
 });
 
 describe("filter specs", () => {

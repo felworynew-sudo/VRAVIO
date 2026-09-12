@@ -126,6 +126,7 @@ export class RasterTileCache {
   /** Every cached mip key at one document-tile coordinate. Keeps invalidation O(changed tiles). */
   readonly #keysByCoordinate = new Map<string, Set<string>>();
   readonly #invalid = new Set<string>();
+  #bytes = 0;
   #documentWidth = 0;
   #documentHeight = 0;
 
@@ -135,14 +136,8 @@ export class RasterTileCache {
   }
 
   get size(): number { return this.#tiles.size; }
-  get bytes(): number {
-    // Counted from the tiles themselves: a mip level holds a quarter of the
-    // pixels of the one below it, and charging every tile the full size would
-    // evict the cheap ones first.
-    let total = 0;
-    for (const tile of this.#tiles.values()) total += tile.pixels.byteLength;
-    return total;
-  }
+  /** Exact aggregate of actual mip buffers; updated at cache ownership changes. */
+  get bytes(): number { return this.#bytes; }
 
   invalidateAll(): void {
     for (const cacheKey of this.#tiles.keys()) this.#invalid.add(cacheKey);
@@ -164,6 +159,7 @@ export class RasterTileCache {
     this.#tiles.clear();
     this.#keysByCoordinate.clear();
     this.#invalid.clear();
+    this.#bytes = 0;
   }
 
   update(state: RasterDocumentState, viewport: RasterRect, mipOrOptions: number | TileUpdateOptions = 0): TileUpdate {
@@ -197,8 +193,13 @@ export class RasterTileCache {
       if (!rect.width || !rect.height) continue;
       const step = stepForMip(mip);
       const tile: RasterTile = { col, row, rect, pixels: compositeRasterRegion(state, rect, { step }), step };
+      const replaced = this.#tiles.get(cacheKey);
       this.#tiles.delete(cacheKey);
       this.#tiles.set(cacheKey, tile);
+      // A mip level holds its own, smaller buffer. Count those actual bytes,
+      // not a full-resolution tile estimate, and do it at insertion so the
+      // eviction loop never has to recount the entire cache.
+      this.#bytes += tile.pixels.byteLength - (replaced?.pixels.byteLength ?? 0);
       const coordinate = coordinateKey(col, row);
       let coordinateKeys = this.#keysByCoordinate.get(coordinate);
       if (!coordinateKeys) { coordinateKeys = new Set(); this.#keysByCoordinate.set(coordinate, coordinateKeys); }
@@ -225,6 +226,7 @@ export class RasterTileCache {
       const tile = this.#tiles.get(cacheKey);
       this.#tiles.delete(cacheKey);
       if (tile) {
+        this.#bytes -= tile.pixels.byteLength;
         const coordinate = coordinateKey(tile.col, tile.row);
         const keys = this.#keysByCoordinate.get(coordinate);
         keys?.delete(cacheKey);
