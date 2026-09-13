@@ -6190,15 +6190,15 @@ Adobe документирует: (1) многопоточный компози�
 
 ### 26.1. Слои и недеструктивность (Photoshop) — самая принципиальная дыра по мнению аудита
 
-`RasterLayer.kind === "smart"` уже предусмотрен в типе, но настоящего Smart Object workflow нет; полноценного live filter/effect graph тоже нет.
+**Статус на 13 сентября 2026.** Embedded-основа Smart Objects уже реализована: Convert to Smart Object извлекает source в Asset Store; обычный Duplicate сохраняет общий source, а New Smart Object via Copy создаёт независимый; двойной клик по thumbnail/Edit Contents открывает round-trip; Save обновляет экземпляры; Replace Contents меняет source только выбранного экземпляра. Smart Object хранит source и affine placement отдельно, поэтому повторные scale/rotate не пересэмплируют исходник. Linked external file workflow и Smart Filter graph остаются P0.
 
 | Что | Описание | Adobe | Донор |
 |---|---|---|---|
-| 🔴 Smart Objects | Вложить изображение/слои/вектор как объект, трансформировать без потери исходника, 2×клик открывает содержимое | [Smart Objects overview](https://helpx.adobe.com/photoshop/using/create-smart-objects.html) | Patchy |
-| 🔴 Embedded Smart Objects | Содержимое хранится внутри документа | Adobe Help | Patchy |
+| 🟠 Smart Objects | Raster embedded workflow готов: source/placement разделены, transform без потери, badge и 2×клик открывает содержимое. Vector/document source и linked workflow остаются. | [Smart Objects overview](https://helpx.adobe.com/photoshop/using/create-smart-objects.html) | Patchy |
+| ✅ Embedded Smart Objects | Содержимое хранится в Asset Store документа; duplicate разделяет source, New Smart Object via Copy создаёт независимый. | Adobe Help | Patchy |
 | 🔴 Linked Smart Objects | Объект ссылается на внешний файл, обновление исходника обновляет экземпляры | Adobe Help | Patchy |
-| 🔴 Edit Contents | 2×клик открывает исходное содержимое, Save обновляет все экземпляры | Adobe Help | Patchy |
-| 🔴 Replace/Relink/Embed linked asset | Замена файла, восстановление потерянной ссылки, linked→embedded | Adobe Help | Penpot |
+| ✅ Edit Contents | 2×клик thumbnail/команда открывает embedded source, Apply child-документа обновляет все экземпляры общего source. | Adobe Help | Patchy |
+| 🟠 Replace/Relink/Embed linked asset | Replace Contents для embedded source готов; Relink/Embed остаются частью будущего desktop Linked workflow. | Adobe Help | Penpot |
 | 🔴 Smart Filter stack | Фильтры остаются редактируемыми, переставляются/скрываются/удаляются | [Smart Filters](https://helpx.adobe.com/photoshop/using/smart-filters.html) | Patchy |
 | 🔴 Filter blending per-filter | opacity/blend mode у каждого Smart Filter отдельно | Adobe Help | Patchy |
 | 🔴 Smart Filter mask | Общая маска, ограничивающая весь стек фильтров | Adobe Help | Patchy |
@@ -6776,12 +6776,13 @@ Generative Fill, Harmonize, Generative Recolor, Prompt-to-Edit — не
 как один порядок продуктовых приоритетов для Raster, чтобы следующая работа
 не распалась на случайные фильтры и маленькие инструменты.
 
-1. **Smart Objects + Smart Filters — P0.** `Convert to Smart Object`,
-   `Edit Contents`, embedded/linked source, связанные дубликаты,
-   Replace/Relink и неразрушаемый упорядоченный Smart Filter stack:
-   параметры, собственная mask, enable/disable/reorder. Основа — текущий
-   `RasterLayer.kind === "smart"`, а не второй тип слоя. Доноры: Photopea
-   UX, Patchy для workflow, GEGL для графа вычислений.
+1. **Smart Objects + Smart Filters — P0.** Embedded-фундамент закрыт:
+   `Convert to Smart Object`, `Edit Contents`, shared/independent duplicates,
+   non-destructive affine placement и Replace Contents. Остаются linked
+   source с desktop path/Relink/Embed и неразрушаемый упорядоченный Smart
+   Filter stack: параметры, собственная mask, enable/disable/reorder. Основа
+   — текущий `RasterLayer.kind === "smart"`, а не второй тип слоя. Доноры:
+   Photopea UX, Patchy для workflow, GEGL для графа вычислений.
 2. **Channels, Quick Mask и Vector Masks — P0.** RGB и сохранённые alpha
    channels, grayscale edit/view, channel↔selection, `Q` как временный
    paintable channel, плюс raster и vector mask одновременно на layer/group.
