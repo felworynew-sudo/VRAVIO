@@ -85,6 +85,12 @@ export interface PendingTransform {
     /** Degrees about `target`'s centre — absolute for the session, not per gesture. */
     readonly rotation: number;
   };
+  /**
+   * Layer-local pixels for a whole-layer live Move. The document-sized
+   * materialisation is transparent outside the canvas by design, so it cannot
+   * preview a layer being dragged back from beyond that canvas.
+   */
+  readonly livePixels?: Uint8ClampedArray;
   /** Content lifted off the layer once; every drag places the same float rather than cutting a
    * second hole out of an image already cut from — see CLAUDE.md's floating-selection lesson. */
   readonly float?: FloatingPixels;
@@ -119,7 +125,7 @@ type MoveDrag =
    * (`renderWorkingRegion`), so a rectangle that does not cover where the *last* frame drew leaves
    * that drawing on screen. Patchy computes the same union from the same two positions
    * (`moving_layers_dirty_region(old_delta, new_delta)`, canvas_widget_move.cpp). */
-  | { kind: "move"; pointerId: number; from: Point; current: Point; previous?: Point; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean; fromOrigin?: boolean; float?: FloatingPixels; linkedBase?: readonly { layerId: string; basePixels: Uint8ClampedArray; baseBounds: RasterRect | null }[]; baseLive?: PendingTransform["live"]; sourceBounds?: RasterRect }
+  | { kind: "move"; pointerId: number; from: Point; current: Point; previous?: Point; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean; fromOrigin?: boolean; float?: FloatingPixels; linkedBase?: readonly { layerId: string; basePixels: Uint8ClampedArray; baseBounds: RasterRect | null }[]; baseLive?: PendingTransform["live"]; sourceBounds?: RasterRect; livePixels?: Uint8ClampedArray }
   | { kind: "scale"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; session: TransformSession; handleX: -1 | 0 | 1; handleY: -1 | 0 | 1; dx: number; dy: number; shiftKey: boolean; text?: PendingTextTransform }
   | { kind: "rotate"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; session: TransformSession; center: Point; startAngle: number; baseRotation: number; dx: number; dy: number; handleX: -1 | 1; handleY: -1 | 1; shiftKey: boolean; text?: PendingTextTransform }
   | { kind: "quad"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; quadOrigin: { pixels: Uint8ClampedArray; bounds: RasterRect; selection: PixelSelection | null }; baseCorners: readonly [Point, Point, Point, Point]; handleIndex: number; mode: QuadTransformMode }
@@ -569,7 +575,7 @@ function beginMoveDrag(context: ToolContext<MoveState>, pointer: ToolPointer, pe
       ...(origin ? { fromOrigin: true } : {}),
       ...(linkedBase ? { linkedBase } : {}),
       ...(float ? { float } : {}),
-      ...(liveEligible ? { sourceBounds: freshOpaqueBounds } : {}),
+      ...(liveEligible ? { sourceBounds: { ...layer.bounds }, livePixels: layer.pixels } : {}),
       // A scale (or rotate) left the session in "described, not resampled" mode — see
       // `PendingTransform.live`'s own doc comment. Carried through so this move-drag can shift
       // that description's own target rect instead of quietly reverting to `basePixels` at its
@@ -579,6 +585,7 @@ function beginMoveDrag(context: ToolContext<MoveState>, pointer: ToolPointer, pe
       // it knows nothing about a still-uncommitted scale, so a move started right after one threw
       // the scale away. The reported "shrink resets the moment you start dragging".
       ...(next?.live ? { baseLive: next.live } : {}),
+      ...(next?.livePixels ? { livePixels: next.livePixels } : {}),
     },
   });
 }
@@ -643,7 +650,7 @@ function applyDragFrame(context: ToolContext<MoveState>, drag: MoveDrag, interpo
   // whatever scale/rotation was still only described, never actually applied to `basePixels`.
   if (drag.baseLive) {
     const target = { ...drag.baseLive.target, x: drag.baseLive.target.x + deltaX, y: drag.baseLive.target.y + deltaY };
-    return { before: drag.before, layerId: drag.before.activeLayerId, dx, dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: drag.rotation, live: { source: drag.baseLive.source, target, rotation: drag.baseLive.rotation } };
+    return { before: drag.before, layerId: drag.before.activeLayerId, dx, dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: drag.rotation, live: { source: drag.baseLive.source, target, rotation: drag.baseLive.rotation }, ...(drag.livePixels ? { livePixels: drag.livePixels } : {}) };
   }
   // The same "described, not resampled" trade as scale/rotate (`PendingTransform.live`'s own doc
   // comment) — `beginMoveDrag` only sets `sourceBounds` for a fresh, unselected, non-text,
@@ -653,7 +660,7 @@ function applyDragFrame(context: ToolContext<MoveState>, drag: MoveDrag, interpo
   // raster preview pipeline.
   if (drag.sourceBounds) {
     const target = { ...drag.sourceBounds, x: drag.sourceBounds.x + deltaX, y: drag.sourceBounds.y + deltaY };
-    return { before: drag.before, layerId: drag.before.activeLayerId, dx, dy, pixels: drag.basePixels, selection: null, rotation: drag.rotation, live: { source: drag.sourceBounds, target, rotation: drag.rotation } };
+    return { before: drag.before, layerId: drag.before.activeLayerId, dx, dy, pixels: drag.basePixels, selection: null, rotation: drag.rotation, live: { source: drag.sourceBounds, target, rotation: drag.rotation }, ...(drag.livePixels ? { livePixels: drag.livePixels } : {}) };
   }
   const shiftX = drag.float || drag.fromOrigin ? dx : deltaX;
   const shiftY = drag.float || drag.fromOrigin ? dy : deltaY;
@@ -959,9 +966,16 @@ const move: RasterToolDefinition<MoveState> = {
       if (overlay.width !== width) overlay.width = width;
       if (overlay.height !== height) overlay.height = height;
       const ctx2d = overlay.getContext("2d");
-      if (ctx2d) ctx2d.putImageData(new ImageData(cropPixels(pending.pixels, document.width, { x: Math.round(source.x), y: Math.round(source.y), width, height }) as Uint8ClampedArray<ArrayBuffer>, width, height), 0, 0);
+      // `livePixels` is the original layer-local buffer. It is deliberately
+      // preferred over the document-sized materialisation: when a stored
+      // layer sits beyond an edge, the latter contains transparent pixels
+      // there, but the former is exactly what must become visible while the
+      // user drags it back in.
+      const previewPixels = pending.livePixels
+        ?? cropPixels(pending.pixels, document.width, { x: Math.round(source.x), y: Math.round(source.y), width, height });
+      if (ctx2d) ctx2d.putImageData(new ImageData(previewPixels as Uint8ClampedArray<ArrayBuffer>, width, height), 0, 0);
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [live?.source.x, live?.source.y, live?.source.width, live?.source.height, pending?.pixels, document.width]);
+    }, [live?.source.x, live?.source.y, live?.source.width, live?.source.height, pending?.pixels, pending?.livePixels, document.width]);
 
     if (!pending) return null;
     const zoom = context.viewport.zoom;

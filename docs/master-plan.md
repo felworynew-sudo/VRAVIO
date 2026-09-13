@@ -6613,6 +6613,51 @@ Generative Fill, Harmonize, Generative Recolor, Prompt-to-Edit — не
 
 ### 26.28. Главный концептуальный вывод второго аудита
 
+#### 26.28.1. Консолидированный Photopea-gap backlog — добавлен 13 сентября 2026
+
+Этот список не отменяет детальные пункты §26.1–§26.15: он фиксирует их
+как один порядок продуктовых приоритетов для Raster, чтобы следующая работа
+не распалась на случайные фильтры и маленькие инструменты.
+
+1. **Smart Objects + Smart Filters — P0.** `Convert to Smart Object`,
+   `Edit Contents`, embedded/linked source, связанные дубликаты,
+   Replace/Relink и неразрушаемый упорядоченный Smart Filter stack:
+   параметры, собственная mask, enable/disable/reorder. Основа — текущий
+   `RasterLayer.kind === "smart"`, а не второй тип слоя. Доноры: Photopea
+   UX, Patchy для workflow, GEGL для графа вычислений.
+2. **Channels, Quick Mask и Vector Masks — P0.** RGB и сохранённые alpha
+   channels, grayscale edit/view, channel↔selection, `Q` как временный
+   paintable channel, плюс raster и vector mask одновременно на layer/group.
+3. **Brush Engine + ABR — P0.** Custom/pattern tips, shape/scatter/color
+   dynamics, tilt/pressure, preset library, import/export `.abr`; базовые
+   Size/Hardness/Spacing не считать завершённым brush engine.
+4. **Настоящий high-bit Raster + ICC — P0.** Не только `bitDepth` в
+   модели: Uint16/float или эквивалент на хранении, compositor, кистях,
+   filters, history и export; ICC input/display/output минимум для sRGB,
+   Display P3 и Adobe RGB. CMYK идёт следующим этапом после устойчивого
+   high-bit/ICC pipeline.
+5. **PSD round-trip — P0.** PSD write и углублённый read должны сохранять
+   raster/groups/clipping, raster/vector masks, text, adjustments, styles,
+   Smart Objects и paths, не сводя документ к одному bitmap.
+6. **Layer Styles до Photopea-класса — P1 после Smart Filters.** Stroke,
+   Satin, Color/Pattern Overlay, более глубокие Bevel/Glow/Shadow,
+   contour, Global Light, presets и `.asl`.
+7. **Selection / Refine Edge — P1.** Quick Selection, Color Range,
+   Select & Mask/Refine Edge с trimap, decontaminate colors и выводом в
+   selection/mask/new layer; Object Selection и Remove Background уже
+   служат фундаментом.
+8. **Actions / automation — P1.** Action Recorder поверх command registry:
+   Record → typed commands+parameters → Replay → batch; `.atn` — только
+   последующий слой совместимости, не архитектурная зависимость.
+9. **Photoshop muscle-memory — непрерывная UX-обязанность.** Channels/
+   Paths рядом с Layers, Brush/Styles/Actions panels, нормальный docking,
+   workspace presets, Alt-click mask/layer, клавиши size/hardness кисти,
+   right-click layers under cursor, Fit/100% и Tab panels.
+10. **Не раздувать Raster legacy-функциями сейчас.** Slices, Variables,
+    отдельное video editing внутри Raster, Vanishing Point, Blur Gallery и
+    Layer Comps оставить после фундаментальных пунктов: часть уже лучше
+    решается отдельными средами VRAVIO.
+
 VRAVIO уже не страдает от отсутствия «базы Photoshop» — базовых инструментов неожиданно много (см. полный список того, что аудит НЕ считает дырой, в начале §26). Проблема — многие операции существуют как отдельные работающие инструменты, но вокруг них пока нет систем, которые делают Adobe зрелым рабочим окружением:
 
 ```

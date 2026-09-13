@@ -39,7 +39,7 @@ function pointerAt(x: number, y: number): ToolPointer {
 
 interface CommitCall { before: RasterDocumentState; after: RasterDocumentState; bounds: RasterRect | null }
 
-function driveMoveAndCapture(document: RasterDocumentState, path: readonly { x: number; y: number }[]): CommitCall[] {
+function driveMoveAndCapture(document: RasterDocumentState, path: readonly { x: number; y: number }[], finish = true): { calls: CommitCall[]; state: MoveState } {
   const calls: CommitCall[] = [];
   const box: { state: MoveState } = { state: move.createState!() as MoveState };
   const layer = document.layers.find((item) => item.id === document.activeLayerId)!;
@@ -68,9 +68,11 @@ function driveMoveAndCapture(document: RasterDocumentState, path: readonly { x: 
 
   move.onPointerDown!(context, pointerAt(path[0]!.x, path[0]!.y));
   for (const step of path.slice(1)) move.onPointerMove!(context, pointerAt(step.x, step.y));
-  move.onGestureEnd!(context, pointerAt(path[path.length - 1]!.x, path[path.length - 1]!.y));
-  move.onDeactivate!(context);
-  return calls;
+  if (finish) {
+    move.onGestureEnd!(context, pointerAt(path[path.length - 1]!.x, path[path.length - 1]!.y));
+    move.onDeactivate!(context);
+  }
+  return { calls, state: box.state };
 }
 
 describe("commitPending's undo snapshot survives the redo that follows it", () => {
@@ -83,11 +85,11 @@ describe("commitPending's undo snapshot survives the redo that follows it", () =
     // Drag the entire painted layer beyond the right edge. The commit keeps
     // the layer-local buffer and only moves its bounds; a second active-layer
     // drag can bring that same buffer back.
-    const outward = driveMoveAndCapture(document, [{ x: 14, y: 15 }, { x: 70, y: 15 }])[0]!.after;
+    const outward = driveMoveAndCapture(document, [{ x: 14, y: 15 }, { x: 70, y: 15 }]).calls[0]!.after;
     expect(outward.layers[0]!.pixels).toBe(originalPixels);
     expect(outward.layers[0]!.bounds.x).toBe(originalBounds.x + 56);
 
-    const returned = driveMoveAndCapture(outward, [{ x: 70, y: 15 }, { x: 14, y: 15 }])[0]!.after;
+    const returned = driveMoveAndCapture(outward, [{ x: 70, y: 15 }, { x: 14, y: 15 }]).calls[0]!.after;
     expect(returned.layers[0]!.pixels).toBe(originalPixels);
     expect(returned.layers[0]!.bounds).toEqual(originalBounds);
     expect(layerDocumentPixels(returned.layers[0]!, WIDTH, HEIGHT)[(10 * WIDTH + 8) * 4 + 3]).toBe(255);
@@ -96,7 +98,7 @@ describe("commitPending's undo snapshot survives the redo that follows it", () =
   it("a fresh, unselected, non-text move (the live-eligible path) hands commitDocument a real clone", () => {
     const document = paintedDocument();
     const originalBounds = { ...document.layers[0]!.bounds };
-    const calls = driveMoveAndCapture(document, [{ x: 14, y: 15 }, { x: 30, y: 32 }]);
+    const calls = driveMoveAndCapture(document, [{ x: 14, y: 15 }, { x: 30, y: 32 }]).calls;
     expect(calls).toHaveLength(1);
     const { before } = calls[0]!;
 
@@ -112,7 +114,21 @@ describe("commitPending's undo snapshot survives the redo that follows it", () =
 
   it("commitPending is never handed context.document's own live reference as \"before\"", () => {
     const document = paintedDocument();
-    const calls = driveMoveAndCapture(document, [{ x: 14, y: 15 }, { x: 30, y: 32 }]);
+    const calls = driveMoveAndCapture(document, [{ x: 14, y: 15 }, { x: 30, y: 32 }]).calls;
     expect(calls[0]!.before).not.toBe(document);
+  });
+
+  it("keeps the layer-local source in the live preview when dragging it back", () => {
+    const document = paintedDocument();
+    const outward = driveMoveAndCapture(document, [{ x: 14, y: 15 }, { x: 70, y: 15 }]).calls[0]!.after;
+    const expectedPixels = outward.layers[0]!.pixels;
+    const returning = driveMoveAndCapture(outward, [{ x: 70, y: 15 }, { x: 14, y: 15 }], false).state.pending;
+
+    // A document-sized materialisation is transparent here, by design. The
+    // live overlay must instead receive the retained layer buffer immediately,
+    // before Enter commits the move.
+    expect(returning?.livePixels).toBe(expectedPixels);
+    expect(returning?.live?.source).toEqual(outward.layers[0]!.bounds);
+    expect(returning?.live?.target.x).toBe(outward.layers[0]!.bounds.x - 56);
   });
 });
