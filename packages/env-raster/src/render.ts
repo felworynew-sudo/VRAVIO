@@ -1,7 +1,9 @@
 import type { RasterDocumentState, RasterLayer, RasterRect, RgbaColor } from "./types";
 import { renderLayerEffects } from "./effects";
 import { applyAdjustment } from "./adjustments";
+import { applyRasterFilter } from "./filters";
 import { effectiveLayerOpacity, flattenRasterLayers, isLayerEffectivelyVisible } from "./layer-tree";
+import { layerDocumentPixels } from "./layer-bounds";
 
 /**
  * Blend modes as integers.
@@ -184,6 +186,92 @@ export function clampRegionToDocument(state: RasterDocumentState, region: Raster
 export interface CompositeOptions {
   /** Sample every Nth pixel, producing a reduced-resolution result. Used for thumbnails and low zoom. */
   readonly step?: number;
+  /** @internal The outer call supplied a blur-safe backdrop margin already. */
+  readonly backdropContext?: boolean;
+}
+
+/** Glass needs a document-space source but does not itself alter that source. */
+function hasRenderableEffect(layer: RasterLayer): boolean {
+  return Object.entries(layer.effects ?? {}).some(([key, effect]) => key !== "glass" && typeof effect === "object" && effect !== null && (effect as { enabled?: boolean }).enabled === true);
+}
+
+const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
+
+function glassPadding(state: RasterDocumentState): number {
+  let padding = 0;
+  for (const layer of flattenRasterLayers(state.layers)) {
+    const glass = layer.effects?.glass;
+    if (glass?.enabled) padding = Math.max(padding, Math.min(32, Math.ceil(Math.max(0, glass.blur))));
+  }
+  return padding;
+}
+
+function cropComposite(source: Uint8ClampedArray, sourceArea: RasterRect, area: RasterRect): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(area.width * area.height * 4);
+  const left = area.x - sourceArea.x, top = area.y - sourceArea.y;
+  for (let row = 0; row < area.height; row += 1) {
+    const from = ((top + row) * sourceArea.width + left) * 4;
+    output.set(source.subarray(from, from + area.width * 4), row * area.width * 4);
+  }
+  return output;
+}
+
+function sampleComposite(source: Uint8ClampedArray, width: number, height: number, step: number): Uint8ClampedArray {
+  const sampledWidth = Math.ceil(width / step), sampledHeight = Math.ceil(height / step);
+  const output = new Uint8ClampedArray(sampledWidth * sampledHeight * 4);
+  for (let row = 0; row < sampledHeight; row += 1) for (let column = 0; column < sampledWidth; column += 1) {
+    const from = (row * step * width + column * step) * 4;
+    output.set(source.subarray(from, from + 4), (row * sampledWidth + column) * 4);
+  }
+  return output;
+}
+
+/**
+ * Applies the expensive part of a Glass layer to the already-composited
+ * backdrop. A small blur pyramid costs three linear passes over the current
+ * region, rather than a different convolution for every brightness value.
+ */
+function applyGlassBackdrop(
+  output: Uint8ClampedArray, width: number, height: number,
+  layer: RasterLayer, renderedLayer: Uint8ClampedArray, area: RasterRect,
+  stateWidth: number, step: number, maskPixels: Uint8ClampedArray | undefined,
+  maskDensity: number, clippingBase: Uint8ClampedArray | undefined,
+  layerAlpha: number,
+): void {
+  const glass = layer.effects.glass!;
+  const maxBlur = Math.min(32, Math.max(0, Math.round(glass.blur)));
+  if (!maxBlur) return;
+  // `output` changes below, so build all levels from its one immutable state.
+  const low = applyRasterFilter(output, width, height, "box_blur", { radius: Math.max(1, Math.round(maxBlur / 3)) });
+  const middle = applyRasterFilter(output, width, height, "box_blur", { radius: Math.max(1, Math.round(maxBlur * 2 / 3)) });
+  const high = applyRasterFilter(output, width, height, "box_blur", { radius: maxBlur });
+  const sourceWidth = stateWidth;
+  for (let row = 0; row < height; row += 1) for (let column = 0; column < width; column += 1) {
+    const documentX = area.x + column * step, documentY = area.y + row * step;
+    const sourceIndex = (documentY * sourceWidth + documentX) * 4;
+    const alpha = renderedLayer[sourceIndex + 3]! / 255;
+    if (!alpha) continue;
+    const documentIndex = documentY * stateWidth + documentX;
+    const maskAlpha = maskPixels ? maskPixels[documentIndex]! / 255 * maskDensity : 1;
+    const baseAlpha = clippingBase ? clippingBase[row * width + column]! / 255 : layer.clipping ? 0 : 1;
+    const coverage = alpha * maskAlpha * baseAlpha * layerAlpha;
+    if (!coverage) continue;
+    let lightness = (renderedLayer[sourceIndex]! * .2126 + renderedLayer[sourceIndex + 1]! * .7152 + renderedLayer[sourceIndex + 2]! * .0722) / 255;
+    if (glass.invertLuminance) lightness = 1 - lightness;
+    const strength = clamp01(lightness) * coverage;
+    if (!strength) continue;
+    const index = (row * width + column) * 4;
+    // Linear interpolation between adjacent pyramid levels avoids brightness
+    // bands while retaining O(1) lookup work per output pixel.
+    const scaled = lightness * 3;
+    const first = scaled < 1 ? output : scaled < 2 ? low : middle;
+    const second = scaled < 1 ? low : scaled < 2 ? middle : high;
+    const fraction = scaled < 1 ? scaled : scaled < 2 ? scaled - 1 : Math.min(1, scaled - 2);
+    for (let channel = 0; channel < 3; channel += 1) {
+      const blurred = first[index + channel]! + (second[index + channel]! - first[index + channel]!) * fraction;
+      output[index + channel] = Math.round(output[index + channel]! + (blurred - output[index + channel]!) * strength);
+    }
+  }
 }
 
 /**
@@ -203,6 +291,21 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
   const { width } = state;
   const area = clampRegionToDocument(state, region);
   const step = Math.max(1, Math.floor(options.step ?? 1));
+
+  // A blur samples beyond the requested tile. Render a padded piece once and
+  // return its centre so independently refreshed tiles cannot show seams.
+  const padding = options.backdropContext ? 0 : glassPadding(state);
+  // A reduced compositing pass samples every Nth source pixel. Running a blur
+  // over that sparse buffer would incorrectly multiply its visible radius by
+  // N, so preview/thumbnail paths use the exact full-resolution result then
+  // sample it — the same representation as a normal reduced composite.
+  if (padding && step > 1 && area.width && area.height) {
+    return sampleComposite(compositeRasterRegion(state, area), area.width, area.height, step);
+  }
+  if (padding && step === 1 && area.width && area.height) {
+    const expanded = clampRegionToDocument(state, { x: area.x - padding, y: area.y - padding, width: area.width + padding * 2, height: area.height + padding * 2 });
+    return cropComposite(compositeRasterRegion(state, expanded, { ...options, backdropContext: true }), expanded, area);
+  }
 
   if (step === 1 && area.width * area.height > subdivideAbove && state.layers.length > 1) {
     return compositeInPieces(state, area);
@@ -268,7 +371,9 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
 
     // Ordinary layers are read where they live; the two exceptions above are
     // laid out across the canvas first, since that is the space they work in.
-    const renderedLayer = wholeCanvas ? renderLayerEffects(layer, state.width, state.height) : layer.pixels;
+    const renderedLayer = wholeCanvas
+      ? (hasRenderableEffect(layer) ? renderLayerEffects(layer, state.width, state.height) : layerDocumentPixels(layer, state.width, state.height))
+      : layer.pixels;
     const sourceWidth = wholeCanvas ? width : layer.bounds.width;
     const sourceOriginX = wholeCanvas ? 0 : layer.bounds.x;
     const sourceOriginY = wholeCanvas ? 0 : layer.bounds.y;
@@ -282,7 +387,9 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
     const maskPixels = mask?.pixels, maskDensity = mask?.density ?? 1;
     const layerAlpha = effectiveOpacity * (layer.fillOpacity ?? 1);
     const clipping = layer.clipping === true;
-    const opaqueNormal = code === NORMAL && layerAlpha >= 1 && !clipping;
+    const glass = layer.effects?.glass?.enabled ? layer.effects.glass : null;
+    if (glass) applyGlassBackdrop(output, outWidth, outHeight, layer, renderedLayer, area, state.width, step, maskPixels, maskDensity, clippingBase, layerAlpha);
+    const opaqueNormal = code === NORMAL && layerAlpha >= 1 && !clipping && !glass;
 
     for (let row = firstRow; row <= lastRow; row += 1) {
       const documentRow = (area.y + row * step) * width + area.x;
@@ -298,7 +405,10 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
         const baseAlpha = clippingBase ? clippingBase[regionIndex]! / 255 : clipping ? 0 : 1;
         const rawAlpha = (renderedLayer[sourceIndex + 3]! / 255) * maskAlpha;
         if (ownAlpha) ownAlpha[regionIndex] = Math.round(rawAlpha * 255);
-        const sourceAlpha = rawAlpha * baseAlpha * layerAlpha;
+        let sourceAlpha = rawAlpha * baseAlpha * layerAlpha;
+        // The backdrop was already frosted above. The painted pixels are only
+        // the pane's tint, so an opaque white source never hides its own blur.
+        if (glass) sourceAlpha *= clamp01(glass.tintOpacity);
         if (sourceAlpha <= 0) continue;
 
         const sourceRed = renderedLayer[sourceIndex]!, sourceGreen = renderedLayer[sourceIndex + 1]!, sourceBlue = renderedLayer[sourceIndex + 2]!;

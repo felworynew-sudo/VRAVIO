@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createRasterLayer, renderLayerEffects } from "./index";
+import { appendLayer, compositeRasterDocument, compositeRasterRegion, createRasterDocument, createRasterLayer, renderLayerEffects } from "./index";
 import type { RasterLayer, RasterLayerEffects } from "./types";
 
 const W = 40, H = 40;
@@ -201,5 +201,46 @@ describe("layer effects on a layer stored in its own bounds", () => {
     // The shadow is offset by (4,4), so just past the bottom-right corner it is
     // there and it is black.
     expect(at(rendered, 30, 30)).toEqual({ r: 0, g: 0, b: 0, a: 255 });
+  });
+});
+
+describe("Glass backdrop effect", () => {
+  function backdropDocument(luminance: number) {
+    const document = createRasterDocument(9, 1, { backgroundColor: "#000000" });
+    // A single white impulse makes any blur at the centre unambiguous.
+    document.layers[0]!.pixels.set([255, 255, 255, 255], 2 * 4);
+    const glass = createRasterLayer(9, 1, "Glass");
+    glass.pixels.set([luminance, luminance, luminance, 255], 4 * 4);
+    glass.effects = { glass: { enabled: true, blur: 6, tintOpacity: 0, invertLuminance: false } };
+    appendLayer(document, glass);
+    return document;
+  }
+
+  it("uses source lightness as the frost map and leaves black pixels sharp", () => {
+    const white = compositeRasterDocument(backdropDocument(255));
+    const black = compositeRasterDocument(backdropDocument(0));
+    // The backdrop at x=4 is black. White glass borrows the neighbouring
+    // white impulse through blur; black glass has zero frost strength.
+    expect(white[4 * 4]).toBeGreaterThan(0);
+    expect(black.slice(4 * 4, 4 * 4 + 4)).toEqual(new Uint8ClampedArray([0, 0, 0, 255]));
+  });
+
+  it("does not change pixels outside the glass coverage", () => {
+    const result = compositeRasterDocument(backdropDocument(255));
+    expect(result.slice(0, 4)).toEqual(new Uint8ClampedArray([0, 0, 0, 255]));
+  });
+
+  it("renders a small tile identically to the same part of the full glass composite", () => {
+    const document = backdropDocument(255);
+    const full = compositeRasterDocument(document);
+    const tile = compositeRasterRegion(document, { x: 4, y: 0, width: 1, height: 1 });
+    expect(tile).toEqual(full.slice(4 * 4, 5 * 4));
+  });
+
+  it("does not inflate blur radius in a reduced-resolution preview", () => {
+    const document = backdropDocument(255);
+    const full = compositeRasterDocument(document);
+    const reduced = compositeRasterRegion(document, { x: 0, y: 0, width: 9, height: 1 }, { step: 2 });
+    expect(reduced.slice(2 * 4, 3 * 4)).toEqual(full.slice(4 * 4, 5 * 4));
   });
 });

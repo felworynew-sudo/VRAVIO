@@ -178,6 +178,12 @@ export interface RasterLayerEffects {
   innerGlow?: { enabled: boolean; color: string; opacity: number; radius: number };
   bevel?: { enabled: boolean; strength: number };
   gradientOverlay?: { enabled: boolean; from: string; to: string; opacity: number; angle: number };
+  /**
+   * A backdrop effect, not a Porter-Duff blend mode. The layer's luminance is
+   * a per-pixel frost map: black keeps the backdrop sharp and white reaches
+   * `blur` pixels. `tintOpacity` then draws the layer itself over that glass.
+   */
+  glass?: { enabled: boolean; blur: number; tintOpacity: number; invertLuminance: boolean };
 }
 
 export interface RasterLayerMask {

@@ -79,7 +79,9 @@ export function renderLayerEffects(layer: RasterLayer, width: number, height: nu
   const effects = layer.effects ?? {};
   // Allocate only once an effect is actually enabled: the compositor calls this for every
   // layer on every frame, and the no-effects case is by far the most common.
-  if (!Object.values(effects).some((effect) => effect?.enabled)) return layer.pixels;
+  // Glass is rendered by the compositor because it reads the backdrop, not by
+  // this source-only layer-style renderer.
+  if (!Object.entries(effects).some(([key, effect]) => key !== "glass" && effect?.enabled)) return layer.pixels;
   const cached = renderedEffects.get(layer.pixels);
   if (cached && cached.effects === layer.effects && cached.width === width && cached.height === height) return cached.output;
   // Document space, both in and out. A layer's pixels are stored in the layer's
