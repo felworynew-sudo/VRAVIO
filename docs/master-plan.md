@@ -6025,9 +6025,10 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
    `Uint8ClampedArray(4)` для каждого touched pixel: использует scalar RGBA
    accumulator с byte-identical rounding. [x] Multigrid coarsening в
    healing membrane больше не создаёт два RGB-массива на каждую coarse-cell,
-   а суммирует scalar channels. [ ] Оставшийся аудит temporary allocations;
-   один payload-copy в
-   `decodeRasterAsset()`; transactional fallback undo до асинхронного
+   а суммирует scalar channels. [x] `decodeRasterAsset()` выполняет ровно
+   одну payload-copy в принадлежащий caller buffer вместо `slice` + второго
+   typed-array copy. [ ] Оставшийся аудит temporary allocations;
+   transactional fallback undo до асинхронного
    asset/history bookkeeping.
    transactional fallback undo до асинхронного asset/history bookkeeping.
 8. **Vector параллельно.** R-tree не должен окружаться O(N) подготовкой;

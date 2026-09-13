@@ -51,8 +51,13 @@ export function decodeRasterAsset(bytes: Uint8Array): RasterAssetImage {
   if (bytes.length - HEADER_BYTES !== expected) {
     throw new RangeError(`Raster asset claims ${width}x${height} but carries ${bytes.length - HEADER_BYTES} bytes`);
   }
-  // Copied rather than viewed: the caller owns the result and will paint on it.
-  return { width, height, pixels: new Uint8ClampedArray(bytes.slice(HEADER_BYTES)) };
+  // Copied rather than viewed: the caller owns the result and will paint on
+  // it. `new Uint8ClampedArray(bytes.slice(...))` made *two* payload copies
+  // (Uint8Array#slice, then typed-array construction); allocate the final
+  // buffer once and copy directly from the header-offset view.
+  const pixels = new Uint8ClampedArray(expected);
+  pixels.set(bytes.subarray(HEADER_BYTES));
+  return { width, height, pixels };
 }
 
 /** Whether these bytes are one of ours, without throwing to find out. */
