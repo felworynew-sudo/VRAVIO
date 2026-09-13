@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createRasterLayer } from "./document";
 import { layerDocumentPixels, setLayerPixels } from "./layer-bounds";
+import { convertLayerToEmbeddedSmartObject, transformSmartObject } from "./smart-object";
 
 const W = 40, H = 40;
 
@@ -105,5 +106,34 @@ describe("layerDocumentPixels outside the canvas", () => {
     const canvas = layerDocumentPixels(layer, 2, 2);
     expect(canvas[3]).toBe(255);
     expect(canvas[7]).toBe(0);
+  });
+});
+
+describe("Smart Object projection", () => {
+  it("bilinearly resamples a fractional Smart Object scale without transparent edge fringes", () => {
+    const layer = createRasterLayer(2, 1, "Two colours");
+    layer.pixels.set([255, 0, 0, 255, 0, 0, 255, 255]);
+    convertLayerToEmbeddedSmartObject(layer, "asset-colours");
+    transformSmartObject(layer, { x: 0, y: 0, width: 2, height: 1 }, { x: 0, y: 0, width: 3, height: 1 }, 0);
+
+    const projection = layerDocumentPixels(layer, 3, 1);
+    // The middle pixel lies halfway between red and blue. Nearest-neighbour
+    // could only produce a pure source colour here.
+    expect(projection.slice(4, 8)).toEqual(new Uint8ClampedArray([128, 0, 128, 255]));
+    expect(projection[3]).toBe(255);
+    expect(projection[11]).toBe(255);
+  });
+
+  it("keeps projections for two placements of one immutable source independently cached", () => {
+    const source = createRasterLayer(1, 1, "Source");
+    source.pixels.set([10, 20, 30, 255]);
+    convertLayerToEmbeddedSmartObject(source, "asset-shared");
+    const first = layerDocumentPixels(source, 4, 1);
+    transformSmartObject(source, { x: 0, y: 0, width: 1, height: 1 }, { x: 2, y: 0, width: 1, height: 1 }, 0);
+    const second = layerDocumentPixels(source, 4, 1);
+
+    expect(first[3]).toBe(255);
+    expect(second[3]).toBe(0);
+    expect(second[11]).toBe(255);
   });
 });

@@ -49,15 +49,71 @@ export function unionRect(current: RasterRect | null, x0: number, y0: number, x1
  * which is safe because every path that edits pixels assigns a fresh one; a
  * layer read repeatedly without being edited materialises once.
  */
-const materialised = new WeakMap<Uint8ClampedArray, { width: number; height: number; bounds: RasterRect; pixels: Uint8ClampedArray; placementKey?: string }>();
+interface MaterialisedLayer {
+  readonly width: number;
+  readonly height: number;
+  readonly bounds: RasterRect;
+  readonly pixels: Uint8ClampedArray;
+}
+
+/**
+ * A source buffer may be placed more than once as independent Smart Object
+ * instances. Keep a small LRU-like set of projections per source instead of
+ * evicting the previous instance on every paint pass. The WeakMap still lets
+ * all projections disappear as soon as their immutable source does.
+ */
+const materialised = new WeakMap<Uint8ClampedArray, Map<string, MaterialisedLayer>>();
+const MAX_MATERIALISED_PROJECTIONS = 4;
+
+function cachedMaterialisation(source: Uint8ClampedArray, key: string): Uint8ClampedArray | null {
+  const entries = materialised.get(source);
+  const cached = entries?.get(key);
+  if (!cached || cached.width < 1 || cached.height < 1) return null;
+  // Refresh insertion order so the least recently used projection is removed.
+  entries!.delete(key); entries!.set(key, cached);
+  return cached.pixels;
+}
+
+function cacheMaterialisation(source: Uint8ClampedArray, key: string, width: number, height: number, bounds: RasterRect, pixels: Uint8ClampedArray): void {
+  const entries = materialised.get(source) ?? new Map<string, MaterialisedLayer>();
+  if (!materialised.has(source)) materialised.set(source, entries);
+  while (entries.size >= MAX_MATERIALISED_PROJECTIONS) entries.delete(entries.keys().next().value!);
+  entries.set(key, { width, height, bounds: { ...bounds }, pixels });
+}
+
+/** Samples straight-alpha source pixels with bilinear filtering in premultiplied
+ * space, avoiding both jagged transformed objects and dark transparent fringes. */
+function sampleBilinear(source: Uint8ClampedArray, width: number, height: number, x: number, y: number, target: Uint8ClampedArray, targetOffset: number): void {
+  const left = Math.floor(x), top = Math.floor(y), fx = x - left, fy = y - top;
+  let red = 0, green = 0, blue = 0, alpha = 0;
+  for (let row = 0; row <= 1; row += 1) for (let column = 0; column <= 1; column += 1) {
+    // The caller has already rejected samples outside the transformed source
+    // rectangle. At the edge, extend the last source pixel instead of mixing
+    // it with transparent black (the usual image-resampling edge behaviour).
+    const sourceX = Math.max(0, Math.min(width - 1, left + column));
+    const sourceY = Math.max(0, Math.min(height - 1, top + row));
+    const weight = (column ? fx : 1 - fx) * (row ? fy : 1 - fy);
+    const offset = (sourceY * width + sourceX) * 4, sourceAlpha = source[offset + 3]! / 255;
+    alpha += sourceAlpha * weight;
+    red += source[offset]! * sourceAlpha * weight;
+    green += source[offset + 1]! * sourceAlpha * weight;
+    blue += source[offset + 2]! * sourceAlpha * weight;
+  }
+  if (alpha <= 0) return;
+  target[targetOffset] = Math.round(red / alpha);
+  target[targetOffset + 1] = Math.round(green / alpha);
+  target[targetOffset + 2] = Math.round(blue / alpha);
+  target[targetOffset + 3] = Math.round(alpha * 255);
+}
 
 export function layerDocumentPixels(layer: RasterLayer, documentWidth: number, documentHeight: number): Uint8ClampedArray {
   const bounds = layer.bounds;
   const placement = smartObjectTransform(layer);
   if (placement) {
-    const cached = materialised.get(layer.pixels);
     const placementKey = `${placement.a},${placement.b},${placement.c},${placement.d},${placement.e},${placement.f}`;
-    if (cached && cached.width === documentWidth && cached.height === documentHeight && cached.placementKey === placementKey) return cached.pixels;
+    const cacheKey = `smart:${documentWidth}x${documentHeight}:${placementKey}`;
+    const cached = cachedMaterialisation(layer.pixels, cacheKey);
+    if (cached) return cached;
     const determinant = placement.a * placement.d - placement.b * placement.c;
     const pixels = new Uint8ClampedArray(documentWidth * documentHeight * 4);
     if (Math.abs(determinant) > 1e-8) {
@@ -65,22 +121,25 @@ export function layerDocumentPixels(layer: RasterLayer, documentWidth: number, d
       const top = Math.max(0, bounds.y), bottom = Math.min(documentHeight, bounds.y + bounds.height);
       for (let y = top; y < bottom; y += 1) for (let x = left; x < right; x += 1) {
         const dx = x + .5 - placement.e, dy = y + .5 - placement.f;
-        const sourceX = Math.floor((placement.d * dx - placement.c * dy) / determinant);
-        const sourceY = Math.floor((-placement.b * dx + placement.a * dy) / determinant);
-        if (sourceX < 0 || sourceY < 0 || sourceX >= layer.width || sourceY >= layer.height) continue;
-        const source = (sourceY * layer.width + sourceX) * 4;
-        pixels.set(layer.pixels.subarray(source, source + 4), (y * documentWidth + x) * 4);
+        // Coordinates above address source-pixel centres. Shift by half a
+        // pixel so identity placement remains exact while fractional scale and
+        // rotation interpolate the surrounding four source pixels.
+        const sourceCentreX = (placement.d * dx - placement.c * dy) / determinant;
+        const sourceCentreY = (-placement.b * dx + placement.a * dy) / determinant;
+        if (sourceCentreX < 0 || sourceCentreY < 0 || sourceCentreX >= layer.width || sourceCentreY >= layer.height) continue;
+        const sourceX = sourceCentreX - .5;
+        const sourceY = sourceCentreY - .5;
+        sampleBilinear(layer.pixels, layer.width, layer.height, sourceX, sourceY, pixels, (y * documentWidth + x) * 4);
       }
     }
-    materialised.set(layer.pixels, { width: documentWidth, height: documentHeight, bounds: { ...bounds }, pixels, placementKey });
+    cacheMaterialisation(layer.pixels, cacheKey, documentWidth, documentHeight, bounds, pixels);
     return pixels;
   }
   if (bounds.x === 0 && bounds.y === 0 && bounds.width === documentWidth && bounds.height === documentHeight) return layer.pixels;
 
-  const cached = materialised.get(layer.pixels);
-  if (cached && cached.width === documentWidth && cached.height === documentHeight
-    && cached.bounds.x === bounds.x && cached.bounds.y === bounds.y
-    && cached.bounds.width === bounds.width && cached.bounds.height === bounds.height) return cached.pixels;
+  const cacheKey = `layer:${documentWidth}x${documentHeight}:${bounds.x},${bounds.y},${bounds.width},${bounds.height}`;
+  const cached = cachedMaterialisation(layer.pixels, cacheKey);
+  if (cached) return cached;
 
   const pixels = new Uint8ClampedArray(documentWidth * documentHeight * 4);
   // Non-destructive crop can put retained pixels left/above the canvas. Read
@@ -97,7 +156,7 @@ export function layerDocumentPixels(layer: RasterLayer, documentWidth: number, d
       pixels.set(layer.pixels.subarray(from, from + rowBytes), (documentY * documentWidth + visibleLeft) * 4);
     }
   }
-  materialised.set(layer.pixels, { width: documentWidth, height: documentHeight, bounds: { ...bounds }, pixels });
+  cacheMaterialisation(layer.pixels, cacheKey, documentWidth, documentHeight, bounds, pixels);
   return pixels;
 }
 

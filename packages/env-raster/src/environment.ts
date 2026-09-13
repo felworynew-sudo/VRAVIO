@@ -170,15 +170,24 @@ export class RasterEnvironment implements Environment<RasterDocumentState> {
     if (!bytes) throw new Error(`Asset ${newAssetId} has no bytes`);
     const image = decodeRasterAsset(bytes);
 
+    let previousAssetId: string | undefined;
     this.#documents.update<RasterDocumentState>(document.id, (state) => {
       const layer = flattenRasterLayers(state.layers).find((item) => item.id === target.layerId);
       if (!layer) throw new Error(`Unknown layer: ${target.layerId}`);
+      previousAssetId = layer.pixelAssetId;
       layer.pixelAssetId = newAssetId;
+      if (layer.smartSource) layer.smartSource = { ...layer.smartSource, assetId: newAssetId, pinnedRev: null };
       if (!replaceSmartObjectSourcePixels(layer, image.pixels, image.width, image.height)) {
         setLayerLocalPixels(layer, image.pixels, { x: layer.bounds.x, y: layer.bounds.y, width: image.width, height: image.height });
       }
     });
     this.#documents.addAssetRef(document.id, newAssetId);
+    const current = this.#documents.get<RasterDocumentState>(document.id);
+    if (previousAssetId && previousAssetId !== newAssetId && current
+      && current.origin?.kind !== "asset"
+      && !flattenRasterLayers(current.state.layers).some((layer) => layer.pixelAssetId === previousAssetId || layer.maskAssetId === previousAssetId || layer.smartSource?.assetId === previousAssetId)) {
+      this.#documents.removeAssetRef(document.id, previousAssetId as AssetId);
+    }
   }
 
   describeChanges(document: VravioDocument<RasterDocumentState>): string {

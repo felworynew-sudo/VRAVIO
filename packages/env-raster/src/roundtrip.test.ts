@@ -349,6 +349,8 @@ describe("raster round-trip", () => {
     const layer = topLayer(documents.get<RasterDocumentState>(parent.id)!);
     expect(assets.mustGet(session.assetId).revisions).toHaveLength(originalRevisions);
     expect(layer.pixelAssetId).not.toBe(session.assetId);
+    expect(layer.smartSource?.assetId ?? layer.pixelAssetId).not.toBe(session.assetId);
+    expect(documents.get(parent.id)!.assetRefs.has(session.assetId)).toBe(false);
     expect(firstPixel(layer.pixels)).toEqual([0, 255, 0, 255]);
   });
 

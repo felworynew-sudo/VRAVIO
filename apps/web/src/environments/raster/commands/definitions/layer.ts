@@ -1,4 +1,4 @@
-import { activeRasterLayer, appendLayer, clearSelectedPixels, convertLayerToEmbeddedSmartObject, createRasterLayer, duplicateLayer, groupLayers, isEditableEmbeddedSmartObject, isRasterDocumentState, layerAccepts, layerDocumentPixels, layerFromSelection, makeIndependentEmbeddedSmartObjectCopy, mergeLayerDown, mergeVisibleLayers, moveLayerInStack, RASTER_ASSET_MIME, removeLayer, replaceSmartObjectSourcePixels, setLayerLocalPixels, setLayerPixels, stampVisibleLayers, ungroupLayer, encodeRasterAsset, type RasterDocumentState } from "@vravio/env-raster";
+import { activeRasterLayer, appendLayer, clearSelectedPixels, convertLayerToEmbeddedSmartObject, createRasterLayer, duplicateLayer, flattenRasterLayers, groupLayers, isEditableEmbeddedSmartObject, isRasterDocumentState, layerAccepts, layerDocumentPixels, layerFromSelection, makeIndependentEmbeddedSmartObjectCopy, mergeLayerDown, mergeVisibleLayers, moveLayerInStack, RASTER_ASSET_MIME, removeLayer, replaceSmartObjectSourcePixels, setLayerLocalPixels, setLayerPixels, stampVisibleLayers, ungroupLayer, encodeRasterAsset, type RasterDocumentState } from "@vravio/env-raster";
 import type { AssetId, EnvironmentKind, PlatformFile } from "@vravio/kernel";
 import { kernel } from "../../../../kernel";
 import { useShellStore } from "../../../../store";
@@ -95,6 +95,21 @@ async function createIndependentSmartObjectCopy(documentId: string): Promise<voi
  * desktop native picker and the web picker one identical command path. */
 type SmartObjectFileSource = { assetId: AssetId; pixels: Uint8ClampedArray; width: number; height: number; name: string; linkedPath: string | null };
 
+/** Document asset refs drive revision notifications. When a Smart Object is
+ * repointed, stop listening to its source only after no layer still uses it. */
+function replaceSmartObjectAssetRef(documentId: string, nextAssetId: AssetId, previousAssetIds: Iterable<string | undefined>): void {
+  kernel.documents.addAssetRef(documentId, nextAssetId);
+  const document = kernel.documents.get<RasterDocumentState>(documentId);
+  if (!document || !isRasterDocumentState(document.state)) return;
+  const usedByDocument = (assetId: string): boolean =>
+    (document.origin?.kind === "asset" && document.origin.assetId === assetId)
+    || flattenRasterLayers(document.state.layers).some((layer) => layer.pixelAssetId === assetId || layer.maskAssetId === assetId || layer.smartSource?.assetId === assetId);
+  for (const previousAssetId of new Set(previousAssetIds)) {
+    if (!previousAssetId || previousAssetId === nextAssetId || usedByDocument(previousAssetId)) continue;
+    kernel.documents.removeAssetRef(documentId, previousAssetId as AssetId);
+  }
+}
+
 async function decodeSmartObjectSource(picked: PlatformFile): Promise<SmartObjectFileSource | null> {
   const bytes = new Uint8Array(picked.data.byteLength); bytes.set(picked.data);
   const file = new File([bytes.buffer], picked.name, { type: picked.mime || "image/png" });
@@ -154,17 +169,19 @@ export async function updateLinkedSmartObjectContents(documentId: string, path?:
   if (!linkedPath || !reader) return;
   const external = await reader(linkedPath); if (!external) return;
   const source = await decodeSmartObjectSource(external); if (!source) return;
+  const previousAssetIds = new Set<string>();
   await edit(documentId, "Update Linked Smart Object (Обновить связанный смарт-объект)", (state) => {
     let changed = false;
     for (const layer of state.layers) {
       if (layer.kind !== "smart" || layer.smartSource?.mode !== "linked" || layer.smartSource.linkedPath !== linkedPath) continue;
+      previousAssetIds.add(layer.pixelAssetId ?? layer.smartSource.assetId);
       layer.pixelAssetId = source.assetId;
       layer.smartSource = { ...layer.smartSource, assetId: source.assetId, pinnedRev: null };
       changed = replaceSmartObjectSourcePixels(layer, source.pixels, source.width, source.height) || changed;
     }
     return changed;
   });
-  kernel.documents.addAssetRef(documentId, source.assetId);
+  replaceSmartObjectAssetRef(documentId, source.assetId, previousAssetIds);
 }
 
 /** Repoints only the selected placement. Other instances keep following their
@@ -177,6 +194,7 @@ async function relinkActiveSmartObject(documentId: string): Promise<void> {
   const source = await pickEmbeddedSmartObjectSource();
   const linkedPath = source?.linkedPath;
   if (!source || !linkedPath) return;
+  const previousAssetId = selected.pixelAssetId ?? selected.smartSource.assetId;
   await edit(documentId, "Relink Smart Object (Перепривязать смарт-объект)", (state) => {
     const layer = state.layers.find((item) => item.id === selected.id);
     if (!layer || layer.kind !== "smart" || layer.smartSource?.mode !== "linked") return false;
@@ -184,7 +202,7 @@ async function relinkActiveSmartObject(documentId: string): Promise<void> {
     layer.smartSource = { ...layer.smartSource, assetId: source.assetId, pinnedRev: null, linkedPath };
     return replaceSmartObjectSourcePixels(layer, source.pixels, source.width, source.height);
   });
-  kernel.documents.addAssetRef(documentId, source.assetId);
+  replaceSmartObjectAssetRef(documentId, source.assetId, [previousAssetId]);
 }
 
 /** Embedding stops future external refreshes but retains the already decoded
@@ -209,6 +227,7 @@ async function replaceActiveSmartObjectContents(documentId: string): Promise<voi
   if (!document || !isRasterDocumentState(document.state)) return;
   const selected = activeRasterLayer(document.state); if (!selected || !isEditableEmbeddedSmartObject(selected)) return;
   const source = await pickEmbeddedSmartObjectSource(); if (!source) return;
+  const previousAssetId = selected.pixelAssetId ?? selected.smartSource!.assetId;
   await edit(documentId, "Replace Smart Object Contents (Заменить содержимое смарт-объекта)", (state) => {
     const layer = state.layers.find((item) => item.id === selected.id);
     if (!layer || !isEditableEmbeddedSmartObject(layer)) return false;
@@ -216,7 +235,7 @@ async function replaceActiveSmartObjectContents(documentId: string): Promise<voi
     layer.smartSource = { ...layer.smartSource!, assetId: source.assetId, pinnedRev: null, mode: "embedded" };
     return replaceSmartObjectSourcePixels(layer, source.pixels, source.width, source.height);
   });
-  kernel.documents.addAssetRef(documentId, source.assetId);
+  replaceSmartObjectAssetRef(documentId, source.assetId, [previousAssetId]);
 }
 
 const edit = (documentId: string, label: string, mutate: (state: RasterDocumentState) => boolean) => changeRasterDocument(documentId, label, mutate);
