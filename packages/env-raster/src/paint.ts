@@ -1,9 +1,11 @@
 import type { Point, RasterRect, RgbaColor } from "./types";
+import type { BrushTip } from "./brush-tip";
 
 /** Runtime subset of a Brush Preset used by the first paint-engine pass.
  * Values are normalized fractions except angleJitter (degrees), count and the
  * explicitly percentage-like `scatter` (100 equals one tip diameter). */
 export interface BrushDynamics {
+  readonly tip?: BrushTip;
   readonly sizeJitter?: number;
   readonly minimumDiameter?: number;
   readonly angleJitter?: number;
@@ -160,6 +162,47 @@ function accumulateRoundDab(
   }
 }
 
+function sampleTipAlpha(tip: BrushTip, x: number, y: number): number {
+  const left = Math.floor(x), top = Math.floor(y), fx = x - left, fy = y - top;
+  let alpha = 0;
+  for (let row = 0; row <= 1; row += 1) for (let column = 0; column <= 1; column += 1) {
+    const sourceX = left + column, sourceY = top + row;
+    if (sourceX < 0 || sourceY < 0 || sourceX >= tip.width || sourceY >= tip.height) continue;
+    alpha += tip.alpha[sourceY * tip.width + sourceX]! * (column ? fx : 1 - fx) * (row ? fy : 1 - fy);
+  }
+  return alpha / 255;
+}
+
+/** Stamps an arbitrary grayscale BrushTip. Sampling uses bilinear alpha so a
+ * scaled imported ABR tip has no nearest-neighbour stair steps. */
+function accumulateBitmapDab(
+  coverage: Uint8ClampedArray, width: number, height: number, point: Point, size: number,
+  flow: number, ceiling: number, selectionMask: Uint8ClampedArray | undefined, roundness: number,
+  angleDegrees: number, pressureSize: boolean, pressureOpacity: boolean, tip: BrushTip,
+): void {
+  const pressure = Math.max(.05, point.pressure ?? 1);
+  const radiusX = Math.max(.5, size / 2) * (pressureSize ? pressure : 1);
+  const radiusY = Math.max(.5, radiusX * (tip.height / tip.width) * Math.max(.01, Math.min(1, roundness)));
+  const reach = Math.max(radiusX, radiusY), radians = angleDegrees * Math.PI / 180;
+  const cosine = Math.cos(radians), sine = Math.sin(radians);
+  const left = Math.max(0, Math.floor(point.x - reach)), right = Math.min(width - 1, Math.ceil(point.x + reach));
+  const top = Math.max(0, Math.floor(point.y - reach)), bottom = Math.min(height - 1, Math.ceil(point.y + reach));
+  const rate = flow * (pressureOpacity ? pressure : 1), cap = clamp01(ceiling) * 255;
+  if (rate <= 0 || cap <= 0) return;
+  for (let y = top; y <= bottom; y += 1) for (let x = left; x <= right; x += 1) {
+    const dx = x + .5 - point.x, dy = y + .5 - point.y;
+    const localX = (dx * cosine + dy * sine) / radiusX;
+    const localY = (-dx * sine + dy * cosine) / radiusY;
+    const shape = sampleTipAlpha(tip, (localX + 1) * tip.width / 2 - .5, (localY + 1) * tip.height / 2 - .5);
+    if (shape <= 0) continue;
+    const index = y * width + x, selectionAlpha = selectionMask ? selectionMask[index]! / 255 : 1;
+    const already = coverage[index]!;
+    if (selectionAlpha <= 0 || already >= cap) continue;
+    const next = already + rate * shape * selectionAlpha * (cap - already);
+    coverage[index] = next > cap ? cap : next;
+  }
+}
+
 /**
  * Paint one logical stamp. Dynamics are resolved once per stamp from a seeded
  * sequence; the hot per-pixel loop above remains branch-free. That is the
@@ -201,7 +244,9 @@ export function accumulateDab(
     const offsetY = dynamics?.bothAxes ? scatterRadius * Math.sin(scatterAngle) : scatterRadius * (brushRandom(seed, stamp, 8 + copy * 5) * 2 - 1) * Math.sin(axisAngle);
     const opacityFactor = Math.max(minimumOpacity, 1 - opacityJitter * controllerAmount(dynamics?.opacityControl, brushRandom(seed, stamp, 6 + copy * 8), point, stamp, fadeSteps));
     const flowFactor = Math.max(minimumFlow, 1 - flowJitter * controllerAmount(dynamics?.flowControl, brushRandom(seed, stamp, 7 + copy * 8), point, stamp, fadeSteps));
-    accumulateRoundDab(coverage, width, height, { ...point, x: point.x + offsetX, y: point.y + offsetY }, size * sizeFactor, flow * flowFactor, ceiling * opacityFactor, hardness, selectionMask, currentRoundness, currentAngle, pressureSize, pressureOpacity);
+    const stampedPoint = { ...point, x: point.x + offsetX, y: point.y + offsetY };
+    if (dynamics?.tip) accumulateBitmapDab(coverage, width, height, stampedPoint, size * sizeFactor, flow * flowFactor, ceiling * opacityFactor, selectionMask, currentRoundness, currentAngle, pressureSize, pressureOpacity, dynamics.tip);
+    else accumulateRoundDab(coverage, width, height, stampedPoint, size * sizeFactor, flow * flowFactor, ceiling * opacityFactor, hardness, selectionMask, currentRoundness, currentAngle, pressureSize, pressureOpacity);
   }
 }
 

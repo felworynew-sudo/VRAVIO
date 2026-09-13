@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { accumulateDab, accumulateStrokeSegment, compositeCoverage } from "./paint";
+import { createBrushTip } from "./brush-tip";
 
 /**
  * The owner's report: a freehand stroke "очень жёстко тупит" while a Shift-straight line "летает",
@@ -172,6 +173,20 @@ describe("brush hardness", () => {
 });
 
 describe("brush dynamics", () => {
+  it("stamps a reusable grayscale bitmap tip instead of a procedural circle", () => {
+    // A 3×3 plus mark: its transparent corners distinguish it from the
+    // default round tip and are also the primitive imported ABR will supply.
+    const tip = createBrushTip("plus", 3, 3, new Uint8ClampedArray([
+      0, 255, 0,
+      255, 255, 255,
+      0, 255, 0,
+    ]));
+    const coverage = blankCoverage();
+    accumulateDab(coverage, W, H, { x: 200, y: 100 }, 30, 1, 1, 1, undefined, 1, 0, true, false, { tip });
+    expect(coverage[100 * W + 200]!).toBeGreaterThan(240);
+    expect(coverage[(100 - 12) * W + 200 - 12]!).toBe(0);
+  });
+
   it("uses a deterministic stamp sequence rather than nondeterministic Math.random", () => {
     const one = blankCoverage(), two = blankCoverage();
     accumulateDab(one, W, H, { x: 200, y: 100 }, 80, 1, 1, 0.82, undefined, 1, 0, true, false,

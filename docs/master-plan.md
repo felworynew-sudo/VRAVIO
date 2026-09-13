@@ -2261,6 +2261,11 @@ Select/Node Tool.
       Brush Preset (`Include Tool Settings`), но не обязаны храниться
       внутри него по умолчанию.
 
+  **Статус 14 сентября 2026:** runtime-модель `BrushTip` уже добавлена как
+  immutable grayscale alpha-mask с id/spacing и bilinear stamping в общем
+  paint pipeline. UI создания из selection/изображения, library persistence
+  и ABR decoder ещё не подключены, поэтому пункт остаётся открытым.
+
 Рекомендованная владельцем-ревьюером структура типов:
 
 ```
