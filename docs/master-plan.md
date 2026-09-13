@@ -6192,7 +6192,7 @@ Adobe документирует: (1) многопоточный компози�
 
 **Статус на 13 сентября 2026.** Embedded-основа Smart Objects уже реализована: Convert to Smart Object извлекает source в Asset Store; обычный Duplicate сохраняет общий source, а New Smart Object via Copy создаёт независимый; двойной клик по thumbnail/Edit Contents открывает round-trip; явная команда «Применить в исходный документ» обновляет экземпляры; Replace Contents меняет source только выбранного экземпляра. Smart Object хранит source и affine placement отдельно, поэтому повторные scale/rotate не пересэмплируют исходник. Desktop Linked умеет Place, Update, Relink и Embed; watcher изменений и Smart Filter graph остаются P0.
 
-- [ ] **P0 — семантика Save для Edit Contents.** Вкладка, открытая через Smart Object → Edit Contents, должна по `Ctrl+S` выполнять round-trip `Apply to Parent Document`, как Photoshop; сейчас общий Save-путь ошибочно открывает сохранение `.vravio` и не передаёт изменения родителю. `Save As…` остаётся отдельным намеренным сохранением документа на диск.
+- [x] **P0 — семантика Save для Edit Contents.** Вкладка, открытая через Smart Object → Edit Contents, по `Ctrl+S` выполняет round-trip `Apply to Parent Document`, как Photoshop; `Save As…` остаётся отдельным намеренным сохранением документа на диск. Реализовано в `5923d02`.
 
 | Что | Описание | Adobe | Донор |
 |---|---|---|---|
