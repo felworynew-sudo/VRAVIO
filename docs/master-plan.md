@@ -6055,7 +6055,12 @@ TileStore + stroke/mask/selection, затем ROI effects + RasterRenderPlan.
 **Пробел:** пороги ловят катастрофические регрессии, но не гарантируют интерактивность (162 мс на композит — уже заметный лаг, если бы это было реальной цифрой, а не намеренно щедрым порогом против шума). Нет gating-бенчмарков для: 4K/8K документов, 50–200 слоёв, масок, цепочек clipping, вложенных групп, множественных adjustments, layer styles/effects, live brush pointermove → видимые пиксели, p50/p95 задержки кадра, undo/redo через настоящий OPFS (не Memory), 100–500 состояний истории, холодного tile cache, накладных расходов инвалидации тайлов, pan/zoom, transform drag, пиковой памяти, GC pressure, цепочек GPU-фильтров с readback, WebGPU fallback.
 
 - [x] **25.4.1 (базовый сценарий).** `performance.bench.test.ts` измеряет p50/p95 sustained viewport composite на реалистичном 21-слойном документе; p50 <50 мс, p95 <100 мс. Это не заменяет быстрый `fastestOf`-пол: он ловит деградацию throughput, percentile-тест — видимые периодические фризы.
-- [ ] **25.4.1 (матрица P1).** Расширить percentile-замеры до pointer→painted frame, pan/zoom, transform drag, 4K/8K, 50–200 слоёв, масок/effects, cold/warm tile cache, p99/long tasks/peak RAM и настоящего OPFS.
+- [x] **25.4.1 (navigation + move).** Помимо viewport composite, suite
+      измеряет p50/p95 при pan через границы cached tiles и при повторных
+      Move-tool pixel previews; оба сценария держат p50 <50 мс, p95 <100 мс.
+- [ ] **25.4.1 (матрица P1).** Добавить pointer→painted frame для реальных
+      кистей, zoom/transform, 4K/8K, 50–200 слоёв, масок/effects, cold/warm
+      tile cache, p99/long tasks/peak RAM и настоящий OPFS.
 
 ### 25.5. Приоритетный список — как передано аудитом
 

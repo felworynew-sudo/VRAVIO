@@ -7,6 +7,7 @@ import { combineSelections, createEllipseSelection } from "./selection";
 import { accumulateUniquePixelBytes, layerDocumentPixels, setLayerPixels } from "./layer-bounds";
 import { duplicateLayer } from "./layer-ops";
 import { TileStore } from "./tile-store";
+import { RasterTileCache } from "./tiles";
 import type { RasterDocumentState, RasterLayer } from "./types";
 
 /**
@@ -129,6 +130,36 @@ describe("performance floor (stage 0 of the catalogue migration)", () => {
     // instead of a platform-specific snapshot. The ceilings are loose enough
     // for cold CI, yet distinguish a responsive interaction from a frame that
     // visibly stalls. p95 is the guard against periodic GC/cache regressions.
+    expect(latency.p50).toBeLessThan(50);
+    expect(latency.p95).toBeLessThan(100);
+  });
+
+  it("records p50/p95 while panning a cached viewport", () => {
+    const state = realisticDocument();
+    const cache = new RasterTileCache({ tileSize: 256 });
+    // Warm the first viewport. Timed calls deliberately cross tile boundaries
+    // so this is navigation through a real cache, not a no-op cache hit.
+    cache.update(state, { x: 0, y: 180, width: 768, height: 540 });
+    let sample = 0;
+    const latency = latencyPercentiles(() => {
+      const x = (sample++ * 137) % (state.width - 768);
+      cache.update(state, { x, y: 180, width: 768, height: 540 });
+    });
+
+    expect(latency.p50).toBeLessThan(50);
+    expect(latency.p95).toBeLessThan(100);
+  });
+
+  it("records p50/p95 for repeated Move-tool pixel previews", () => {
+    const state = realisticDocument();
+    const layer = state.layers[10] as RasterLayer;
+    const documentPixels = layerDocumentPixels(layer, state.width, state.height);
+    let sample = 0;
+    const latency = latencyPercentiles(() => {
+      const offset = ++sample;
+      translateLayerPixels(documentPixels, state.width, state.height, offset, -offset, null);
+    });
+
     expect(latency.p50).toBeLessThan(50);
     expect(latency.p95).toBeLessThan(100);
   });
