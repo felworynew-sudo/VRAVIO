@@ -26,21 +26,29 @@ function mixPixelRgba(pixels: Uint8ClampedArray, target: number, r: number, g: n
  * option existed — the default, so a caller that does not pass it keeps
  * exactly the shape it already had.
  */
-function insideBrushAt(x: number, y: number, centerX: number, centerY: number, radius: number, roundness: number, angle: number, hardness = 0): number {
-  const radians = angle * Math.PI / 180, cosine = Math.cos(radians), sine = Math.sin(radians), dx = x + .5 - centerX, dy = y + .5 - centerY;
-  const rx = dx * cosine + dy * sine, ry = -dx * sine + dy * cosine, distance = Math.hypot(rx / radius, ry / Math.max(.5, radius * roundness));
-  if (distance > 1) return 0;
-  return distance <= hardness ? 1 : 1 - (distance - hardness) / Math.max(0.0001, 1 - hardness);
+interface BrushShape { readonly radius: number; readonly shortRadius: number; readonly cosine: number; readonly sine: number; readonly hardness: number; }
+
+function brushShape(radius: number, roundness: number, angle: number, hardness = 0): BrushShape {
+  const radians = angle * Math.PI / 180;
+  return { radius, shortRadius: Math.max(.5, radius * roundness), cosine: Math.cos(radians), sine: Math.sin(radians), hardness };
 }
 
-function insideBrush(x: number, y: number, point: Point, radius: number, roundness: number, angle: number, hardness = 0): number {
-  return insideBrushAt(x, y, point.x, point.y, radius, roundness, angle, hardness);
+function insideBrushAt(x: number, y: number, centerX: number, centerY: number, shape: BrushShape): number {
+  const dx = x + .5 - centerX, dy = y + .5 - centerY;
+  const rx = dx * shape.cosine + dy * shape.sine, ry = -dx * shape.sine + dy * shape.cosine, distance = Math.hypot(rx / shape.radius, ry / shape.shortRadius);
+  if (distance > 1) return 0;
+  return distance <= shape.hardness ? 1 : 1 - (distance - shape.hardness) / Math.max(0.0001, 1 - shape.hardness);
+}
+
+function insideBrush(x: number, y: number, point: Point, shape: BrushShape): number {
+  return insideBrushAt(x, y, point.x, point.y, shape);
 }
 
 export function blurDab(pixels: Uint8ClampedArray, source: Uint8ClampedArray, width: number, height: number, point: Point, size: number, strength: number, selectionMask?: Uint8ClampedArray, roundness = 1, angle = 0, hardness = 0): void {
   const radius = Math.max(.5, size / 2), sampleRadius = Math.max(1, Math.min(12, Math.round(size / 10))), left = Math.max(0, Math.floor(point.x - radius)), right = Math.min(width - 1, Math.ceil(point.x + radius)), top = Math.max(0, Math.floor(point.y - radius)), bottom = Math.min(height - 1, Math.ceil(point.y + radius));
+  const shape = brushShape(radius, roundness, angle, hardness);
   for (let y = top; y <= bottom; y += 1) for (let x = left; x <= right; x += 1) {
-    const coverage = insideBrush(x, y, point, radius, roundness, angle, hardness); if (!coverage) continue;
+    const coverage = insideBrush(x, y, point, shape); if (!coverage) continue;
     const selection = selectionMask ? selectionMask[y * width + x]! / 255 : 1; if (!selection) continue;
     let red = 0, green = 0, blue = 0, alpha = 0, count = 0;
     for (let sy = Math.max(0, y - sampleRadius); sy <= Math.min(height - 1, y + sampleRadius); sy += 1) for (let sx = Math.max(0, x - sampleRadius); sx <= Math.min(width - 1, x + sampleRadius); sx += 1) {
@@ -54,6 +62,7 @@ export function blurDab(pixels: Uint8ClampedArray, source: Uint8ClampedArray, wi
 
 export function blurStrokeSegment(pixels: Uint8ClampedArray, source: Uint8ClampedArray, width: number, height: number, from: Point, to: Point, size: number, strength: number, selectionMask?: Uint8ClampedArray, roundness = 1, angle = 0, hardness = 0): void {
   const radius = Math.max(.5, size / 2), sampleRadius = Math.max(1, Math.min(12, Math.round(size / 10)));
+  const shape = brushShape(radius, roundness, angle, hardness);
   const effectLeft = Math.max(0, Math.floor(Math.min(from.x, to.x) - radius)), effectRight = Math.min(width - 1, Math.ceil(Math.max(from.x, to.x) + radius));
   const effectTop = Math.max(0, Math.floor(Math.min(from.y, to.y) - radius)), effectBottom = Math.min(height - 1, Math.ceil(Math.max(from.y, to.y) + radius));
   const sampleLeft = Math.max(0, effectLeft - sampleRadius), sampleRight = Math.min(width - 1, effectRight + sampleRadius), sampleTop = Math.max(0, effectTop - sampleRadius), sampleBottom = Math.min(height - 1, effectBottom + sampleRadius);
@@ -70,7 +79,7 @@ export function blurStrokeSegment(pixels: Uint8ClampedArray, source: Uint8Clampe
   const average = new Uint8ClampedArray(4);
   for (let y = effectTop; y <= effectBottom; y += 1) for (let x = effectLeft; x <= effectRight; x += 1) {
     const projection = lengthSquared ? Math.max(0, Math.min(1, ((x + .5 - from.x) * dx + (y + .5 - from.y) * dy) / lengthSquared)) : 0;
-    const coverage = insideBrushAt(x, y, from.x + dx * projection, from.y + dy * projection, radius, roundness, angle, hardness); if (!coverage) continue;
+    const coverage = insideBrushAt(x, y, from.x + dx * projection, from.y + dy * projection, shape); if (!coverage) continue;
     const selection = selectionMask ? selectionMask[y * width + x]! / 255 : 1; if (!selection) continue;
     const x0 = Math.max(sampleLeft, x - sampleRadius) - sampleLeft, x1 = Math.min(sampleRight, x + sampleRadius) - sampleLeft + 1, y0 = Math.max(sampleTop, y - sampleRadius) - sampleTop, y1 = Math.min(sampleBottom, y + sampleRadius) - sampleTop + 1;
     const count = (x1 - x0) * (y1 - y0), topLeft = (y0 * integralWidth + x0) * 4, topRight = (y0 * integralWidth + x1) * 4, bottomLeft = (y1 * integralWidth + x0) * 4, bottomRight = (y1 * integralWidth + x1) * 4;
@@ -169,9 +178,9 @@ export function smudgeStrokeSegment(pixels: Uint8ClampedArray, source: Uint8Clam
   // Same overlapping-dabs-`spacing`-apart shape as dodge/burn's stroke —
   // tighter spacing drags more, smoother trail; wider spacing leaves visible
   // gaps between the samples it drags forward.
-  const dx = to.x - from.x, dy = to.y - from.y, distance = Math.hypot(dx, dy), steps = Math.max(1, Math.ceil(distance / Math.max(1, size * Math.max(0.02, spacing)))), radius = Math.max(.5, size / 2);
+  const dx = to.x - from.x, dy = to.y - from.y, distance = Math.hypot(dx, dy), steps = Math.max(1, Math.ceil(distance / Math.max(1, size * Math.max(0.02, spacing)))), radius = Math.max(.5, size / 2), shape = brushShape(radius, roundness, angle, hardness);
   for (let step = 1; step <= steps; step += 1) { const t = step / steps, point = { x: from.x + dx * t, y: from.y + dy * t }, sourcePoint = { x: point.x - dx / steps, y: point.y - dy / steps }, left = Math.max(0, Math.floor(point.x - radius)), right = Math.min(width - 1, Math.ceil(point.x + radius)), top = Math.max(0, Math.floor(point.y - radius)), bottom = Math.min(height - 1, Math.ceil(point.y + radius));
     const smearSource = step === 1 ? source : pixels;
-    for (let y = top; y <= bottom; y += 1) for (let x = left; x <= right; x += 1) { const coverage = insideBrush(x, y, point, radius, roundness, angle, hardness); if (!coverage) continue; const selection = selectionMask ? selectionMask[y * width + x]! / 255 : 1; if (!selection) continue; const sx = Math.max(0, Math.min(width - 1, Math.round(sourcePoint.x + x - point.x))), sy = Math.max(0, Math.min(height - 1, Math.round(sourcePoint.y + y - point.y))); mixPixel(pixels, (y * width + x) * 4, smearSource, (sy * width + sx) * 4, strength * coverage * selection); }
+    for (let y = top; y <= bottom; y += 1) for (let x = left; x <= right; x += 1) { const coverage = insideBrush(x, y, point, shape); if (!coverage) continue; const selection = selectionMask ? selectionMask[y * width + x]! / 255 : 1; if (!selection) continue; const sx = Math.max(0, Math.min(width - 1, Math.round(sourcePoint.x + x - point.x))), sy = Math.max(0, Math.min(height - 1, Math.round(sourcePoint.y + y - point.y))); mixPixel(pixels, (y * width + x) * 4, smearSource, (sy * width + sx) * 4, strength * coverage * selection); }
   }
 }

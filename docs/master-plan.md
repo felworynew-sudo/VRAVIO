@@ -6024,7 +6024,9 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
    [x] `blurDab` в retouch больше не создаёт `[r,g,b,a]` и
    `Uint8ClampedArray(4)` для каждого touched pixel: использует scalar RGBA
    accumulator с byte-identical rounding; `blurStrokeSegment` не создаёт
-   Point-object на каждый pixel. [x] Multigrid coarsening в
+   Point-object на каждый pixel и все retouch brush paths вычисляют
+   sin/cos геометрии наконечника один раз на dab/stroke, не на pixel. [x]
+   Multigrid coarsening в
    healing membrane больше не создаёт два RGB-массива на каждую coarse-cell,
    а суммирует scalar channels. [x] `decodeRasterAsset()` выполняет ровно
    одну payload-copy в принадлежащий caller buffer вместо `slice` + второго
