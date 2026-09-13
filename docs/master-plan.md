@@ -5917,7 +5917,7 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
       смешивается с parent с opacity/mask группы; passThrough остаётся
       раскрытым в parent graph. Перекрытие при group opacity исправлено и
       покрыто тестом.
-- [ ] **Isolated group advanced compositing.** Добавить group blend modes,
+- [ ] **P1 — Isolated group advanced compositing.** Добавить group blend modes,
       effects/clipping и compiled projection tiles к RasterRenderPlan; это
       нужно для полной Photoshop-паритетности и высоких разрешений.
 - [x] **Deterministic Dissolve.** Режим теперь использует стабильную
@@ -5930,11 +5930,13 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
 - [x] **Median / Dust & Scratches.** Median теперь order-statistic filter,
       который удаляет isolated speckle вместо распространения его цветом;
       Dust & Scratches использует этот же честный механизм. Покрыто тестом.
-- [ ] **Честный каталог остальных фильтров.** Развести настоящие
-      Motion/Radial/Lens/Iris/Tilt-Shift/Surface: сейчас нельзя рекламировать
-      разные фильтры, если
-      они вычисляются одним Box Blur. Одновременно обновить их
-      `halo`/tile-safety metadata.
+- [x] **Честный каталог фильтров (P0).** Нереализованные Motion/Radial/
+      Lens/Iris/Tilt-Shift/Surface убраны из пользовательской галереи до
+      появления собственных алгоритмов; Box/Gaussian/Median/Dust остаются
+      доступными и различимыми. Есть контрактный тест каталога.
+- [ ] **Blur family (P1).** Реализовать Motion/Radial/Lens/Iris/Tilt-Shift/
+      Surface с собственными controls, halo и tile-safety metadata, затем
+      вернуть их в каталог.
 - [x] **Direct-preview parity.** Общий `canDirectRasterPreviewBlit(layer,state)`
       уже закрывает Brush/Spot Heal/Selection Brush: fast path допустим лишь
       для единственного normal pixel layer с opacity/fillOpacity=1, без
@@ -5955,7 +5957,7 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
       `extractAsset()` разворачивает trimmed layer в валидный
       document-sized buffer перед encoding; это устраняет некорректный
       header/payload и покрыто round-trip тестом.
-- [ ] **RasterEnvironment compact local extraction — performance.**
+- [ ] **P1 — RasterEnvironment compact local extraction — performance.**
       Следующий шаг: формат `pixels + bounds.width/height + bounds.x/y`
       и offset в parent target без full-canvas materialisation.
 - [x] **Реальный pressure Clone Stamp.** Pointer pressure проходит до

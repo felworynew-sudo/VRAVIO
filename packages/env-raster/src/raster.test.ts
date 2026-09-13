@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { adjustRgb, applyAdjustment, buildCurveLut } from "./adjustments";
+import { rasterFilterCatalog } from "./filters";
 import type { RasterAdjustment } from "./types";
 
 describe("adjustments", () => {
@@ -636,6 +637,12 @@ describe("filter specs", () => {
   it("declares a CPU implementation for every spec so no device is left without a path", () => {
     expect(filterSpecs.length).toBeGreaterThan(0);
     for (const spec of filterSpecs) expect(typeof spec.cpu).toBe("function");
+  });
+
+  it("does not advertise placeholder blur variants as distinct filters", () => {
+    const ids = new Set(rasterFilterCatalog.map((filter) => filter.id));
+    for (const id of ["motion_blur", "radial_blur", "surface_blur", "lens_blur", "iris_blur", "tilt_shift_blur"]) expect(ids.has(id)).toBe(false);
+    for (const id of ["box_blur", "gaussian_blur", "median", "dust_and_scratches"]) expect(ids.has(id)).toBe(true);
   });
 
   it("produces the same pixels through the CPU path as the existing catalog", () => {
