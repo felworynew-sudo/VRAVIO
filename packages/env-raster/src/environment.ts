@@ -6,7 +6,7 @@ import { appendLayer, flattenRasterLayers } from "./layer-tree";
 import { compositeRasterDocument } from "./render";
 import { RASTER_ASSET_MIME, decodeRasterAsset, encodeRasterAsset, isRasterAsset } from "./raster-asset";
 import type { RasterDocumentOptions, RasterDocumentState, RasterLayer } from "./types";
-import { layerDocumentPixels, setLayerPixels } from "./layer-bounds";
+import { setLayerLocalPixels, setLayerPixels } from "./layer-bounds";
 
 export interface RasterEnvironmentOptions {
   readonly documents: DocumentStore;
@@ -84,12 +84,10 @@ export class RasterEnvironment implements Environment<RasterDocumentState> {
     if (target.kind !== "raster-layer") throw new Error(`A raster document has no ${target.kind}`);
     const layer = flattenRasterLayers(document.state.layers).find((item) => item.id === target.layerId);
     if (!layer) throw new Error(`Unknown layer: ${target.layerId}`);
-    // Pixel layers are retained in their local content bounds. Assets, in
-    // contrast, are opened as self-contained documents, so their header must
-    // describe the same document-sized RGBA buffer it carries. Encoding the
-    // trimmed buffer with canvas dimensions produced an invalid container as
-    // soon as a user edited a small region of a large canvas.
-    const assetPixels = layerDocumentPixels(layer, document.state.width, document.state.height);
+    // A raster layer already owns a local surface and its document-space
+    // origin separately in `bounds`. Preserve that compact representation for
+    // cross-environment editing instead of allocating a transparent canvas.
+    const assetPixels = layer.pixels;
 
     // Already bound and nobody asked for a copy: hand over the same asset, so
     // the child's revisions land straight on what the parent is drawing.
@@ -100,12 +98,12 @@ export class RasterEnvironment implements Environment<RasterDocumentState> {
       // Bound before the layer buffers carried their dimensions. Nothing that
       // receives this asset could read it, so it is brought up to date in place
       // rather than left as a shape that fails at the far end.
-      await this.#assets.commitRevision(existing, encodeRasterAsset(assetPixels, document.state.width, document.state.height), "raster-env", "Self-describing layer buffer");
+      await this.#assets.commitRevision(existing, encodeRasterAsset(assetPixels, layer.bounds.width, layer.bounds.height), "raster-env", "Self-describing local layer buffer");
       return { assetId: existing, title: layer.name, handleOffset: 0 };
     }
 
     const assetId = await this.#assets.importAsset(
-      encodeRasterAsset(assetPixels, document.state.width, document.state.height),
+      encodeRasterAsset(assetPixels, layer.bounds.width, layer.bounds.height),
       { kind: "image", mime: RASTER_ASSET_MIME, name: `${layer.name}.vraster`, producedBy: "raster-env" },
     );
     // A branch deliberately leaves the layer pointing where it did; the parent
@@ -154,7 +152,10 @@ export class RasterEnvironment implements Environment<RasterDocumentState> {
             // A pinned layer asked to be left where it is; that is the whole
             // point of pinning, and honouring it is what keeps round-trip safe.
             if (layer.smartSource?.pinnedRev != null) continue;
-            setLayerPixels(layer, fitPixels(image.pixels, image.width, image.height, state.width, state.height), state.width, state.height);
+            // Keep the layer where the user placed it while replacing only
+            // its local asset surface. This is what lets a child editor work
+            // on a 200×200 mark from an 8K parent without an 8K round-trip.
+            setLayerLocalPixels(layer, image.pixels, { x: layer.bounds.x, y: layer.bounds.y, width: image.width, height: image.height });
           }
         });
       });
@@ -170,7 +171,7 @@ export class RasterEnvironment implements Environment<RasterDocumentState> {
       const layer = flattenRasterLayers(state.layers).find((item) => item.id === target.layerId);
       if (!layer) throw new Error(`Unknown layer: ${target.layerId}`);
       layer.pixelAssetId = newAssetId;
-      setLayerPixels(layer, fitPixels(image.pixels, image.width, image.height, state.width, state.height), state.width, state.height);
+      setLayerLocalPixels(layer, image.pixels, { x: layer.bounds.x, y: layer.bounds.y, width: image.width, height: image.height });
     });
     this.#documents.addAssetRef(document.id, newAssetId);
   }

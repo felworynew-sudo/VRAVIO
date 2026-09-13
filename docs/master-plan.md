@@ -5962,9 +5962,10 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
       `extractAsset()` разворачивает trimmed layer в валидный
       document-sized buffer перед encoding; это устраняет некорректный
       header/payload и покрыто round-trip тестом.
-- [ ] **P1 — RasterEnvironment compact local extraction — performance.**
-      Следующий шаг: формат `pixels + bounds.width/height + bounds.x/y`
-      и offset в parent target без full-canvas materialisation.
+- [x] **RasterEnvironment compact local extraction.** Asset encodes the
+      layer's actual local surface (`pixels + bounds.width/height`), while the
+      parent retains current `bounds.x/y` on apply/relink. Это устраняет
+      full-canvas materialisation и покрыто round-trip test с offset.
 - [x] **Реальный pressure Clone Stamp.** Pointer pressure проходит до
       `cloneDab()` и stroke interpolation; настройки размера и opacity
       добавлены в Tool Options, проверено unit-тестом.

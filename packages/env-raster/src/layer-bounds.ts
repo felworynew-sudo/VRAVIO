@@ -146,6 +146,18 @@ export function setLayerPixels(layer: RasterLayer, pixels: Uint8ClampedArray, do
   layer.pixels = trimmed;
 }
 
+/** Assigns an already-local raster surface without materialising document
+ * space. Used by round-trip assets, whose header carries exactly these local
+ * dimensions while the layer itself owns the document-space origin. */
+export function setLayerLocalPixels(layer: RasterLayer, pixels: Uint8ClampedArray, bounds: RasterRect): void {
+  if (!Number.isInteger(bounds.width) || !Number.isInteger(bounds.height) || bounds.width < 1 || bounds.height < 1) throw new RangeError("Local layer dimensions must be positive integers");
+  if (pixels.length !== bounds.width * bounds.height * 4) throw new RangeError("Local layer pixels do not match bounds");
+  layer.bounds = { ...bounds };
+  layer.width = bounds.width;
+  layer.height = bounds.height;
+  layer.pixels = pixels;
+}
+
 /** Reads one pixel's alpha in document coordinates, without materialising. */
 export function layerAlphaAt(layer: RasterLayer, x: number, y: number): number {
   const { bounds } = layer;

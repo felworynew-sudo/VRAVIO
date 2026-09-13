@@ -105,7 +105,7 @@ describe("raster round-trip", () => {
     expect(child.provenance).toMatchObject({ parentDocId: parent.id, writeBack: "replace-asset" });
   });
 
-  it("extracts a trimmed layer as a valid document-sized raster asset", async () => {
+  it("extracts a trimmed layer as a compact local raster asset", async () => {
     const parent = await environment.createEmpty({ width: W, height: H, name: "Trimmed parent" });
     const layer = createRasterLayer(W, H, "Small red mark");
     const local = new Uint8ClampedArray(2 * 2 * 4);
@@ -118,9 +118,27 @@ describe("raster round-trip", () => {
     const bytes = await assets.read(extracted.assetId);
     const image = decodeRasterAsset(bytes!);
 
-    expect([image.width, image.height]).toEqual([W, H]);
-    expect(firstPixel(image.pixels.subarray((3 * W + 5) * 4))).toEqual([255, 0, 0, 255]);
-    expect(firstPixel(image.pixels)).toEqual([0, 0, 0, 0]);
+    expect([image.width, image.height]).toEqual([2, 2]);
+    expect(firstPixel(image.pixels)).toEqual([255, 0, 0, 255]);
+  });
+
+  it("keeps a compact layer at its document origin after child apply", async () => {
+    const parent = await environment.createEmpty({ width: W, height: H, name: "Offset parent" });
+    const layer = createRasterLayer(W, H, "Offset mark");
+    layer.pixels = new Uint8ClampedArray(2 * 2 * 4);
+    layer.pixels.set([255, 0, 0, 255], 0);
+    layer.bounds = { x: 5, y: 3, width: 2, height: 2 };
+    layer.width = 2; layer.height = 2;
+    documents.update<RasterDocumentState>(parent.id, (state) => { state.layers = [layer]; });
+    const session = await roundtrip.open({ parentDocId: parent.id, target: { kind: "raster-layer", layerId: layer.id }, targetEnv: "raster" });
+    const child = documents.get<RasterDocumentState>(session.childDocId)!;
+    child.state.layers[0]!.pixels.set([0, 0, 255, 255], 0);
+    await roundtrip.apply(child.id);
+    await environment.whenSettled();
+
+    const returned = flattenRasterLayers(documents.get<RasterDocumentState>(parent.id)!.state.layers).find((item) => item.id === layer.id)!;
+    expect(returned.bounds).toEqual({ x: 5, y: 3, width: 2, height: 2 });
+    expect(firstPixel(returned.pixels)).toEqual([0, 0, 255, 255]);
   });
 
   it("binds the layer to the asset so the parent and child share one reference", async () => {
