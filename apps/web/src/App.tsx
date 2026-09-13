@@ -778,6 +778,7 @@ export function App() {
           { label: "Smart Objects (Смарт-объекты)", items: [
             ["Convert to Smart Object (Преобразовать в смарт-объект)", "", () => void kernel.commands.execute("layer.convertToSmartObject", activeCommandContext()), !activeRasterState || activeRasterState.layers.find((layer) => layer.id === activeRasterState.activeLayerId)?.kind !== "pixel"],
             ["Edit Contents (Редактировать содержимое)", "", () => void kernel.commands.execute("layer.editSmartObjectContents", activeCommandContext()), !activeRasterState || activeRasterState.layers.find((layer) => layer.id === activeRasterState.activeLayerId)?.kind !== "smart"],
+            ["Replace Contents… (Заменить содержимое…)", "", () => void kernel.commands.execute("layer.replaceSmartObjectContents", activeCommandContext()), !activeRasterState || activeRasterState.layers.find((layer) => layer.id === activeRasterState.activeLayerId)?.kind !== "smart"],
             ["New Smart Object via Copy (Новый смарт-объект через копирование)", "", () => void kernel.commands.execute("layer.newSmartObjectViaCopy", activeCommandContext()), !activeRasterState || activeRasterState.layers.find((layer) => layer.id === activeRasterState.activeLayerId)?.kind !== "smart"],
           ] },
           ["Delete Layer (Удалить слой)", "", () => void kernel.commands.execute("layer.delete", activeCommandContext()), !active || !isRasterDocumentState(active.state)],

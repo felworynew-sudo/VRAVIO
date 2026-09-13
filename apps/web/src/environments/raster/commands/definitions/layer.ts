@@ -1,4 +1,4 @@
-import { activeRasterLayer, clearSelectedPixels, convertLayerToEmbeddedSmartObject, createRasterLayer, duplicateLayer, groupLayers, isEditableEmbeddedSmartObject, isRasterDocumentState, layerAccepts, layerDocumentPixels, layerFromSelection, makeIndependentEmbeddedSmartObjectCopy, mergeLayerDown, mergeVisibleLayers, moveLayerInStack, removeLayer, setLayerPixels, stampVisibleLayers, ungroupLayer, type RasterDocumentState } from "@vravio/env-raster";
+import { activeRasterLayer, clearSelectedPixels, convertLayerToEmbeddedSmartObject, createRasterLayer, duplicateLayer, groupLayers, isEditableEmbeddedSmartObject, isRasterDocumentState, layerAccepts, layerDocumentPixels, layerFromSelection, makeIndependentEmbeddedSmartObjectCopy, mergeLayerDown, mergeVisibleLayers, moveLayerInStack, RASTER_ASSET_MIME, removeLayer, replaceSmartObjectSourcePixels, setLayerPixels, stampVisibleLayers, ungroupLayer, encodeRasterAsset, type RasterDocumentState } from "@vravio/env-raster";
 import type { AssetId, EnvironmentKind } from "@vravio/kernel";
 import { kernel } from "../../../../kernel";
 import { useShellStore } from "../../../../store";
@@ -8,6 +8,7 @@ import type { CommandDefinition } from "../../../../commands/types";
 import { confirmModal } from "../../../../modals/runtime";
 import { text } from "../../../../i18n";
 import { changeRasterDocument } from "../document-edits";
+import { decodeImportedImage } from "../../../../imageImport";
 
 /**
  * Photoshop's layer commands, in its own order and with its own keys.
@@ -87,6 +88,45 @@ async function createIndependentSmartObjectCopy(documentId: string): Promise<voi
     return Boolean(copy && makeIndependentEmbeddedSmartObjectCopy(copy, copyAssetId));
   });
   kernel.documents.addAssetRef(documentId, copyAssetId);
+}
+
+/** Reads one user-picked image into the same internal raster asset format that
+ * round-trip and embedded Smart Objects already use. `Platform.fs` gives the
+ * desktop native picker and the web picker one identical command path. */
+async function pickEmbeddedSmartObjectSource(): Promise<{ assetId: AssetId; pixels: Uint8ClampedArray; width: number; height: number } | null> {
+  const selected = await kernel.platform.fs.openFiles({ accept: { "image/*": [".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".bmp", ".tif", ".tiff", ".svg"] } });
+  const picked = selected[0]; if (!picked) return null;
+  const bytes = new Uint8Array(picked.data.byteLength); bytes.set(picked.data);
+  const file = new File([bytes.buffer], picked.name, { type: picked.mime || "image/png" });
+  const decoded = await decodeImportedImage(file); if (!decoded) return null;
+  try {
+    const surface = window.document.createElement("canvas");
+    surface.width = decoded.width; surface.height = decoded.height;
+    const context = surface.getContext("2d"); if (!context) return null;
+    context.drawImage(decoded.image, 0, 0);
+    const pixels = new Uint8ClampedArray(context.getImageData(0, 0, decoded.width, decoded.height).data);
+    const assetId = await kernel.assets.importAsset(encodeRasterAsset(pixels, decoded.width, decoded.height), {
+      kind: "image", mime: RASTER_ASSET_MIME, name: picked.name, producedBy: "smart-object",
+    });
+    return { assetId, pixels, width: decoded.width, height: decoded.height };
+  } finally { decoded.release(); }
+}
+
+/** Photoshop's Replace Contents: only the selected placement gets a new source;
+ * regular duplicates continue following their previous shared asset. */
+async function replaceActiveSmartObjectContents(documentId: string): Promise<void> {
+  const document = kernel.documents.get<RasterDocumentState>(documentId);
+  if (!document || !isRasterDocumentState(document.state)) return;
+  const selected = activeRasterLayer(document.state); if (!selected || !isEditableEmbeddedSmartObject(selected)) return;
+  const source = await pickEmbeddedSmartObjectSource(); if (!source) return;
+  await edit(documentId, "Replace Smart Object Contents (Заменить содержимое смарт-объекта)", (state) => {
+    const layer = state.layers.find((item) => item.id === selected.id);
+    if (!layer || !isEditableEmbeddedSmartObject(layer)) return false;
+    layer.pixelAssetId = source.assetId;
+    layer.smartSource = { ...layer.smartSource!, assetId: source.assetId, pinnedRev: null, mode: "embedded" };
+    return replaceSmartObjectSourcePixels(layer, source.pixels, source.width, source.height);
+  });
+  kernel.documents.addAssetRef(documentId, source.assetId);
 }
 
 const edit = (documentId: string, label: string, mutate: (state: RasterDocumentState) => boolean) => changeRasterDocument(documentId, label, mutate);
@@ -325,6 +365,18 @@ const commands: readonly CommandDefinition[] = [
       return Boolean(layer && isEditableEmbeddedSmartObject(layer));
     },
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void editActiveSmartObjectContents(activeDocumentId); },
+  },
+  {
+    id: "layer.replaceSmartObjectContents",
+    label: { en: "Replace Contents…", ru: "Заменить содержимое…" },
+    category: CATEGORY_LAYER,
+    surfaces: ["menu", "palette", "layer-context"],
+    isEnabled: ({ activeDocumentId }) => {
+      const state = activeRasterState(activeDocumentId);
+      const layer = state?.layers.find((item) => item.id === state.activeLayerId);
+      return Boolean(layer && isEditableEmbeddedSmartObject(layer));
+    },
+    execute: ({ activeDocumentId }) => { if (activeDocumentId) void replaceActiveSmartObjectContents(activeDocumentId); },
   },
   {
     id: "layer.openElsewhere",
