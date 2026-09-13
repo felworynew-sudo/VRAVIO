@@ -5901,12 +5901,12 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
 ошибки способны дать неверные данные либо неверный визуальный результат уже
 сегодня и не должны ждать переписывания storage.
 
-- [ ] **AssetStore revision-safe dedup.** Нынешний индекс `hash → assetId`
-      может вернуть asset, чей current head уже не соответствует байтам
-      совпавшей старой revision; также нельзя схлопывать assets с разными
-      `kind`/MIME/meta только по bytes. Целевая модель: immutable
-      `BlobStore(hash → blob)` отдельно от mutable `AssetRecord`; переходный
-      минимум — `hash → {assetId, rev}` с проверкой revision.
+- [x] **AssetStore revision-safe dedup — переходный минимум.** Hash index
+      хранит `{assetId, rev}` для каждой revision и импорт принимает только
+      совместимый current head с теми же `kind`/MIME/meta. Это устраняет
+      возврат asset с иными current bytes и unsafe cross-type merge; покрыто
+      тестами. Immutable `BlobStore(hash → blob)` остаётся отдельной
+      storage-оптимизацией TileStore-уровня.
 - [x] **Filter-worker cancellation race.** Abort больше не освобождает slot
       `WorkerPool` до terminal message старой worker-задачи; stale reply
       потребляется и превращается в `AbortError`, после чего запускается

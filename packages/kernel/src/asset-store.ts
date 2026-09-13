@@ -40,6 +40,8 @@ interface AssetStoreEvents {
   deleted: { assetId: AssetId };
 }
 
+interface HashEntry { readonly assetId: AssetId; readonly rev: number }
+
 const INDEX_KEY = "asset-index.v1.json";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -62,9 +64,18 @@ function extensionOf(name: string, mime: string): string {
 
 function optionalNote(note: string | undefined): { note?: string } { return note === undefined ? {} : { note }; }
 
+/** Metadata changes how an asset is interpreted, so byte equality alone is
+ * never enough reason to merge two imports. JSON is also the persistence
+ * boundary for `meta`, making this deliberately conservative comparison a
+ * safe compatibility rule. */
+function sameMeta(left: Record<string, unknown>, right: Record<string, unknown> | undefined): boolean {
+  return JSON.stringify(left) === JSON.stringify(right ?? {});
+}
+
 export class AssetStore {
   readonly #records = new Map<AssetId, AssetRecord>();
-  readonly #hashIndex = new Map<string, AssetId>();
+  /** Every revision remains indexed; imports accept only a compatible current head. */
+  readonly #hashIndex = new Map<string, HashEntry[]>();
   readonly #adapter: BinaryStorageAdapter;
   readonly #events = new EventBus<AssetStoreEvents>();
   #initialized = false;
@@ -79,7 +90,7 @@ export class AssetStore {
       const records = JSON.parse(decoder.decode(stored)) as AssetRecord[];
       for (const record of records) {
         this.#records.set(record.id, record);
-        for (const revision of record.revisions) this.#hashIndex.set(revision.hash, record.id);
+        for (const revision of record.revisions) this.#indexRevision(revision.hash, record.id, revision.rev);
       }
     }
     this.#initialized = true;
@@ -88,21 +99,27 @@ export class AssetStore {
   async importAsset(data: Blob | Uint8Array, options: ImportAssetOptions): Promise<AssetId> {
     await this.initialize();
     const bytes = data instanceof Uint8Array ? data.slice() : new Uint8Array(await data.arrayBuffer());
-    const hash = await sha256(bytes), duplicateId = this.#hashIndex.get(hash);
-    if (duplicateId) {
-      const duplicate = this.mustGet(duplicateId);
+    const mime = (options.mime ?? (data instanceof Blob ? data.type : "")) || "application/octet-stream";
+    const hash = await sha256(bytes);
+    const duplicate = (this.#hashIndex.get(hash) ?? [])
+      .map(({ assetId, rev }) => ({ record: this.#records.get(assetId), rev }))
+      .find(({ record, rev }) => record !== undefined
+        && record.head === rev
+        && record.kind === options.kind
+        && record.mime === mime
+        && sameMeta(record.meta, options.meta))?.record;
+    if (duplicate) {
       duplicate.refCount += 1;
       await this.#persist();
-      return duplicateId;
+      return duplicate.id;
     }
     const id = crypto.randomUUID() as AssetId;
-    const mime = (options.mime ?? (data instanceof Blob ? data.type : "")) || "application/octet-stream";
     const storageKey = `${id}/0.${extensionOf(options.name, mime)}`;
     await this.#adapter.set(storageKey, bytes);
     const revision: AssetRevision = { rev: 0, storageKey, bytes: bytes.byteLength, hash, createdAt: Date.now(), producedBy: options.producedBy ?? "import" };
     const record: AssetRecord = { id, kind: options.kind, mime, name: options.name, revisions: [revision], head: 0, refCount: 1, meta: { ...options.meta } };
     this.#records.set(id, record);
-    this.#hashIndex.set(hash, id);
+    this.#indexRevision(hash, id, 0);
     await this.#persist();
     this.#events.emit("imported", { assetId: id });
     return id;
@@ -124,7 +141,7 @@ export class AssetStore {
     const revision: AssetRevision = { rev, storageKey, bytes: bytes.byteLength, hash: await sha256(bytes), createdAt: Date.now(), producedBy, ...optionalNote(note) };
     record.revisions.push(revision);
     record.head = rev;
-    this.#hashIndex.set(revision.hash, id);
+    this.#indexRevision(revision.hash, id, rev);
     await this.#persist();
     this.#events.emit("revised", { assetId: id, rev, producedBy, ...optionalNote(note) });
     return rev;
@@ -235,7 +252,13 @@ export class AssetStore {
 
   #rebuildHashIndex(): void {
     this.#hashIndex.clear();
-    for (const record of this.#records.values()) for (const revision of record.revisions) this.#hashIndex.set(revision.hash, record.id);
+    for (const record of this.#records.values()) for (const revision of record.revisions) this.#indexRevision(revision.hash, record.id, revision.rev);
+  }
+
+  #indexRevision(hash: string, assetId: AssetId, rev: number): void {
+    const entries = this.#hashIndex.get(hash) ?? [];
+    entries.push({ assetId, rev });
+    this.#hashIndex.set(hash, entries);
   }
 
   async #persist(): Promise<void> {

@@ -127,6 +127,26 @@ describe("AssetStore", () => {
     expect(store.size).toBe(1);
   });
 
+  it("does not return an asset whose head moved past the matching revision", async () => {
+    const store = new AssetStore();
+    const original = await store.importAsset(new Uint8Array([1, 2, 3]), { kind: "image", mime: "image/png", name: "one.png" });
+    await store.commitRevision(original, new Uint8Array([9, 9, 9]), "raster", "paint");
+
+    const importedAgain = await store.importAsset(new Uint8Array([1, 2, 3]), { kind: "image", mime: "image/png", name: "two.png" });
+
+    expect(importedAgain).not.toBe(original);
+    expect([...await store.read(importedAgain) ?? []]).toEqual([1, 2, 3]);
+  });
+
+  it("does not deduplicate bytes across incompatible asset semantics", async () => {
+    const store = new AssetStore();
+    const image = await store.importAsset(new Uint8Array([1, 2, 3]), { kind: "image", mime: "image/png", name: "a.png", meta: { profile: "sRGB" } });
+    const vector = await store.importAsset(new Uint8Array([1, 2, 3]), { kind: "vector", mime: "image/svg+xml", name: "a.svg", meta: { profile: "sRGB" } });
+    const taggedImage = await store.importAsset(new Uint8Array([1, 2, 3]), { kind: "image", mime: "image/png", name: "b.png", meta: { profile: "Display P3" } });
+
+    expect(new Set([image, vector, taggedImage]).size).toBe(3);
+  });
+
   it("persists revision metadata and rolls the head back without deleting data", async () => {
     const adapter = new MemoryStorageAdapter();
     const store = new AssetStore(adapter);
