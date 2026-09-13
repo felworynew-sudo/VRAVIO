@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
 export interface ContextMenuItem {
@@ -21,17 +21,27 @@ interface ContextMenuState { x: number; y: number; items: ContextMenuItem[] }
  */
 export function useContextMenu() {
   const [menu, setMenu] = useState<ContextMenuState | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [placement, setPlacement] = useState<{ left: number; top: number } | null>(null);
   const open = (event: { preventDefault(): void; stopPropagation(): void; clientX: number; clientY: number }, items: ContextMenuItem[]) => {
     event.preventDefault();
     event.stopPropagation();
-    if (items.length) setMenu({ x: event.clientX, y: event.clientY, items });
+    if (items.length) { setPlacement(null); setMenu({ x: event.clientX, y: event.clientY, items }); }
   };
-  const close = () => setMenu(null);
+  const close = () => { setMenu(null); setPlacement(null); };
+  useLayoutEffect(() => {
+    if (!menu || !menuRef.current) return;
+    const rect = menuRef.current.getBoundingClientRect(), margin = 8;
+    setPlacement({
+      left: Math.max(margin, Math.min(menu.x, window.innerWidth - rect.width - margin)),
+      top: Math.max(margin, Math.min(menu.y, window.innerHeight - rect.height - margin)),
+    });
+  }, [menu]);
   // Dockview uses transformed/overflowing containers for collapsed icon docks.
   // A fixed element below one of those can still be clipped by that ancestor,
   // so every context menu belongs at the document root, not in its panel tree.
   const node = menu ? createPortal(<div className="context-menu-backdrop" onMouseDown={close} onContextMenu={(event) => { event.preventDefault(); close(); }}>
-    <div className="context-menu" style={{ left: Math.min(menu.x, window.innerWidth - 240), top: Math.min(menu.y, window.innerHeight - menu.items.length * 30 - 16) }} onMouseDown={(event) => event.stopPropagation()}>
+    <div ref={menuRef} className="context-menu" style={{ left: placement?.left ?? menu.x, top: placement?.top ?? menu.y }} onMouseDown={(event) => event.stopPropagation()}>
       {menu.items.map((item, index) => <button key={index} disabled={item.disabled} className={[item.danger ? "danger" : "", item.separatorBefore ? "separator-before" : ""].filter(Boolean).join(" ")} onClick={() => { item.onSelect(); close(); }}>{item.label}</button>)}
     </div>
   </div>, document.body) : null;
