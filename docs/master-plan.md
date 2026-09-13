@@ -5921,8 +5921,11 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
       координатную hash-coverage: полупрозрачный пиксель становится полностью
       видимым или отсутствует, а tile, preview и export дают одинаковый
       результат. Покрыто тестом tile boundary.
-- [ ] **Честный каталог фильтров.** Развести настоящие
-      Gaussian/Median/Motion/Radial/Lens/Iris/Tilt-Shift/Surface/
+- [x] **Gaussian Blur.** CPU path теперь separable Gaussian с реальными
+      весами, а не Box Blur; подтверждено impulse-тестом и parallel band
+      equivalence.
+- [ ] **Честный каталог остальных фильтров.** Развести настоящие
+      Median/Motion/Radial/Lens/Iris/Tilt-Shift/Surface/
       Dust & Scratches: сейчас нельзя рекламировать разные фильтры, если
       они вычисляются одним Box Blur. Одновременно обновить их
       `halo`/tile-safety metadata.

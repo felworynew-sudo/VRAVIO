@@ -610,6 +610,18 @@ describe("tile cache", () => {
 });
 
 describe("filter specs", () => {
+  it("renders Gaussian Blur with Gaussian weights rather than Box Blur", () => {
+    const impulse = new Uint8ClampedArray(9 * 4);
+    impulse[4 * 4] = 255;
+    impulse[4 * 4 + 3] = 255;
+    const gaussian = applyRasterFilter(impulse, 9, 1, "gaussian_blur", { radius: 2 });
+    const box = applyRasterFilter(impulse, 9, 1, "box_blur", { radius: 2 });
+
+    expect([...gaussian]).not.toEqual([...box]);
+    expect(gaussian[4 * 4]!).toBeGreaterThan(gaussian[3 * 4]!);
+    expect(gaussian[3 * 4]!).toBeGreaterThan(gaussian[2 * 4]!);
+  });
+
   it("declares a CPU implementation for every spec so no device is left without a path", () => {
     expect(filterSpecs.length).toBeGreaterThan(0);
     for (const spec of filterSpecs) expect(typeof spec.cpu).toBe("function");

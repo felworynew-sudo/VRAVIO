@@ -73,6 +73,42 @@ function blur(source: Uint8ClampedArray, width: number, height: number, radius: 
   return output;
 }
 
+/** Separable Gaussian, intentionally distinct from Box Blur.
+ *
+ * The weights are calculated once per pass and the implementation stays
+ * O(radius × pixels), rather than the O(radius² × pixels) naive kernel. */
+function gaussianBlur(source: Uint8ClampedArray, width: number, height: number, radius: number): Uint8ClampedArray {
+  const r = Math.max(1, Math.min(32, Math.round(radius)));
+  const sigma = Math.max(0.5, r / 2);
+  const weights = new Float64Array(r * 2 + 1);
+  let total = 0;
+  for (let offset = -r; offset <= r; offset += 1) {
+    const weight = Math.exp(-(offset * offset) / (2 * sigma * sigma));
+    weights[offset + r] = weight;
+    total += weight;
+  }
+  for (let index = 0; index < weights.length; index += 1) weights[index] = weights[index]! / total;
+  const horizontal = new Float32Array(source.length);
+  const clampX = (x: number) => Math.max(0, Math.min(width - 1, x));
+  const clampY = (y: number) => Math.max(0, Math.min(height - 1, y));
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const out = (y * width + x) * 4;
+    for (let offset = -r; offset <= r; offset += 1) {
+      const sourceIndex = (y * width + clampX(x + offset)) * 4, weight = weights[offset + r]!;
+      for (let channel = 0; channel < 4; channel += 1) horizontal[out + channel] = horizontal[out + channel]! + source[sourceIndex + channel]! * weight;
+    }
+  }
+  const output = new Uint8ClampedArray(source.length);
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const out = (y * width + x) * 4;
+    for (let offset = -r; offset <= r; offset += 1) {
+      const sourceIndex = (clampY(y + offset) * width + x) * 4, weight = weights[offset + r]!;
+      for (let channel = 0; channel < 4; channel += 1) output[out + channel] = output[out + channel]! + horizontal[sourceIndex + channel]! * weight;
+    }
+  }
+  return output;
+}
+
 function sampleBilinear(source: Uint8ClampedArray, width: number, height: number, x: number, y: number): [number, number, number, number] {
   const cx = Math.max(0, Math.min(width - 1.001, x)), cy = Math.max(0, Math.min(height - 1.001, y));
   const x0 = Math.floor(cx), y0 = Math.floor(cy), x1 = Math.min(width - 1, x0 + 1), y1 = Math.min(height - 1, y0 + 1), fx = cx - x0, fy = cy - y0;
@@ -264,7 +300,8 @@ function eInkFilter(source: Uint8ClampedArray, width: number, levels: number, mi
 
 export function applyRasterFilter(source: Uint8ClampedArray, width: number, height: number, id: string, settings: Record<string, number> = {}): Uint8ClampedArray {
   const output = source.slice(), mix = Math.max(0,Math.min(1,value(settings,"amount",100)/100));
-  if (["box_blur","gaussian_blur","surface_blur","lens_blur","iris_blur","tilt_shift_blur","median","dust_and_scratches","motion_blur","radial_blur"].includes(id)) return blur(source,width,height,value(settings,"radius",2));
+  if (id === "gaussian_blur") return gaussianBlur(source, width, height, value(settings, "radius", 2));
+  if (["box_blur","surface_blur","lens_blur","iris_blur","tilt_shift_blur","median","dust_and_scratches","motion_blur","radial_blur"].includes(id)) return blur(source,width,height,value(settings,"radius",2));
   if(id==="pixelate"){const size=Math.max(2,Math.round(value(settings,"size",8)));for(let y=0;y<height;y+=size)for(let x=0;x<width;x+=size){const i=(y*width+x)*4;for(let yy=y;yy<Math.min(height,y+size);yy++)for(let xx=x;xx<Math.min(width,x+size);xx++){const o=(yy*width+xx)*4;output[o]=source[i]!;output[o+1]=source[i+1]!;output[o+2]=source[i+2]!;output[o+3]=source[i+3]!;}}return output;}
   if(id==="auto_tone"||id==="auto_contrast"||id==="auto_color"){for(let c=0;c<3;c++){let lo=255,hi=0;for(let i=c;i<source.length;i+=4)if(source[i+3-c]!==0){lo=Math.min(lo,source[i]!);hi=Math.max(hi,source[i]!);}if(hi>lo)for(let i=c;i<output.length;i+=4)output[i]=byte((source[i]!-lo)*255/(hi-lo));}return output;}
   if(id==="twirl") return twirlFilter(source,width,height,value(settings,"amount",100));
