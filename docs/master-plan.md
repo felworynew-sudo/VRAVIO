@@ -6019,7 +6019,9 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
    (`walkSpacedLine`) для Brush-family: Clone, Spot Heal и Selection Brush
    теперь переносят остаток расстояния между pointer samples; тест
    подтверждает одинаковый результат одного длинного и дробного drag.
-   [ ] OffscreenCanvas pool для mip blit; убрать per-pixel temporary arrays
+   [x] Bounded LRU из четырёх `OffscreenCanvas` для mip blit: больше не
+   создаётся временный canvas на каждый invalidated subsampled tile.
+   [ ] Убрать per-pixel temporary arrays
    из retouch и healing membrane; один payload-copy в `decodeRasterAsset()`;
    transactional fallback undo до асинхронного asset/history bookkeeping.
 8. **Vector параллельно.** R-tree не должен окружаться O(N) подготовкой;

@@ -30,6 +30,34 @@ export function putPixels(canvas: HTMLCanvasElement, pixels: Uint8ClampedArray, 
   context.putImageData(new ImageData(pixels as Uint8ClampedArray<ArrayBuffer>, width, height), 0, 0);
 }
 
+/**
+ * Scaling a mip tile needs a tiny intermediate canvas. Creating one for every
+ * invalidated tile makes pan/zoom allocate DOM-backed resources at pointer
+ * rate, so retain a deliberately small LRU by sampled size. A canvas is used
+ * synchronously by `drawImage`, therefore returning it to this pool is safe
+ * as soon as the call finishes.
+ */
+const mipBlitCanvases = new Map<string, OffscreenCanvas>();
+const MAX_MIP_BLIT_CANVASES = 4;
+
+function mipBlitCanvas(width: number, height: number): OffscreenCanvas {
+  const key = `${width}x${height}`;
+  const cached = mipBlitCanvases.get(key);
+  if (cached) {
+    // Map insertion order is our LRU order.
+    mipBlitCanvases.delete(key);
+    mipBlitCanvases.set(key, cached);
+    return cached;
+  }
+  const source = new OffscreenCanvas(width, height);
+  mipBlitCanvases.set(key, source);
+  if (mipBlitCanvases.size > MAX_MIP_BLIT_CANVASES) {
+    const oldest = mipBlitCanvases.keys().next().value as string | undefined;
+    if (oldest) mipBlitCanvases.delete(oldest);
+  }
+  return source;
+}
+
 /** Blits a region-sized buffer at its document offset, leaving the rest of the canvas untouched. */
 export function putRegionPixels(canvas: HTMLCanvasElement, pixels: Uint8ClampedArray, region: RasterRect, step = 1): void {
   if (!region.width || !region.height) return;
@@ -42,7 +70,7 @@ export function putRegionPixels(canvas: HTMLCanvasElement, pixels: Uint8ClampedA
   // A subsampled tile carries one pixel per `step`; the browser scales it back
   // up, which is what makes compositing at a mip level worth doing at all.
   const sampledWidth = Math.ceil(region.width / step), sampledHeight = Math.ceil(region.height / step);
-  const source = new OffscreenCanvas(sampledWidth, sampledHeight);
+  const source = mipBlitCanvas(sampledWidth, sampledHeight);
   const sourceContext = source.getContext("2d");
   if (!sourceContext) throw new Error("Canvas 2D is not available");
   sourceContext.putImageData(new ImageData(pixels as Uint8ClampedArray<ArrayBuffer>, sampledWidth, sampledHeight), 0, 0);
