@@ -358,7 +358,10 @@ export function startPendingTransform(context: ToolContext<MoveState>): void {
   // `commitPending` itself below (see that fix's own comment for the mechanism).
   const before = cloneRasterState(state);
   const target = liveText ? layer : (before.layers.find((item) => item.id === layer.id) ?? layer);
-  const selection = before.selection ? restrictSelectionToContent(before.selection, materialise(target, before), state.width, state.height) : null;
+  // Smart Objects transform as whole placed sources. Letting a document
+  // selection enter the pixel-transform path would either silently rasterize
+  // part of the object or discard its source/placement separation.
+  const selection = target.kind === "smart" ? null : before.selection ? restrictSelectionToContent(before.selection, materialise(target, before), state.width, state.height) : null;
   if (before.selection && !selection) { diagnostic("info", "transform", "Transform ignored: selection contains no opaque pixels", { layerId: target.id }); return; }
   const pixels = materialise(target, before);
   const opaque = layerOpaqueBounds(pixels, state.width, state.height);
@@ -495,7 +498,7 @@ function materialise(layer: RasterDocumentState["layers"][number], document: Ras
  * pre-port `handlePointerDown` did with one shared `if (activeToolId === "raster.move")` block. */
 function beginMoveDrag(context: ToolContext<MoveState>, pointer: ToolPointer, pending: PendingTransform | null, layer: NonNullable<ToolContext<MoveState>["activeLayer"]>): void {
   const state = context.document;
-  const effectiveSelection = !pending ? restrictSelectionToContent(state.selection, materialise(layer, state), state.width, state.height) : null;
+  const effectiveSelection = !pending && layer.kind !== "smart" ? restrictSelectionToContent(state.selection, materialise(layer, state), state.width, state.height) : null;
   // Computed here (once, at drag start) so a fresh, unselected, non-text move below can reuse it
   // as `live.source` instead of a second full-canvas scan — and, further down, instead of the
   // per-frame `layerOpaqueBounds` scan `applyDragFrame`'s old plain-translate path used to redo
