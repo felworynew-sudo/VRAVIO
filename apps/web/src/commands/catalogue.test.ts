@@ -82,6 +82,7 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "layer.new|Mod+Shift+N||Layer",
   "layer.openElsewhereBranch|||Layer",
   "layer.openElsewhere|||Layer",
+  "layer.placeLinkedSmartObject|||Layer",
   "layer.replaceSmartObjectContents|||Layer",
   "layer.sendBackward|Mod+[||Layer",
   "layer.sendToBack|Mod+Shift+[||Layer",

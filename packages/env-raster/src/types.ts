@@ -212,6 +212,9 @@ export interface RasterSmartSource {
   sourceKind: "raster" | "vector" | "document";
   /** Embedded is the migration default until the external linked-file workflow lands. */
   mode?: "embedded" | "linked";
+  /** Absolute desktop path for a genuine linked source. Deliberately absent in
+   * browser sessions, where a picked File does not grant durable path access. */
+  linkedPath?: string;
 }
 
 /**

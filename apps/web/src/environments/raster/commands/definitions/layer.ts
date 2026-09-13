@@ -1,4 +1,4 @@
-import { activeRasterLayer, clearSelectedPixels, convertLayerToEmbeddedSmartObject, createRasterLayer, duplicateLayer, groupLayers, isEditableEmbeddedSmartObject, isRasterDocumentState, layerAccepts, layerDocumentPixels, layerFromSelection, makeIndependentEmbeddedSmartObjectCopy, mergeLayerDown, mergeVisibleLayers, moveLayerInStack, RASTER_ASSET_MIME, removeLayer, replaceSmartObjectSourcePixels, setLayerPixels, stampVisibleLayers, ungroupLayer, encodeRasterAsset, type RasterDocumentState } from "@vravio/env-raster";
+import { activeRasterLayer, appendLayer, clearSelectedPixels, convertLayerToEmbeddedSmartObject, createRasterLayer, duplicateLayer, groupLayers, isEditableEmbeddedSmartObject, isRasterDocumentState, layerAccepts, layerDocumentPixels, layerFromSelection, makeIndependentEmbeddedSmartObjectCopy, mergeLayerDown, mergeVisibleLayers, moveLayerInStack, RASTER_ASSET_MIME, removeLayer, replaceSmartObjectSourcePixels, setLayerLocalPixels, setLayerPixels, stampVisibleLayers, ungroupLayer, encodeRasterAsset, type RasterDocumentState } from "@vravio/env-raster";
 import type { AssetId, EnvironmentKind } from "@vravio/kernel";
 import { kernel } from "../../../../kernel";
 import { useShellStore } from "../../../../store";
@@ -93,7 +93,7 @@ async function createIndependentSmartObjectCopy(documentId: string): Promise<voi
 /** Reads one user-picked image into the same internal raster asset format that
  * round-trip and embedded Smart Objects already use. `Platform.fs` gives the
  * desktop native picker and the web picker one identical command path. */
-async function pickEmbeddedSmartObjectSource(): Promise<{ assetId: AssetId; pixels: Uint8ClampedArray; width: number; height: number } | null> {
+async function pickEmbeddedSmartObjectSource(): Promise<{ assetId: AssetId; pixels: Uint8ClampedArray; width: number; height: number; name: string; linkedPath: string | null } | null> {
   const selected = await kernel.platform.fs.openFiles({ accept: { "image/*": [".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".bmp", ".tif", ".tiff", ".svg"] } });
   const picked = selected[0]; if (!picked) return null;
   const bytes = new Uint8Array(picked.data.byteLength); bytes.set(picked.data);
@@ -108,8 +108,31 @@ async function pickEmbeddedSmartObjectSource(): Promise<{ assetId: AssetId; pixe
     const assetId = await kernel.assets.importAsset(encodeRasterAsset(pixels, decoded.width, decoded.height), {
       kind: "image", mime: RASTER_ASSET_MIME, name: picked.name, producedBy: "smart-object",
     });
-    return { assetId, pixels, width: decoded.width, height: decoded.height };
+    return { assetId, pixels, width: decoded.width, height: decoded.height, name: picked.name, linkedPath: picked.path ?? null };
   } finally { decoded.release(); }
+}
+
+/** Place Linked is intentionally desktop-only for now: a browser File cannot
+ * persist a usable absolute path after reload, so advertising it as a linked
+ * asset would be a broken promise. The asset preview still lives in the
+ * document, while `linkedPath` is the authoritative source to refresh later. */
+async function placeLinkedSmartObject(documentId: string): Promise<void> {
+  if (kernel.platform.kind !== "desktop") return;
+  const document = kernel.documents.get<RasterDocumentState>(documentId);
+  if (!document || !isRasterDocumentState(document.state)) return;
+  const source = await pickEmbeddedSmartObjectSource();
+  const linkedPath = source?.linkedPath;
+  if (!source || !linkedPath) return;
+  await edit(documentId, "Place Linked Smart Object (Поместить связанный смарт-объект)", (state) => {
+    const layer = createRasterLayer(1, 1, source.name.replace(/\.[^.]+$/, "") || source.name);
+    const x = Math.round((state.width - source.width) / 2), y = Math.round((state.height - source.height) / 2);
+    setLayerLocalPixels(layer, source.pixels, { x, y, width: source.width, height: source.height });
+    if (!convertLayerToEmbeddedSmartObject(layer, source.assetId)) return false;
+    layer.smartSource = { ...layer.smartSource!, mode: "linked", linkedPath };
+    appendLayer(state, layer); state.activeLayerId = layer.id;
+    return true;
+  });
+  kernel.documents.addAssetRef(documentId, source.assetId);
 }
 
 /** Photoshop's Replace Contents: only the selected placement gets a new source;
@@ -353,6 +376,14 @@ const commands: readonly CommandDefinition[] = [
       return Boolean(state && state.layers.find((layer) => layer.id === state.activeLayerId)?.kind === "pixel");
     },
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void convertActiveLayerToSmartObject(activeDocumentId); },
+  },
+  {
+    id: "layer.placeLinkedSmartObject",
+    label: { en: "Place Linked…", ru: "Поместить связанный…" },
+    category: CATEGORY_LAYER,
+    surfaces: ["menu", "palette"],
+    isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && kernel.platform.kind === "desktop" && isRasterActive({ activeDocumentId })),
+    execute: ({ activeDocumentId }) => { if (activeDocumentId) void placeLinkedSmartObject(activeDocumentId); },
   },
   {
     id: "layer.editSmartObjectContents",

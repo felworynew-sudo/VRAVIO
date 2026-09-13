@@ -10,6 +10,10 @@ export interface PlatformFile {
   readonly size: number;
   readonly lastModified: number;
   readonly data: Uint8Array;
+  /** Native desktop path when the platform can safely expose one. Web file
+   * pickers intentionally leave this absent: browser `File` objects are not
+   * durable external links. */
+  readonly path?: string;
 }
 
 export interface OpenFileOptions { readonly accept?: Record<string, readonly string[]>; readonly multiple?: boolean }

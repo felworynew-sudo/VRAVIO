@@ -70,7 +70,19 @@ function isBrowserFileHandle(value: unknown): value is BrowserFileHandle {
 const isTauriDesktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 class DesktopFileSystem implements FileSystemPort {
-  async openFiles(options: OpenFileOptions = {}): Promise<readonly PlatformFile[]> { return new WebFileSystem().openFiles(options); }
+  async openFiles(options: OpenFileOptions = {}): Promise<readonly PlatformFile[]> {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const { readFile } = await import("@tauri-apps/plugin-fs");
+    const extensions = [...new Set(Object.values(options.accept ?? {}).flat().map((extension) => extension.replace(/^\./, "")).filter(Boolean))];
+    const chosen = await open({ multiple: options.multiple ?? false, ...(extensions.length ? { filters: [{ name: "Supported files", extensions }] } : {}) });
+    const paths = chosen === null ? [] : Array.isArray(chosen) ? chosen : [chosen];
+    return Promise.all(paths.map(async (path) => {
+      const data = await readFile(path), name = path.split(/[\\/]/).pop() || "file";
+      const extension = name.split(".").pop()?.toLowerCase() ?? "";
+      const mime = extension === "png" ? "image/png" : extension === "jpg" || extension === "jpeg" ? "image/jpeg" : extension === "webp" ? "image/webp" : extension === "svg" ? "image/svg+xml" : "application/octet-stream";
+      return { name, mime, size: data.byteLength, lastModified: 0, data, path };
+    }));
+  }
 
   async saveFile(options: SaveFileOptions): Promise<SaveFileResult> {
     const { save } = await import("@tauri-apps/plugin-dialog");
