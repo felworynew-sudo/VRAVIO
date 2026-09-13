@@ -39,11 +39,15 @@ export function useContextMenu() {
   }, [menu]);
   // Dockview uses transformed/overflowing containers for collapsed icon docks.
   // A fixed element below one of those can still be clipped by that ancestor,
-  // so every context menu belongs at the document root, not in its panel tree.
+  // so every context menu belongs at the application root, not in its panel
+  // tree. It must not use document.body: theme and custom-palette variables
+  // deliberately live on `.app`, and a body portal makes their backgrounds
+  // resolve to transparent.
+  const portalRoot = document.querySelector(".app") ?? document.body;
   const node = menu ? createPortal(<div className="context-menu-backdrop" onMouseDown={close} onContextMenu={(event) => { event.preventDefault(); close(); }}>
     <div ref={menuRef} className="context-menu" style={{ left: placement?.left ?? menu.x, top: placement?.top ?? menu.y }} onMouseDown={(event) => event.stopPropagation()}>
       {menu.items.map((item, index) => <button key={index} disabled={item.disabled} className={[item.danger ? "danger" : "", item.separatorBefore ? "separator-before" : ""].filter(Boolean).join(" ")} onClick={() => { item.onSelect(); close(); }}>{item.label}</button>)}
     </div>
-  </div>, document.body) : null;
+  </div>, portalRoot) : null;
   return { open, close, node, isOpen: menu !== null };
 }
