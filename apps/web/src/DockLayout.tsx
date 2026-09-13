@@ -396,7 +396,7 @@ function LayerThumbnail({ layer, active = false, onActivate }: { layer: RasterLa
     context.putImageData(thumbnail, left, top);
   }, [layer.pixels, layer.width, layer.height]);
   if (layer.kind === "group") return <span className="layer-thumb layer-group-thumb"><img src={iconUrl("/ГРУППА.svg")} alt=""/></span>;
-  return <span className={`layer-thumb${active ? " editing" : ""}`} onClick={(event) => { event.stopPropagation(); onActivate?.(); }}>{layerKindIcon(layer) && <img className="layer-kind-icon" src={layerKindIcon(layer)!} alt="" width={13} height={13}/>}<canvas ref={ref} width="36" height="28" /></span>;
+  return <span className={`layer-thumb${active ? " editing" : ""}`} onClick={(event) => { event.stopPropagation(); onActivate?.(); }} onDoubleClick={(event) => { if (layer.kind !== "smart") return; event.stopPropagation(); window.dispatchEvent(new CustomEvent("vravio-smart-object-edit", { detail: { layerId: layer.id } })); }}>{layerKindIcon(layer) && <img className="layer-kind-icon" src={layerKindIcon(layer)!} alt="" width={13} height={13}/>}<canvas ref={ref} width="36" height="28" /></span>;
 }
 
 function LayerMaskThumbnail({ mask, width, height, active, onActivate, onDragStart }: { mask: RasterLayerMask; width: number; height: number; active: boolean; onActivate(): void; onDragStart(event: React.PointerEvent): void }) {
@@ -582,6 +582,20 @@ function LayersPanel() {
   useEffect(() => {
     const open = () => { const current = activeDocumentId ? kernel.documents.get<RasterDocumentState>(activeDocumentId) : null; if (current && isRasterDocumentState(current.state)) setStyleLayerId(current.state.activeLayerId); };
     window.addEventListener("vravio-layer-style-open", open); return () => window.removeEventListener("vravio-layer-style-open", open);
+  }, [activeDocumentId]);
+  // Photoshop's primary discovery gesture: double-click the Smart Object
+  // thumbnail, not the layer name. A normal click on that same thumbnail has
+  // already made it active before `dblclick` fires; verify that fact so a
+  // stale bubbling event can never open contents for another document.
+  useEffect(() => {
+    const open = (event: Event) => {
+      const layerId = (event as CustomEvent<{ layerId?: string }>).detail?.layerId;
+      const current = activeDocumentId ? kernel.documents.get<RasterDocumentState>(activeDocumentId) : null;
+      if (!layerId || !current || !isRasterDocumentState(current.state) || current.state.activeLayerId !== layerId) return;
+      void kernel.commands.execute("layer.editSmartObjectContents", { activeDocumentId });
+    };
+    window.addEventListener("vravio-smart-object-edit", open);
+    return () => window.removeEventListener("vravio-smart-object-edit", open);
   }, [activeDocumentId]);
   // master-plan.md §1.9 item 1: clicking a mask thumbnail sets
   // `editingMaskLayerId` (see `LayerMaskThumbnail`'s `onActivate` below), but
