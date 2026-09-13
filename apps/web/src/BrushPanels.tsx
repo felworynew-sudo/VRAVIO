@@ -31,6 +31,11 @@ const brushSections: readonly BrushSection[] = [
 
 type DraftValues = Record<string, number | boolean | string>;
 
+// Zustand selectors must return a stable fallback value. Returning a new object
+// here on every store read makes useSyncExternalStore believe the snapshot has
+// changed continuously when no brush settings have been saved yet.
+const emptyBrushToolOptions: Readonly<Record<string, string | number | boolean>> = {};
+
 const initialDraft: DraftValues = {
   sizeJitter: 0, minimumDiameter: 0, angleJitter: 0, roundnessJitter: 0, minimumRoundness: 0,
   scatter: 0, bothAxes: false, count: 1, countJitter: 0,
@@ -65,7 +70,7 @@ function BrushStrokePreview({ hardness, roundness }: { hardness: number; roundne
 
 export function BrushSettingsPanel() {
   const language = useShellStore((state) => state.language);
-  const toolOptions = useShellStore((state) => state.toolOptions["raster.brush"] ?? {});
+  const toolOptions = useShellStore((state) => state.toolOptions["raster.brush"] ?? emptyBrushToolOptions);
   const setToolOption = useShellStore((state) => state.setToolOption);
   const [selected, setSelected] = useState<BrushSectionId>("tip");
   const [enabled, setEnabled] = useState<Set<BrushSectionId>>(() => new Set(["shape", "scatter", "texture", "smoothing"]));
@@ -174,7 +179,7 @@ export function BrushesPanel() {
   const setTool = useShellStore((state) => state.setTool);
   const setToolOption = useShellStore((state) => state.setToolOption);
   const activeDocumentId = useShellStore((state) => state.activeDocumentId);
-  const brushOptions = useShellStore((state) => state.toolOptions["raster.brush"] ?? {});
+  const brushOptions = useShellStore((state) => state.toolOptions["raster.brush"] ?? emptyBrushToolOptions);
   const [query, setQuery] = useState("");
   const [customPresets, setCustomPresets] = useState<StoredBrushPreset[]>(readCustomPresets);
   const [recentIds, setRecentIds] = useState<string[]>([]);
