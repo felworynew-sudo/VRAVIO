@@ -1,1 +1,16 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="9" cy="10" r="5" fill="none" stroke="#e7e9ee" stroke-width="1.8"/><circle cx="15" cy="10" r="5" fill="none" stroke="#e7e9ee" stroke-width="1.8"/><circle cx="12" cy="15" r="5" fill="none" stroke="#e7e9ee" stroke-width="1.8"/></svg>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="_Слой_1" data-name="Слой_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 24 24">
+  <!-- Generator: Adobe Illustrator 30.7.0, SVG Export Plug-In . SVG Version: 2.1.4 Build 114)  -->
+  <defs>
+    <style>
+      .st0 {
+        fill: none;
+        stroke: #e7e9ee;
+        stroke-width: 1.8px;
+      }
+    </style>
+  </defs>
+  <circle class="st0" cx="8.2" cy="9.3" r="6.4"/>
+  <circle class="st0" cx="15.8" cy="9.3" r="6.4"/>
+  <circle class="st0" cx="12" cy="15.7" r="6.4"/>
+</svg>

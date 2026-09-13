@@ -1,1 +1,23 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="#e7e9ee" stroke-width="1.8"/><path d="M12 3a9 9 0 0 1 0 18Z" fill="#e7e9ee"/><path d="M12 7a5 5 0 0 0 0 10" fill="none" stroke="#20242c" stroke-width="1.5"/></svg>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="_Слой_1" data-name="Слой_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 24 24">
+  <!-- Generator: Adobe Illustrator 30.7.0, SVG Export Plug-In . SVG Version: 2.1.4 Build 114)  -->
+  <defs>
+    <style>
+      .st0 {
+        fill: none;
+      }
+
+      .st0, .st1 {
+        stroke: #e7e9ee;
+        stroke-width: 1.8px;
+      }
+
+      .st1 {
+        fill: #e7e9ee;
+      }
+    </style>
+  </defs>
+  <circle class="st0" cx="12" cy="12" r="9"/>
+  <path class="st1" d="M12,3c5,0,9,4,9,9s-4,9-9,9h0V3Z"/>
+  <path class="st0" d="M12,7c-2.8,0-5,2.2-5,5s2.2,5,5,5"/>
+</svg>

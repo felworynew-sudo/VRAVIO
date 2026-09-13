@@ -1,10 +1,24 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg id="_Слой_1" data-name="Слой 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 250 250">
+<svg id="_Слой_1" xmlns="http://www.w3.org/2000/svg" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 250 250">
+  <!-- Generator: Adobe Illustrator 30.7.0, SVG Export Plug-In . SVG Version: 2.1.4 Build 114)  -->
   <defs>
-    <mask id="crescent-cut">
-      <rect x="0" y="0" width="250" height="250" fill="#fff"/>
-      <circle cx="158" cy="103" r="66" fill="#000"/>
+    <style>
+      .st0 {
+        fill: #fff;
+      }
+
+      .st1 {
+        mask: url(#mask);
+      }
+    </style>
+    <mask id="mask" x="-59.6" y="-67.3" width="384.6" height="384.6" maskUnits="userSpaceOnUse">
+      <g id="crescent-cut">
+        <rect class="st0" x="-59.6" y="-67.3" width="384.6" height="384.6"/>
+        <circle cx="183.5" cy="91.2" r="101.5"/>
+      </g>
     </mask>
   </defs>
-  <circle cx="120" cy="125" r="78" fill="#fff" mask="url(#crescent-cut)"/>
+  <g class="st1">
+    <circle class="st0" cx="125" cy="125" r="120"/>
+  </g>
 </svg>

@@ -1,4 +1,21 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-  <circle cx="12" cy="12" r="7.5" fill="none" stroke="#e7e9ee" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M12 4.5a7.5 7.5 0 0 0 0 15Z" fill="#e7e9ee"/>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="_Слой_1" data-name="Слой_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 24 24">
+  <!-- Generator: Adobe Illustrator 30.7.0, SVG Export Plug-In . SVG Version: 2.1.4 Build 114)  -->
+  <defs>
+    <style>
+      .st0 {
+        fill: none;
+        stroke: #e7e9ee;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 2.4px;
+      }
+
+      .st1 {
+        fill: #e7e9ee;
+      }
+    </style>
+  </defs>
+  <circle class="st0" cx="12" cy="12" r="9.9"/>
+  <path class="st1" d="M12,2.1C6.5,2.1,2.1,6.5,2.1,12s4.4,9.9,9.9,9.9V2.1Z"/>
 </svg>

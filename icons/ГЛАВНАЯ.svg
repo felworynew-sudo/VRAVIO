@@ -1,1 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#000" d="M3 10.8 12 3l9 7.8v9.7a.5.5 0 0 1-.5.5h-5.4v-6.4H8.9V21H3.5a.5.5 0 0 1-.5-.5v-9.7Zm3 1.37V18h2.9v-6.4h6.2V18H18v-5.83L12 7l-6 5.17Z"/></svg>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="_Слой_1" data-name="Слой_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 24 24">
+  <!-- Generator: Adobe Illustrator 30.7.0, SVG Export Plug-In . SVG Version: 2.1.4 Build 114)  -->
+  <path d="M21,11.1v9.3c0,.3-.3.6-.6.6h-5.2v-6c0-1.8-1.4-3.2-3.2-3.2h0c-1.8,0-3.2,1.4-3.2,3.2v6H3.6c-.3,0-.6-.3-.6-.6v-9.3c0-.2,0-.4.2-.5,1.4-1.2,8.8-7.6,8.8-7.6,0,0,7.3,6.5,8.7,7.6.1.1.2.3.2.5Z"/>
+</svg>

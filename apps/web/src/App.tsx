@@ -284,6 +284,27 @@ export function App() {
    * formats remain in Export, matching Photoshop's project/export split. */
   const saveProject = async ({ markClean = true, saveAs = false }: { markClean?: boolean; saveAs?: boolean } = {}) => {
     if (!active) return;
+    // A document opened through Smart Object → Edit Contents is not an
+    // independent project from the user's point of view. Photoshop's Ctrl+S
+    // writes its changed contents back to the parent placement; sending it to
+    // the generic project saver instead both asks for a .vravio file and
+    // leaves the Smart Object visually stale. Save As remains an intentional
+    // escape hatch for making an independent project file.
+    const roundTripSession = !saveAs && active.provenance ? kernel.roundtrip.sessionOf(active.id) : undefined;
+    if (roundTripSession && roundTripSession.status !== "detached") {
+      if (saveInFlight.current.has(active.id)) return;
+      saveInFlight.current.add(active.id);
+      try {
+        await kernel.roundtrip.apply(active.id);
+      } catch (error) {
+        const because = error instanceof Error ? error.message : String(error);
+        diagnostic("error", "roundtrip.apply", because, error);
+        errorModal({ title: text(store.language, "Could not apply Smart Object contents", "Не удалось применить содержимое смарт-объекта"), message: text(store.language, "The source document was not changed. Your edits remain open here — try saving again.", "Исходный документ не был изменён. Ваши правки остаются открытыми здесь — попробуйте сохранить ещё раз."), detail: because });
+      } finally {
+        saveInFlight.current.delete(active.id);
+      }
+      return;
+    }
     // A second save for the same document while the first is still writing
     // would call `createWritable()` on the same handle twice — its default
     // "exclusive" mode throws on the second call, not queues it. Dropping

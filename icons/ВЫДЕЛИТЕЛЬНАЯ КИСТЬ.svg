@@ -4,20 +4,20 @@
   <defs>
     <style>
       .st0 {
-        fill: #fff;
-        isolation: isolate;
-        opacity: .5;
-      }
-
-      .st1 {
         fill: none;
         stroke: #fff;
         stroke-dasharray: 11.9 11.9;
         stroke-miterlimit: 10;
-        stroke-width: 14px;
+        stroke-width: 16px;
+      }
+
+      .st1 {
+        fill: #fff;
+        isolation: isolate;
+        opacity: .5;
       }
     </style>
   </defs>
-  <rect class="st1" x="21.8" y="21.4" width="206.1" height="206.1"/>
-  <rect class="st0" x="43.6" y="43.2" width="162.5" height="162.5"/>
+  <rect class="st0" x="21.8" y="21.4" width="206.1" height="206.1"/>
+  <rect class="st1" x="43.6" y="43.2" width="162.5" height="162.5"/>
 </svg>

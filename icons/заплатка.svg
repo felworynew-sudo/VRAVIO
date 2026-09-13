@@ -1,15 +1,31 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg id="_Слой_1" data-name="Слой 1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 249.78 248.85">
+<svg id="_Слой_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 249.8 248.9">
+  <!-- Generator: Adobe Illustrator 30.7.0, SVG Export Plug-In . SVG Version: 2.1.4 Build 114)  -->
   <defs>
     <style>
-      .cls-1 {
+      .st0 {
+        stroke-width: 15.6px;
+      }
+
+      .st0, .st1 {
         fill: none;
         stroke: #fff;
         stroke-miterlimit: 10;
-        stroke-width: 40px;
+      }
+
+      .st1 {
+        stroke-width: 23.2px;
       }
     </style>
   </defs>
-  <path class="cls-1" d="M69.06,64.15l-23.27,75.38,147.74,45.6-6.67,21.62c-8.95,28.99-39.71,45.24-68.7,36.29l-43.72-13.49c-28.99-8.95-45.24-39.71-36.29-68.7l32.79-106.23c8.95-29,39.7-45.24,68.7-36.3l43.72,13.49c28.99,8.95,45.24,39.7,36.29,68.7l-2.85,9.23-147.74-45.6Z"/>
-  <rect class="cls-1" x="91.84" y="47.33" width="78.89" height="154.61" transform="translate(-26.53 213.33) rotate(-72.85)"/>
+  <rect class="st1" x="48.5" y="46.5" width="158.9" height="158.9"/>
+  <line class="st0" x1="78.2" y1="16.1" x2="78.2" y2="73.6"/>
+  <line class="st0" x1="124.9" y1="16.1" x2="124.9" y2="73.6"/>
+  <line class="st0" x1="171.6" y1="16.1" x2="171.6" y2="73.6"/>
+  <line class="st0" x1="78.2" y1="175.2" x2="78.2" y2="232.8"/>
+  <line class="st0" x1="124.9" y1="175.2" x2="124.9" y2="232.8"/>
+  <line class="st0" x1="171.6" y1="175.2" x2="171.6" y2="232.8"/>
+  <line class="st0" x1="233.3" y1="101.1" x2="175.7" y2="101.1"/>
+  <line class="st0" x1="233.3" y1="147.8" x2="175.7" y2="147.8"/>
+  <line class="st0" x1="74.1" y1="124.4" x2="16.5" y2="124.4"/>
 </svg>

@@ -1,4 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <path d="M50,50 m-4,0 a4,4 0 1 1 8,0 a12,12 0 0 1 -12,12 a20,20 0 0 1 -20,-20 a28,28 0 0 1 28,-28 a36,36 0 0 1 36,36" fill="none" stroke="#fff" stroke-width="7.5" stroke-linecap="round"/>
+<svg id="_Слой_1" data-name="Слой_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 100 100">
+  <!-- Generator: Adobe Illustrator 30.7.0, SVG Export Plug-In . SVG Version: 2.1.4 Build 114)  -->
+  <defs>
+    <style>
+      .st0 {
+        fill: none;
+        stroke: #fff;
+        stroke-linecap: round;
+        stroke-width: 7.5px;
+      }
+    </style>
+  </defs>
+  <path class="st0" d="M57.6,9.9c-16-1.7-31.4,5.9-39.5,19.4-7.6,12.7-7.7,28.8,0,41.4,8.3,13.6,25.8,23.3,42.8,18.2,18.3-5.5,31.9-27,24.7-44.3-6.7-16.2-29.9-25.1-43.7-16-10.3,6.8-16.3,24.2-8.4,34.4,5.3,6.8,16.9,10.2,25.2,5.3,7.1-4.3,12.1-14.9,7.9-20.2-2.9-3.6-9.7-4.4-16.7-1.7"/>
 </svg>
