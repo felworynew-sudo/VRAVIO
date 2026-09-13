@@ -5920,9 +5920,11 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
 - [x] **Isolated group blend modes and effects.** После composite subtree
       isolated group применяет собственный blend mode и layer effects к
       отдельной surface; покрыто visual-regression тестом.
-- [ ] **P1 — Isolated group clipping and compiled projection tiles.**
-      Добавить clipping и cached projection tiles к RasterRenderPlan для
-      полной Photoshop-паритетности и высоких разрешений.
+- [x] **Isolated group clipping.** Group respects clipping base coverage and
+      can itself provide coverage for clipped siblings; covered by regression
+      test.
+- [ ] **P1 — Compiled isolated-group projection tiles.** Добавить cached
+      projection tiles к RasterRenderPlan для высоких разрешений.
 - [x] **Deterministic Dissolve.** Режим теперь использует стабильную
       координатную hash-coverage: полупрозрачный пиксель становится полностью
       видимым или отсутствует, а tile, preview и export дают одинаковый

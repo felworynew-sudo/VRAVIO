@@ -398,10 +398,14 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
       const groupPixels = hasRenderableEffect(layer) ? renderLayerEffects(groupSurfaceLayer, outWidth, outHeight) : rawGroupPixels;
       const groupMask = layer.mask?.enabled ? featherMask(layer.mask.pixels, state.width, state.height, layer.mask.feather) : undefined;
       const groupCode = blendCode(layer.blendMode), groupNonSeparable = isNonSeparable(groupCode);
+      const groupClippingBase = layer.clipping ? clippingBaseByParent.get(parentKey) : undefined;
+      const groupOwnAlpha = layer.clipping || !clippedParents.has(parentKey) ? null : new Uint8ClampedArray(outWidth * outHeight);
       for (let row = 0; row < outHeight; row += 1) for (let column = 0; column < outWidth; column += 1) {
         const index = (row * outWidth + column) * 4;
-        const sourceAlpha = groupPixels[index + 3]! / 255 * effectiveOpacity
-          * (groupMask ? groupMask[(area.y + row * step) * state.width + area.x + column * step]! / 255 * (layer.mask?.density ?? 1) : 1);
+        const maskAlpha = groupMask ? groupMask[(area.y + row * step) * state.width + area.x + column * step]! / 255 * (layer.mask?.density ?? 1) : 1;
+        const rawAlpha = groupPixels[index + 3]! / 255 * maskAlpha;
+        if (groupOwnAlpha) groupOwnAlpha[index] = Math.round(rawAlpha * 255);
+        const sourceAlpha = rawAlpha * effectiveOpacity * (groupClippingBase ? groupClippingBase[index]! / 255 : layer.clipping ? 0 : 1);
         if (sourceAlpha <= 0) continue;
         const destinationAlpha = output[index + 3]! / 255;
         const carry = destinationAlpha * (1 - sourceAlpha), alpha = sourceAlpha + carry;
@@ -421,6 +425,7 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
         output[index + 2] = Math.round((blendedBlue * sourceAlpha + destinationBlue * carry) / alpha);
         output[index + 3] = Math.round(alpha * 255);
       }
+      if (groupOwnAlpha) clippingBaseByParent.set(parentKey, groupOwnAlpha);
       continue;
     }
     if (layer.kind === "group" || !isLayerEffectivelyVisible(layer, state.layers) || effectiveOpacity <= 0) {

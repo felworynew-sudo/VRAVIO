@@ -227,6 +227,25 @@ describe("composite output is stable", () => {
     expect([...result.slice(4, 7)]).toEqual([0, 0, 0]);
   });
 
+  it("uses clipping coverage when an isolated group is clipped", () => {
+    const state = createRasterDocument(2, 1);
+    state.layers = [];
+    const base = createRasterLayer(2, 1, "Base");
+    base.pixels.set([255, 255, 255, 255], 0);
+    state.layers.push(base);
+    const group = createRasterGroup(2, 1, "Clipped group");
+    group.groupMode = "isolated";
+    group.clipping = true;
+    appendLayer(state, group);
+    const child = createRasterLayer(2, 1, "Blue child");
+    child.parentId = group.id;
+    child.pixels.set([0, 0, 255, 255], 4);
+    state.layers.push(child);
+
+    const result = compositeRasterRegion(state, { x: 0, y: 0, width: 2, height: 1 });
+    expect([...result.slice(4, 8)]).toEqual([0, 0, 0, 0]);
+  });
+
   it("subsampling picks the same pixels the full composite has", () => {
     const state = scene();
     const full = compositeRasterRegion(state, whole);
