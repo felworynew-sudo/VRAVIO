@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendLayer, changedRenderRegion, createAdjustmentLayer, createRasterDocument, createRasterLayer, layerRenderSignatures, setLayerPixels } from "./index";
+import { appendLayer, changedRenderRegion, createAdjustmentLayer, createRasterDocument, createRasterLayer, createRasterLayerMask, layerRenderSignatures, setLayerPixels } from "./index";
 import type { RasterDocumentState, RasterLayer } from "./types";
 
 const W = 64, H = 64;
@@ -71,6 +71,18 @@ describe("what changed between two renders", () => {
     lower.visible = false;
 
     expect(region(state, before)).toEqual({ x: 4, y: 4, width: 10, height: 10 });
+  });
+
+  it("invalidates masked content when density changes without replacing mask bytes", () => {
+    const { state, upper } = scene();
+    upper.mask = createRasterLayerMask(W, H);
+    const before = layerRenderSignatures(state);
+    upper.mask.density = 0.4;
+
+    // The mask buffer identity did not change. Density still changes every
+    // covered pixel, so skipping this region left a stale preview until a
+    // later, unrelated edit happened to repaint it.
+    expect(region(state, before)).toEqual({ x: 40, y: 40, width: 12, height: 12 });
   });
 
   it("bounds a layer stored trimmed to its own content, not to the canvas", () => {

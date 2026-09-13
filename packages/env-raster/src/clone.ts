@@ -36,10 +36,12 @@ export function cloneDab(
   angleDegrees = 0,
   pressureSize = true,
   pressureOpacity = false,
-  sourcePixels: Uint8ClampedArray = pixels
+  sourcePixels: Uint8ClampedArray = pixels,
+  /** PointerEvent pressure, normalized by the tool layer to 0…1. */
+  pressure = 1,
 ): void {
-  const pressure = 1;
-  const radius = Math.max(0.5, size / 2) * (pressureSize ? pressure : 1);
+  const normalizedPressure = Math.max(0, Math.min(1, pressure));
+  const radius = Math.max(0.5, size / 2) * (pressureSize ? normalizedPressure : 1);
   const shortRadius = Math.max(0.5, radius * Math.max(0.01, Math.min(1, roundness)));
   const radians = angleDegrees * Math.PI / 180;
   const cosine = Math.cos(radians);
@@ -74,7 +76,7 @@ export function cloneDab(
 
       const destIndex = (y * width + x) * 4;
       const srcIndex = (srcY * width + srcX) * 4;
-      const effectiveOpacity = Math.max(0, Math.min(1, opacity * (pressureOpacity ? pressure : 1) * coverage * selectionAlpha));
+      const effectiveOpacity = Math.max(0, Math.min(1, opacity * (pressureOpacity ? normalizedPressure : 1) * coverage * selectionAlpha));
 
       compositeClonePixel(pixels, destIndex, sourcePixels, srcIndex, effectiveOpacity);
     }
@@ -102,6 +104,7 @@ export function cloneStrokeSegment(
   spacing = 0.18,
   /** Distance travelled since the last stamp, carried across pointer samples. */
   carry = 0,
+  pressure = to.pressure ?? 1,
 ): number {
   const distance = Math.hypot(to.x - from.x, to.y - from.y);
   const step = Math.max(0.5, size * Math.max(0.01, spacing));
@@ -122,7 +125,7 @@ export function cloneStrokeSegment(
     previousX = currentX; previousY = currentY;
     if (travelled < step) continue;
     travelled -= step;
-    cloneDab(pixels, width, height, currentX + sourceOffsetX, currentY + sourceOffsetY, currentX, currentY, size, opacity, hardness, selectionMask, roundness, angleDegrees, pressureSize, pressureOpacity, sourcePixels);
+    cloneDab(pixels, width, height, currentX + sourceOffsetX, currentY + sourceOffsetY, currentX, currentY, size, opacity, hardness, selectionMask, roundness, angleDegrees, pressureSize, pressureOpacity, sourcePixels, pressure);
   }
   return travelled;
 }
@@ -162,6 +165,7 @@ export function cloneQuadraticStrokeSegment(
   sourcePixels: Uint8ClampedArray = pixels,
   spacing = 0.18,
   carry = 0,
+  pressure = to.pressure ?? 1,
 ): number {
   const approximateLength = Math.hypot(control.x - from.x, control.y - from.y) + Math.hypot(to.x - control.x, to.y - control.y);
   const step = Math.max(0.5, size * Math.max(0.01, spacing));
@@ -182,7 +186,7 @@ export function cloneQuadraticStrokeSegment(
     previous = current;
     if (travelled < step) continue;
     travelled -= step;
-    cloneDab(pixels, width, height, current.x + sourceOffsetX, current.y + sourceOffsetY, current.x, current.y, size, opacity, hardness, selectionMask, roundness, angleDegrees, pressureSize, pressureOpacity, sourcePixels);
+    cloneDab(pixels, width, height, current.x + sourceOffsetX, current.y + sourceOffsetY, current.x, current.y, size, opacity, hardness, selectionMask, roundness, angleDegrees, pressureSize, pressureOpacity, sourcePixels, pressure);
   }
   return travelled;
 }

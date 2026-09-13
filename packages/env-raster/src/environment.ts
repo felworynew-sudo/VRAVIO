@@ -6,7 +6,7 @@ import { appendLayer, flattenRasterLayers } from "./layer-tree";
 import { compositeRasterDocument } from "./render";
 import { RASTER_ASSET_MIME, decodeRasterAsset, encodeRasterAsset, isRasterAsset } from "./raster-asset";
 import type { RasterDocumentOptions, RasterDocumentState, RasterLayer } from "./types";
-import { setLayerPixels } from "./layer-bounds";
+import { layerDocumentPixels, setLayerPixels } from "./layer-bounds";
 
 export interface RasterEnvironmentOptions {
   readonly documents: DocumentStore;
@@ -84,6 +84,12 @@ export class RasterEnvironment implements Environment<RasterDocumentState> {
     if (target.kind !== "raster-layer") throw new Error(`A raster document has no ${target.kind}`);
     const layer = flattenRasterLayers(document.state.layers).find((item) => item.id === target.layerId);
     if (!layer) throw new Error(`Unknown layer: ${target.layerId}`);
+    // Pixel layers are retained in their local content bounds. Assets, in
+    // contrast, are opened as self-contained documents, so their header must
+    // describe the same document-sized RGBA buffer it carries. Encoding the
+    // trimmed buffer with canvas dimensions produced an invalid container as
+    // soon as a user edited a small region of a large canvas.
+    const assetPixels = layerDocumentPixels(layer, document.state.width, document.state.height);
 
     // Already bound and nobody asked for a copy: hand over the same asset, so
     // the child's revisions land straight on what the parent is drawing.
@@ -94,12 +100,12 @@ export class RasterEnvironment implements Environment<RasterDocumentState> {
       // Bound before the layer buffers carried their dimensions. Nothing that
       // receives this asset could read it, so it is brought up to date in place
       // rather than left as a shape that fails at the far end.
-      await this.#assets.commitRevision(existing, encodeRasterAsset(layer.pixels, document.state.width, document.state.height), "raster-env", "Self-describing layer buffer");
+      await this.#assets.commitRevision(existing, encodeRasterAsset(assetPixels, document.state.width, document.state.height), "raster-env", "Self-describing layer buffer");
       return { assetId: existing, title: layer.name, handleOffset: 0 };
     }
 
     const assetId = await this.#assets.importAsset(
-      encodeRasterAsset(layer.pixels, document.state.width, document.state.height),
+      encodeRasterAsset(assetPixels, document.state.width, document.state.height),
       { kind: "image", mime: RASTER_ASSET_MIME, name: `${layer.name}.vraster`, producedBy: "raster-env" },
     );
     // A branch deliberately leaves the layer pointing where it did; the parent

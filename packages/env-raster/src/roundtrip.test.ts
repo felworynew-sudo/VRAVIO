@@ -105,6 +105,24 @@ describe("raster round-trip", () => {
     expect(child.provenance).toMatchObject({ parentDocId: parent.id, writeBack: "replace-asset" });
   });
 
+  it("extracts a trimmed layer as a valid document-sized raster asset", async () => {
+    const parent = await environment.createEmpty({ width: W, height: H, name: "Trimmed parent" });
+    const layer = createRasterLayer(W, H, "Small red mark");
+    const local = new Uint8ClampedArray(2 * 2 * 4);
+    local.set([255, 0, 0, 255], 0);
+    layer.pixels = local;
+    layer.bounds = { x: 5, y: 3, width: 2, height: 2 };
+    documents.update<RasterDocumentState>(parent.id, (state) => { state.layers = [layer]; });
+
+    const extracted = await environment.extractAsset(parent, { kind: "raster-layer", layerId: layer.id }, { forceNew: true });
+    const bytes = await assets.read(extracted.assetId);
+    const image = decodeRasterAsset(bytes!);
+
+    expect([image.width, image.height]).toEqual([W, H]);
+    expect(firstPixel(image.pixels.subarray((3 * W + 5) * 4))).toEqual([255, 0, 0, 255]);
+    expect(firstPixel(image.pixels)).toEqual([0, 0, 0, 0]);
+  });
+
   it("binds the layer to the asset so the parent and child share one reference", async () => {
     const parent = await parentDocument();
     const session = await roundtrip.open({ parentDocId: parent.id, target: { kind: "raster-layer", layerId: topLayer(parent).id }, targetEnv: "raster" });

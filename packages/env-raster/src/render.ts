@@ -532,6 +532,9 @@ export interface LayerRenderSignature {
   readonly bounds: RasterRect;
   readonly mask: Uint8ClampedArray | null;
   readonly maskEnabled: boolean;
+  /** Mask settings alter composite coverage even when its byte buffer stays put. */
+  readonly maskDensity: number;
+  readonly maskFeather: number;
   readonly visible: boolean;
   readonly opacity: number;
   readonly fillOpacity: number;
@@ -550,6 +553,8 @@ export function layerRenderSignatures(state: RasterDocumentState): LayerRenderSi
     bounds: layer.bounds,
     mask: layer.mask?.pixels ?? null,
     maskEnabled: layer.mask?.enabled ?? false,
+    maskDensity: layer.mask?.density ?? 1,
+    maskFeather: layer.mask?.feather ?? 0,
     visible: layer.visible,
     opacity: layer.opacity,
     fillOpacity: layer.fillOpacity ?? 1,
@@ -564,6 +569,7 @@ export function layerRenderSignatures(state: RasterDocumentState): LayerRenderSi
 
 const sameSignature = (a: LayerRenderSignature, b: LayerRenderSignature): boolean =>
   a.pixels === b.pixels && a.mask === b.mask && a.maskEnabled === b.maskEnabled
+  && a.maskDensity === b.maskDensity && a.maskFeather === b.maskFeather
   && a.visible === b.visible && a.opacity === b.opacity && a.fillOpacity === b.fillOpacity
   && a.blendMode === b.blendMode && a.clipping === b.clipping
   && a.effects === b.effects && a.adjustment === b.adjustment

@@ -3,7 +3,7 @@ import {
   activeRasterLayer, changedRenderRegion, clampRegionToDocument, cloneRasterState, compositeRasterDocument, compositeRasterRegion,
   cropRegion, cropRegionAsMask, DirtyRegion, flattenRasterLayers, layerRenderSignatures, mipForZoom, RasterTileCache, setLayerPixels,
   swapLayerRegion, swapMaskRegion, RASTER_ASSET_MIME,
-  type LayerRenderSignature, type PixelSelection, type RasterDocumentState, type RasterRect,
+  type LayerRenderSignature, type PixelSelection, type RasterDocumentState, type RasterLayer, type RasterRect,
 } from "@vravio/env-raster";
 import { createBufferRevisionOperation, type AssetId, type VravioDocument } from "@vravio/kernel";
 import { kernel } from "./kernel";
@@ -31,6 +31,20 @@ import type { DocumentViewport } from "./store";
  * still finish in the first pass and nothing appears in stages.
  */
 const TILE_BUDGET_MS = 8;
+
+/**
+ * The direct preview path is an optimisation, never a second compositor.
+ * Keep its contract deliberately narrower than "one normal layer": masks,
+ * fill opacity, clipping and enabled layer effects all change the pixels that
+ * the compositor would produce, even when there is no second visible layer.
+ */
+export function canDirectRasterPreviewBlit(state: RasterDocumentState, layer: RasterLayer): boolean {
+  if (state.layers.length !== 1 || state.layers[0]?.id !== layer.id) return false;
+  if (layer.kind !== "pixel" || layer.parentId !== null || !layer.visible || layer.opacity !== 1) return false;
+  if ((layer.fillOpacity ?? 1) !== 1 || layer.blendMode !== "normal" || layer.clipping) return false;
+  if (layer.mask?.enabled) return false;
+  return !Object.values(layer.effects ?? {}).some((effect) => effect?.enabled);
+}
 
 export function useRasterCommit(params: {
   document: VravioDocument;
@@ -131,7 +145,7 @@ export function useRasterCommit(params: {
     if (!canvas) return;
     if (target === "mask") { putPixels(canvas, compositeRasterDocument(withLayerMaskPixels(state, layerId, pixels)), state.width, state.height); return; }
     const layer = activeRasterLayer(state);
-    const direct = state.layers.length === 1 && layer.visible && layer.opacity === 1 && layer.blendMode === "normal";
+    const direct = canDirectRasterPreviewBlit(state, layer);
     putPixels(canvas, direct ? pixels : compositeRasterDocument(withActiveLayerPixels(state, pixels)), state.width, state.height);
   };
 
@@ -167,7 +181,7 @@ export function useRasterCommit(params: {
       return;
     }
     const layer = activeRasterLayer(state);
-    const direct = state.layers.length === 1 && layer.visible && layer.opacity === 1 && layer.blendMode === "normal";
+    const direct = canDirectRasterPreviewBlit(state, layer);
     putRegionPixels(canvas, direct ? cropPixels(pixels, state.width, region) : compositeRasterRegion(withActiveLayerPixels(state, pixels), region), region);
   };
 
@@ -195,7 +209,7 @@ export function useRasterCommit(params: {
     // The layer as it stands, composited for this rectangle only.
     const pixels = canvasPixels(activeRasterLayer(state));
     const layer = activeRasterLayer(state);
-    const direct = state.layers.length === 1 && layer.visible && layer.opacity === 1 && layer.blendMode === "normal";
+    const direct = canDirectRasterPreviewBlit(state, layer);
     const composited = direct ? cropPixels(pixels, state.width, region) : compositeRasterRegion(withActiveLayerPixels(state, pixels), region);
 
     for (let y = 0; y < region.height; y += 1) {
@@ -245,7 +259,7 @@ export function useRasterCommit(params: {
 
     const pixels = canvasPixels(activeRasterLayer(state));
     const layer = activeRasterLayer(state);
-    const direct = state.layers.length === 1 && layer.visible && layer.opacity === 1 && layer.blendMode === "normal";
+    const direct = canDirectRasterPreviewBlit(state, layer);
     const composited = direct ? cropPixels(pixels, state.width, region) : compositeRasterRegion(withActiveLayerPixels(state, pixels), region);
 
     for (let y = 0; y < region.height; y += 1) {

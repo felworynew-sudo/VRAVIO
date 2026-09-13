@@ -5923,21 +5923,28 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
       Dust & Scratches: сейчас нельзя рекламировать разные фильтры, если
       они вычисляются одним Box Blur. Одновременно обновить их
       `halo`/tile-safety metadata.
-- [ ] **Direct-preview parity.** Вынести общий `canDirectBlit(layer,state)`
-      для Brush/Spot Heal/Selection Brush: fast path допустим лишь при
-      normal, opacity/fillOpacity=1, без mask/effects/clipping/adjustment и
-      влияющих родителей. Иначе preview обязан пройти compositor.
-- [ ] **Mask и group invalidation.** В render signature включить density,
-      feather и все render-affecting mask props; реализовать feather как
-      non-destructive mask operation с halo. Изменение opacity/visibility
-      группы обязано invalidировать render-bounds всех descendants, а не
-      её пустой служебный buffer.
-- [ ] **RasterEnvironment asset dimensions.** `extractAsset()` не должен
-      передавать trimmed `layer.pixels` как будто это full document:
-      кодировать локальные `pixels + bounds.width/height` и передавать
-      `bounds.x/y` отдельным offset, без full-canvas materialisation.
-- [ ] **Реальный pressure Clone Stamp.** Протянуть pointer pressure до
-      `cloneDab()` или до этого убрать неработающие pressure controls.
+- [x] **Direct-preview parity.** Общий `canDirectRasterPreviewBlit(layer,state)`
+      уже закрывает Brush/Spot Heal/Selection Brush: fast path допустим лишь
+      для единственного normal pixel layer с opacity/fillOpacity=1, без
+      mask/effects/clipping. Остальные случаи идут через compositor; покрыто
+      unit-тестом вариантов, которые прежде теряли свойства слоя.
+- [x] **Mask density invalidation.** `LayerRenderSignature` теперь включает
+      density/feather, поэтому изменение density не оставляет старую область
+      на canvas даже без замены mask buffer; покрыто тестом.
+- [ ] **Mask feather и group invalidation.** Feather ещё надо реализовать
+      как non-destructive mask operation с halo. Изменение
+      opacity/visibility группы обязано invalidировать render-bounds всех
+      descendants, а не её пустой служебный buffer.
+- [x] **RasterEnvironment asset dimensions — correctness bridge.**
+      `extractAsset()` разворачивает trimmed layer в валидный
+      document-sized buffer перед encoding; это устраняет некорректный
+      header/payload и покрыто round-trip тестом.
+- [ ] **RasterEnvironment compact local extraction — performance.**
+      Следующий шаг: формат `pixels + bounds.width/height + bounds.x/y`
+      и offset в parent target без full-canvas materialisation.
+- [x] **Реальный pressure Clone Stamp.** Pointer pressure проходит до
+      `cloneDab()` и stroke interpolation; настройки размера и opacity
+      добавлены в Tool Options, проверено unit-тестом.
 
 #### 25.3.12. Full-canvas escape hatches и порядок архитектурной миграции — 13 сентября 2026
 

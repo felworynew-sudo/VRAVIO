@@ -324,6 +324,18 @@ describe("clone stamp", () => {
     expect(pixels[(4 * W + 0) * 4]).toBe(0);
   });
 
+  it("uses tablet pressure for opacity when that option is enabled", () => {
+    const source = flat();
+    markSquare(source, 8, 8, 12);
+    const destination = new Uint8ClampedArray(W * H * 4);
+
+    cloneDab(destination, W, H, 14, 14, 40, 40, 8, 1, 1, undefined, 1, 0, false, true, source, 0.25);
+
+    const alpha = destination[(40 * W + 40) * 4 + 3]!;
+    expect(alpha).toBeGreaterThan(0);
+    expect(alpha).toBeLessThan(255);
+  });
+
   it("samples the buffer it was handed, not the one it is writing into", () => {
     const source = flat();
     markSquare(source, 0, 0, W);

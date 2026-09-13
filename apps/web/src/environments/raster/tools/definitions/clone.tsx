@@ -45,6 +45,8 @@ function resolvedOptions(options: Readonly<Record<string, string | number | bool
     roundness: Number(options.roundness ?? 100) / 100,
     angle: Number(options.angle ?? 0),
     spacing: Number(options.spacing ?? 12) / 100,
+    pressureSize: options.pressureSize !== false,
+    pressureOpacity: options.pressureOpacity === true,
     alignMode: String(options.alignMode ?? "registered"),
   };
 }
@@ -71,7 +73,7 @@ function appendPoint(context: ToolContext<CloneState>, stroke: Stroke, point: Po
   if (Math.hypot(point.x - stroke.pending.x, point.y - stroke.pending.y) < 0.05) return;
   const end: Point = { x: (stroke.pending.x + point.x) / 2, y: (stroke.pending.y + point.y) / 2, pressure: ((stroke.pending.pressure ?? 1) + (point.pressure ?? 1)) / 2 };
   const o = resolvedOptions(context.options);
-  stroke.spacingCarry = cloneQuadraticStrokeSegment(stroke.working, context.document.width, context.document.height, stroke.curveStart, stroke.pending, end, stroke.sourceOffsetX, stroke.sourceOffsetY, o.size, o.opacity, context.paintMask, o.hardness, o.roundness, o.angle, true, false, stroke.before, o.spacing, stroke.spacingCarry);
+  stroke.spacingCarry = cloneQuadraticStrokeSegment(stroke.working, context.document.width, context.document.height, stroke.curveStart, stroke.pending, end, stroke.sourceOffsetX, stroke.sourceOffsetY, o.size, o.opacity, context.paintMask, o.hardness, o.roundness, o.angle, o.pressureSize, o.pressureOpacity, stroke.before, o.spacing, stroke.spacingCarry, end.pressure ?? 1);
   const pad = o.size / 2 + 2;
   stroke.dirty = unionRect(stroke.dirty, stroke.curveStart.x, stroke.curveStart.y, stroke.pending.x, stroke.pending.y, pad);
   stroke.dirty = unionRect(stroke.dirty, point.x, point.y, end.x, end.y, pad);
@@ -110,14 +112,14 @@ const clone: RasterToolDefinition<CloneState> = {
     const last = context.lastStrokePoint;
     const shiftFrom = pointer.shiftKey && last?.toolId === clone.id && last.layerId === key ? last.point : null;
     if (shiftFrom) {
-      cloneStrokeSegment(working, context.document.width, context.document.height, shiftFrom, pointer.point, offset.x, offset.y, o.size, o.opacity, context.paintMask, o.hardness, o.roundness, o.angle, true, false, before, o.spacing);
+      cloneStrokeSegment(working, context.document.width, context.document.height, shiftFrom, pointer.point, offset.x, offset.y, o.size, o.opacity, context.paintMask, o.hardness, o.roundness, o.angle, o.pressureSize, o.pressureOpacity, before, o.spacing, 0, pointer.point.pressure ?? 1);
       context.setLastStrokePoint({ toolId: clone.id, layerId: key, point: pointer.point });
       context.schedulePreview(working, "pixels", key, null);
       void context.commit(before, working, "Clone Line (Линия штампа)");
       return;
     }
 
-    cloneDab(working, context.document.width, context.document.height, pointer.point.x + offset.x, pointer.point.y + offset.y, pointer.point.x, pointer.point.y, o.size, o.opacity, o.hardness, context.paintMask, o.roundness, o.angle, true, false, before);
+    cloneDab(working, context.document.width, context.document.height, pointer.point.x + offset.x, pointer.point.y + offset.y, pointer.point.x, pointer.point.y, o.size, o.opacity, o.hardness, context.paintMask, o.roundness, o.angle, o.pressureSize, o.pressureOpacity, before, pointer.point.pressure ?? 1);
     context.schedulePreview(working, "pixels", key, null);
     context.setState({ stroke: { pointerId: pointer.pointerId, before, working, curveStart: pointer.point, pending: pointer.point, dirty: null, strokeBounds: null, spacingCarry: 0, sourceOffsetX: offset.x, sourceOffsetY: offset.y } });
   },
@@ -138,7 +140,7 @@ const clone: RasterToolDefinition<CloneState> = {
     // so the stretch from the last drawn point to where the pointer was
     // released is still unstamped — this is the segment that closes it.
     const o = resolvedOptions(context.options);
-    cloneQuadraticStrokeSegment(stroke.working, context.document.width, context.document.height, stroke.curveStart, stroke.pending, stroke.pending, stroke.sourceOffsetX, stroke.sourceOffsetY, o.size, o.opacity, context.paintMask, o.hardness, o.roundness, o.angle, true, false, stroke.before, o.spacing, stroke.spacingCarry);
+    cloneQuadraticStrokeSegment(stroke.working, context.document.width, context.document.height, stroke.curveStart, stroke.pending, stroke.pending, stroke.sourceOffsetX, stroke.sourceOffsetY, o.size, o.opacity, context.paintMask, o.hardness, o.roundness, o.angle, o.pressureSize, o.pressureOpacity, stroke.before, o.spacing, stroke.spacingCarry, stroke.pending.pressure ?? 1);
     const closing = unionRect(null, stroke.curveStart.x, stroke.curveStart.y, stroke.pending.x, stroke.pending.y, o.size / 2 + 2);
     stroke.strokeBounds = unionRect(stroke.strokeBounds, closing.x, closing.y, closing.x + closing.width, closing.y + closing.height, 0);
     context.schedulePreview(stroke.working, "pixels", context.paintTarget.layerId, closing);
