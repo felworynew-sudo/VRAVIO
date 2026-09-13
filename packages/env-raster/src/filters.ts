@@ -109,6 +109,32 @@ function gaussianBlur(source: Uint8ClampedArray, width: number, height: number, 
   return output;
 }
 
+/** Edge-preserving order-statistic blur used by Median and Dust & Scratches.
+ *
+ * Radius is deliberately capped lower than convolution blurs: a median needs
+ * to inspect every value in its neighbourhood and must stay responsive in the
+ * worker preview. Unlike Box Blur, isolated dust pixels disappear without
+ * smearing their colour over their neighbours. */
+function medianBlur(source: Uint8ClampedArray, width: number, height: number, radius: number): Uint8ClampedArray {
+  const r = Math.max(1, Math.min(8, Math.round(radius)));
+  const output = new Uint8ClampedArray(source.length);
+  const samples: number[] = [];
+  const clampX = (x: number) => Math.max(0, Math.min(width - 1, x));
+  const clampY = (y: number) => Math.max(0, Math.min(height - 1, y));
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const outputIndex = (y * width + x) * 4;
+    for (let channel = 0; channel < 4; channel += 1) {
+      samples.length = 0;
+      for (let dy = -r; dy <= r; dy += 1) for (let dx = -r; dx <= r; dx += 1) {
+        samples.push(source[(clampY(y + dy) * width + clampX(x + dx)) * 4 + channel]!);
+      }
+      samples.sort((left, right) => left - right);
+      output[outputIndex + channel] = samples[samples.length >> 1]!;
+    }
+  }
+  return output;
+}
+
 function sampleBilinear(source: Uint8ClampedArray, width: number, height: number, x: number, y: number): [number, number, number, number] {
   const cx = Math.max(0, Math.min(width - 1.001, x)), cy = Math.max(0, Math.min(height - 1.001, y));
   const x0 = Math.floor(cx), y0 = Math.floor(cy), x1 = Math.min(width - 1, x0 + 1), y1 = Math.min(height - 1, y0 + 1), fx = cx - x0, fy = cy - y0;
@@ -301,7 +327,8 @@ function eInkFilter(source: Uint8ClampedArray, width: number, levels: number, mi
 export function applyRasterFilter(source: Uint8ClampedArray, width: number, height: number, id: string, settings: Record<string, number> = {}): Uint8ClampedArray {
   const output = source.slice(), mix = Math.max(0,Math.min(1,value(settings,"amount",100)/100));
   if (id === "gaussian_blur") return gaussianBlur(source, width, height, value(settings, "radius", 2));
-  if (["box_blur","surface_blur","lens_blur","iris_blur","tilt_shift_blur","median","dust_and_scratches","motion_blur","radial_blur"].includes(id)) return blur(source,width,height,value(settings,"radius",2));
+  if (id === "median" || id === "dust_and_scratches") return medianBlur(source, width, height, value(settings, "radius", 2));
+  if (["box_blur","surface_blur","lens_blur","iris_blur","tilt_shift_blur","motion_blur","radial_blur"].includes(id)) return blur(source,width,height,value(settings,"radius",2));
   if(id==="pixelate"){const size=Math.max(2,Math.round(value(settings,"size",8)));for(let y=0;y<height;y+=size)for(let x=0;x<width;x+=size){const i=(y*width+x)*4;for(let yy=y;yy<Math.min(height,y+size);yy++)for(let xx=x;xx<Math.min(width,x+size);xx++){const o=(yy*width+xx)*4;output[o]=source[i]!;output[o+1]=source[i+1]!;output[o+2]=source[i+2]!;output[o+3]=source[i+3]!;}}return output;}
   if(id==="auto_tone"||id==="auto_contrast"||id==="auto_color"){for(let c=0;c<3;c++){let lo=255,hi=0;for(let i=c;i<source.length;i+=4)if(source[i+3-c]!==0){lo=Math.min(lo,source[i]!);hi=Math.max(hi,source[i]!);}if(hi>lo)for(let i=c;i<output.length;i+=4)output[i]=byte((source[i]!-lo)*255/(hi-lo));}return output;}
   if(id==="twirl") return twirlFilter(source,width,height,value(settings,"amount",100));

@@ -622,6 +622,17 @@ describe("filter specs", () => {
     expect(gaussian[3 * 4]!).toBeGreaterThan(gaussian[2 * 4]!);
   });
 
+  it("removes an isolated pixel with Median rather than spreading it as Box Blur", () => {
+    const impulse = new Uint8ClampedArray(9 * 4);
+    impulse[4 * 4] = 255;
+    impulse[4 * 4 + 3] = 255;
+    const median = applyRasterFilter(impulse, 9, 1, "median", { radius: 1 });
+    const box = applyRasterFilter(impulse, 9, 1, "box_blur", { radius: 1 });
+
+    expect(median[4 * 4]).toBe(0);
+    expect(box[4 * 4]!).toBeGreaterThan(0);
+  });
+
   it("declares a CPU implementation for every spec so no device is left without a path", () => {
     expect(filterSpecs.length).toBeGreaterThan(0);
     for (const spec of filterSpecs) expect(typeof spec.cpu).toBe("function");

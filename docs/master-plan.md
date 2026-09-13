@@ -5927,9 +5927,12 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
 - [x] **Gaussian Blur.** CPU path теперь separable Gaussian с реальными
       весами, а не Box Blur; подтверждено impulse-тестом и parallel band
       equivalence.
+- [x] **Median / Dust & Scratches.** Median теперь order-statistic filter,
+      который удаляет isolated speckle вместо распространения его цветом;
+      Dust & Scratches использует этот же честный механизм. Покрыто тестом.
 - [ ] **Честный каталог остальных фильтров.** Развести настоящие
-      Median/Motion/Radial/Lens/Iris/Tilt-Shift/Surface/
-      Dust & Scratches: сейчас нельзя рекламировать разные фильтры, если
+      Motion/Radial/Lens/Iris/Tilt-Shift/Surface: сейчас нельзя рекламировать
+      разные фильтры, если
       они вычисляются одним Box Blur. Одновременно обновить их
       `halo`/tile-safety metadata.
 - [x] **Direct-preview parity.** Общий `canDirectRasterPreviewBlit(layer,state)`
