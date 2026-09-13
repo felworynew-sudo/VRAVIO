@@ -208,6 +208,41 @@ function hasRenderableEffect(layer: RasterLayer): boolean {
 
 const clamp01 = (value: number) => Math.max(0, Math.min(1, value));
 
+/** Cached non-destructive layer-mask feather. The source mask remains the
+ * editable grayscale truth; only the compositor reads this softened view. */
+const featheredMasks = new WeakMap<Uint8ClampedArray, Map<number, Uint8ClampedArray>>();
+
+function featherMask(mask: Uint8ClampedArray, width: number, height: number, feather: number): Uint8ClampedArray {
+  const radius = Math.max(0, Math.min(64, Math.round(feather)));
+  if (!radius) return mask;
+  const byRadius = featheredMasks.get(mask) ?? new Map<number, Uint8ClampedArray>();
+  const cached = byRadius.get(radius);
+  if (cached) return cached;
+  const horizontal = new Float32Array(mask.length), output = new Uint8ClampedArray(mask.length);
+  const diameter = radius * 2 + 1;
+  const clampX = (x: number) => Math.max(0, Math.min(width - 1, x));
+  const clampY = (y: number) => Math.max(0, Math.min(height - 1, y));
+  for (let y = 0; y < height; y += 1) {
+    let sum = 0;
+    for (let offset = -radius; offset <= radius; offset += 1) sum += mask[y * width + clampX(offset)]!;
+    for (let x = 0; x < width; x += 1) {
+      horizontal[y * width + x] = sum / diameter;
+      sum += mask[y * width + clampX(x + radius + 1)]! - mask[y * width + clampX(x - radius)]!;
+    }
+  }
+  for (let x = 0; x < width; x += 1) {
+    let sum = 0;
+    for (let offset = -radius; offset <= radius; offset += 1) sum += horizontal[clampY(offset) * width + x]!;
+    for (let y = 0; y < height; y += 1) {
+      output[y * width + x] = Math.round(sum / diameter);
+      sum += horizontal[clampY(y + radius + 1) * width + x]! - horizontal[clampY(y - radius) * width + x]!;
+    }
+  }
+  byRadius.set(radius, output);
+  featheredMasks.set(mask, byRadius);
+  return output;
+}
+
 function glassPadding(state: RasterDocumentState): number {
   let padding = 0;
   for (const layer of flattenRasterLayers(state.layers)) {
@@ -344,11 +379,12 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
     }
     if (layer.kind === "adjustment" && layer.adjustment) {
       const clippingBase = layer.clipping ? clippingBaseByParent.get(parentKey) : undefined;
-      const before = layer.mask?.enabled || clippingBase ? output.slice() : null;
+      const maskPixels = layer.mask?.enabled ? featherMask(layer.mask.pixels, state.width, state.height, layer.mask.feather) : null;
+      const before = maskPixels || clippingBase ? output.slice() : null;
       applyAdjustment(output, layer.adjustment, effectiveOpacity);
       if (before) for (let row = 0; row < outHeight; row += 1) for (let column = 0; column < outWidth; column += 1) {
         const index = (row * outWidth + column) * 4, documentIndex = (area.y + row * step) * width + (area.x + column * step);
-        const sample = layer.mask?.enabled ? layer.mask.pixels[documentIndex]! : 255;
+        const sample = maskPixels ? maskPixels[documentIndex]! : 255;
         const amount = sample / 255 * (layer.mask?.density ?? 1) * (clippingBase ? clippingBase[row * outWidth + column]! / 255 : 1);
         output[index] = Math.round(before[index]! + (output[index]! - before[index]!) * amount);
         output[index + 1] = Math.round(before[index + 1]! + (output[index + 1]! - before[index + 1]!) * amount);
@@ -396,7 +432,7 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
     const code = blendCode(layer.blendMode);
     const nonSeparable = isNonSeparable(code);
     const mask = layer.mask?.enabled ? layer.mask : null;
-    const maskPixels = mask?.pixels, maskDensity = mask?.density ?? 1;
+    const maskPixels = mask ? featherMask(mask.pixels, state.width, state.height, mask.feather) : undefined, maskDensity = mask?.density ?? 1;
     const layerAlpha = effectiveOpacity * (layer.fillOpacity ?? 1);
     const clipping = layer.clipping === true;
     const glass = layer.effects?.glass?.enabled ? layer.effects.glass : null;

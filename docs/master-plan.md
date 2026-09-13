@@ -5941,8 +5941,10 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
       выбирает full-document repaint, а не пустой group buffer; тестом
       подтверждено отсутствие stale descendants. Точный descendant ink-bounds
       остаётся задачей RasterRenderPlan.
-- [ ] **Mask feather.** Реализовать feather как non-destructive mask
-      operation с halo.
+- [x] **Mask feather.** Compositor получает cached separable feathered view
+      mask buffer, не меняя исходные редактируемые grayscale pixels; density
+      применяется после feather. Покрыто visual-regression тестом. Для
+      TileStore потребуется перенести cache в halo-aware tile representation.
 - [x] **RasterEnvironment asset dimensions — correctness bridge.**
       `extractAsset()` разворачивает trimmed layer в валидный
       document-sized buffer перед encoding; это устраняет некорректный

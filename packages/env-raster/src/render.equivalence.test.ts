@@ -162,6 +162,25 @@ describe("composite output is stable", () => {
     }
   });
 
+  it("applies layer-mask feather non-destructively at composite time", () => {
+    const state = createRasterDocument(11, 1);
+    const top = createRasterLayer(11, 1, "Masked red");
+    for (let index = 0; index < top.pixels.length; index += 4) { top.pixels[index] = 255; top.pixels[index + 3] = 255; }
+    const mask = createRasterLayerMask(11, 1, false);
+    mask.pixels[5] = 255;
+    mask.feather = 2;
+    top.mask = mask;
+    appendLayer(state, top);
+
+    const softened = compositeRasterRegion(state, { x: 0, y: 0, width: 11, height: 1 });
+    expect(softened[5 * 4 + 3]!).toBeGreaterThan(0);
+    expect(softened[4 * 4 + 3]!).toBeGreaterThan(0);
+
+    mask.feather = 0;
+    const sharp = compositeRasterRegion(state, { x: 0, y: 0, width: 11, height: 1 });
+    expect(sharp[4 * 4 + 3]).toBe(0);
+  });
+
   it("subsampling picks the same pixels the full composite has", () => {
     const state = scene();
     const full = compositeRasterRegion(state, whole);
