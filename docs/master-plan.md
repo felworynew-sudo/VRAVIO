@@ -6023,8 +6023,10 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
    создаётся временный canvas на каждый invalidated subsampled tile.
    [x] `blurDab` в retouch больше не создаёт `[r,g,b,a]` и
    `Uint8ClampedArray(4)` для каждого touched pixel: использует scalar RGBA
-   accumulator с byte-identical rounding. [ ] Отдельно убрать оставшиеся
-   temporary arrays из healing membrane; один payload-copy в
+   accumulator с byte-identical rounding. [x] Multigrid coarsening в
+   healing membrane больше не создаёт два RGB-массива на каждую coarse-cell,
+   а суммирует scalar channels. [ ] Оставшийся аудит temporary allocations;
+   один payload-copy в
    `decodeRasterAsset()`; transactional fallback undo до асинхронного
    asset/history bookkeeping.
    transactional fallback undo до асинхронного asset/history bookkeeping.

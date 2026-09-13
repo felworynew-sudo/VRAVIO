@@ -108,8 +108,11 @@ export function solveHealMembrane(
     };
       for (let y = 0; y < coarseH; y++) {
       for (let x = 0; x < coarseW; x++) {
-        const dirichletSum: number[] = [0, 0, 0];
-        const allSum: number[] = [0, 0, 0];
+        // This runs for every cell of every multigrid level. Six scalars are
+        // both clearer to the JIT and avoid allocating two tiny JS arrays per
+        // coarse cell while a large healing stroke is still interactive.
+        let dirichletRed = 0, dirichletGreen = 0, dirichletBlue = 0;
+        let allRed = 0, allGreen = 0, allBlue = 0;
         let dirichletCount = 0;
         let allCount = 0;
         for (let childY = 0; childY < 2; childY++) {
@@ -119,20 +122,28 @@ export function solveHealMembrane(
             if (fx >= fine.width || fy >= fine.height) continue;
             const fi = fy * fine.width + fx;
             allCount++;
-            for (let ch = 0; ch < 3; ch++) allSum[ch]! += fine.value[fi * 3 + ch]!;
+            const offset = fi * 3;
+            allRed += fine.value[offset]!;
+            allGreen += fine.value[offset + 1]!;
+            allBlue += fine.value[offset + 2]!;
             if (fine.interior[fi] === 0) {
               dirichletCount++;
-              for (let ch = 0; ch < 3; ch++) dirichletSum[ch]! += fine.value[fi * 3 + ch]!;
+              dirichletRed += fine.value[offset]!;
+              dirichletGreen += fine.value[offset + 1]!;
+              dirichletBlue += fine.value[offset + 2]!;
             }
           }
         }
         const ci = y * coarseW + x;
         coarse.interior[ci] = dirichletCount > 0 ? 0 : 1;
-        for (let ch = 0; ch < 3; ch++) {
-          const s = dirichletCount > 0 ? dirichletSum[ch]! : allSum[ch]!;
-          const c = dirichletCount > 0 ? dirichletCount : allCount;
-          coarse.value[ci * 3 + ch] = c > 0 ? (s / c) | 0 : 0;
-        }
+        const count = dirichletCount > 0 ? dirichletCount : allCount;
+        const red = dirichletCount > 0 ? dirichletRed : allRed;
+        const green = dirichletCount > 0 ? dirichletGreen : allGreen;
+        const blue = dirichletCount > 0 ? dirichletBlue : allBlue;
+        const offset = ci * 3;
+        coarse.value[offset] = count > 0 ? (red / count) | 0 : 0;
+        coarse.value[offset + 1] = count > 0 ? (green / count) | 0 : 0;
+        coarse.value[offset + 2] = count > 0 ? (blue / count) | 0 : 0;
       }
     }
     levels.push(coarse);
