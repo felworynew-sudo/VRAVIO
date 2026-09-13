@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createAdjustmentLayer, createRasterDocument, createRasterLayer, createRasterLayerMask } from "./document";
+import { createAdjustmentLayer, createRasterDocument, createRasterGroup, createRasterLayer, createRasterLayerMask } from "./document";
 import { setLayerPixels } from "./layer-bounds";
 import { appendLayer } from "./layer-tree";
 import { compositeRasterRegion } from "./render";
@@ -179,6 +179,28 @@ describe("composite output is stable", () => {
     mask.feather = 0;
     const sharp = compositeRasterRegion(state, { x: 0, y: 0, width: 11, height: 1 });
     expect(sharp[4 * 4 + 3]).toBe(0);
+  });
+
+  it("composites an isolated group before applying the group's opacity", () => {
+    const build = (mode: "passThrough" | "isolated") => {
+      const state = createRasterDocument(1, 1);
+      state.layers = [];
+      const group = createRasterGroup(1, 1, "Group");
+      group.groupMode = mode;
+      group.opacity = 0.5;
+      appendLayer(state, group);
+      const red = createRasterLayer(1, 1, "Red");
+      red.parentId = group.id; red.pixels.set([255, 0, 0, 255]); red.opacity = 0.5;
+      const blue = createRasterLayer(1, 1, "Blue");
+      blue.parentId = group.id; blue.pixels.set([0, 0, 255, 255]); blue.opacity = 0.5;
+      state.layers.push(red, blue);
+      return compositeRasterRegion(state, { x: 0, y: 0, width: 1, height: 1 });
+    };
+    const passThrough = build("passThrough"), isolated = build("isolated");
+    expect([...isolated]).not.toEqual([...passThrough]);
+    // Isolated: red/blue blend first (alpha .75), then the whole result gets
+    // group opacity .5, yielding .375 rather than pass-through's .4375.
+    expect(isolated[3]).toBeLessThan(passThrough[3]!);
   });
 
   it("subsampling picks the same pixels the full composite has", () => {

@@ -5912,11 +5912,14 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
       потребляется и превращается в `AbortError`, после чего запускается
       следующая задача. Это исключает замену `onmessage` и доставку старого
       результата новой задаче; есть тест с одним worker slot.
-- [ ] **Настоящий isolated group compositor.** `groupMode: isolated` не
-      может быть только флагом модели: группа должна получить собственный
-      projection tile/ROI, скомпоновать детей внутри и лишь затем один раз
-      смешаться с родителем. `passThrough` можно раскрывать в parent graph.
-      Это исправляет overlap при group opacity и adjustment внутри группы.
+- [x] **Isolated group base compositor.** `groupMode: isolated` получает
+      отдельную transparent ROI-surface для subtree, затем единоразово
+      смешивается с parent с opacity/mask группы; passThrough остаётся
+      раскрытым в parent graph. Перекрытие при group opacity исправлено и
+      покрыто тестом.
+- [ ] **Isolated group advanced compositing.** Добавить group blend modes,
+      effects/clipping и compiled projection tiles к RasterRenderPlan; это
+      нужно для полной Photoshop-паритетности и высоких разрешений.
 - [x] **Deterministic Dissolve.** Режим теперь использует стабильную
       координатную hash-coverage: полупрозрачный пиксель становится полностью
       видимым или отсутствует, а tile, preview и export дают одинаковый

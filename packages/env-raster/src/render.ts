@@ -2,7 +2,7 @@ import type { RasterDocumentState, RasterLayer, RasterRect, RgbaColor } from "./
 import { renderLayerEffects } from "./effects";
 import { applyAdjustment } from "./adjustments";
 import { applyRasterFilter } from "./filters";
-import { effectiveLayerOpacity, flattenRasterLayers, isLayerEffectivelyVisible } from "./layer-tree";
+import { effectiveLayerOpacity, flattenRasterLayers, isLayerEffectivelyVisible, rasterLayerDescendantIds } from "./layer-tree";
 import { layerDocumentPixels } from "./layer-bounds";
 
 /**
@@ -368,11 +368,41 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
   // per layer, which most documents never read back.
   const clippedParents = new Set<string>();
   for (const layer of layers) if (layer.clipping) clippedParents.add(layer.parentId ?? "root");
+  const consumedByIsolatedGroup = new Set<string>();
 
   for (let layerIndex = 0; layerIndex < layers.length; layerIndex += 1) {
     const layer = layers[layerIndex]!;
+    if (consumedByIsolatedGroup.has(layer.id)) continue;
     const parentKey = layer.parentId ?? "root";
     const effectiveOpacity = effectiveLayerOpacity(layer, state.layers);
+    if (layer.kind === "group" && layer.groupMode === "isolated" && isLayerEffectivelyVisible(layer, state.layers) && effectiveOpacity > 0) {
+      const descendantIds = rasterLayerDescendantIds(state.layers, layer.id);
+      for (const id of descendantIds) consumedByIsolatedGroup.add(id);
+      // Render the group's descendants against transparent black in their own
+      // stack. The immediate children become roots; nested groups preserve
+      // their relationships and therefore recurse naturally.
+      const inside = new Set(descendantIds);
+      const groupState: RasterDocumentState = {
+        ...state,
+        layers: state.layers.filter((candidate) => inside.has(candidate.id)).map((candidate) =>
+          candidate.parentId === layer.id ? { ...candidate, parentId: null } : candidate),
+      };
+      const groupPixels = compositeRasterRegion(groupState, area, options);
+      const groupMask = layer.mask?.enabled ? featherMask(layer.mask.pixels, state.width, state.height, layer.mask.feather) : undefined;
+      for (let row = 0; row < outHeight; row += 1) for (let column = 0; column < outWidth; column += 1) {
+        const index = (row * outWidth + column) * 4;
+        const sourceAlpha = groupPixels[index + 3]! / 255 * effectiveOpacity
+          * (groupMask ? groupMask[(area.y + row * step) * state.width + area.x + column * step]! / 255 * (layer.mask?.density ?? 1) : 1);
+        if (sourceAlpha <= 0) continue;
+        const destinationAlpha = output[index + 3]! / 255;
+        const carry = destinationAlpha * (1 - sourceAlpha), alpha = sourceAlpha + carry;
+        output[index] = Math.round((groupPixels[index]! * sourceAlpha + output[index]! * carry) / alpha);
+        output[index + 1] = Math.round((groupPixels[index + 1]! * sourceAlpha + output[index + 1]! * carry) / alpha);
+        output[index + 2] = Math.round((groupPixels[index + 2]! * sourceAlpha + output[index + 2]! * carry) / alpha);
+        output[index + 3] = Math.round(alpha * 255);
+      }
+      continue;
+    }
     if (layer.kind === "group" || !isLayerEffectivelyVisible(layer, state.layers) || effectiveOpacity <= 0) {
       if (layer.kind !== "group" && !layer.clipping) clippingBaseByParent.delete(parentKey);
       continue;
