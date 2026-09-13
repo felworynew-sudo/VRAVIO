@@ -6059,9 +6059,10 @@ TileStore + stroke/mask/selection, затем ROI effects + RasterRenderPlan.
 - [x] **25.4.1 (базовый сценарий).** `performance.bench.test.ts` измеряет p50/p95 sustained viewport composite на реалистичном 21-слойном документе; p50 <50 мс, p95 <100 мс. Это не заменяет быстрый `fastestOf`-пол: он ловит деградацию throughput, percentile-тест — видимые периодические фризы.
 - [x] **25.4.1 (navigation + move).** Помимо viewport composite, suite
       измеряет p50/p95 при pan через границы cached tiles и при повторных
-      Move-tool pixel previews; оба сценария держат p50 <50 мс, p95 <100 мс.
-- [ ] **25.4.1 (матрица P1).** Добавить pointer→painted frame для реальных
-      кистей, zoom/transform, 4K/8K, 50–200 слоёв, масок/effects, cold/warm
+      Move-tool pixel previews, а также `pointer sample → brush dirty-band
+      preview`; сценарии держат p50 <50 мс, p95 <100 мс.
+- [ ] **25.4.1 (матрица P1).** Добавить реальный UI-level zoom/transform,
+      4K/8K, 50–200 слоёв, масок/effects, cold/warm
       tile cache, p99/long tasks/peak RAM и настоящий OPFS.
 
 ### 25.5. Приоритетный список — как передано аудитом

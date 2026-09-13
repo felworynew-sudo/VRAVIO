@@ -8,6 +8,7 @@ import { accumulateUniquePixelBytes, layerDocumentPixels, setLayerPixels } from 
 import { duplicateLayer } from "./layer-ops";
 import { TileStore } from "./tile-store";
 import { RasterTileCache } from "./tiles";
+import { accumulateStrokeSegment, compositeCoverage } from "./paint";
 import type { RasterDocumentState, RasterLayer } from "./types";
 
 /**
@@ -158,6 +159,28 @@ describe("performance floor (stage 0 of the catalogue migration)", () => {
     const latency = latencyPercentiles(() => {
       const offset = ++sample;
       translateLayerPixels(documentPixels, state.width, state.height, offset, -offset, null);
+    });
+
+    expect(latency.p50).toBeLessThan(50);
+    expect(latency.p95).toBeLessThan(100);
+  });
+
+  it("records p50/p95 from a brush pointer sample to its painted preview", () => {
+    const state = realisticDocument(1);
+    const before = state.layers[0]!.pixels;
+    let sample = 0;
+    const latency = latencyPercentiles(() => {
+      // A fresh per-gesture coverage/output pair mirrors the buffers a brush
+      // owns while dragging. The measured work is one coalesced pointer
+      // segment plus its dirty-band preview, not a full-document composite.
+      const coverage = new Uint8ClampedArray(state.width * state.height);
+      const working = before.slice();
+      const x = 300 + (++sample % 8) * 120;
+      accumulateStrokeSegment(coverage, state.width, state.height,
+        { x, y: 420, pressure: 1 }, { x: x + 30, y: 430, pressure: 1 }, { x: x + 60, y: 440, pressure: 1 },
+        72, 1, 0.8, undefined, 0.82, 0.12, 1, 0, true, false, 0);
+      compositeCoverage(working, before, coverage, state.width, state.height,
+        { x: x - 40, y: 380, width: 140, height: 100 }, { r: 50, g: 130, b: 230, a: 255 });
     });
 
     expect(latency.p50).toBeLessThan(50);
