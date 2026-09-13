@@ -154,7 +154,7 @@ export function accumulateDab(
   coverage: Uint8ClampedArray, width: number, height: number, point: Point, size: number,
   flow: number, ceiling: number, hardness = 0.82, selectionMask?: Uint8ClampedArray,
   roundness = 1, angleDegrees = 0, pressureSize = true, pressureOpacity = false,
-  dynamics?: BrushDynamics, stampState?: BrushStampState,
+  dynamics?: BrushDynamics, stampState?: BrushStampState, strokeDirectionRadians?: number,
 ): void {
   const stamp = stampState ? stampState.index++ : Math.round(point.x * 31 + point.y * 131);
   const seed = stampState?.seed ?? 0x51f15e;
@@ -177,10 +177,11 @@ export function accumulateDab(
     const currentAngle = angleDegrees + (brushRandom(seed, stamp, 3 + copy * 5) * 2 - 1) * (dynamics?.angleJitter ?? 0);
     const scatterRadius = size * (scatter / 100) * Math.sqrt(brushRandom(seed, stamp, 4 + copy * 5));
     const scatterAngle = brushRandom(seed, stamp, 5 + copy * 5) * Math.PI * 2;
-    const offsetX = scatterRadius * Math.cos(scatterAngle);
-    // Single-axis scatter keeps a brush's main travel axis recognisable;
-    // enabling Both Axes turns it into the full radial cloud.
-    const offsetY = dynamics?.bothAxes ? scatterRadius * Math.sin(scatterAngle) : 0;
+    const axisAngle = (strokeDirectionRadians ?? 0) + Math.PI / 2;
+    // Photoshop/GIMP's one-axis scatter is perpendicular to the stroke, not
+    // screen X. Both Axes turns it into the full radial cloud.
+    const offsetX = dynamics?.bothAxes ? scatterRadius * Math.cos(scatterAngle) : scatterRadius * (brushRandom(seed, stamp, 8 + copy * 5) * 2 - 1) * Math.cos(axisAngle);
+    const offsetY = dynamics?.bothAxes ? scatterRadius * Math.sin(scatterAngle) : scatterRadius * (brushRandom(seed, stamp, 8 + copy * 5) * 2 - 1) * Math.sin(axisAngle);
     const opacityFactor = Math.max(minimumOpacity, 1 - opacityJitter * brushRandom(seed, stamp, 6 + copy * 5));
     const flowFactor = Math.max(minimumFlow, 1 - flowJitter * brushRandom(seed, stamp, 7 + copy * 5));
     accumulateRoundDab(coverage, width, height, { ...point, x: point.x + offsetX, y: point.y + offsetY }, size * sizeFactor, flow * flowFactor, ceiling * opacityFactor, hardness, selectionMask, currentRoundness, currentAngle, pressureSize, pressureOpacity);
@@ -274,8 +275,9 @@ export function accumulateStrokeSegment(
       pressure: inverse * inverse * (from.pressure ?? 1) + 2 * inverse * t * (control.pressure ?? 1) + t * t * (to.pressure ?? 1),
     };
   };
+  const strokeDirection = Math.atan2(to.y - from.y, to.x - from.x);
   return walkSpacedPath(at, approximateLength, step, carry, (current) => {
-    accumulateDab(coverage, width, height, current, size, flow, ceiling, hardness, selectionMask, roundness, angleDegrees, pressureSize, pressureOpacity, dynamics, stampState);
+    accumulateDab(coverage, width, height, current, size, flow, ceiling, hardness, selectionMask, roundness, angleDegrees, pressureSize, pressureOpacity, dynamics, stampState, strokeDirection);
   });
 }
 
