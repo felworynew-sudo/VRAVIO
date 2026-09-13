@@ -6021,8 +6021,12 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
    подтверждает одинаковый результат одного длинного и дробного drag.
    [x] Bounded LRU из четырёх `OffscreenCanvas` для mip blit: больше не
    создаётся временный canvas на каждый invalidated subsampled tile.
-   [ ] Убрать per-pixel temporary arrays
-   из retouch и healing membrane; один payload-copy в `decodeRasterAsset()`;
+   [x] `blurDab` в retouch больше не создаёт `[r,g,b,a]` и
+   `Uint8ClampedArray(4)` для каждого touched pixel: использует scalar RGBA
+   accumulator с byte-identical rounding. [ ] Отдельно убрать оставшиеся
+   temporary arrays из healing membrane; один payload-copy в
+   `decodeRasterAsset()`; transactional fallback undo до асинхронного
+   asset/history bookkeeping.
    transactional fallback undo до асинхронного asset/history bookkeeping.
 8. **Vector параллельно.** R-tree не должен окружаться O(N) подготовкой;
    retained GPU Vector Renderer приоритизирован выше новых vector tools,

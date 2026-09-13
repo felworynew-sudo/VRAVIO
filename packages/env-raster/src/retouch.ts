@@ -6,6 +6,18 @@ function mixPixel(pixels: Uint8ClampedArray, target: number, source: Uint8Clampe
   for (let channel = 0; channel < 4; channel += 1) pixels[target + channel] = Math.round(pixels[target + channel]! * (1 - factor) + source[sourceIndex + channel]! * factor);
 }
 
+/** Same blend as `mixPixel`, used when a filter has four scalar samples already.
+ * Avoiding a short-lived `[r,g,b,a]` and a `Uint8ClampedArray(4)` per touched
+ * pixel matters for a large Blur brush stroke: allocation/GC, not the four
+ * arithmetic operations, used to dominate its hot inner loop. */
+function mixPixelRgba(pixels: Uint8ClampedArray, target: number, r: number, g: number, b: number, a: number, amount: number): void {
+  const factor = Math.max(0, Math.min(1, amount));
+  pixels[target] = Math.round(pixels[target]! * (1 - factor) + r * factor);
+  pixels[target + 1] = Math.round(pixels[target + 1]! * (1 - factor) + g * factor);
+  pixels[target + 2] = Math.round(pixels[target + 2]! * (1 - factor) + b * factor);
+  pixels[target + 3] = Math.round(pixels[target + 3]! * (1 - factor) + a * factor);
+}
+
 /**
  * Distance-based coverage of a brush shape, softened by `hardness` the same
  * way `accumulateDab` in paint.ts does: full coverage out to `hardness` of the
@@ -26,10 +38,13 @@ export function blurDab(pixels: Uint8ClampedArray, source: Uint8ClampedArray, wi
   for (let y = top; y <= bottom; y += 1) for (let x = left; x <= right; x += 1) {
     const coverage = insideBrush(x, y, point, radius, roundness, angle, hardness); if (!coverage) continue;
     const selection = selectionMask ? selectionMask[y * width + x]! / 255 : 1; if (!selection) continue;
-    const sums = [0, 0, 0, 0]; let count = 0;
-    for (let sy = Math.max(0, y - sampleRadius); sy <= Math.min(height - 1, y + sampleRadius); sy += 1) for (let sx = Math.max(0, x - sampleRadius); sx <= Math.min(width - 1, x + sampleRadius); sx += 1) { const index = (sy * width + sx) * 4; for (let channel = 0; channel < 4; channel += 1) sums[channel] = sums[channel]! + source[index + channel]!; count += 1; }
-    const averaged = new Uint8ClampedArray(4); for (let channel = 0; channel < 4; channel += 1) averaged[channel] = Math.round(sums[channel]! / count);
-    mixPixel(pixels, (y * width + x) * 4, averaged, 0, strength * coverage * selection);
+    let red = 0, green = 0, blue = 0, alpha = 0, count = 0;
+    for (let sy = Math.max(0, y - sampleRadius); sy <= Math.min(height - 1, y + sampleRadius); sy += 1) for (let sx = Math.max(0, x - sampleRadius); sx <= Math.min(width - 1, x + sampleRadius); sx += 1) {
+      const index = (sy * width + sx) * 4;
+      red += source[index]!; green += source[index + 1]!; blue += source[index + 2]!; alpha += source[index + 3]!;
+      count += 1;
+    }
+    mixPixelRgba(pixels, (y * width + x) * 4, Math.round(red / count), Math.round(green / count), Math.round(blue / count), Math.round(alpha / count), strength * coverage * selection);
   }
 }
 
