@@ -1,4 +1,5 @@
 import { solveHealMembrane } from "./heal_membrane";
+import { walkSpacedLine } from "./paint";
 
 export interface SpotHealSourceMap {
   valid: boolean;
@@ -367,28 +368,29 @@ export function spotHealStrokeSegment(
   angleDegrees = 0,
   /** Gap between dabs as a fraction of the tip, the same units the brush and
    * clone stroke's own spacing use. */
-  spacing = 0.18
-): void {
-  const distance = Math.hypot(toX - fromX, toY - fromY);
-  const steps = Math.max(1, Math.ceil(distance / Math.max(1, size * Math.max(0.01, spacing))));
-  for (let step = 0; step <= steps; step++) {
-    const t = step / steps;
-    const x = fromX + (toX - fromX) * t;
-    const y = fromY + (toY - fromY) * t;
+  spacing = 0.18,
+  /** Omit only for a standalone segment: it paints its first endpoint too. */
+  carry?: number,
+): number {
+  const from = { x: fromX, y: fromY };
+  if (carry === undefined) {
     spotHealDab(
       mask,
       maskOriginX,
       maskOriginY,
       maskWidth,
       maskHeight,
-      x,
-      y,
+      from.x,
+      from.y,
       size,
       hardness,
       roundness,
       angleDegrees
     );
   }
+  return walkSpacedLine(from, { x: toX, y: toY }, size, spacing, carry ?? 0, (point) => {
+    spotHealDab(mask, maskOriginX, maskOriginY, maskWidth, maskHeight, point.x, point.y, size, hardness, roundness, angleDegrees);
+  });
 }
 
 export function spotHealApply(

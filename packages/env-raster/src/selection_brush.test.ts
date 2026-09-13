@@ -39,6 +39,23 @@ describe("selection brush stamping", () => {
     for (let x = 5; x <= 35; x += 5) expect(mask[20 * W + x]).toBeGreaterThan(0);
   });
 
+  it("keeps dab placement identical when one drag arrives as many pointer samples", () => {
+    const continuous = new Uint8ClampedArray(W * H);
+    selectionBrushStrokeSegment(continuous, W, H, 5, 20, 35, 20, 10, 100, 100, 0, "add", 0.3);
+
+    const sampled = new Uint8ClampedArray(W * H);
+    // First call is standalone and lays the initial dab. Every subsequent
+    // pointer sample threads the returned carry into the next segment.
+    selectionBrushStrokeSegment(sampled, W, H, 5, 20, 5, 20, 10, 100, 100, 0, "add", 0.3);
+    let carry = 0;
+    carry = selectionBrushStrokeSegment(sampled, W, H, 5, 20, 11, 20, 10, 100, 100, 0, "add", 0.3, carry);
+    carry = selectionBrushStrokeSegment(sampled, W, H, 11, 20, 19, 20, 10, 100, 100, 0, "add", 0.3, carry);
+    carry = selectionBrushStrokeSegment(sampled, W, H, 19, 20, 26, 20, 10, 100, 100, 0, "add", 0.3, carry);
+    selectionBrushStrokeSegment(sampled, W, H, 26, 20, 35, 20, 10, 100, 100, 0, "add", 0.3, carry);
+
+    expect([...sampled]).toEqual([...continuous]);
+  });
+
   it("hardness < 100 softens the edge instead of a binary cutoff", () => {
     const hard = new Uint8ClampedArray(W * H);
     selectionBrushDab(hard, W, H, 20, 20, 20, 100, 100, 0, "add");

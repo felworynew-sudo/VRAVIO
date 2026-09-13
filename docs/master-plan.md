@@ -6015,10 +6015,12 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
    переходят на transfer/buffer pool/SAB и stitch результатов по завершению,
    без `Promise.all` всех крупных bands; Box Blur не держит full-size
    `Float32Array` без лимита.
-7. **Небольшие безопасные оптимизации после P0.** Общий
-   `StrokeSpacingAccumulator` для Brush/Clone/Spot Heal/Selection Brush;
-   OffscreenCanvas pool для mip blit; убрать per-pixel temporary arrays из
-   retouch и healing membrane; один payload-copy в `decodeRasterAsset()`;
+7. **Небольшие безопасные оптимизации после P0.** [x] Общий spacing-walker
+   (`walkSpacedLine`) для Brush-family: Clone, Spot Heal и Selection Brush
+   теперь переносят остаток расстояния между pointer samples; тест
+   подтверждает одинаковый результат одного длинного и дробного drag.
+   [ ] OffscreenCanvas pool для mip blit; убрать per-pixel temporary arrays
+   из retouch и healing membrane; один payload-copy в `decodeRasterAsset()`;
    transactional fallback undo до асинхронного asset/history bookkeeping.
 8. **Vector параллельно.** R-tree не должен окружаться O(N) подготовкой;
    retained GPU Vector Renderer приоритизирован выше новых vector tools,

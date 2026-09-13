@@ -114,6 +114,57 @@ export function accumulateDab(
 }
 
 /**
+ * Walk a straight pointer segment at the brush's requested spacing.
+ *
+ * `carry` is the distance already travelled since the previous dab. Keeping
+ * it outside the pointer event is essential: browsers may report the same
+ * hand movement as two samples or two hundred coalesced samples, but neither
+ * case should change the number or placement of dabs. Brush, Clone, Spot
+ * Heal and Selection Brush use this primitive rather than each quietly
+ * implementing a different `ceil(distance / spacing)` loop.
+ */
+function walkSpacedPath(
+  at: (t: number) => Point,
+  approximateLength: number,
+  step: number,
+  carry: number,
+  stamp: (point: Point) => void,
+): number {
+  if (!(approximateLength > 0)) return carry;
+  // Each small section is never longer than one spacing interval. That
+  // permits one subtraction below and retains the exact remainder.
+  const walk = Math.max(1, Math.ceil(approximateLength / Math.min(step, 2)));
+  let previous = at(0);
+  let travelled = carry;
+  for (let index = 1; index <= walk; index += 1) {
+    const current = at(index / walk);
+    travelled += Math.hypot(current.x - previous.x, current.y - previous.y);
+    previous = current;
+    if (travelled < step) continue;
+    travelled -= step;
+    stamp(current);
+  }
+  return travelled;
+}
+
+export function walkSpacedLine(
+  from: Point,
+  to: Point,
+  size: number,
+  spacing: number,
+  carry: number,
+  stamp: (point: Point) => void,
+): number {
+  const distance = Math.hypot(to.x - from.x, to.y - from.y);
+  const step = Math.max(0.5, size * Math.max(0.01, spacing));
+  return walkSpacedPath((t) => ({
+    x: from.x + (to.x - from.x) * t,
+    y: from.y + (to.y - from.y) * t,
+    pressure: (from.pressure ?? 1) + ((to.pressure ?? 1) - (from.pressure ?? 1)) * t,
+  }), distance, step, carry, stamp);
+}
+
+/**
  * The spaced walk along one quadratic slice of the pointer's path, accumulating coverage.
  *
  * `carry` in, carry out. That is the whole point, and it is the fix for the owner's report that a
@@ -140,8 +191,6 @@ export function accumulateStrokeSegment(
 ): number {
   const approximateLength = Math.hypot(control.x - from.x, control.y - from.y) + Math.hypot(to.x - control.x, to.y - control.y);
   const step = Math.max(0.5, size * Math.max(0.01, spacing));
-  if (!(approximateLength > 0)) return carry;
-  const walk = Math.max(1, Math.ceil(approximateLength / Math.min(step, 2)));
   const at = (t: number): Point => {
     const inverse = 1 - t;
     return {
@@ -150,17 +199,9 @@ export function accumulateStrokeSegment(
       pressure: inverse * inverse * (from.pressure ?? 1) + 2 * inverse * t * (control.pressure ?? 1) + t * t * (to.pressure ?? 1),
     };
   };
-  let previous = at(0);
-  let travelled = carry;
-  for (let index = 1; index <= walk; index += 1) {
-    const current = at(index / walk);
-    travelled += Math.hypot(current.x - previous.x, current.y - previous.y);
-    previous = current;
-    if (travelled < step) continue;
-    travelled -= step;
+  return walkSpacedPath(at, approximateLength, step, carry, (current) => {
     accumulateDab(coverage, width, height, current, size, flow, ceiling, hardness, selectionMask, roundness, angleDegrees, pressureSize, pressureOpacity);
-  }
-  return travelled;
+  });
 }
 
 /**

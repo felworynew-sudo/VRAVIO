@@ -32,6 +32,8 @@ interface Stroke {
    * open stroke (see onGestureEnd's own comment). */
   readonly start: { x: number; y: number };
   pending: { x: number; y: number };
+  /** Distance from the latest stamp, preserved across browser pointer samples. */
+  spacingCarry: number;
   /**
    * Coalesces the live tint into one repaint per animation frame, exactly
    * the way `RasterWorkspace.tsx`'s own `schedulePreview` throttles brush
@@ -105,7 +107,7 @@ const selectionBrush: RasterToolDefinition<SelectionBrushState> = {
     const roundness = Number(options.roundness ?? 100);
     const mode = pointer.altKey ? "subtract" : "add";
 
-    const stroke: Stroke = { pointerId: pointer.pointerId, before, working, start: pointer.point, pending: pointer.point, frameDirty: null };
+    const stroke: Stroke = { pointerId: pointer.pointerId, before, working, start: pointer.point, pending: pointer.point, spacingCarry: 0, frameDirty: null };
     selectionBrushStrokeSegment(working, width, height, pointer.point.x, pointer.point.y, pointer.point.x, pointer.point.y, size, hardness, roundness, 0, mode);
     context.setState({ stroke });
     scheduleFramePaint(context, stroke, pointer.point.x, pointer.point.y, size / 2 + 2);
@@ -122,7 +124,7 @@ const selectionBrush: RasterToolDefinition<SelectionBrushState> = {
     const spacing = Number(options.spacing ?? 12) / 100;
     const mode = pointer.altKey ? "subtract" : "add";
 
-    selectionBrushStrokeSegment(stroke.working, width, height, stroke.pending.x, stroke.pending.y, pointer.point.x, pointer.point.y, size, hardness, roundness, 0, mode, spacing);
+    stroke.spacingCarry = selectionBrushStrokeSegment(stroke.working, width, height, stroke.pending.x, stroke.pending.y, pointer.point.x, pointer.point.y, size, hardness, roundness, 0, mode, spacing, stroke.spacingCarry);
     const radius = size / 2 + 2;
     // Both ends of this segment, not just where the pointer landed — a fast
     // sweep can jump the tip's own radius or more between samples, and the

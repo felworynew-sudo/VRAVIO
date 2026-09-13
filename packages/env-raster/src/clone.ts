@@ -1,5 +1,5 @@
 import type { Point } from "./types";
-import { FALLOFF_STEPS, falloffTable } from "./paint";
+import { FALLOFF_STEPS, falloffTable, walkSpacedLine } from "./paint";
 
 function compositeClonePixel(
   destPixels: Uint8ClampedArray,
@@ -106,28 +106,14 @@ export function cloneStrokeSegment(
   carry = 0,
   pressure = to.pressure ?? 1,
 ): number {
-  const distance = Math.hypot(to.x - from.x, to.y - from.y);
-  const step = Math.max(0.5, size * Math.max(0.01, spacing));
-  if (!(distance > 0)) return carry;
   // Carried across pointer samples, exactly as the brush does — see
   // `accumulateStrokeSegment`, which owns the explanation. This used to run
   // `for (step = 0; step <= steps)` with `steps` forced to at least one, so every pointer sample
   // stamped at its own start *and* end however close together they were: the stamp did far more
   // work than its spacing asked for, and re-stamped the same spot on every sample.
-  const walk = Math.max(1, Math.ceil(distance / Math.min(step, 2)));
-  let travelled = carry;
-  let previousX = from.x, previousY = from.y;
-  for (let index = 1; index <= walk; index += 1) {
-    const t = index / walk;
-    const currentX = from.x + (to.x - from.x) * t;
-    const currentY = from.y + (to.y - from.y) * t;
-    travelled += Math.hypot(currentX - previousX, currentY - previousY);
-    previousX = currentX; previousY = currentY;
-    if (travelled < step) continue;
-    travelled -= step;
-    cloneDab(pixels, width, height, currentX + sourceOffsetX, currentY + sourceOffsetY, currentX, currentY, size, opacity, hardness, selectionMask, roundness, angleDegrees, pressureSize, pressureOpacity, sourcePixels, pressure);
-  }
-  return travelled;
+  return walkSpacedLine(from, to, size, spacing, carry, (current) => {
+    cloneDab(pixels, width, height, current.x + sourceOffsetX, current.y + sourceOffsetY, current.x, current.y, size, opacity, hardness, selectionMask, roundness, angleDegrees, pressureSize, pressureOpacity, sourcePixels, pressure);
+  });
 }
 
 /**

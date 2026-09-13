@@ -24,6 +24,8 @@ interface Stroke {
   height: number;
   /** Where the last dab landed, so the next one is joined to it rather than dropped beside it. */
   pending: Point;
+  /** Distance from the latest stamp, preserved across browser pointer samples. */
+  spacingCarry: number;
 }
 
 interface SpotHealState {
@@ -108,7 +110,7 @@ const spotHeal: RasterToolDefinition<SpotHealState> = {
       const lineWidth = lineRight - lineOriginX, lineHeight = lineBottom - lineOriginY;
       const lineMask = new Uint8ClampedArray(lineWidth * lineHeight);
       spotHealStrokeSegment(lineMask, lineOriginX, lineOriginY, lineWidth, lineHeight, shiftFrom.x, shiftFrom.y, pointer.point.x, pointer.point.y, size, hardness, roundness, angle, spacing);
-      const working = healedResult(context, { pointerId: pointer.pointerId, before, mask: lineMask, originX: lineOriginX, originY: lineOriginY, width: lineWidth, height: lineHeight, pending: pointer.point });
+      const working = healedResult(context, { pointerId: pointer.pointerId, before, mask: lineMask, originX: lineOriginX, originY: lineOriginY, width: lineWidth, height: lineHeight, pending: pointer.point, spacingCarry: 0 });
       context.setLastStrokePoint({ toolId: spotHeal.id, layerId: key, point: pointer.point });
       context.schedulePreview(working, "pixels", key, null);
       void context.commit(before, working, "Spot Healing Line (Линия восстановления)");
@@ -122,7 +124,7 @@ const spotHeal: RasterToolDefinition<SpotHealState> = {
     const width = originX2 - originX, height = originY2 - originY;
     const mask = new Uint8ClampedArray(width * height);
     spotHealDab(mask, originX, originY, width, height, pointer.point.x, pointer.point.y, size, hardness, roundness, angle);
-    context.setState({ stroke: { pointerId: pointer.pointerId, before, mask, originX, originY, width, height, pending: pointer.point } });
+    context.setState({ stroke: { pointerId: pointer.pointerId, before, mask, originX, originY, width, height, pending: pointer.point, spacingCarry: 0 } });
     context.previewSpotHealMask(mask, originX, originY, width, height);
   },
 
@@ -152,10 +154,10 @@ const spotHeal: RasterToolDefinition<SpotHealState> = {
     // leaves the marked region in dots the moment the hand moves faster than the tip is wide —
     // seen live as three separate healed circles along one drag — and the repair then follows
     // the dots rather than the line the user drew.
-    spotHealStrokeSegment(
+    stroke.spacingCarry = spotHealStrokeSegment(
       stroke.mask, stroke.originX, stroke.originY, stroke.width, stroke.height,
       stroke.pending.x, stroke.pending.y, pointer.point.x, pointer.point.y,
-      size, Number(options.hardness ?? 82) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), Number(options.spacing ?? 18) / 100,
+      size, Number(options.hardness ?? 82) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), Number(options.spacing ?? 18) / 100, stroke.spacingCarry,
     );
     stroke.pending = pointer.point;
     context.previewSpotHealMask(stroke.mask, stroke.originX, stroke.originY, stroke.width, stroke.height);
@@ -167,10 +169,10 @@ const spotHeal: RasterToolDefinition<SpotHealState> = {
     // The release point is a sample like any other: without this the marked region stops
     // wherever the last move event happened to land.
     const options = context.options;
-    spotHealStrokeSegment(
+    stroke.spacingCarry = spotHealStrokeSegment(
       stroke.mask, stroke.originX, stroke.originY, stroke.width, stroke.height,
       stroke.pending.x, stroke.pending.y, pointer.point.x, pointer.point.y,
-      Number(options.size ?? 24), Number(options.hardness ?? 82) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), Number(options.spacing ?? 18) / 100,
+      Number(options.size ?? 24), Number(options.hardness ?? 82) / 100, Number(options.roundness ?? 100) / 100, Number(options.angle ?? 0), Number(options.spacing ?? 18) / 100, stroke.spacingCarry,
     );
     context.setLastStrokePoint({ toolId: spotHeal.id, layerId: context.paintTarget.layerId, point: pointer.point });
     commitHeal(context, stroke);
