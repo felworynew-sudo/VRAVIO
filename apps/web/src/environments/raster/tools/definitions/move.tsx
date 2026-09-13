@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import {
   cloneRasterState, compositeRasterDocument, flattenRasterLayers, layerAccepts, layerDocumentPixels, layerLockReason, layerOpaqueBounds, liftSelection, linkedLayers, meshLayerPixels, meshSelection,
   pickLayerAt, quadLayerPixels, quadSelection, regularMesh, restrictSelectionToContent, rotateLayerPixels, rotateSelection,
-  rotatedDestinationBounds, scaleLayerPixels, scaleSelection, setLayerPixels, stampFloating, transformLayerPixels, translateLayerPixels, translateSelection, unionRect, WARP_GRID, warpPresetMesh,
+  rotatedDestinationBounds, scaleLayerPixels, scaleSelection, setLayerPixels, stampFloating, transformLayerPixels, transformSmartObject, translateLayerPixels, translateSelection, translateSmartObject, unionRect, WARP_GRID, warpPresetMesh,
   type WarpPresetId,
   type FloatingPixels, type PixelSelection, type Point, type RasterDocumentState, type RasterLayer, type RasterRect, type RasterTextData,
 } from "@vravio/env-raster";
@@ -440,7 +440,12 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
     if (storedTranslation) {
       const offsetX = Math.round(pending.live!.target.x - pending.live!.source.x);
       const offsetY = Math.round(pending.live!.target.y - pending.live!.source.y);
-      layer.bounds = { ...layer.bounds, x: layer.bounds.x + offsetX, y: layer.bounds.y + offsetY };
+      if (!translateSmartObject(layer, offsetX, offsetY)) layer.bounds = { ...layer.bounds, x: layer.bounds.x + offsetX, y: layer.bounds.y + offsetY };
+      isThere = layerOpaqueBounds(materialise(layer, after), after.width, after.height);
+    } else if (pending.live && transformSmartObject(layer, pending.live.source, pending.live.target, pending.live.rotation)) {
+      // Smart Object transform changes only its placement matrix. The raw
+      // source remains untouched, so the next transform never starts from a
+      // previously resampled preview.
       isThere = layerOpaqueBounds(materialise(layer, after), after.width, after.height);
     } else {
       // The session's one and only resample. Everything the hand did — every

@@ -7,6 +7,7 @@ import { compositeRasterDocument } from "./render";
 import { RASTER_ASSET_MIME, decodeRasterAsset, encodeRasterAsset, isRasterAsset } from "./raster-asset";
 import type { RasterDocumentOptions, RasterDocumentState, RasterLayer } from "./types";
 import { setLayerLocalPixels, setLayerPixels } from "./layer-bounds";
+import { replaceSmartObjectSourcePixels } from "./smart-object";
 
 export interface RasterEnvironmentOptions {
   readonly documents: DocumentStore;
@@ -155,7 +156,9 @@ export class RasterEnvironment implements Environment<RasterDocumentState> {
             // Keep the layer where the user placed it while replacing only
             // its local asset surface. This is what lets a child editor work
             // on a 200×200 mark from an 8K parent without an 8K round-trip.
-            setLayerLocalPixels(layer, image.pixels, { x: layer.bounds.x, y: layer.bounds.y, width: image.width, height: image.height });
+            if (!replaceSmartObjectSourcePixels(layer, image.pixels, image.width, image.height)) {
+              setLayerLocalPixels(layer, image.pixels, { x: layer.bounds.x, y: layer.bounds.y, width: image.width, height: image.height });
+            }
           }
         });
       });
@@ -171,7 +174,9 @@ export class RasterEnvironment implements Environment<RasterDocumentState> {
       const layer = flattenRasterLayers(state.layers).find((item) => item.id === target.layerId);
       if (!layer) throw new Error(`Unknown layer: ${target.layerId}`);
       layer.pixelAssetId = newAssetId;
-      setLayerLocalPixels(layer, image.pixels, { x: layer.bounds.x, y: layer.bounds.y, width: image.width, height: image.height });
+      if (!replaceSmartObjectSourcePixels(layer, image.pixels, image.width, image.height)) {
+        setLayerLocalPixels(layer, image.pixels, { x: layer.bounds.x, y: layer.bounds.y, width: image.width, height: image.height });
+      }
     });
     this.#documents.addAssetRef(document.id, newAssetId);
   }

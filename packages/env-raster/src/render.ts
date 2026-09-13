@@ -474,12 +474,16 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
 
     // Ordinary layers are read where they live; the two exceptions above are
     // laid out across the canvas first, since that is the space they work in.
+    // A Smart Object is a third case: its compact buffer remains its pristine
+    // source, while its placement is materialised only for this composite.
+    const smartSurface = layer.kind === "smart" && Boolean(layer.smartTransform);
+    const documentSurface = wholeCanvas || smartSurface;
     const renderedLayer = wholeCanvas
       ? (hasRenderableEffect(layer) ? renderLayerEffects(layer, state.width, state.height) : layerDocumentPixels(layer, state.width, state.height))
-      : layer.pixels;
-    const sourceWidth = wholeCanvas ? width : layer.bounds.width;
-    const sourceOriginX = wholeCanvas ? 0 : layer.bounds.x;
-    const sourceOriginY = wholeCanvas ? 0 : layer.bounds.y;
+      : smartSurface ? layerDocumentPixels(layer, state.width, state.height) : layer.pixels;
+    const sourceWidth = documentSurface ? width : layer.bounds.width;
+    const sourceOriginX = documentSurface ? 0 : layer.bounds.x;
+    const sourceOriginY = documentSurface ? 0 : layer.bounds.y;
     const clippingBase = layer.clipping ? clippingBaseByParent.get(parentKey) : undefined;
     const ownAlpha = layer.clipping || !clippedParents.has(parentKey) ? null : new Uint8ClampedArray(outWidth * outHeight);
     // Everything constant for the layer is read once. Inside the loop these are
@@ -502,7 +506,7 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
         const regionIndex = outputRow + column, index = regionIndex * 4;
         const documentIndex = documentRow + column * step;
         const sourceX = area.x + column * step - sourceOriginX, sourceY = documentY - sourceOriginY;
-        if (sourceX < 0 || sourceY < 0 || sourceX >= sourceWidth || sourceY >= (wholeCanvas ? state.height : layer.bounds.height)) continue;
+        if (sourceX < 0 || sourceY < 0 || sourceX >= sourceWidth || sourceY >= (documentSurface ? state.height : layer.bounds.height)) continue;
         const sourceIndex = (sourceY * sourceWidth + sourceX) * 4;
         const maskAlpha = maskPixels ? (maskPixels[documentIndex]! / 255) * maskDensity : 1;
         const baseAlpha = clippingBase ? clippingBase[regionIndex]! / 255 : clipping ? 0 : 1;
@@ -652,6 +656,7 @@ export interface LayerRenderSignature {
   readonly adjustment: unknown;
   readonly parentId: string | null;
   readonly orderKey: string;
+  readonly smartTransform: unknown;
 }
 
 export function layerRenderSignatures(state: RasterDocumentState): LayerRenderSignature[] {
@@ -673,16 +678,25 @@ export function layerRenderSignatures(state: RasterDocumentState): LayerRenderSi
     adjustment: layer.adjustment,
     parentId: layer.parentId,
     orderKey: layer.orderKey,
+    smartTransform: layer.smartTransform,
   }));
 }
 
+const sameTransform = (a: unknown, b: unknown): boolean => {
+  const left = a as { a?: number; b?: number; c?: number; d?: number; e?: number; f?: number } | undefined;
+  const right = b as typeof left;
+  return left === right || Boolean(left && right && left.a === right.a && left.b === right.b && left.c === right.c && left.d === right.d && left.e === right.e && left.f === right.f);
+};
+
 const sameSignature = (a: LayerRenderSignature, b: LayerRenderSignature): boolean =>
   a.kind === b.kind && a.pixels === b.pixels && a.mask === b.mask && a.maskEnabled === b.maskEnabled
+  && a.bounds.x === b.bounds.x && a.bounds.y === b.bounds.y && a.bounds.width === b.bounds.width && a.bounds.height === b.bounds.height
   && a.maskDensity === b.maskDensity && a.maskFeather === b.maskFeather
   && a.visible === b.visible && a.opacity === b.opacity && a.fillOpacity === b.fillOpacity
   && a.blendMode === b.blendMode && a.clipping === b.clipping
   && a.effects === b.effects && a.adjustment === b.adjustment
-  && a.parentId === b.parentId && a.orderKey === b.orderKey;
+  && a.parentId === b.parentId && a.orderKey === b.orderKey
+  && sameTransform(a.smartTransform, b.smartTransform);
 
 /**
  * Where a signature's opaque content actually is, in document coordinates.

@@ -68,6 +68,7 @@ function snapshotLayers(state: RasterDocumentState): { layers: RasterLayer[]; ac
       ...(layer.text ? { text: structuredClone(layer.text) } : {}),
       ...(layer.adjustment ? { adjustment: structuredClone(layer.adjustment) } : {}),
       ...(layer.smartSource ? { smartSource: { ...layer.smartSource } } : {}),
+      ...(layer.smartTransform ? { smartTransform: { ...layer.smartTransform } } : {}),
     })),
     activeLayerId: state.activeLayerId,
   };

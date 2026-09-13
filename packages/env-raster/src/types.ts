@@ -214,6 +214,14 @@ export interface RasterSmartSource {
   mode?: "embedded" | "linked";
 }
 
+/**
+ * Where an embedded source surface lives in document coordinates.  Unlike a
+ * regular pixel layer, a Smart Object never bakes this mapping into its source
+ * buffer: repeated scale/rotate operations therefore always sample the
+ * original pixels.
+ */
+export interface RasterSmartTransform { a: number; b: number; c: number; d: number; e: number; f: number }
+
 export interface RasterLayer {
   id: string;
   name: string;
@@ -232,7 +240,9 @@ export interface RasterLayer {
   bounds: RasterRect;
   width: number;
   height: number;
-  /** Sized to `bounds`, addressed in bounds-local coordinates. */
+  /** Sized to `bounds`, addressed in bounds-local coordinates. Smart Objects
+   * are the deliberate exception: their buffer is the unscaled source and
+   * `smartTransform` maps it onto the document. */
   pixels: Uint8ClampedArray;
   visible: boolean;
   opacity: number;
@@ -276,6 +286,7 @@ export interface RasterLayer {
   clipping?: boolean;
   mask?: RasterLayerMask;
   smartSource?: RasterSmartSource;
+  smartTransform?: RasterSmartTransform;
   /**
    * Asset whose revisions are the undo history of this buffer.
    *

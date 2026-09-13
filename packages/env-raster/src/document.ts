@@ -132,6 +132,7 @@ export function cloneRasterState(state: RasterDocumentState): RasterDocumentStat
       ...(layer.adjustment ? { adjustment: structuredClone(layer.adjustment) } : {}),
       ...(layer.mask ? { mask: { ...layer.mask } } : {}),
       ...(layer.smartSource ? { smartSource: { ...layer.smartSource } } : {}),
+      ...(layer.smartTransform ? { smartTransform: { ...layer.smartTransform } } : {}),
     })),
     selection: state.selection ? { mask: state.selection.mask, bounds: { ...state.selection.bounds } } : null,
     guides: (state.guides ?? []).map((guide) => ({ ...guide })),

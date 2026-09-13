@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createRasterLayer } from "./document";
 import { duplicateLayer, layerAccepts, layerLockReason } from "./layer-ops";
-import { convertLayerToEmbeddedSmartObject, isEditableEmbeddedSmartObject, makeIndependentEmbeddedSmartObjectCopy, smartObjectSourceMode } from "./smart-object";
+import { compositeRasterDocument } from "./render";
+import { convertLayerToEmbeddedSmartObject, isEditableEmbeddedSmartObject, makeIndependentEmbeddedSmartObjectCopy, replaceSmartObjectSourcePixels, smartObjectSourceMode, transformSmartObject, translateSmartObject } from "./smart-object";
 import type { RasterDocumentState } from "./types";
 
 describe("embedded Smart Objects", () => {
@@ -42,5 +43,31 @@ describe("embedded Smart Objects", () => {
     expect(layer.smartSource?.assetId).toBe("asset-original");
     expect(copy.smartSource?.assetId).toBe("asset-copy");
     expect(copy.pixelAssetId).toBe("asset-copy");
+  });
+
+  it("changes placement rather than resampling source pixels on transforms", () => {
+    const layer = createRasterLayer(2, 2, "Mark");
+    for (let pixel = 0; pixel < layer.pixels.length; pixel += 4) { layer.pixels[pixel] = 240; layer.pixels[pixel + 3] = 255; }
+    const source = layer.pixels.slice();
+    convertLayerToEmbeddedSmartObject(layer, "asset-mark");
+
+    expect(transformSmartObject(layer, { x: 0, y: 0, width: 2, height: 2 }, { x: 1, y: 1, width: 4, height: 4 }, 0)).toBe(true);
+    expect(layer.pixels).toEqual(source);
+    expect(layer.bounds).toEqual({ x: 1, y: 1, width: 4, height: 4 });
+    expect(translateSmartObject(layer, 1, 0)).toBe(true);
+    expect(layer.pixels).toEqual(source);
+
+    const state: RasterDocumentState = { kind: "raster", schemaVersion: 2, width: 8, height: 8, colorSpace: "srgb", resolution: 72, resolutionUnit: "ppi", bitDepth: 8, pixelAspectRatio: 1, backgroundColor: null, layers: [layer], activeLayerId: layer.id, selection: null, guides: [] };
+    const composited = compositeRasterDocument(state);
+    expect(composited[(2 * 8 + 2) * 4 + 3]).toBe(255);
+    expect(composited[(0 * 8 + 0) * 4 + 3]).toBe(0);
+  });
+
+  it("keeps placed geometry when edited Smart Object contents have another size", () => {
+    const layer = createRasterLayer(2, 2, "Mark");
+    convertLayerToEmbeddedSmartObject(layer, "asset-mark");
+    transformSmartObject(layer, { x: 0, y: 0, width: 2, height: 2 }, { x: 5, y: 4, width: 8, height: 6 }, 0);
+    expect(replaceSmartObjectSourcePixels(layer, new Uint8ClampedArray(4 * 3 * 4), 4, 3)).toBe(true);
+    expect(layer.bounds).toEqual({ x: 5, y: 4, width: 8, height: 6 });
   });
 });

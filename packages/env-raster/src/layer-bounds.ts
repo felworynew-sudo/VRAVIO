@@ -1,3 +1,4 @@
+import { smartObjectTransform } from "./smart-object";
 import type { RasterLayer, RasterRect } from "./types";
 
 /** The rectangle outside which a buffer has nothing but transparency. */
@@ -48,10 +49,32 @@ export function unionRect(current: RasterRect | null, x0: number, y0: number, x1
  * which is safe because every path that edits pixels assigns a fresh one; a
  * layer read repeatedly without being edited materialises once.
  */
-const materialised = new WeakMap<Uint8ClampedArray, { width: number; height: number; bounds: RasterRect; pixels: Uint8ClampedArray }>();
+const materialised = new WeakMap<Uint8ClampedArray, { width: number; height: number; bounds: RasterRect; pixels: Uint8ClampedArray; placementKey?: string }>();
 
 export function layerDocumentPixels(layer: RasterLayer, documentWidth: number, documentHeight: number): Uint8ClampedArray {
   const bounds = layer.bounds;
+  const placement = smartObjectTransform(layer);
+  if (placement) {
+    const cached = materialised.get(layer.pixels);
+    const placementKey = `${placement.a},${placement.b},${placement.c},${placement.d},${placement.e},${placement.f}`;
+    if (cached && cached.width === documentWidth && cached.height === documentHeight && cached.placementKey === placementKey) return cached.pixels;
+    const determinant = placement.a * placement.d - placement.b * placement.c;
+    const pixels = new Uint8ClampedArray(documentWidth * documentHeight * 4);
+    if (Math.abs(determinant) > 1e-8) {
+      const left = Math.max(0, bounds.x), right = Math.min(documentWidth, bounds.x + bounds.width);
+      const top = Math.max(0, bounds.y), bottom = Math.min(documentHeight, bounds.y + bounds.height);
+      for (let y = top; y < bottom; y += 1) for (let x = left; x < right; x += 1) {
+        const dx = x + .5 - placement.e, dy = y + .5 - placement.f;
+        const sourceX = Math.floor((placement.d * dx - placement.c * dy) / determinant);
+        const sourceY = Math.floor((-placement.b * dx + placement.a * dy) / determinant);
+        if (sourceX < 0 || sourceY < 0 || sourceX >= layer.width || sourceY >= layer.height) continue;
+        const source = (sourceY * layer.width + sourceX) * 4;
+        pixels.set(layer.pixels.subarray(source, source + 4), (y * documentWidth + x) * 4);
+      }
+    }
+    materialised.set(layer.pixels, { width: documentWidth, height: documentHeight, bounds: { ...bounds }, pixels, placementKey });
+    return pixels;
+  }
   if (bounds.x === 0 && bounds.y === 0 && bounds.width === documentWidth && bounds.height === documentHeight) return layer.pixels;
 
   const cached = materialised.get(layer.pixels);
@@ -160,6 +183,14 @@ export function setLayerLocalPixels(layer: RasterLayer, pixels: Uint8ClampedArra
 
 /** Reads one pixel's alpha in document coordinates, without materialising. */
 export function layerAlphaAt(layer: RasterLayer, x: number, y: number): number {
+  const placement = smartObjectTransform(layer);
+  if (placement) {
+    const determinant = placement.a * placement.d - placement.b * placement.c;
+    if (Math.abs(determinant) <= 1e-8) return 0;
+    const dx = x + .5 - placement.e, dy = y + .5 - placement.f;
+    const localX = Math.floor((placement.d * dx - placement.c * dy) / determinant), localY = Math.floor((-placement.b * dx + placement.a * dy) / determinant);
+    return localX < 0 || localY < 0 || localX >= layer.width || localY >= layer.height ? 0 : layer.pixels[(localY * layer.width + localX) * 4 + 3] ?? 0;
+  }
   const { bounds } = layer;
   const localX = x - bounds.x, localY = y - bounds.y;
   if (localX < 0 || localY < 0 || localX >= bounds.width || localY >= bounds.height) return 0;
