@@ -51,8 +51,13 @@ function toHex(bytes: Uint8Array): string {
 }
 
 async function sha256(data: Uint8Array): Promise<string> {
-  const owned = data.slice();
-  return toHex(new Uint8Array(await crypto.subtle.digest("SHA-256", owned.buffer)));
+  // importAsset/commitRevision take ownership before reaching here, so this
+  // exact-buffer view cannot be detached or mutated by the caller. Copying it
+  // once more merely to hash a 100 MB layer doubled peak RAM for no benefit.
+  const input = data.byteOffset === 0 && data.byteLength === data.buffer.byteLength
+    ? data.buffer
+    : data.slice().buffer;
+  return toHex(new Uint8Array(await crypto.subtle.digest("SHA-256", input)));
 }
 
 function extensionOf(name: string, mime: string): string {
