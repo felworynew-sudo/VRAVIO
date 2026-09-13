@@ -70,6 +70,24 @@ function isBrowserFileHandle(value: unknown): value is BrowserFileHandle {
 const isTauriDesktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 class DesktopFileSystem implements FileSystemPort {
+  async watchExternalFile(path: string, onChange: () => void): Promise<(() => void) | null> {
+    try {
+      const { watch } = await import("@tauri-apps/plugin-fs");
+      // `watch` is debounced by the native plugin. Ignore access-only events:
+      // decoding the image is itself a read, and treating that as a source
+      // change would make an external refresh watch itself forever.
+      return await watch(path, (event) => {
+        if (typeof event.type !== "object" || !("modify" in event.type || "create" in event.type || "remove" in event.type)) return;
+        onChange();
+      }, { delayMs: 350 });
+    } catch {
+      // A stale/moved file, a revoked scope, or an older desktop runtime must
+      // not break editing. The existing manual Update Linked Contents command
+      // remains available in all of those cases.
+      return null;
+    }
+  }
+
   async readExternalFile(path: string): Promise<PlatformFile | null> {
     try {
       const { readFile } = await import("@tauri-apps/plugin-fs");

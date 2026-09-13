@@ -6190,7 +6190,7 @@ Adobe документирует: (1) многопоточный компози�
 
 ### 26.1. Слои и недеструктивность (Photoshop) — самая принципиальная дыра по мнению аудита
 
-**Статус на 13 сентября 2026.** Embedded-основа Smart Objects уже реализована: Convert to Smart Object извлекает source в Asset Store; обычный Duplicate сохраняет общий source, а New Smart Object via Copy создаёт независимый; двойной клик по thumbnail/Edit Contents открывает round-trip; явная команда «Применить в исходный документ» обновляет экземпляры; Replace Contents меняет source только выбранного экземпляра. Smart Object хранит source и affine placement отдельно, поэтому повторные scale/rotate не пересэмплируют исходник. Desktop Linked умеет Place, Update, Relink и Embed; watcher изменений и Smart Filter graph остаются P0.
+**Статус на 14 сентября 2026.** Embedded-основа Smart Objects уже реализована: Convert to Smart Object извлекает source в Asset Store; обычный Duplicate сохраняет общий source, а New Smart Object via Copy создаёт независимый; двойной клик по thumbnail/Edit Contents открывает round-trip; явная команда «Применить в исходный документ» обновляет экземпляры; Replace Contents меняет source только выбранного экземпляра. Smart Object хранит source и affine placement отдельно, поэтому повторные scale/rotate не пересэмплируют исходник. Desktop Linked умеет Place, Update, Relink и Embed, а Tauri watcher с debounce обновляет все открытые экземпляры изменённого файла. Smart Filter graph остаётся P0.
 
 - [x] **P0 — семантика Save для Edit Contents.** Вкладка, открытая через Smart Object → Edit Contents, по `Ctrl+S` выполняет round-trip `Apply to Parent Document`, как Photoshop; `Save As…` остаётся отдельным намеренным сохранением документа на диск. Реализовано в `5923d02`.
 
@@ -6198,7 +6198,7 @@ Adobe документирует: (1) многопоточный компози�
 |---|---|---|---|
 | 🟠 Smart Objects | Raster embedded workflow готов: source/placement разделены, transform без потери, badge и 2×клик открывает содержимое. Vector/document source и linked workflow остаются. | [Smart Objects overview](https://helpx.adobe.com/photoshop/using/create-smart-objects.html) | Patchy |
 | ✅ Embedded Smart Objects | Содержимое хранится в Asset Store документа; duplicate разделяет source, New Smart Object via Copy создаёт независимый. | Adobe Help | Patchy |
-| 🟠 Linked Smart Objects | Desktop: Place Linked сохраняет авторизованный путь, Update обновляет все экземпляры пути, Relink меняет выбранный, Embed делает его автономным. Нет file watcher; web честно не предлагает durable link. | Adobe Help | Patchy |
+| 🟠 Linked Smart Objects | Desktop: Place Linked сохраняет авторизованный путь, Update обновляет все экземпляры пути, Relink меняет выбранный, Embed делает его автономным. Tauri file watcher с debounce обновляет открытые экземпляры при внешней записи; web честно не предлагает durable link. | Adobe Help | Patchy |
 | ✅ Edit Contents | 2×клик thumbnail/команда открывает embedded source, Apply child-документа обновляет все экземпляры общего source. | Adobe Help | Patchy |
 | ✅ Replace/Relink/Embed linked asset | Replace Contents для embedded, а desktop Linked поддерживает Relink и Embed с сохранением placement. | Adobe Help | Penpot |
 | 🔴 Smart Filter stack | Фильтры остаются редактируемыми, переставляются/скрываются/удаляются | [Smart Filters](https://helpx.adobe.com/photoshop/using/smart-filters.html) | Patchy |

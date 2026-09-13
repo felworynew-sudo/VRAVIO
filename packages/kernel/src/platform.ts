@@ -28,6 +28,10 @@ export interface FileSystemPort {
   /** Re-open a previously authorised desktop path. Web implementations return
    * null because browser file input does not grant a reusable path. */
   readExternalFile?(path: string): Promise<PlatformFile | null>;
+  /** Subscribe to a desktop file that was explicitly authorised by the user.
+   * The optional port keeps browser builds honest: a browser File is a
+   * snapshot, not a durable path that can be watched after the picker closes. */
+  watchExternalFile?(path: string, onChange: () => void): Promise<(() => void) | null>;
   saveFile(options: SaveFileOptions): Promise<SaveFileResult>;
 }
 

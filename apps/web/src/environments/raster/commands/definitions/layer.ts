@@ -140,11 +140,16 @@ async function placeLinkedSmartObject(documentId: string): Promise<void> {
   kernel.documents.addAssetRef(documentId, source.assetId);
 }
 
-async function updateLinkedSmartObjectContents(documentId: string): Promise<void> {
+/** Refreshes every placement of one desktop linked path in a document.
+ *
+ * `path` is optional for the manual command, which takes it from the active
+ * layer. The file watcher supplies it directly so an external change never
+ * steals the user's active-layer selection just to perform its update. */
+export async function updateLinkedSmartObjectContents(documentId: string, path?: string): Promise<void> {
   if (kernel.platform.kind !== "desktop") return;
   const document = kernel.documents.get<RasterDocumentState>(documentId);
   const selected = document && isRasterDocumentState(document.state) ? activeRasterLayer(document.state) : undefined;
-  const linkedPath = selected?.kind === "smart" && selected.smartSource?.mode === "linked" ? selected.smartSource.linkedPath : undefined;
+  const linkedPath = path ?? (selected?.kind === "smart" && selected.smartSource?.mode === "linked" ? selected.smartSource.linkedPath : undefined);
   const reader = kernel.platform.fs.readExternalFile;
   if (!linkedPath || !reader) return;
   const external = await reader(linkedPath); if (!external) return;

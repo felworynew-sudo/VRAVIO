@@ -54,6 +54,8 @@ import { luminanceHistogram } from "./raster-adjustments/histogram";
 import { HomeScreen } from "./bridge/HomeScreen";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 import { applyWorkspacePreset, resetWorkspacePreset, selectedWorkspacePreset, workspacePresetsFor } from "./workspace-presets";
+import { LinkedSmartObjectWatcher } from "./linked-smart-object-watcher";
+import { updateLinkedSmartObjectContents } from "./environments/raster/commands/definitions/layer";
 import { decodeAudioFileToWav } from "./audioImport";
 import { decodeWav, isAudioDocumentState } from "@vravio/env-audio";
 import { addClipFromAsset as addAudioClipFromAsset } from "./audio-commands";
@@ -91,6 +93,15 @@ export function App() {
    * closes the failure regardless of which path (or another not yet found)
    * triggers the second call, rather than chasing each one individually. */
   const saveInFlight = useRef(new Set<string>());
+  // Native filesystem watches belong to the lifetime of the shell rather than
+  // one particular document tab. The watcher itself deduplicates paths and
+  // disposes each native handle when the last linked placement goes away.
+  useEffect(() => {
+    if (kernel.platform.kind !== "desktop" || !kernel.platform.fs.watchExternalFile) return;
+    const watcher = new LinkedSmartObjectWatcher(kernel.documents, kernel.platform.fs, updateLinkedSmartObjectContents);
+    watcher.start();
+    return () => watcher.dispose();
+  }, []);
   const [transformMetrics, setTransformMetrics] = useState<{ active: boolean; x: number; y: number; width: number; height: number; rotation: number; warp?: boolean } | null>(null);
   // The 3D rotation gizmo's own pending state — a parallel channel to `transformMetrics` above
   // rather than folded into it: the two are never active at once (Scene3DOrbitGizmo only mounts
