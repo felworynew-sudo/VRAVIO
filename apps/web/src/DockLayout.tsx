@@ -45,6 +45,7 @@ import { GeometryModifiersPanel } from "./environments/vector/GeometryModifiersP
 import { mergeableEdit } from "./history-helpers";
 import { TextLayerProperties } from "./TextLayerProperties";
 import { RasterPixelLayerProperties } from "./RasterPixelLayerProperties";
+import { BrushesPanel, BrushSettingsPanel } from "./BrushPanels";
 import "dockview-react/dist/styles/dockview.css";
 
 const LAYOUT_STORAGE_KEY = WORKSPACE_LAYOUT_STORAGE_KEY;
@@ -1422,6 +1423,8 @@ const components = {
   symbols: SymbolsPanel,
   palette: PalettePanel,
   artboards: ArtboardsPanel,
+  "brush-settings": BrushSettingsPanel,
+  brushes: BrushesPanel,
 };
 
 /**

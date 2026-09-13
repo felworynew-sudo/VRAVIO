@@ -13,9 +13,10 @@ describe("window catalogues", () => {
 
   it("discovers unique raster panels with components and themeable icons", () => {
     const panels = windowsFor("raster");
-    expect(panels.map((panel) => panel.id)).toEqual(["properties", "layers", "history", "assets", "color", "navigator", "effects", "scripts"]);
+    expect(panels.map((panel) => panel.id)).toEqual(["properties", "layers", "history", "assets", "color", "brush-settings", "navigator", "brushes", "effects", "scripts"]);
     expect(new Set(panels.map((panel) => panel.component)).size).toBe(panels.length);
     expect(panels.every((panel) => panel.icon.endsWith(".svg"))).toBe(true);
+    expect(panels.filter((panel) => panel.id === "brush-settings" || panel.id === "brushes").every((panel) => !panel.defaultVisible)).toBe(true);
   });
 
   it("discovers the vector panels", () => {
