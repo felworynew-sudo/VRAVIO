@@ -162,6 +162,41 @@ async function updateLinkedSmartObjectContents(documentId: string): Promise<void
   kernel.documents.addAssetRef(documentId, source.assetId);
 }
 
+/** Repoints only the selected placement. Other instances keep following their
+ * previous external file, matching Replace Contents' one-placement semantics. */
+async function relinkActiveSmartObject(documentId: string): Promise<void> {
+  if (kernel.platform.kind !== "desktop") return;
+  const document = kernel.documents.get<RasterDocumentState>(documentId);
+  const selected = document && isRasterDocumentState(document.state) ? activeRasterLayer(document.state) : undefined;
+  if (selected?.kind !== "smart" || selected.smartSource?.mode !== "linked") return;
+  const source = await pickEmbeddedSmartObjectSource();
+  const linkedPath = source?.linkedPath;
+  if (!source || !linkedPath) return;
+  await edit(documentId, "Relink Smart Object (Перепривязать смарт-объект)", (state) => {
+    const layer = state.layers.find((item) => item.id === selected.id);
+    if (!layer || layer.kind !== "smart" || layer.smartSource?.mode !== "linked") return false;
+    layer.pixelAssetId = source.assetId;
+    layer.smartSource = { ...layer.smartSource, assetId: source.assetId, pinnedRev: null, linkedPath };
+    return replaceSmartObjectSourcePixels(layer, source.pixels, source.width, source.height);
+  });
+  kernel.documents.addAssetRef(documentId, source.assetId);
+}
+
+/** Embedding stops future external refreshes but retains the already decoded
+ * internal source exactly as it is currently displayed. */
+async function embedActiveLinkedSmartObject(documentId: string): Promise<void> {
+  const document = kernel.documents.get<RasterDocumentState>(documentId);
+  const selected = document && isRasterDocumentState(document.state) ? activeRasterLayer(document.state) : undefined;
+  if (selected?.kind !== "smart" || selected.smartSource?.mode !== "linked") return;
+  await edit(documentId, "Embed Linked Smart Object (Встроить связанный смарт-объект)", (state) => {
+    const layer = state.layers.find((item) => item.id === selected.id);
+    if (!layer || layer.kind !== "smart" || layer.smartSource?.mode !== "linked") return false;
+    const { linkedPath: _linkedPath, ...embedded } = layer.smartSource;
+    layer.smartSource = { ...embedded, mode: "embedded" };
+    return true;
+  });
+}
+
 /** Photoshop's Replace Contents: only the selected placement gets a new source;
  * regular duplicates continue following their previous shared asset. */
 async function replaceActiveSmartObjectContents(documentId: string): Promise<void> {
@@ -423,6 +458,28 @@ const commands: readonly CommandDefinition[] = [
       return Boolean(kernel.platform.kind === "desktop" && layer?.kind === "smart" && layer.smartSource?.mode === "linked" && layer.smartSource.linkedPath);
     },
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void updateLinkedSmartObjectContents(activeDocumentId); },
+  },
+  {
+    id: "layer.relinkSmartObject",
+    label: { en: "Relink to File…", ru: "Перепривязать к файлу…" },
+    category: CATEGORY_LAYER,
+    surfaces: ["menu", "palette", "layer-context"],
+    isEnabled: ({ activeDocumentId }) => {
+      const state = activeRasterState(activeDocumentId), layer = state?.layers.find((item) => item.id === state.activeLayerId);
+      return Boolean(kernel.platform.kind === "desktop" && layer?.kind === "smart" && layer.smartSource?.mode === "linked");
+    },
+    execute: ({ activeDocumentId }) => { if (activeDocumentId) void relinkActiveSmartObject(activeDocumentId); },
+  },
+  {
+    id: "layer.embedLinkedSmartObject",
+    label: { en: "Embed Linked", ru: "Встроить связанный" },
+    category: CATEGORY_LAYER,
+    surfaces: ["menu", "palette", "layer-context"],
+    isEnabled: ({ activeDocumentId }) => {
+      const state = activeRasterState(activeDocumentId), layer = state?.layers.find((item) => item.id === state.activeLayerId);
+      return Boolean(layer?.kind === "smart" && layer.smartSource?.mode === "linked");
+    },
+    execute: ({ activeDocumentId }) => { if (activeDocumentId) void embedActiveLinkedSmartObject(activeDocumentId); },
   },
   {
     id: "layer.editSmartObjectContents",
