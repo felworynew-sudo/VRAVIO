@@ -6190,15 +6190,15 @@ Adobe документирует: (1) многопоточный компози�
 
 ### 26.1. Слои и недеструктивность (Photoshop) — самая принципиальная дыра по мнению аудита
 
-**Статус на 13 сентября 2026.** Embedded-основа Smart Objects уже реализована: Convert to Smart Object извлекает source в Asset Store; обычный Duplicate сохраняет общий source, а New Smart Object via Copy создаёт независимый; двойной клик по thumbnail/Edit Contents открывает round-trip; Save обновляет экземпляры; Replace Contents меняет source только выбранного экземпляра. Smart Object хранит source и affine placement отдельно, поэтому повторные scale/rotate не пересэмплируют исходник. Desktop Linked уже умеет Place Linked и Update Linked Contents для всех экземпляров пути; Relink/Embed, watcher изменений и Smart Filter graph остаются P0.
+**Статус на 13 сентября 2026.** Embedded-основа Smart Objects уже реализована: Convert to Smart Object извлекает source в Asset Store; обычный Duplicate сохраняет общий source, а New Smart Object via Copy создаёт независимый; двойной клик по thumbnail/Edit Contents открывает round-trip; Save обновляет экземпляры; Replace Contents меняет source только выбранного экземпляра. Smart Object хранит source и affine placement отдельно, поэтому повторные scale/rotate не пересэмплируют исходник. Desktop Linked умеет Place, Update, Relink и Embed; watcher изменений и Smart Filter graph остаются P0.
 
 | Что | Описание | Adobe | Донор |
 |---|---|---|---|
 | 🟠 Smart Objects | Raster embedded workflow готов: source/placement разделены, transform без потери, badge и 2×клик открывает содержимое. Vector/document source и linked workflow остаются. | [Smart Objects overview](https://helpx.adobe.com/photoshop/using/create-smart-objects.html) | Patchy |
 | ✅ Embedded Smart Objects | Содержимое хранится в Asset Store документа; duplicate разделяет source, New Smart Object via Copy создаёт независимый. | Adobe Help | Patchy |
-| 🟠 Linked Smart Objects | Desktop: Place Linked сохраняет авторизованный путь, Update Linked Contents перечитывает его и обновляет все экземпляры. Нет watcher, Relink и Embed; web честно не предлагает durable link. | Adobe Help | Patchy |
+| 🟠 Linked Smart Objects | Desktop: Place Linked сохраняет авторизованный путь, Update обновляет все экземпляры пути, Relink меняет выбранный, Embed делает его автономным. Нет file watcher; web честно не предлагает durable link. | Adobe Help | Patchy |
 | ✅ Edit Contents | 2×клик thumbnail/команда открывает embedded source, Apply child-документа обновляет все экземпляры общего source. | Adobe Help | Patchy |
-| 🟠 Replace/Relink/Embed linked asset | Replace Contents для embedded source готов; Relink/Embed остаются частью будущего desktop Linked workflow. | Adobe Help | Penpot |
+| ✅ Replace/Relink/Embed linked asset | Replace Contents для embedded, а desktop Linked поддерживает Relink и Embed с сохранением placement. | Adobe Help | Penpot |
 | 🔴 Smart Filter stack | Фильтры остаются редактируемыми, переставляются/скрываются/удаляются | [Smart Filters](https://helpx.adobe.com/photoshop/using/smart-filters.html) | Patchy |
 | 🔴 Filter blending per-filter | opacity/blend mode у каждого Smart Filter отдельно | Adobe Help | Patchy |
 | 🔴 Smart Filter mask | Общая маска, ограничивающая весь стек фильтров | Adobe Help | Patchy |
@@ -6779,7 +6779,7 @@ Generative Fill, Harmonize, Generative Recolor, Prompt-to-Edit — не
 1. **Smart Objects + Smart Filters — P0.** Embedded-фундамент закрыт:
    `Convert to Smart Object`, `Edit Contents`, shared/independent duplicates,
    non-destructive affine placement и Replace Contents. Desktop уже умеет
-   Place/Update Linked; остаются file watcher, Relink/Embed и неразрушаемый упорядоченный Smart
+   Place/Update/Relink/Embed Linked; остаются file watcher и неразрушаемый упорядоченный Smart
    Filter stack: параметры, собственная mask, enable/disable/reorder. Основа
    — текущий `RasterLayer.kind === "smart"`, а не второй тип слоя. Доноры:
    Photopea UX, Patchy для workflow, GEGL для графа вычислений.
