@@ -5895,6 +5895,101 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
 - [ ] **25.3.9. OPFS-адаптер API — только целыми файлами**, нет `readRange()`/`writeRange()`/`mapTile()`/`streamRevision()`. Пока это blob-хранилище ревизий, не настоящий scratch backend растрового движка. Не делать сейчас (P1/P2 уровень), но держать в виду при проектировании tile-backed storage (§25.5).
 - [ ] **25.3.10. История экономит RAM, но не I/O.** Один destructive pixel edit коммитит **полную** revision слоя в OPFS, даже если реально изменилось 100×100 пикселей на слое 4000×4000. Лучше — dirty-tile/copy-on-write revision (см. §25.5, P1).
 
+#### 25.3.11. Correctness P0 из повторного аудита актуального main — 13 сентября 2026
+
+Это отдельный список от большой миграции на TileStore: перечисленные
+ошибки способны дать неверные данные либо неверный визуальный результат уже
+сегодня и не должны ждать переписывания storage.
+
+- [ ] **AssetStore revision-safe dedup.** Нынешний индекс `hash → assetId`
+      может вернуть asset, чей current head уже не соответствует байтам
+      совпавшей старой revision; также нельзя схлопывать assets с разными
+      `kind`/MIME/meta только по bytes. Целевая модель: immutable
+      `BlobStore(hash → blob)` отдельно от mutable `AssetRecord`; переходный
+      минимум — `hash → {assetId, rev}` с проверкой revision.
+- [ ] **Filter-worker cancellation race.** У каждой задачи нужен
+      монотонный `requestId`, ответ обязан его сверять, а abort не должен
+      делать slot свободным, пока старая работа реально не завершилась.
+      Возможные реализации: SAB/Atomics cooperative cancel,
+      terminate+recreate worker либо дождаться и отбросить stale response.
+- [ ] **Настоящий isolated group compositor.** `groupMode: isolated` не
+      может быть только флагом модели: группа должна получить собственный
+      projection tile/ROI, скомпоновать детей внутри и лишь затем один раз
+      смешаться с родителем. `passThrough` можно раскрывать в parent graph.
+      Это исправляет overlap при group opacity и adjustment внутри группы.
+- [ ] **Честный каталог режимов/фильтров.** Реализовать deterministic
+      dissolve либо скрыть его из UI до реализации. Развести настоящие
+      Gaussian/Median/Motion/Radial/Lens/Iris/Tilt-Shift/Surface/
+      Dust & Scratches: сейчас нельзя рекламировать разные фильтры, если
+      они вычисляются одним Box Blur. Одновременно обновить их
+      `halo`/tile-safety metadata.
+- [ ] **Direct-preview parity.** Вынести общий `canDirectBlit(layer,state)`
+      для Brush/Spot Heal/Selection Brush: fast path допустим лишь при
+      normal, opacity/fillOpacity=1, без mask/effects/clipping/adjustment и
+      влияющих родителей. Иначе preview обязан пройти compositor.
+- [ ] **Mask и group invalidation.** В render signature включить density,
+      feather и все render-affecting mask props; реализовать feather как
+      non-destructive mask operation с halo. Изменение opacity/visibility
+      группы обязано invalidировать render-bounds всех descendants, а не
+      её пустой служебный buffer.
+- [ ] **RasterEnvironment asset dimensions.** `extractAsset()` не должен
+      передавать trimmed `layer.pixels` как будто это full document:
+      кодировать локальные `pixels + bounds.width/height` и передавать
+      `bounds.x/y` отдельным offset, без full-canvas materialisation.
+- [ ] **Реальный pressure Clone Stamp.** Протянуть pointer pressure до
+      `cloneDab()` или до этого убрать неработающие pressure controls.
+
+#### 25.3.12. Full-canvas escape hatches и порядок архитектурной миграции — 13 сентября 2026
+
+Главное противоречие Raster: tile/dirty-region outer shell уже есть, но
+локальная работа периодически возвращается к full-canvas
+`Uint8ClampedArray`. Приоритет — не десятки точечных микропатчей, а единая
+миграция на sparse tiled primitive для Layer, Mask, Selection и History.
+
+1. **TileStore становится реальным storage.** Missing tile = transparent;
+   не создавать пустые tiles и не материализовать flat buffer в `empty()`/
+   `toPixels()`. Заменить безлимитный WeakMap materialisation cache
+   `layerDocumentPixels()` byte-budgeted LRU до полного удаления bridge.
+2. **Убрать buffers у Group/Adjustment.** Group не имеет pixels вовсе;
+   Adjustment не имеет RGBA buffer, reveal-all mask implicit (`null`), а
+   редактируемая маска создаётся лениво. Это также убирает лишний
+   `output.slice()` для дефолтной adjustment mask.
+3. **Stroke/Mask/Selection только touched tiles.** Brush start держит
+   `before/working/coverage` по затронутым tiles; mask stroke — patches,
+   не `committed.slice()`. Selection — sparse tiled mask; flood fill —
+   scanline/span algorithm (или минимум mark visited при enqueue);
+   marching ants ограничивает visited knownBounds+halo. Copy/Cut сразу
+   работают в `selection.bounds ∩ layer.bounds`.
+4. **ROI effects и быстрые kernels.** Каждый эффект объявляет
+   `requiredInputRect/outset`; маленькая тень не создаёт 8K surface. Glow
+   заменить с O(pixels×radius²) на separable morphology, distance transform
+   либо blur alpha. Glass получает mip-aware backdrop pyramid: не считать
+   full-resolution composite ради 6%-zoom.
+5. **Compiled RasterRenderPlan на document revision.** Кэшировать `byId`,
+   sorted children, paint order, effective visibility/opacity, clipping,
+   group isolation и effect/glass outsets; tile не должен заново делать
+   flatten/sort/parent-chain lookup. Кэш opaque/ink bounds по pixel identity
+   исключает двойной 8K alpha-scan при простой смене opacity.
+6. **Локальные операции и workers.** Merge Down — union ink/effect bounds,
+   Patch — cropped source ROI+halo, Liquify — adaptive 1/2–1/4 deformation
+   grid, Camera Raw — strip/tiled final и low-res preview. Filter workers
+   переходят на transfer/buffer pool/SAB и stitch результатов по завершению,
+   без `Promise.all` всех крупных bands; Box Blur не держит full-size
+   `Float32Array` без лимита.
+7. **Небольшие безопасные оптимизации после P0.** Общий
+   `StrokeSpacingAccumulator` для Brush/Clone/Spot Heal/Selection Brush;
+   OffscreenCanvas pool для mip blit; убрать per-pixel temporary arrays из
+   retouch и healing membrane; один payload-copy в `decodeRasterAsset()`;
+   transactional fallback undo до асинхронного asset/history bookkeeping.
+8. **Vector параллельно.** R-tree не должен окружаться O(N) подготовкой;
+   retained GPU Vector Renderer приоритизирован выше новых vector tools,
+   так как SVG DOM уже измеренно деградирует на тысячах фигур.
+
+Ожидаемый порядок: сначала Correctness P0 (§25.3.11), затем sparse
+TileStore + stroke/mask/selection, затем ROI effects + RasterRenderPlan.
+Именно это убирает зависимость стоимости маленькой операции от размера всего
+документа; GPU compute имеет смысл подключать после этих границ данных.
+
 ### 25.4. Benchmark suite — что сейчас гарантируется и где слабое место
 
 Текущие пороги (`packages/env-raster/src/performance.bench.test.ts`, `packages/kernel/src/performance.bench.test.ts`) — проверить актуальные цифры перед использованием, могли измениться:
