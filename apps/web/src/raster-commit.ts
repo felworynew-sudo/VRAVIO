@@ -416,26 +416,50 @@ export function useRasterCommit(params: {
     commitQueue.current = commitQueue.current
       .catch(() => undefined)
       .then(async () => {
-        const assetId = await ensureBufferAsset(layerId, target, before);
-        if (!assetId) {
-          // No asset store available: fall back to buffer snapshots so the edit
-          // is still reversible, just at the old memory cost.
+        const recordMemoryFallback = async (): Promise<void> => {
+          // The document already shows `confined`. Keep it reversible even if
+          // OPFS/IndexedDB rejected this particular write (quota, private-mode
+          // storage policy, or a transient device error). Marking the asset
+          // behind means the next successful revision first persists the
+          // current visual base instead of treating an old head as undo data.
+          assetBehind.current.add(`${target}:${layerId}`);
           await history.record({ label, memoryEstimate: before.byteLength + confined.byteLength, redo: () => assign(confined), undo: () => assign(before) });
+        };
+        let assetId: AssetId | null;
+        try {
+          assetId = await ensureBufferAsset(layerId, target, before);
+          if (!assetId) {
+            // No asset store available: fall back to buffer snapshots so the
+            // edit is still reversible, just at the old memory cost.
+            await recordMemoryFallback();
+            return;
+          }
+        } catch (error) {
+          diagnostic("warn", "history.asset-fallback", "Asset revision setup failed; using memory-backed undo", { documentId: document.id, layerId, target, error: error instanceof Error ? error.message : String(error) });
+          await recordMemoryFallback();
           return;
         }
         // Strokes go to memory now (see the swap above), so the asset's head can be several
         // edits behind the layer. Undoing to it would undo those strokes as well, so the buffer
         // this edit is undone to is written first and *that* is the revision the step names.
-        const behind = assetBehind.current.delete(`${target}:${layerId}`);
-        const previousRev = behind
-          ? await kernel.assets.commitRevision(assetId, toBytes(before, state.width, state.height), "raster", `${label} — base`)
-          : kernel.assets.mustGet(assetId).head;
+        let previousRev: number;
+        let nextRev: number;
+        try {
+          const behind = assetBehind.current.delete(`${target}:${layerId}`);
+          previousRev = behind
+            ? await kernel.assets.commitRevision(assetId, toBytes(before, state.width, state.height), "raster", `${label} — base`)
+            : kernel.assets.mustGet(assetId).head;
         // The confined buffer, not the raw one: this revision is what redo and
         // any later reload restore from, so committing the unconfined edit here
         // would show the selection honoured and then quietly undo that on the
         // first redo. Every current tool masks as it paints, which is why the
         // two agree today; the guarantee above is for the one that does not.
-        const nextRev = await kernel.assets.commitRevision(assetId, toBytes(confined, state.width, state.height), "raster", label);
+          nextRev = await kernel.assets.commitRevision(assetId, toBytes(confined, state.width, state.height), "raster", label);
+        } catch (error) {
+          diagnostic("warn", "history.asset-fallback", "Asset revision write failed; using memory-backed undo", { documentId: document.id, layerId, target, error: error instanceof Error ? error.message : String(error) });
+          await recordMemoryFallback();
+          return;
+        }
         await history.record(createBufferRevisionOperation({ assets: kernel.assets, assetId, label, producedBy: "raster", apply: assign }, previousRev, nextRev));
       });
     await commitQueue.current;

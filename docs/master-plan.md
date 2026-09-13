@@ -6028,9 +6028,10 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
    healing membrane больше не создаёт два RGB-массива на каждую coarse-cell,
    а суммирует scalar channels. [x] `decodeRasterAsset()` выполняет ровно
    одну payload-copy в принадлежащий caller buffer вместо `slice` + второго
-   typed-array copy. [ ] Оставшийся аудит temporary allocations;
-   transactional fallback undo до асинхронного
-   asset/history bookkeeping.
+   typed-array copy. [ ] Оставшийся аудит temporary allocations. [x]
+   Transactional fallback undo: ошибка setup/commit asset revision не оставляет
+   уже показанный edit без History — записывается memory-backed reversible
+   operation, а asset помечается behind для корректной следующей синхронизации.
    transactional fallback undo до асинхронного asset/history bookkeeping.
 8. **Vector параллельно.** R-tree не должен окружаться O(N) подготовкой;
    retained GPU Vector Renderer приоритизирован выше новых vector tools,
