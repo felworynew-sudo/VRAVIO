@@ -37,6 +37,21 @@ const brushTipOptions: readonly ToolOption[] = [size,
   { id: "angle", label: { en: "Angle", ru: "Угол" }, type: "number", min: -180, max: 180, step: 1, defaultValue: 0, unit: "°", hideFromBar: true },
 ];
 
+/** The first paint-engine dynamics. They deliberately remain out of the compact
+ * Options Bar: Brush Settings is where a user expects to edit a whole module,
+ * while the runtime still receives one typed option contract. */
+const brushDynamicsOptions: readonly ToolOption[] = [
+  { id: "sizeJitter", label: { en: "Size Jitter", ru: "Колебание размера" }, type: "number", min: 0, max: 100, step: 1, defaultValue: 0, unit: "%", hideFromBar: true },
+  { id: "minimumDiameter", label: { en: "Minimum Diameter", ru: "Минимальный диаметр" }, type: "number", min: 0, max: 100, step: 1, defaultValue: 0, unit: "%", hideFromBar: true },
+  { id: "angleJitter", label: { en: "Angle Jitter", ru: "Колебание угла" }, type: "number", min: 0, max: 180, step: 1, defaultValue: 0, unit: "°", hideFromBar: true },
+  { id: "roundnessJitter", label: { en: "Roundness Jitter", ru: "Колебание формы" }, type: "number", min: 0, max: 100, step: 1, defaultValue: 0, unit: "%", hideFromBar: true },
+  { id: "minimumRoundness", label: { en: "Minimum Roundness", ru: "Минимальная форма" }, type: "number", min: 1, max: 100, step: 1, defaultValue: 1, unit: "%", hideFromBar: true },
+  { id: "scatter", label: { en: "Scatter", ru: "Рассеивание" }, type: "number", min: 0, max: 1000, step: 1, defaultValue: 0, unit: "%", hideFromBar: true },
+  { id: "bothAxes", label: { en: "Both Axes", ru: "Обе оси" }, type: "boolean", defaultValue: false, hideFromBar: true },
+  { id: "count", label: { en: "Count", ru: "Счётчик" }, type: "number", min: 1, max: 16, step: 1, defaultValue: 1, hideFromBar: true },
+  { id: "countJitter", label: { en: "Count Jitter", ru: "Колебание счётчика" }, type: "number", min: 0, max: 100, step: 1, defaultValue: 0, unit: "%", hideFromBar: true },
+];
+
 export const tools: readonly ToolDefinition[] = [
   { id: "raster.move", kind: "raster", icon: "↖", iconFile: "КУРСОР.svg", label: { en: "Move Tool", ru: "Перемещение" }, shortcut: "V", options: [{ id: "autoSelect", label: { en: "Auto-select", ru: "Автовыбор" }, type: "boolean", defaultValue: true }, { id: "autoSelectTarget", label: { en: "" }, type: "select", defaultValue: "layer", values: [{ value: "layer", label: { en: "Layer", ru: "Слой" } }, { value: "group", label: { en: "Group", ru: "Группа" } }] }, { id: "showTransform", label: { en: "Transform controls", ru: "Элементы трансформации" }, type: "boolean", defaultValue: true }] },
   { id: "raster.hand", kind: "raster", icon: "✋", iconFile: "РУКА.svg", label: { en: "Hand Tool", ru: "Рука" }, shortcut: "H", options: [] },
@@ -47,7 +62,7 @@ export const tools: readonly ToolDefinition[] = [
   { id: "raster.lasso", kind: "raster", icon: "⌁", iconFile: "ЛАССО.svg", label: { en: "Lasso Tool", ru: "Лассо" }, shortcut: "L", options: [{ id: "mode", label: { en: "Mode", ru: "Режим" }, type: "select", defaultValue: "replace", values: [{ value: "replace", label: { en: "Replace", ru: "Заменить" } }, { value: "add", label: { en: "Add", ru: "Добавить" } }, { value: "subtract", label: { en: "Subtract", ru: "Вычесть" } }, { value: "intersect", label: { en: "Intersect", ru: "Пересечь" } }] }, { id: "feather", label: { en: "Feather", ru: "Растушёвка" }, type: "number", min: 0, max: 500, step: 1, defaultValue: 0, unit: "px" }] },
   { id: "raster.selectionBrush", kind: "raster", icon: "◉", label: { en: "Selection Brush Tool", ru: "Кисть выделения" }, shortcut: "L", options: [...brushTipOptions.filter((option) => option.id !== "angle"), { ...opacity, defaultValue: 50, label: { en: "Overlay opacity", ru: "Непрозрачность заливки" } }] },
   { id: "raster.magicWand", kind: "raster", icon: "✦", iconFile: "ВОЛШЕБНАЯ ПАЛОЧКА.svg", label: { en: "Magic Wand Tool", ru: "Волшебная палочка" }, shortcut: "W", options: [{ id: "tolerance", label: { en: "Tolerance", ru: "Допуск" }, type: "number", min: 0, max: 255, step: 1, defaultValue: 32 }, { id: "allLayers", label: { en: "Sample all layers", ru: "Все слои" }, type: "boolean", defaultValue: true }] },
-  { id: "raster.brush", kind: "raster", icon: "●", iconFile: "КИСТЬ.svg", label: { en: "Brush Tool", ru: "Кисть" }, shortcut: "B", options: [...brushTipOptions, opacity, color, { id: "flow", label: { en: "Flow", ru: "Подача" }, type: "number", min: 1, max: 100, step: 1, defaultValue: 100, unit: "%" }, { id: "pressureSize", label: { en: "Pen pressure: size", ru: "Нажим: размер" }, type: "boolean", defaultValue: true }, { id: "pressureOpacity", label: { en: "Pen pressure: opacity", ru: "Нажим: непрозрачность" }, type: "boolean", defaultValue: false }] },
+  { id: "raster.brush", kind: "raster", icon: "●", iconFile: "КИСТЬ.svg", label: { en: "Brush Tool", ru: "Кисть" }, shortcut: "B", options: [...brushTipOptions, ...brushDynamicsOptions, opacity, color, { id: "flow", label: { en: "Flow", ru: "Подача" }, type: "number", min: 1, max: 100, step: 1, defaultValue: 100, unit: "%" }, { id: "pressureSize", label: { en: "Pen pressure: size", ru: "Нажим: размер" }, type: "boolean", defaultValue: true }, { id: "pressureOpacity", label: { en: "Pen pressure: opacity", ru: "Нажим: непрозрачность" }, type: "boolean", defaultValue: false }] },
   { id: "raster.pencil", kind: "raster", icon: "✎", iconFile: "КАРАНДАШ.svg", label: { en: "Pencil Tool", ru: "Карандаш" }, shortcut: "B", options: [size, opacity, color] },
   { id: "raster.highlighter", kind: "raster", icon: "▰", iconFile: "ВЫДЕЛИТЕЛЬ.svg", label: { en: "Highlighter Tool", ru: "Выделитель" }, shortcut: "B", options: [size, { ...opacity, defaultValue: 35 }, color] },
   { id: "raster.eraser", kind: "raster", icon: "◩", iconFile: "ЛАСТИК.svg", label: { en: "Eraser Tool", ru: "Ластик" }, shortcut: "E", options: [...brushTipOptions, opacity, { id: "flow", label: { en: "Flow", ru: "Подача" }, type: "number", min: 1, max: 100, step: 1, defaultValue: 100, unit: "%" }] },

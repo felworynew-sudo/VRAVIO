@@ -75,8 +75,10 @@ export function BrushSettingsPanel() {
   const [selected, setSelected] = useState<BrushSectionId>("tip");
   const [enabled, setEnabled] = useState<Set<BrushSectionId>>(() => new Set(["shape", "scatter", "texture", "smoothing"]));
   const [locked, setLocked] = useState<Set<BrushSectionId>>(() => new Set());
-  const [draft, setDraft] = useState<DraftValues>(initialDraft);
-  const setDraftValue = (key: string, value: number | boolean | string) => setDraft((current) => ({ ...current, [key]: value }));
+  // Settings panel fields write into the same brush option set the paint tool
+  // reads. Keeping a separate draft here made the UI look configured while a
+  // stroke silently continued using its old behaviour.
+  const setDraftValue = (key: string, value: number | boolean | string) => setToolOption("raster.brush", key, value);
   const value = (id: "size" | "hardness" | "spacing" | "roundness" | "angle", fallback: number) => Number(toolOptions[id] ?? fallback);
   const section = brushSections.find((entry) => entry.id === selected)!;
   const selectSection = (id: BrushSectionId) => setSelected(id);
@@ -84,8 +86,8 @@ export function BrushSettingsPanel() {
   const toggleLocked = (id: BrushSectionId) => setLocked((current) => { const next = new Set(current); next.has(id) ? next.delete(id) : next.add(id); return next; });
   const liveValue = (id: "size" | "hardness" | "spacing" | "roundness" | "angle", fallback: number) => value(id, fallback);
 
-  const draftField = (key: string, label: string, options: { min?: number; max?: number; unit?: string } = {}) => <NumberField label={label} value={Number(draft[key])} onChange={(next) => setDraftValue(key, next)} {...options} />;
-  const checkbox = (key: string, label: string) => <label className="brush-inline-checkbox"><input type="checkbox" checked={Boolean(draft[key])} onChange={(event) => setDraftValue(key, event.currentTarget.checked)} />{label}</label>;
+  const draftField = (key: string, label: string, options: { min?: number; max?: number; unit?: string } = {}) => <NumberField label={label} value={Number(toolOptions[key] ?? initialDraft[key])} onChange={(next) => setDraftValue(key, next)} {...options} />;
+  const checkbox = (key: string, label: string) => <label className="brush-inline-checkbox"><input type="checkbox" checked={Boolean(toolOptions[key] ?? initialDraft[key])} onChange={(event) => setDraftValue(key, event.currentTarget.checked)} />{label}</label>;
 
   let editor: ReactNode;
   if (selected === "tip") editor = <>
@@ -110,7 +112,7 @@ export function BrushSettingsPanel() {
   </>;
   else if (selected === "scatter") editor = <>
     <div className="brush-inline-row">{checkbox("bothAxes", text(language, "Both Axes", "Обе оси"))}</div>
-    {draftField("scatter", text(language, "Scatter", "Рассеивание"))}<ControlField language={language} />
+    {draftField("scatter", text(language, "Scatter", "Рассеивание"), { max: 1000 })}<ControlField language={language} />
     {draftField("count", text(language, "Count", "Счётчик"), { min: 1, max: 16, unit: "" })}
     {draftField("countJitter", text(language, "Count Jitter", "Колебание счётчика"))}<ControlField language={language} />
   </>;
@@ -196,7 +198,10 @@ export function BrushesPanel() {
     const preset: StoredBrushPreset = {
       id: `custom-${Date.now().toString(36)}`,
       label: { en: name.trim(), ru: name.trim() }, glyph: "●", order: 1000 + customPresets.length,
-      options: Object.fromEntries(["size", "hardness", "spacing", "roundness", "angle"].map((id) => [id, brushOptions[id] ?? (id === "size" ? 24 : id === "hardness" ? 82 : id === "spacing" ? 12 : id === "roundness" ? 100 : 0)])),
+      // A preset is the current brush behaviour, not merely the five fields
+      // visible in the compact options bar. Unknown future fields remain
+      // serialisable, making saved presets forward-compatible.
+      options: { ...brushOptions },
       custom: true,
     };
     setCustomPresets((current) => { const next = [...current, preset]; localStorage.setItem(CUSTOM_PRESETS_KEY, JSON.stringify(next)); return next; });

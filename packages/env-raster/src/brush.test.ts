@@ -171,6 +171,33 @@ describe("brush hardness", () => {
   });
 });
 
+describe("brush dynamics", () => {
+  it("uses a deterministic stamp sequence rather than nondeterministic Math.random", () => {
+    const one = blankCoverage(), two = blankCoverage();
+    accumulateDab(one, W, H, { x: 200, y: 100 }, 80, 1, 1, 0.82, undefined, 1, 0, true, false,
+      { sizeJitter: .75, angleJitter: 120, roundnessJitter: .5, count: 3, scatter: 40, bothAxes: true }, { seed: 42, index: 0 });
+    accumulateDab(two, W, H, { x: 200, y: 100 }, 80, 1, 1, 0.82, undefined, 1, 0, true, false,
+      { sizeJitter: .75, angleJitter: 120, roundnessJitter: .5, count: 3, scatter: 40, bothAxes: true }, { seed: 42, index: 0 });
+    expect(two).toEqual(one);
+  });
+
+  it("scatters a multi-count stamp farther than its unscattered tip", () => {
+    const plain = blankCoverage(), scattered = blankCoverage();
+    accumulateDab(plain, W, H, { x: 200, y: 100 }, 40, 1, 1, .82);
+    accumulateDab(scattered, W, H, { x: 200, y: 100 }, 40, 1, 1, .82, undefined, 1, 0, true, false,
+      { scatter: 100, bothAxes: true, count: 8 }, { seed: 7, index: 0 });
+    expect(painted(scattered)).toBeGreaterThan(painted(plain));
+  });
+
+  it("never lets size jitter fall below its configured minimum diameter", () => {
+    const coverage = blankCoverage();
+    accumulateDab(coverage, W, H, { x: 200, y: 100 }, 100, 1, 1, 1, undefined, 1, 0, true, false,
+      { sizeJitter: 1, minimumDiameter: .6 }, { seed: 1, index: 0 });
+    // Any jitter seed must retain an opaque core at least 60px in diameter.
+    expect(coverage[100 * W + 220]!).toBeGreaterThan(240);
+  });
+});
+
 describe("stroke coverage", () => {
   const WHITE_BASE = () => {
     const px = new Uint8ClampedArray(W * H * 4);

@@ -2410,6 +2410,13 @@ Pointer Events → Stroke Smoothing → Stroke Resampling → Stamp Positions
       добавлена в Window: поиск, Basic/Dry/Wet/Special Effect группы, recent,
       выбор базовых пресетов и локальное сохранение новых. Drag-and-drop,
       реальные previews и ABR остаются задачами §5.5.
+- [x] **14 сентября 2026:** первый runtime-слой dynamics подключён к
+      `raster.brush`: Shape Dynamics (`Size/Angle/Roundness Jitter` с
+      minimum diameter/roundness) и Scattering (`Scatter`, Both Axes,
+      Count/Count Jitter). Параметры панели и preset теперь идут в один
+      `toolOptions`-контракт, последовательность stamps детерминирована,
+      а dynamics считаются до пиксельного цикла. Texture/Dual/Color/Transfer
+      и контроллеры стилуса остаются следующими шагами.
 - [ ] Единая грамматика параметра во всех секциях: `Slider/Number +
       Jitter + Control ▾ (Off/Fade/Pen Pressure/Pen Tilt/Stylus Wheel/…)`.
 - [ ] Владелец-ревьюер предлагает **чуть упростить** относительно

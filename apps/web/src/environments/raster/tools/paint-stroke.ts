@@ -1,4 +1,4 @@
-import { accumulateDab, accumulateStrokeSegment, compositeCoverage, parseHexColor, sampleAverage, toHexColor, unionRect, type Point, type RasterRect } from "@vravio/env-raster";
+import { accumulateDab, accumulateStrokeSegment, compositeCoverage, parseHexColor, sampleAverage, toHexColor, unionRect, type BrushDynamics, type BrushStampState, type Point, type RasterRect } from "@vravio/env-raster";
 import { locksRefuse } from "./lock-guard";
 import type { PaintTarget, RasterToolDefinition, ToolContext, ToolPointer } from "./types";
 
@@ -38,6 +38,8 @@ interface Stroke {
    * sample would get a dab of its own regardless of the brush's spacing. See
    * `accumulateStrokeSegment`, which owns the explanation. */
   spacingCarry: number;
+  readonly dynamics: BrushDynamics;
+  readonly stampState: BrushStampState;
   /** Set the moment Shift is first seen held mid-drag (and cleared the moment it is released) —
    * see `constrainToAxis`'s own comment for why the axis and anchor are decided once, here,
    * rather than re-read every sample. */
@@ -104,17 +106,33 @@ function resolvedOptions(context: ToolContext<PaintStrokeState>, config: PaintSt
     angle: Number(options.angle ?? 0),
     pressureSize: options.pressureSize !== false,
     pressureOpacity: options.pressureOpacity === true,
+    dynamics: {
+      sizeJitter: Number(options.sizeJitter ?? 0) / 100,
+      minimumDiameter: Number(options.minimumDiameter ?? 0) / 100,
+      angleJitter: Number(options.angleJitter ?? 0),
+      roundnessJitter: Number(options.roundnessJitter ?? 0) / 100,
+      minimumRoundness: Number(options.minimumRoundness ?? 1) / 100,
+      scatter: Number(options.scatter ?? 0),
+      bothAxes: options.bothAxes === true,
+      count: Number(options.count ?? 1),
+      countJitter: Number(options.countJitter ?? 0) / 100,
+    } satisfies BrushDynamics,
   };
 }
 
-function paintDab(context: ToolContext<PaintStrokeState>, config: PaintStrokeConfig, coverage: Uint8ClampedArray, point: Point): void {
+function paintDab(context: ToolContext<PaintStrokeState>, config: PaintStrokeConfig, coverage: Uint8ClampedArray, point: Point, dynamics?: BrushDynamics, stampState?: BrushStampState): void {
   const o = resolvedOptions(context, config);
-  accumulateDab(coverage, context.document.width, context.document.height, point, o.size, o.flow, o.opacity, o.hardness, context.paintMask, o.roundness, o.angle, o.pressureSize, o.pressureOpacity);
+  accumulateDab(coverage, context.document.width, context.document.height, point, o.size, o.flow, o.opacity, o.hardness, context.paintMask, o.roundness, o.angle, o.pressureSize, o.pressureOpacity, dynamics ?? o.dynamics, stampState);
 }
 
-function paintSegment(context: ToolContext<PaintStrokeState>, config: PaintStrokeConfig, coverage: Uint8ClampedArray, from: Point, control: Point, to: Point, carry = 0): number {
+function paintSegment(context: ToolContext<PaintStrokeState>, config: PaintStrokeConfig, coverage: Uint8ClampedArray, from: Point, control: Point, to: Point, carry = 0, dynamics?: BrushDynamics, stampState?: BrushStampState): number {
   const o = resolvedOptions(context, config);
-  return accumulateStrokeSegment(coverage, context.document.width, context.document.height, from, control, to, o.size, o.flow, o.opacity, context.paintMask, o.hardness, o.spacing, o.roundness, o.angle, o.pressureSize, o.pressureOpacity, carry);
+  return accumulateStrokeSegment(coverage, context.document.width, context.document.height, from, control, to, o.size, o.flow, o.opacity, context.paintMask, o.hardness, o.spacing, o.roundness, o.angle, o.pressureSize, o.pressureOpacity, carry, dynamics ?? o.dynamics, stampState);
+}
+
+function brushPaintPad(context: ToolContext<PaintStrokeState>): number {
+  const size = Number(context.options.size ?? 24);
+  return size / 2 + size * Math.max(0, Number(context.options.scatter ?? 0)) / 100 + 2;
 }
 
 /** Lays the coverage gathered so far onto the working buffer, over one rectangle. */
@@ -157,8 +175,8 @@ function constrainToAxis(stroke: Stroke, pointer: ToolPointer): Point {
 function appendPoint(context: ToolContext<PaintStrokeState>, config: PaintStrokeConfig, stroke: Stroke, point: Point): void {
   if (Math.hypot(point.x - stroke.pending.x, point.y - stroke.pending.y) < 0.05) return;
   const end: Point = { x: (stroke.pending.x + point.x) / 2, y: (stroke.pending.y + point.y) / 2, pressure: ((stroke.pending.pressure ?? 1) + (point.pressure ?? 1)) / 2 };
-  stroke.spacingCarry = paintSegment(context, config, stroke.coverage, stroke.curveStart, stroke.pending, end, stroke.spacingCarry);
-  const pad = Number(context.options.size ?? 24) / 2 + 2;
+  stroke.spacingCarry = paintSegment(context, config, stroke.coverage, stroke.curveStart, stroke.pending, end, stroke.spacingCarry, stroke.dynamics, stroke.stampState);
+  const pad = brushPaintPad(context);
   const touched = unionRect(
     unionRect(null, stroke.curveStart.x, stroke.curveStart.y, stroke.pending.x, stroke.pending.y, pad),
     point.x, point.y, end.x, end.y, pad,
@@ -220,8 +238,9 @@ export function createPaintStrokeTool(config: PaintStrokeConfig): RasterToolDefi
         // touched `gesture.current` for this case either.
         const control: Point = { x: (shiftFrom.x + pointer.point.x) / 2, y: (shiftFrom.y + pointer.point.y) / 2, pressure: 1 };
         const lineCoverage = new Uint8ClampedArray(context.document.width * context.document.height);
-        paintSegment(context, config, lineCoverage, shiftFrom, control, pointer.point);
-        const pad = Number(context.options.size ?? 24) / 2 + 2;
+        const lineOptions = resolvedOptions(context, config);
+        paintSegment(context, config, lineCoverage, shiftFrom, control, pointer.point, 0, lineOptions.dynamics, { seed: Math.round(shiftFrom.x * 13 + shiftFrom.y * 29 + pointer.point.x * 47 + pointer.point.y * 97), index: 0 });
+        const pad = brushPaintPad(context);
         const line = unionRect(null, shiftFrom.x, shiftFrom.y, pointer.point.x, pointer.point.y, pad);
         layStroke(context, config, { before, working, coverage: lineCoverage } as Stroke, line);
         context.setLastStrokePoint({ toolId: config.id, layerId: key, point: pointer.point });
@@ -231,9 +250,10 @@ export function createPaintStrokeTool(config: PaintStrokeConfig): RasterToolDefi
       }
 
       const coverage = new Uint8ClampedArray(context.document.width * context.document.height);
-      const stroke: Stroke = { pointerId: pointer.pointerId, before, working, coverage, curveStart: pointer.point, pending: pointer.point, dirty: null, strokeBounds: null, spacingCarry: 0, axisLock: null, target: context.paintTarget.kind, layerId: context.paintTarget.layerId };
-      paintDab(context, config, coverage, pointer.point);
-      const pad = Number(context.options.size ?? 24) / 2 + 2;
+      const strokeOptions = resolvedOptions(context, config);
+      const stroke: Stroke = { pointerId: pointer.pointerId, before, working, coverage, curveStart: pointer.point, pending: pointer.point, dirty: null, strokeBounds: null, spacingCarry: 0, dynamics: strokeOptions.dynamics, stampState: { seed: Math.round(pointer.point.x * 13 + pointer.point.y * 29 + pointer.pointerId * 47), index: 0 }, axisLock: null, target: context.paintTarget.kind, layerId: context.paintTarget.layerId };
+      paintDab(context, config, coverage, pointer.point, stroke.dynamics, stroke.stampState);
+      const pad = brushPaintPad(context);
       const first = unionRect(null, pointer.point.x, pointer.point.y, pointer.point.x, pointer.point.y, pad);
       layStroke(context, config, stroke, first);
       stroke.strokeBounds = first;
@@ -256,8 +276,8 @@ export function createPaintStrokeTool(config: PaintStrokeConfig): RasterToolDefi
       // The curve lags half a step behind the raw input by construction
       // (`appendPoint` always ends on a midpoint) — this closes the last
       // gap so the stroke visibly reaches where the pointer was released.
-      paintSegment(context, config, stroke.coverage, stroke.curveStart, stroke.pending, stroke.pending, stroke.spacingCarry);
-      const closing = unionRect(null, stroke.curveStart.x, stroke.curveStart.y, stroke.pending.x, stroke.pending.y, Number(context.options.size ?? 24) / 2 + 2);
+      paintSegment(context, config, stroke.coverage, stroke.curveStart, stroke.pending, stroke.pending, stroke.spacingCarry, stroke.dynamics, stroke.stampState);
+      const closing = unionRect(null, stroke.curveStart.x, stroke.curveStart.y, stroke.pending.x, stroke.pending.y, brushPaintPad(context));
       layStroke(context, config, stroke, closing);
       stroke.strokeBounds = unionRect(stroke.strokeBounds, closing.x, closing.y, closing.x + closing.width, closing.y + closing.height, 0);
       context.setLastStrokePoint({ toolId: config.id, layerId: strokeKey({ kind: stroke.target, layerId: stroke.layerId }), point: stroke.pending });

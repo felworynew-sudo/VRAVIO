@@ -1,5 +1,33 @@
 import type { Point, RasterRect, RgbaColor } from "./types";
 
+/** Runtime subset of a Brush Preset used by the first paint-engine pass.
+ * Values are normalized fractions except angleJitter (degrees), count and the
+ * explicitly percentage-like `scatter` (100 equals one tip diameter). */
+export interface BrushDynamics {
+  readonly sizeJitter?: number;
+  readonly minimumDiameter?: number;
+  readonly angleJitter?: number;
+  readonly roundnessJitter?: number;
+  readonly minimumRoundness?: number;
+  readonly scatter?: number;
+  readonly bothAxes?: boolean;
+  readonly count?: number;
+  readonly countJitter?: number;
+}
+
+/** Kept for the lifetime of one stroke so a preview, re-render, and a saved
+ * history result all use the same dab sequence instead of Math.random(). */
+export interface BrushStampState { seed: number; index: number }
+
+function brushRandom(seed: number, stamp: number, channel: number): number {
+  let value = (seed ^ Math.imul(stamp + 1, 0x9e3779b1) ^ Math.imul(channel + 1, 0x85ebca6b)) >>> 0;
+  value ^= value >>> 16; value = Math.imul(value, 0x7feb352d); value ^= value >>> 15;
+  value = Math.imul(value, 0x846ca68b); value ^= value >>> 16;
+  return (value >>> 0) / 0x100000000;
+}
+
+const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
+
 /**
  * GIMP's own brush falloff, from `app/core/gimpbrushgenerated.c`.
  *
@@ -73,7 +101,7 @@ export function falloffTable(hardness: number): Float32Array {
  * The shape comes from the same `falloffTable` the clone stamp and the retouch tools use, so no
  * two of them can come to disagree about what a given hardness looks like.
  */
-export function accumulateDab(
+function accumulateRoundDab(
   coverage: Uint8ClampedArray, width: number, height: number, point: Point, size: number,
   flow: number, ceiling: number, hardness = 0.82, selectionMask?: Uint8ClampedArray,
   roundness = 1, angleDegrees = 0, pressureSize = true, pressureOpacity = false,
@@ -110,6 +138,42 @@ export function accumulateDab(
       const next = already + rate * shape * selectionAlpha * (cap - already);
       coverage[index] = next > cap ? cap : next;
     }
+  }
+}
+
+/**
+ * Paint one logical stamp. Dynamics are resolved once per stamp from a seeded
+ * sequence; the hot per-pixel loop above remains branch-free. That is the
+ * same separation Patchy uses between its dynamics evaluator and tip dab.
+ */
+export function accumulateDab(
+  coverage: Uint8ClampedArray, width: number, height: number, point: Point, size: number,
+  flow: number, ceiling: number, hardness = 0.82, selectionMask?: Uint8ClampedArray,
+  roundness = 1, angleDegrees = 0, pressureSize = true, pressureOpacity = false,
+  dynamics?: BrushDynamics, stampState?: BrushStampState,
+): void {
+  const stamp = stampState ? stampState.index++ : Math.round(point.x * 31 + point.y * 131);
+  const seed = stampState?.seed ?? 0x51f15e;
+  const sizeJitter = clamp01(dynamics?.sizeJitter ?? 0);
+  const minimumDiameter = clamp01(dynamics?.minimumDiameter ?? 0);
+  const roundnessJitter = clamp01(dynamics?.roundnessJitter ?? 0);
+  const minimumRoundness = clamp01(dynamics?.minimumRoundness ?? 0.01);
+  const countJitter = clamp01(dynamics?.countJitter ?? 0);
+  const baseCount = Math.max(1, Math.min(16, Math.round(dynamics?.count ?? 1)));
+  const count = Math.max(1, Math.min(16, Math.round(baseCount * (1 - countJitter * brushRandom(seed, stamp, 0)))));
+  const scatter = Math.max(0, dynamics?.scatter ?? 0);
+
+  for (let copy = 0; copy < count; copy += 1) {
+    const sizeFactor = Math.max(minimumDiameter, 1 - sizeJitter * brushRandom(seed, stamp, 1 + copy * 5));
+    const currentRoundness = Math.max(minimumRoundness, roundness * (1 - roundnessJitter * brushRandom(seed, stamp, 2 + copy * 5)));
+    const currentAngle = angleDegrees + (brushRandom(seed, stamp, 3 + copy * 5) * 2 - 1) * (dynamics?.angleJitter ?? 0);
+    const scatterRadius = size * (scatter / 100) * Math.sqrt(brushRandom(seed, stamp, 4 + copy * 5));
+    const scatterAngle = brushRandom(seed, stamp, 5 + copy * 5) * Math.PI * 2;
+    const offsetX = scatterRadius * Math.cos(scatterAngle);
+    // Single-axis scatter keeps a brush's main travel axis recognisable;
+    // enabling Both Axes turns it into the full radial cloud.
+    const offsetY = dynamics?.bothAxes ? scatterRadius * Math.sin(scatterAngle) : 0;
+    accumulateRoundDab(coverage, width, height, { ...point, x: point.x + offsetX, y: point.y + offsetY }, size * sizeFactor, flow, ceiling, hardness, selectionMask, currentRoundness, currentAngle, pressureSize, pressureOpacity);
   }
 }
 
@@ -188,6 +252,7 @@ export function accumulateStrokeSegment(
   coverage: Uint8ClampedArray, width: number, height: number, from: Point, control: Point, to: Point,
   size: number, flow: number, ceiling: number, selectionMask?: Uint8ClampedArray, hardness = 0.82,
   spacing = 0.12, roundness = 1, angleDegrees = 0, pressureSize = true, pressureOpacity = false, carry = 0,
+  dynamics?: BrushDynamics, stampState?: BrushStampState,
 ): number {
   const approximateLength = Math.hypot(control.x - from.x, control.y - from.y) + Math.hypot(to.x - control.x, to.y - control.y);
   const step = Math.max(0.5, size * Math.max(0.01, spacing));
@@ -200,7 +265,7 @@ export function accumulateStrokeSegment(
     };
   };
   return walkSpacedPath(at, approximateLength, step, carry, (current) => {
-    accumulateDab(coverage, width, height, current, size, flow, ceiling, hardness, selectionMask, roundness, angleDegrees, pressureSize, pressureOpacity);
+    accumulateDab(coverage, width, height, current, size, flow, ceiling, hardness, selectionMask, roundness, angleDegrees, pressureSize, pressureOpacity, dynamics, stampState);
   });
 }
 
