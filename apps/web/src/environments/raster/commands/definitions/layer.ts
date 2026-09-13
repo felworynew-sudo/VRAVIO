@@ -1,5 +1,5 @@
-import { activeRasterLayer, clearSelectedPixels, convertLayerToEmbeddedSmartObject, createRasterLayer, groupLayers, isEditableEmbeddedSmartObject, isRasterDocumentState, layerAccepts, layerDocumentPixels, layerFromSelection, mergeLayerDown, mergeVisibleLayers, moveLayerInStack, removeLayer, setLayerPixels, stampVisibleLayers, ungroupLayer, type RasterDocumentState } from "@vravio/env-raster";
-import type { EnvironmentKind } from "@vravio/kernel";
+import { activeRasterLayer, clearSelectedPixels, convertLayerToEmbeddedSmartObject, createRasterLayer, duplicateLayer, groupLayers, isEditableEmbeddedSmartObject, isRasterDocumentState, layerAccepts, layerDocumentPixels, layerFromSelection, makeIndependentEmbeddedSmartObjectCopy, mergeLayerDown, mergeVisibleLayers, moveLayerInStack, removeLayer, setLayerPixels, stampVisibleLayers, ungroupLayer, type RasterDocumentState } from "@vravio/env-raster";
+import type { AssetId, EnvironmentKind } from "@vravio/kernel";
 import { kernel } from "../../../../kernel";
 import { useShellStore } from "../../../../store";
 import { CATEGORY_LAYER } from "../../../../commands/categories";
@@ -59,6 +59,34 @@ async function editActiveSmartObjectContents(documentId: string): Promise<void> 
   if (!document || !isRasterDocumentState(document.state)) return;
   if (!isEditableEmbeddedSmartObject(activeRasterLayer(document.state))) return;
   await openTargetElsewhere(documentId, "raster", false);
+}
+
+/** Photoshop's New Smart Object via Copy: same visual pixels, separate source. */
+async function createIndependentSmartObjectCopy(documentId: string): Promise<void> {
+  const document = kernel.documents.get<RasterDocumentState>(documentId);
+  if (!document || !isRasterDocumentState(document.state)) return;
+  const source = activeRasterLayer(document.state);
+  if (!isEditableEmbeddedSmartObject(source)) return;
+  const assetId = source.smartSource!.assetId as AssetId;
+  const record = kernel.assets.mustGet(assetId);
+  const bytes = await kernel.assets.read(assetId);
+  if (!bytes) return;
+  // AssetStore correctly deduplicates ordinary identical imports. A Smart
+  // Object via Copy must intentionally *not* deduplicate: its source is now
+  // independently editable, so an opaque copy token makes that semantic
+  // distinction durable through persistence and reload.
+  const copyAssetId = await kernel.assets.importAsset(bytes, {
+    kind: record.kind,
+    mime: record.mime,
+    name: record.name,
+    producedBy: "smart-object",
+    meta: { ...record.meta, smartObjectCopyOf: assetId, smartObjectCopyNonce: crypto.randomUUID() },
+  });
+  await edit(documentId, "New Smart Object via Copy (Новый смарт-объект через копирование)", (state) => {
+    const copy = duplicateLayer(state, source.id);
+    return Boolean(copy && makeIndependentEmbeddedSmartObjectCopy(copy, copyAssetId));
+  });
+  kernel.documents.addAssetRef(documentId, copyAssetId);
 }
 
 const edit = (documentId: string, label: string, mutate: (state: RasterDocumentState) => boolean) => changeRasterDocument(documentId, label, mutate);
@@ -263,6 +291,18 @@ const commands: readonly CommandDefinition[] = [
   restack(["layer.sendBackward", "Send Backward", "Переложить назад", "Mod+[", "down"]),
   restack(["layer.bringToFront", "Bring to Front", "На передний план", "Mod+Shift+]", "top"]),
   restack(["layer.sendToBack", "Send to Back", "На задний план", "Mod+Shift+[", "bottom"]),
+  {
+    id: "layer.newSmartObjectViaCopy",
+    label: { en: "New Smart Object via Copy", ru: "Новый смарт-объект через копирование" },
+    category: CATEGORY_LAYER,
+    surfaces: ["menu", "palette", "layer-context"],
+    isEnabled: ({ activeDocumentId }) => {
+      const state = activeRasterState(activeDocumentId);
+      const layer = state?.layers.find((item) => item.id === state.activeLayerId);
+      return Boolean(layer && isEditableEmbeddedSmartObject(layer));
+    },
+    execute: ({ activeDocumentId }) => { if (activeDocumentId) void createIndependentSmartObjectCopy(activeDocumentId); },
+  },
   {
     id: "layer.convertToSmartObject",
     label: { en: "Convert to Smart Object", ru: "Преобразовать в смарт-объект" },

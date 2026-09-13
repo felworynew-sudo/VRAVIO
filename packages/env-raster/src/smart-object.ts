@@ -18,3 +18,15 @@ export function smartObjectSourceMode(source: RasterSmartSource | undefined): "e
 export function isEditableEmbeddedSmartObject(layer: RasterLayer): boolean {
   return layer.kind === "smart" && Boolean(layer.smartSource?.assetId) && smartObjectSourceMode(layer.smartSource) === "embedded";
 }
+
+/**
+ * Rebinds a duplicated Smart Object to a separately imported asset. The caller
+ * owns the byte copy and asset lifetime; this keeps the document mutation pure
+ * and makes "New Smart Object via Copy" undoable as one structural step.
+ */
+export function makeIndependentEmbeddedSmartObjectCopy(layer: RasterLayer, assetId: AssetId): boolean {
+  if (!isEditableEmbeddedSmartObject(layer) || !assetId) return false;
+  layer.pixelAssetId = assetId;
+  layer.smartSource = { ...layer.smartSource!, assetId, pinnedRev: null, mode: "embedded" };
+  return true;
+}

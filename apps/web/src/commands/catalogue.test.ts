@@ -78,6 +78,7 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "layer.mergeVisible|Mod+Shift+E||Layer",
   "layer.new3DExtrude|||3D",
   "layer.new3DText|||3D",
+  "layer.newSmartObjectViaCopy|||Layer",
   "layer.new|Mod+Shift+N||Layer",
   "layer.openElsewhereBranch|||Layer",
   "layer.openElsewhere|||Layer",

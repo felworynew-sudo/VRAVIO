@@ -698,7 +698,7 @@ function LayersPanel() {
      * the last two are not commands at all yet.
      */
     const layerContextMenu = (layer: RasterLayer): ContextMenuItem[] => {
-      const fromCatalogue = pickCommands("layer-context", ["layer.duplicate", "layer.convertToSmartObject", "layer.editSmartObjectContents", "layer.mergeDown", "layer.mergeVisible", "layer.ungroup", "image.adjustment.invert"], { activeDocumentId: active.id }, language);
+      const fromCatalogue = pickCommands("layer-context", ["layer.duplicate", "layer.convertToSmartObject", "layer.editSmartObjectContents", "layer.newSmartObjectViaCopy", "layer.mergeDown", "layer.mergeVisible", "layer.ungroup", "image.adjustment.invert"], { activeDocumentId: active.id }, language);
       const byId = new Map(fromCatalogue.map((command) => [command.id, command]));
       const item = (id: string, extra?: Partial<ContextMenuItem>): ContextMenuItem => {
         const command = byId.get(id)!;
@@ -708,6 +708,7 @@ function LayersPanel() {
         item("layer.duplicate"),
         ...(layer.kind === "pixel" ? [item("layer.convertToSmartObject")] : []),
         ...(layer.kind === "smart" ? [item("layer.editSmartObjectContents")] : []),
+        ...(layer.kind === "smart" ? [item("layer.newSmartObjectViaCopy")] : []),
         { label: text(language, "Delete Layer", "Удалить слой"), onSelect: deleteLayer, danger: true },
         { label: text(language, "Layer Style…", "Стиль слоя…"), onSelect: () => setStyleLayerId(layer.id), disabled: layer.kind === "group" },
         // Owner's own request: a text layer offers "Convert to 3D" — extrudes
