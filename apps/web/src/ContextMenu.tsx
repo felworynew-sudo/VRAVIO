@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 
 export interface ContextMenuItem {
   label: string;
@@ -26,10 +27,13 @@ export function useContextMenu() {
     if (items.length) setMenu({ x: event.clientX, y: event.clientY, items });
   };
   const close = () => setMenu(null);
-  const node = menu && <div className="context-menu-backdrop" onMouseDown={close} onContextMenu={(event) => { event.preventDefault(); close(); }}>
+  // Dockview uses transformed/overflowing containers for collapsed icon docks.
+  // A fixed element below one of those can still be clipped by that ancestor,
+  // so every context menu belongs at the document root, not in its panel tree.
+  const node = menu ? createPortal(<div className="context-menu-backdrop" onMouseDown={close} onContextMenu={(event) => { event.preventDefault(); close(); }}>
     <div className="context-menu" style={{ left: Math.min(menu.x, window.innerWidth - 240), top: Math.min(menu.y, window.innerHeight - menu.items.length * 30 - 16) }} onMouseDown={(event) => event.stopPropagation()}>
       {menu.items.map((item, index) => <button key={index} disabled={item.disabled} className={[item.danger ? "danger" : "", item.separatorBefore ? "separator-before" : ""].filter(Boolean).join(" ")} onClick={() => { item.onSelect(); close(); }}>{item.label}</button>)}
     </div>
-  </div>;
+  </div>, document.body) : null;
   return { open, close, node, isOpen: menu !== null };
 }
