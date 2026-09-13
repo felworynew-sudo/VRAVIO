@@ -25,6 +25,9 @@ export interface SaveFileResult { readonly name: string; readonly method: "nativ
 
 export interface FileSystemPort {
   openFiles(options?: OpenFileOptions): Promise<readonly PlatformFile[]>;
+  /** Re-open a previously authorised desktop path. Web implementations return
+   * null because browser file input does not grant a reusable path. */
+  readExternalFile?(path: string): Promise<PlatformFile | null>;
   saveFile(options: SaveFileOptions): Promise<SaveFileResult>;
 }
 

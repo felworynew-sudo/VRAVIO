@@ -89,6 +89,7 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "layer.stampVisible|Mod+Shift+Alt+E||Layer",
   "layer.toggleClippingMask|Mod+Alt+G||Layer",
   "layer.ungroup|Mod+Shift+G||Layer",
+  "layer.updateLinkedSmartObject|||Layer",
   "layer.viaCut|Mod+Shift+J||Layer",
   "roundtrip.apply|Mod+Shift+Enter||File",
   "roundtrip.detach|||File",

@@ -1,5 +1,5 @@
 import { activeRasterLayer, appendLayer, clearSelectedPixels, convertLayerToEmbeddedSmartObject, createRasterLayer, duplicateLayer, groupLayers, isEditableEmbeddedSmartObject, isRasterDocumentState, layerAccepts, layerDocumentPixels, layerFromSelection, makeIndependentEmbeddedSmartObjectCopy, mergeLayerDown, mergeVisibleLayers, moveLayerInStack, RASTER_ASSET_MIME, removeLayer, replaceSmartObjectSourcePixels, setLayerLocalPixels, setLayerPixels, stampVisibleLayers, ungroupLayer, encodeRasterAsset, type RasterDocumentState } from "@vravio/env-raster";
-import type { AssetId, EnvironmentKind } from "@vravio/kernel";
+import type { AssetId, EnvironmentKind, PlatformFile } from "@vravio/kernel";
 import { kernel } from "../../../../kernel";
 import { useShellStore } from "../../../../store";
 import { CATEGORY_LAYER } from "../../../../commands/categories";
@@ -93,9 +93,9 @@ async function createIndependentSmartObjectCopy(documentId: string): Promise<voi
 /** Reads one user-picked image into the same internal raster asset format that
  * round-trip and embedded Smart Objects already use. `Platform.fs` gives the
  * desktop native picker and the web picker one identical command path. */
-async function pickEmbeddedSmartObjectSource(): Promise<{ assetId: AssetId; pixels: Uint8ClampedArray; width: number; height: number; name: string; linkedPath: string | null } | null> {
-  const selected = await kernel.platform.fs.openFiles({ accept: { "image/*": [".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".bmp", ".tif", ".tiff", ".svg"] } });
-  const picked = selected[0]; if (!picked) return null;
+type SmartObjectFileSource = { assetId: AssetId; pixels: Uint8ClampedArray; width: number; height: number; name: string; linkedPath: string | null };
+
+async function decodeSmartObjectSource(picked: PlatformFile): Promise<SmartObjectFileSource | null> {
   const bytes = new Uint8Array(picked.data.byteLength); bytes.set(picked.data);
   const file = new File([bytes.buffer], picked.name, { type: picked.mime || "image/png" });
   const decoded = await decodeImportedImage(file); if (!decoded) return null;
@@ -110,6 +110,11 @@ async function pickEmbeddedSmartObjectSource(): Promise<{ assetId: AssetId; pixe
     });
     return { assetId, pixels, width: decoded.width, height: decoded.height, name: picked.name, linkedPath: picked.path ?? null };
   } finally { decoded.release(); }
+}
+
+async function pickEmbeddedSmartObjectSource(): Promise<SmartObjectFileSource | null> {
+  const selected = await kernel.platform.fs.openFiles({ accept: { "image/*": [".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif", ".bmp", ".tif", ".tiff", ".svg"] } });
+  const picked = selected[0]; return picked ? decodeSmartObjectSource(picked) : null;
 }
 
 /** Place Linked is intentionally desktop-only for now: a browser File cannot
@@ -131,6 +136,28 @@ async function placeLinkedSmartObject(documentId: string): Promise<void> {
     layer.smartSource = { ...layer.smartSource!, mode: "linked", linkedPath };
     appendLayer(state, layer); state.activeLayerId = layer.id;
     return true;
+  });
+  kernel.documents.addAssetRef(documentId, source.assetId);
+}
+
+async function updateLinkedSmartObjectContents(documentId: string): Promise<void> {
+  if (kernel.platform.kind !== "desktop") return;
+  const document = kernel.documents.get<RasterDocumentState>(documentId);
+  const selected = document && isRasterDocumentState(document.state) ? activeRasterLayer(document.state) : undefined;
+  const linkedPath = selected?.kind === "smart" && selected.smartSource?.mode === "linked" ? selected.smartSource.linkedPath : undefined;
+  const reader = kernel.platform.fs.readExternalFile;
+  if (!linkedPath || !reader) return;
+  const external = await reader(linkedPath); if (!external) return;
+  const source = await decodeSmartObjectSource(external); if (!source) return;
+  await edit(documentId, "Update Linked Smart Object (Обновить связанный смарт-объект)", (state) => {
+    let changed = false;
+    for (const layer of state.layers) {
+      if (layer.kind !== "smart" || layer.smartSource?.mode !== "linked" || layer.smartSource.linkedPath !== linkedPath) continue;
+      layer.pixelAssetId = source.assetId;
+      layer.smartSource = { ...layer.smartSource, assetId: source.assetId, pinnedRev: null };
+      changed = replaceSmartObjectSourcePixels(layer, source.pixels, source.width, source.height) || changed;
+    }
+    return changed;
   });
   kernel.documents.addAssetRef(documentId, source.assetId);
 }
@@ -384,6 +411,18 @@ const commands: readonly CommandDefinition[] = [
     surfaces: ["menu", "palette"],
     isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && kernel.platform.kind === "desktop" && isRasterActive({ activeDocumentId })),
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void placeLinkedSmartObject(activeDocumentId); },
+  },
+  {
+    id: "layer.updateLinkedSmartObject",
+    label: { en: "Update Linked Contents", ru: "Обновить связанное содержимое" },
+    category: CATEGORY_LAYER,
+    surfaces: ["menu", "palette", "layer-context"],
+    isEnabled: ({ activeDocumentId }) => {
+      const state = activeRasterState(activeDocumentId);
+      const layer = state?.layers.find((item) => item.id === state.activeLayerId);
+      return Boolean(kernel.platform.kind === "desktop" && layer?.kind === "smart" && layer.smartSource?.mode === "linked" && layer.smartSource.linkedPath);
+    },
+    execute: ({ activeDocumentId }) => { if (activeDocumentId) void updateLinkedSmartObjectContents(activeDocumentId); },
   },
   {
     id: "layer.editSmartObjectContents",

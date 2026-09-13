@@ -70,6 +70,16 @@ function isBrowserFileHandle(value: unknown): value is BrowserFileHandle {
 const isTauriDesktop = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 class DesktopFileSystem implements FileSystemPort {
+  async readExternalFile(path: string): Promise<PlatformFile | null> {
+    try {
+      const { readFile } = await import("@tauri-apps/plugin-fs");
+      const data = await readFile(path), name = path.split(/[\\/]/).pop() || "file";
+      const extension = name.split(".").pop()?.toLowerCase() ?? "";
+      const mime = extension === "png" ? "image/png" : extension === "jpg" || extension === "jpeg" ? "image/jpeg" : extension === "webp" ? "image/webp" : extension === "svg" ? "image/svg+xml" : "application/octet-stream";
+      return { name, mime, size: data.byteLength, lastModified: 0, data, path };
+    } catch { return null; }
+  }
+
   async openFiles(options: OpenFileOptions = {}): Promise<readonly PlatformFile[]> {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const { readFile } = await import("@tauri-apps/plugin-fs");
