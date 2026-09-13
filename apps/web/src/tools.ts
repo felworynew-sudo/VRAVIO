@@ -50,6 +50,10 @@ const brushDynamicsOptions: readonly ToolOption[] = [
   { id: "bothAxes", label: { en: "Both Axes", ru: "Обе оси" }, type: "boolean", defaultValue: false, hideFromBar: true },
   { id: "count", label: { en: "Count", ru: "Счётчик" }, type: "number", min: 1, max: 16, step: 1, defaultValue: 1, hideFromBar: true },
   { id: "countJitter", label: { en: "Count Jitter", ru: "Колебание счётчика" }, type: "number", min: 0, max: 100, step: 1, defaultValue: 0, unit: "%", hideFromBar: true },
+  { id: "opacityJitter", label: { en: "Opacity Jitter", ru: "Колебание непрозрачности" }, type: "number", min: 0, max: 100, step: 1, defaultValue: 0, unit: "%", hideFromBar: true },
+  { id: "minimumOpacity", label: { en: "Minimum Opacity", ru: "Минимальная непрозрачность" }, type: "number", min: 0, max: 100, step: 1, defaultValue: 0, unit: "%", hideFromBar: true },
+  { id: "flowJitter", label: { en: "Flow Jitter", ru: "Колебание подачи" }, type: "number", min: 0, max: 100, step: 1, defaultValue: 0, unit: "%", hideFromBar: true },
+  { id: "minimumFlow", label: { en: "Minimum Flow", ru: "Минимальная подача" }, type: "number", min: 0, max: 100, step: 1, defaultValue: 0, unit: "%", hideFromBar: true },
 ];
 
 export const tools: readonly ToolDefinition[] = [

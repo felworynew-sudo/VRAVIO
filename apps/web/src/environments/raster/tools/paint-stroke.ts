@@ -116,6 +116,10 @@ function resolvedOptions(context: ToolContext<PaintStrokeState>, config: PaintSt
       bothAxes: options.bothAxes === true,
       count: Number(options.count ?? 1),
       countJitter: Number(options.countJitter ?? 0) / 100,
+      opacityJitter: Number(options.opacityJitter ?? 0) / 100,
+      minimumOpacity: Number(options.minimumOpacity ?? 0) / 100,
+      flowJitter: Number(options.flowJitter ?? 0) / 100,
+      minimumFlow: Number(options.minimumFlow ?? 0) / 100,
     } satisfies BrushDynamics,
   };
 }

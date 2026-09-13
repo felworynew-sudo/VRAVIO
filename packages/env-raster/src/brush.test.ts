@@ -196,6 +196,16 @@ describe("brush dynamics", () => {
     // Any jitter seed must retain an opaque core at least 60px in diameter.
     expect(coverage[100 * W + 220]!).toBeGreaterThan(240);
   });
+
+  it("keeps Transfer opacity below the tool opacity ceiling and applies its minimum", () => {
+    const normal = blankCoverage(), transferred = blankCoverage();
+    accumulateDab(normal, W, H, { x: 200, y: 100 }, 60, 1, .8, 1);
+    accumulateDab(transferred, W, H, { x: 200, y: 100 }, 60, 1, .8, 1, undefined, 1, 0, true, false,
+      { opacityJitter: 1, minimumOpacity: .25, flowJitter: 1, minimumFlow: .25 }, { seed: 17, index: 0 });
+    const alpha = transferred[100 * W + 200]!;
+    expect(alpha).toBeGreaterThanOrEqual(Math.round(.25 * .25 * .8 * 255) - 1);
+    expect(alpha).toBeLessThanOrEqual(normal[100 * W + 200]!);
+  });
 });
 
 describe("stroke coverage", () => {

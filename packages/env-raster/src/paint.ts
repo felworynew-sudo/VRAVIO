@@ -13,6 +13,10 @@ export interface BrushDynamics {
   readonly bothAxes?: boolean;
   readonly count?: number;
   readonly countJitter?: number;
+  readonly opacityJitter?: number;
+  readonly minimumOpacity?: number;
+  readonly flowJitter?: number;
+  readonly minimumFlow?: number;
 }
 
 /** Kept for the lifetime of one stroke so a preview, re-render, and a saved
@@ -159,6 +163,10 @@ export function accumulateDab(
   const roundnessJitter = clamp01(dynamics?.roundnessJitter ?? 0);
   const minimumRoundness = clamp01(dynamics?.minimumRoundness ?? 0.01);
   const countJitter = clamp01(dynamics?.countJitter ?? 0);
+  const opacityJitter = clamp01(dynamics?.opacityJitter ?? 0);
+  const minimumOpacity = clamp01(dynamics?.minimumOpacity ?? 0);
+  const flowJitter = clamp01(dynamics?.flowJitter ?? 0);
+  const minimumFlow = clamp01(dynamics?.minimumFlow ?? 0);
   const baseCount = Math.max(1, Math.min(16, Math.round(dynamics?.count ?? 1)));
   const count = Math.max(1, Math.min(16, Math.round(baseCount * (1 - countJitter * brushRandom(seed, stamp, 0)))));
   const scatter = Math.max(0, dynamics?.scatter ?? 0);
@@ -173,7 +181,9 @@ export function accumulateDab(
     // Single-axis scatter keeps a brush's main travel axis recognisable;
     // enabling Both Axes turns it into the full radial cloud.
     const offsetY = dynamics?.bothAxes ? scatterRadius * Math.sin(scatterAngle) : 0;
-    accumulateRoundDab(coverage, width, height, { ...point, x: point.x + offsetX, y: point.y + offsetY }, size * sizeFactor, flow, ceiling, hardness, selectionMask, currentRoundness, currentAngle, pressureSize, pressureOpacity);
+    const opacityFactor = Math.max(minimumOpacity, 1 - opacityJitter * brushRandom(seed, stamp, 6 + copy * 5));
+    const flowFactor = Math.max(minimumFlow, 1 - flowJitter * brushRandom(seed, stamp, 7 + copy * 5));
+    accumulateRoundDab(coverage, width, height, { ...point, x: point.x + offsetX, y: point.y + offsetY }, size * sizeFactor, flow * flowFactor, ceiling * opacityFactor, hardness, selectionMask, currentRoundness, currentAngle, pressureSize, pressureOpacity);
   }
 }
 
