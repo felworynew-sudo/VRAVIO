@@ -2421,6 +2421,11 @@ Pointer Events → Stroke Smoothing → Stroke Resampling → Stamp Positions
       `Fade` и `Direction` сохраняются в preset и уже управляют применимыми
       Size/Angle/Roundness/Opacity/Flow settings; Texture/Dual/Color и
       дополнительные контроллеры стилуса остаются следующими шагами.
+- [x] **14 сентября 2026:** первый настраиваемый Smoothing (0–100%) вошёл
+      в общий brush option/preset contract. Он стабилизирует промежуточные
+      samples pulled-string интерполяцией, но на отпускании всегда принимает
+      реальную конечную координату указателя, поэтому мазок не заканчивается
+      позади курсора.
 - [ ] Единая грамматика параметра во всех секциях: `Slider/Number +
       Jitter + Control ▾ (Off/Fade/Pen Pressure/Pen Tilt/Stylus Wheel/…)`.
 - [ ] Владелец-ревьюер предлагает **чуть упростить** относительно

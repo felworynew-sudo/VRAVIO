@@ -25,7 +25,7 @@ const brushSections: readonly BrushSection[] = [
   { id: "noise", en: "Noise", ru: "Шум" },
   { id: "wetEdges", en: "Wet Edges", ru: "Влажные края" },
   { id: "buildUp", en: "Build-up", ru: "Накладка" },
-  { id: "smoothing", en: "Smoothing", ru: "Сглаживание" },
+  { id: "smoothing", en: "Smoothing", ru: "Сглаживание", configurable: true },
   { id: "protectTexture", en: "Protect Texture", ru: "Защита текстуры" },
 ];
 
@@ -143,6 +143,10 @@ export function BrushSettingsPanel() {
     {draftField("tiltY", text(language, "Tilt Y", "Наклон по оси Y"), { min: -100, max: 100 })}{checkbox("overrideTiltY", text(language, "Override Tilt Y", "Переопределить наклон по оси Y"))}
     {draftField("rotation", text(language, "Rotation", "Поворот"), { min: -180, max: 180, unit: "°" })}{checkbox("overrideRotation", text(language, "Override Rotation", "Переопределить поворот"))}
     {draftField("pressure", text(language, "Pressure", "Нажим"))}{checkbox("overridePressure", text(language, "Override Pressure", "Переопределить нажим"))}
+  </>;
+  else if (selected === "smoothing") editor = <>
+    {draftField("smoothing", text(language, "Smoothing", "Сглаживание"))}
+    <p className="brush-setting-hint">{text(language, "Higher values stabilise hand motion while keeping the released endpoint precise.", "Большие значения стабилизируют движение руки, сохраняя точную конечную точку.")}</p>
   </>;
   else editor = <div className="brush-simple-setting"><strong>{text(language, section.en, section.ru)}</strong><p>{text(language, "This section is a single preset switch, with no extra parameters.", "У этого раздела только переключатель участия в пресете, без дополнительных параметров.")}</p></div>;
 

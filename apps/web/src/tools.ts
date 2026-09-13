@@ -59,6 +59,7 @@ const brushDynamicsOptions: readonly ToolOption[] = [
     values: [{ value: "off", label: { en: "Off", ru: "Выкл" } }, { value: "pressure", label: { en: "Pen pressure", ru: "Нажим пера" } }, { value: "fade", label: { en: "Fade", ru: "Угасание" } }, { value: "direction", label: { en: "Direction", ru: "Направление" } }], hideFromBar: true,
   })),
   { id: "fadeSteps", label: { en: "Fade steps", ru: "Шаги угасания" }, type: "number", min: 1, max: 10000, step: 1, defaultValue: 100, hideFromBar: true },
+  { id: "smoothing", label: { en: "Smoothing", ru: "Сглаживание" }, type: "number", min: 0, max: 100, step: 1, defaultValue: 0, unit: "%", hideFromBar: true },
 ];
 
 export const tools: readonly ToolDefinition[] = [

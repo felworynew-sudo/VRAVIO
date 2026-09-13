@@ -185,9 +185,24 @@ function constrainToAxis(stroke: Stroke, pointer: ToolPointer): Point {
   return axis === "y" ? { ...pointer.point, y: anchor.y } : { ...pointer.point, x: anchor.x };
 }
 
+/** A compact pulled-string stabiliser. The stroke still owns the actual
+ * pointer endpoint on release; only intermediate samples are eased, so high
+ * smoothing does not make a line visibly end short of the cursor. */
+function smoothPoint(previous: Point, incoming: Point, amount: number): Point {
+  const smoothing = Math.max(0, Math.min(1, amount));
+  if (smoothing <= 0) return incoming;
+  const follow = 1 - smoothing * .85;
+  return {
+    x: previous.x + (incoming.x - previous.x) * follow,
+    y: previous.y + (incoming.y - previous.y) * follow,
+    pressure: (previous.pressure ?? 1) + ((incoming.pressure ?? 1) - (previous.pressure ?? 1)) * follow,
+  };
+}
+
 /** Extends the stroke to `point`, mutating it in place — see the note on the
  * interface above for why this does not go through `setState`. */
-function appendPoint(context: ToolContext<PaintStrokeState>, config: PaintStrokeConfig, stroke: Stroke, point: Point): void {
+function appendPoint(context: ToolContext<PaintStrokeState>, config: PaintStrokeConfig, stroke: Stroke, point: Point, precise = false): void {
+  if (!precise) point = smoothPoint(stroke.pending, point, Number(context.options.smoothing ?? 0) / 100);
   if (Math.hypot(point.x - stroke.pending.x, point.y - stroke.pending.y) < 0.05) return;
   const end: Point = { x: (stroke.pending.x + point.x) / 2, y: (stroke.pending.y + point.y) / 2, pressure: ((stroke.pending.pressure ?? 1) + (point.pressure ?? 1)) / 2 };
   stroke.spacingCarry = paintSegment(context, config, stroke.coverage, stroke.curveStart, stroke.pending, end, stroke.spacingCarry, stroke.dynamics, stroke.stampState);
@@ -287,7 +302,7 @@ export function createPaintStrokeTool(config: PaintStrokeConfig): RasterToolDefi
     onGestureEnd(context, pointer) {
       const stroke = context.state.stroke;
       if (!stroke || stroke.pointerId !== pointer.pointerId) return;
-      appendPoint(context, config, stroke, constrainToAxis(stroke, pointer));
+      appendPoint(context, config, stroke, constrainToAxis(stroke, pointer), true);
       // The curve lags half a step behind the raw input by construction
       // (`appendPoint` always ends on a midpoint) — this closes the last
       // gap so the stroke visibly reaches where the pointer was released.
