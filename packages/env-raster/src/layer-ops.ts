@@ -109,8 +109,9 @@ export function duplicateLayer(state: RasterDocumentState, layerId: string): Ras
       ...(layer.adjustment ? { adjustment: structuredClone(layer.adjustment) } : {}),
       effects: structuredClone(layer.effects ?? {}),
     };
-    // A copy is a new buffer, so it must not claim the original's asset.
-    delete copy.pixelAssetId;
+    // A normal layer's asset is private revision history. A Smart Object's
+    // asset is its shared source, so Duplicate Layer deliberately keeps it.
+    if (copy.kind !== "smart") delete copy.pixelAssetId;
     delete copy.maskAssetId;
     state.layers.push(copy);
     copies.set(layer.id, copy);
@@ -448,6 +449,9 @@ export type LayerAction = "paint" | "move" | "erase" | "restyle" | "delete";
  */
 export function layerAccepts(layer: RasterLayer, action: LayerAction): boolean {
   if (layer.locked) return false;
+  // Paint or erase would silently sever the source relationship. Move, mask
+  // and appearance edits remain valid on the instance itself.
+  if ((action === "paint" || action === "erase") && layer.kind === "smart") return false;
   if ((action === "paint" || action === "erase") && layer.lockPixels) return false;
   if (action === "move" && layer.lockPosition) return false;
   return true;
@@ -456,6 +460,7 @@ export function layerAccepts(layer: RasterLayer, action: LayerAction): boolean {
 /** Why an edit was refused, for the message the user sees. */
 export function layerLockReason(layer: RasterLayer, action: LayerAction): string | null {
   if (layer.locked) return "Layer is fully locked (Слой полностью закреплён)";
+  if ((action === "paint" || action === "erase") && layer.kind === "smart") return "Smart Object contents cannot be painted directly; use Edit Contents (Содержимое смарт-объекта нельзя рисовать напрямую; откройте Редактировать содержимое)";
   if ((action === "paint" || action === "erase") && layer.lockPixels) return "Layer pixels are locked (Пиксели слоя закреплены)";
   if (action === "move" && layer.lockPosition) return "Layer position is locked (Положение слоя закреплено)";
   return null;

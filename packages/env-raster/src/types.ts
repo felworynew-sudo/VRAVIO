@@ -210,6 +210,8 @@ export interface RasterSmartSource {
   assetId: string;
   pinnedRev: string | null;
   sourceKind: "raster" | "vector" | "document";
+  /** Embedded is the migration default until the external linked-file workflow lands. */
+  mode?: "embedded" | "linked";
 }
 
 export interface RasterLayer {

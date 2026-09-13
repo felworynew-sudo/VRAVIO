@@ -16,6 +16,7 @@ export * from "./render";
 export * from "./selection";
 export * from "./shapes";
 export * from "./smartcrop";
+export * from "./smart-object";
 export * from "./tiling";
 export * from "./tiles";
 export * from "./sampling";

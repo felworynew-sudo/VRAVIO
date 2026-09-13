@@ -1,4 +1,4 @@
-import { activeRasterLayer, clearSelectedPixels, createRasterLayer, groupLayers, isRasterDocumentState, layerAccepts, layerDocumentPixels, layerFromSelection, mergeLayerDown, mergeVisibleLayers, moveLayerInStack, removeLayer, setLayerPixels, stampVisibleLayers, ungroupLayer, type RasterDocumentState } from "@vravio/env-raster";
+import { activeRasterLayer, clearSelectedPixels, convertLayerToEmbeddedSmartObject, createRasterLayer, groupLayers, isEditableEmbeddedSmartObject, isRasterDocumentState, layerAccepts, layerDocumentPixels, layerFromSelection, mergeLayerDown, mergeVisibleLayers, moveLayerInStack, removeLayer, setLayerPixels, stampVisibleLayers, ungroupLayer, type RasterDocumentState } from "@vravio/env-raster";
 import type { EnvironmentKind } from "@vravio/kernel";
 import { kernel } from "../../../../kernel";
 import { useShellStore } from "../../../../store";
@@ -32,6 +32,33 @@ async function openTargetElsewhere(documentId: string, targetEnv: EnvironmentKin
 
   const session = await kernel.roundtrip.open({ parentDocId: documentId, target: { kind: "raster-layer", layerId: layer.id }, targetEnv, branch });
   useShellStore.getState().adoptDocument(session.childDocId);
+}
+
+/**
+ * The source is imported once into the document asset store, then history
+ * records only the structural switch. This keeps the Smart Object small,
+ * reversible, and on the same asset-revision route as Edit Contents.
+ */
+async function convertActiveLayerToSmartObject(documentId: string): Promise<void> {
+  const document = kernel.documents.get<RasterDocumentState>(documentId);
+  if (!document || !isRasterDocumentState(document.state)) return;
+  const layer = activeRasterLayer(document.state);
+  if (layer.kind !== "pixel") return;
+
+  const raster = kernel.environments.get("raster");
+  const extracted = await raster.extractAsset(document, { kind: "raster-layer", layerId: layer.id }, { handles: 0, forceNew: true });
+  await edit(documentId, "Convert to Smart Object (Преобразовать в смарт-объект)", (state) => {
+    const target = state.layers.find((item) => item.id === layer.id);
+    return Boolean(target && convertLayerToEmbeddedSmartObject(target, extracted.assetId));
+  });
+  kernel.documents.addAssetRef(documentId, extracted.assetId);
+}
+
+async function editActiveSmartObjectContents(documentId: string): Promise<void> {
+  const document = kernel.documents.get<RasterDocumentState>(documentId);
+  if (!document || !isRasterDocumentState(document.state)) return;
+  if (!isEditableEmbeddedSmartObject(activeRasterLayer(document.state))) return;
+  await openTargetElsewhere(documentId, "raster", false);
 }
 
 const edit = (documentId: string, label: string, mutate: (state: RasterDocumentState) => boolean) => changeRasterDocument(documentId, label, mutate);
@@ -236,6 +263,29 @@ const commands: readonly CommandDefinition[] = [
   restack(["layer.sendBackward", "Send Backward", "Переложить назад", "Mod+[", "down"]),
   restack(["layer.bringToFront", "Bring to Front", "На передний план", "Mod+Shift+]", "top"]),
   restack(["layer.sendToBack", "Send to Back", "На задний план", "Mod+Shift+[", "bottom"]),
+  {
+    id: "layer.convertToSmartObject",
+    label: { en: "Convert to Smart Object", ru: "Преобразовать в смарт-объект" },
+    category: CATEGORY_LAYER,
+    surfaces: ["menu", "palette", "layer-context"],
+    isEnabled: ({ activeDocumentId }) => {
+      const state = activeRasterState(activeDocumentId);
+      return Boolean(state && state.layers.find((layer) => layer.id === state.activeLayerId)?.kind === "pixel");
+    },
+    execute: ({ activeDocumentId }) => { if (activeDocumentId) void convertActiveLayerToSmartObject(activeDocumentId); },
+  },
+  {
+    id: "layer.editSmartObjectContents",
+    label: { en: "Edit Contents", ru: "Редактировать содержимое" },
+    category: CATEGORY_LAYER,
+    surfaces: ["menu", "palette", "layer-context"],
+    isEnabled: ({ activeDocumentId }) => {
+      const state = activeRasterState(activeDocumentId);
+      const layer = state?.layers.find((item) => item.id === state.activeLayerId);
+      return Boolean(layer && isEditableEmbeddedSmartObject(layer));
+    },
+    execute: ({ activeDocumentId }) => { if (activeDocumentId) void editActiveSmartObjectContents(activeDocumentId); },
+  },
   {
     id: "layer.openElsewhere",
     label: { en: "Edit Layer in Its Own Tab", ru: "Открыть слой в отдельной вкладке" },

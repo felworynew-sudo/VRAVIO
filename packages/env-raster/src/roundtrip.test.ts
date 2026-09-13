@@ -6,8 +6,10 @@ import {
 import { RasterEnvironment } from "./environment";
 import { createRasterLayer } from "./document";
 import { layerDocumentPixels } from "./layer-bounds";
+import { duplicateLayer } from "./layer-ops";
 import { appendLayer, flattenRasterLayers } from "./layer-tree";
 import { decodeRasterAsset, encodeRasterAsset, isRasterAsset } from "./raster-asset";
+import { convertLayerToEmbeddedSmartObject } from "./smart-object";
 import type { RasterDocumentState } from "./types";
 
 const W = 8, H = 6;
@@ -179,6 +181,31 @@ describe("raster round-trip", () => {
 
     expect(firstPixel(topLayer(documents.get<RasterDocumentState>(parent.id)!).pixels)).toEqual([0, 0, 255, 255]);
     expect(roundtrip.sessionOf(session.childDocId)?.status).toBe("applied");
+  });
+
+  it("updates every embedded Smart Object instance that shares its source", async () => {
+    const parent = await parentDocument();
+    const source = topLayer(parent);
+    const extracted = await environment.extractAsset(parent, { kind: "raster-layer", layerId: source.id }, { forceNew: true });
+    documents.update<RasterDocumentState>(parent.id, (state) => {
+      const layer = flattenRasterLayers(state.layers).find((item) => item.id === source.id)!;
+      expect(convertLayerToEmbeddedSmartObject(layer, extracted.assetId)).toBe(true);
+      duplicateLayer(state, layer.id);
+    });
+    // The conversion command records this document-level dependency too. The
+    // manager intentionally notifies only documents that declared the asset,
+    // otherwise a stray matching ID in serialized data could cause a reload.
+    documents.addAssetRef(parent.id, extracted.assetId);
+
+    const session = await roundtrip.open({ parentDocId: parent.id, target: { kind: "raster-layer", layerId: source.id }, targetEnv: "raster" });
+    documents.update<RasterDocumentState>(session.childDocId, (state) => { state.layers[0]!.pixels = solid(0, 0, 255); });
+    await roundtrip.apply(session.childDocId);
+    await environment.whenSettled();
+
+    const instances = flattenRasterLayers(documents.get<RasterDocumentState>(parent.id)!.state.layers).filter((layer) => layer.kind === "smart");
+    expect(instances).toHaveLength(2);
+    expect(instances.every((layer) => layer.pixelAssetId === extracted.assetId)).toBe(true);
+    expect(instances.map((layer) => firstPixel(layer.pixels))).toEqual([[0, 0, 255, 255], [0, 0, 255, 255]]);
   });
 
   it("does not make the child reload the bytes it just produced", async () => {

@@ -775,6 +775,10 @@ export function App() {
         ]}/>}
         {active?.kind === "raster" && <Menu label="Layer (Слой)" language={store.language} open={openMenu === "layer"} onToggle={() => setOpenMenu(openMenu === "layer" ? null : "layer")} items={[
           ["Duplicate Layer (Дублировать слой)", "Ctrl+J", () => void kernel.commands.execute("layer.duplicate", activeCommandContext()), !active || !isRasterDocumentState(active.state)],
+          { label: "Smart Objects (Смарт-объекты)", items: [
+            ["Convert to Smart Object (Преобразовать в смарт-объект)", "", () => void kernel.commands.execute("layer.convertToSmartObject", activeCommandContext()), !activeRasterState || activeRasterState.layers.find((layer) => layer.id === activeRasterState.activeLayerId)?.kind !== "pixel"],
+            ["Edit Contents (Редактировать содержимое)", "", () => void kernel.commands.execute("layer.editSmartObjectContents", activeCommandContext()), !activeRasterState || activeRasterState.layers.find((layer) => layer.id === activeRasterState.activeLayerId)?.kind !== "smart"],
+          ] },
           ["Delete Layer (Удалить слой)", "", () => void kernel.commands.execute("layer.delete", activeCommandContext()), !active || !isRasterDocumentState(active.state)],
           ["New 3D Text Layer… (Новый объёмный текстовый слой…)", "", () => void kernel.commands.execute("layer.new3DText", activeCommandContext()), !active || !isRasterDocumentState(active.state)],
           ["New 3D Extrusion from Layer (Экструдировать слой в 3D)", "", () => void kernel.commands.execute("layer.new3DExtrude", activeCommandContext()), !active || !isRasterDocumentState(active.state)],
