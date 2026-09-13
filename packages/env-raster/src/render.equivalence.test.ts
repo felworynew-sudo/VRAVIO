@@ -203,6 +203,30 @@ describe("composite output is stable", () => {
     expect(isolated[3]).toBeLessThan(passThrough[3]!);
   });
 
+  it("applies an isolated group's blend mode and effects after its subtree", () => {
+    const state = createRasterDocument(3, 1);
+    state.layers = [];
+    const backdrop = createRasterLayer(3, 1, "Backdrop");
+    backdrop.pixels.set([100, 200, 50, 255], 0);
+    state.layers.push(backdrop);
+    const group = createRasterGroup(3, 1, "Group");
+    group.groupMode = "isolated";
+    group.blendMode = "multiply";
+    group.effects = { dropShadow: { enabled: true, color: "#000000", opacity: 1, offsetX: 1, offsetY: 0 } };
+    appendLayer(state, group);
+    const child = createRasterLayer(3, 1, "Child");
+    child.parentId = group.id;
+    child.pixels.set([200, 100, 200, 255], 0);
+    state.layers.push(child);
+
+    const result = compositeRasterRegion(state, { x: 0, y: 0, width: 3, height: 1 });
+    // The child is multiplied with the pre-existing backdrop at x=0.
+    expect([...result.slice(0, 4)]).toEqual([78, 78, 39, 255]);
+    // The group's shadow is drawn after its subtree, at x=1.
+    expect(result[4 + 3]).toBe(255);
+    expect([...result.slice(4, 7)]).toEqual([0, 0, 0]);
+  });
+
   it("subsampling picks the same pixels the full composite has", () => {
     const state = scene();
     const full = compositeRasterRegion(state, whole);

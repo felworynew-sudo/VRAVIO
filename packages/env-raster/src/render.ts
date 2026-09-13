@@ -387,8 +387,17 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
         layers: state.layers.filter((candidate) => inside.has(candidate.id)).map((candidate) =>
           candidate.parentId === layer.id ? { ...candidate, parentId: null } : candidate),
       };
-      const groupPixels = compositeRasterRegion(groupState, area, options);
+      const rawGroupPixels = compositeRasterRegion(groupState, area, options);
+      // Reuse the layer-style renderer on the subtree's already-composited
+      // surface. A group effect belongs outside its children, unlike effects
+      // on each child, so this is intentionally after the recursive pass.
+      const groupSurfaceLayer: RasterLayer = {
+        ...layer, kind: "pixel", parentId: null, pixels: rawGroupPixels,
+        bounds: { x: 0, y: 0, width: outWidth, height: outHeight }, width: outWidth, height: outHeight,
+      };
+      const groupPixels = hasRenderableEffect(layer) ? renderLayerEffects(groupSurfaceLayer, outWidth, outHeight) : rawGroupPixels;
       const groupMask = layer.mask?.enabled ? featherMask(layer.mask.pixels, state.width, state.height, layer.mask.feather) : undefined;
+      const groupCode = blendCode(layer.blendMode), groupNonSeparable = isNonSeparable(groupCode);
       for (let row = 0; row < outHeight; row += 1) for (let column = 0; column < outWidth; column += 1) {
         const index = (row * outWidth + column) * 4;
         const sourceAlpha = groupPixels[index + 3]! / 255 * effectiveOpacity
@@ -396,9 +405,20 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
         if (sourceAlpha <= 0) continue;
         const destinationAlpha = output[index + 3]! / 255;
         const carry = destinationAlpha * (1 - sourceAlpha), alpha = sourceAlpha + carry;
-        output[index] = Math.round((groupPixels[index]! * sourceAlpha + output[index]! * carry) / alpha);
-        output[index + 1] = Math.round((groupPixels[index + 1]! * sourceAlpha + output[index + 1]! * carry) / alpha);
-        output[index + 2] = Math.round((groupPixels[index + 2]! * sourceAlpha + output[index + 2]! * carry) / alpha);
+        const sourceRed = groupPixels[index]!, sourceGreen = groupPixels[index + 1]!, sourceBlue = groupPixels[index + 2]!;
+        const destinationRed = output[index]!, destinationGreen = output[index + 1]!, destinationBlue = output[index + 2]!;
+        let blendedRed = sourceRed, blendedGreen = sourceGreen, blendedBlue = sourceBlue;
+        if (groupNonSeparable) {
+          blendNonSeparable(groupCode, sourceRed, sourceGreen, sourceBlue, destinationRed, destinationGreen, destinationBlue, blendScratch, sourceHsl, destinationHsl);
+          blendedRed = blendScratch[0]!; blendedGreen = blendScratch[1]!; blendedBlue = blendScratch[2]!;
+        } else if (groupCode !== NORMAL && groupCode !== DISSOLVE) {
+          blendedRed = blendChannel(groupCode, sourceRed, destinationRed);
+          blendedGreen = blendChannel(groupCode, sourceGreen, destinationGreen);
+          blendedBlue = blendChannel(groupCode, sourceBlue, destinationBlue);
+        }
+        output[index] = Math.round((blendedRed * sourceAlpha + destinationRed * carry) / alpha);
+        output[index + 1] = Math.round((blendedGreen * sourceAlpha + destinationGreen * carry) / alpha);
+        output[index + 2] = Math.round((blendedBlue * sourceAlpha + destinationBlue * carry) / alpha);
         output[index + 3] = Math.round(alpha * 255);
       }
       continue;
