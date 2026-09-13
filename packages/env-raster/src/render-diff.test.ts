@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendLayer, changedRenderRegion, createAdjustmentLayer, createRasterDocument, createRasterLayer, createRasterLayerMask, layerRenderSignatures, setLayerPixels } from "./index";
+import { appendLayer, changedRenderRegion, createAdjustmentLayer, createRasterDocument, createRasterGroup, createRasterLayer, createRasterLayerMask, layerRenderSignatures, setLayerPixels } from "./index";
 import type { RasterDocumentState, RasterLayer } from "./types";
 
 const W = 64, H = 64;
@@ -126,6 +126,23 @@ describe("what changed between two renders", () => {
 
     // An adjustment reads back everything composited beneath it, so its effect
     // is not bounded by its own pixels.
+    expect(region(state, before)).toBeNull();
+  });
+
+  it("repaints safely when a group property changes", () => {
+    const state = createRasterDocument(W, H);
+    state.layers = [];
+    const group = createRasterGroup(W, H, "Group");
+    appendLayer(state, group);
+    const child = createRasterLayer(W, H, "Child");
+    child.parentId = group.id;
+    paint(child, 20, 20, 8);
+    appendLayer(state, child);
+    const before = layerRenderSignatures(state);
+    group.opacity = 0.4;
+
+    // A group carries an empty buffer, but changes the composite contribution
+    // of its children. Returning its own empty bounds used to skip repaint.
     expect(region(state, before)).toBeNull();
   });
 

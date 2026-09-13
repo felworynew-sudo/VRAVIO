@@ -5907,11 +5907,11 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
       `kind`/MIME/meta только по bytes. Целевая модель: immutable
       `BlobStore(hash → blob)` отдельно от mutable `AssetRecord`; переходный
       минимум — `hash → {assetId, rev}` с проверкой revision.
-- [ ] **Filter-worker cancellation race.** У каждой задачи нужен
-      монотонный `requestId`, ответ обязан его сверять, а abort не должен
-      делать slot свободным, пока старая работа реально не завершилась.
-      Возможные реализации: SAB/Atomics cooperative cancel,
-      terminate+recreate worker либо дождаться и отбросить stale response.
+- [x] **Filter-worker cancellation race.** Abort больше не освобождает slot
+      `WorkerPool` до terminal message старой worker-задачи; stale reply
+      потребляется и превращается в `AbortError`, после чего запускается
+      следующая задача. Это исключает замену `onmessage` и доставку старого
+      результата новой задаче; есть тест с одним worker slot.
 - [ ] **Настоящий isolated group compositor.** `groupMode: isolated` не
       может быть только флагом модели: группа должна получить собственный
       projection tile/ROI, скомпоновать детей внутри и лишь затем один раз
@@ -5931,10 +5931,12 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
 - [x] **Mask density invalidation.** `LayerRenderSignature` теперь включает
       density/feather, поэтому изменение density не оставляет старую область
       на canvas даже без замены mask buffer; покрыто тестом.
-- [ ] **Mask feather и group invalidation.** Feather ещё надо реализовать
-      как non-destructive mask operation с halo. Изменение
-      opacity/visibility группы обязано invalidировать render-bounds всех
-      descendants, а не её пустой служебный buffer.
+- [x] **Group invalidation safety.** При изменении group signature renderer
+      выбирает full-document repaint, а не пустой group buffer; тестом
+      подтверждено отсутствие stale descendants. Точный descendant ink-bounds
+      остаётся задачей RasterRenderPlan.
+- [ ] **Mask feather.** Реализовать feather как non-destructive mask
+      operation с halo.
 - [x] **RasterEnvironment asset dimensions — correctness bridge.**
       `extractAsset()` разворачивает trimmed layer в валидный
       document-sized buffer перед encoding; это устраняет некорректный

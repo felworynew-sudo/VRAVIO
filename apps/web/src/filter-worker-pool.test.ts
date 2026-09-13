@@ -67,6 +67,41 @@ describe("filterRenderClientFrom", () => {
     await client.run(input, new AbortController().signal);
     expect([...input.pixels]).toEqual([1, 2, 3, 4]);
   });
+
+  it("keeps an aborted slot occupied until its stale worker reply is consumed", async () => {
+    let releaseFirst: (() => void) | undefined;
+    const calls: string[] = [];
+    const pool = new WorkerPool<FilterRenderInput, Uint8ClampedArray>(
+      () => {
+        const { worker } = fakeWorker((sent) => {
+          calls.push(sent.filterId);
+          if (sent.filterId === "first") return null;
+          return { pixels: new Uint8ClampedArray([7, 7, 7, 255]).buffer as ArrayBuffer };
+        });
+        const originalPost = worker.postMessage;
+        worker.postMessage = (message, transfer) => {
+          originalPost(message, transfer);
+          const sent = message as { filterId: string };
+          if (sent.filterId === "first") {
+            releaseFirst = () => worker.onmessage?.({ data: { type: "rendered", requestId: 0, pixels: new Uint8ClampedArray([1, 1, 1, 255]).buffer } });
+          }
+        };
+        return filterRenderClientFrom(worker);
+      },
+      1,
+    );
+    const firstAbort = new AbortController();
+    const first = pool.run({ pixels: new Uint8ClampedArray(4), width: 1, height: 1, filterId: "first", settings: {} }, { signal: firstAbort.signal });
+    firstAbort.abort();
+    const second = pool.run({ pixels: new Uint8ClampedArray(4), width: 1, height: 1, filterId: "second", settings: {} });
+
+    expect(calls).toEqual(["first"]);
+    expect(pool.activeCount).toBe(1);
+    releaseFirst?.();
+    await expect(first).rejects.toMatchObject({ name: "AbortError" });
+    await expect(second).resolves.toEqual(new Uint8ClampedArray([7, 7, 7, 255]));
+    expect(calls).toEqual(["first", "second"]);
+  });
 });
 
 describe("applyRasterFilterParallel", () => {

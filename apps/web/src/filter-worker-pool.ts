@@ -44,18 +44,29 @@ export function filterRenderClientFrom(worker: FilterWorkerLike): WorkerTaskClie
       return new Promise<Uint8ClampedArray>((resolve, reject) => {
         if (signal.aborted) { reject(abortError()); return; }
 
+        let aborted = false;
         const cleanup = () => {
           worker.onmessage = null;
           worker.onerror = null;
           signal.removeEventListener("abort", onAbort);
         };
-        const onAbort = () => { cleanup(); reject(abortError()); };
+        // A Web Worker cannot interrupt synchronous image processing halfway
+        // through a message. Rejecting here used to tell WorkerPool that the
+        // slot was free while the old worker was still computing; its next job
+        // then replaced `onmessage`, and the stale reply could resolve that
+        // next job. Keep the slot occupied until this request's terminal
+        // worker message arrives, then reject it as cancelled.
+        const onAbort = () => { aborted = true; };
         worker.onmessage = (event) => {
           cleanup();
+          if (aborted || signal.aborted) { reject(abortError()); return; }
           if (event.data.type === "error") { reject(new Error(event.data.message ?? "Filter render failed")); return; }
           resolve(new Uint8ClampedArray(event.data.pixels!));
         };
-        worker.onerror = (event) => { cleanup(); reject(new Error(event.message || "Filter render failed")); };
+        worker.onerror = (event) => {
+          cleanup();
+          reject(aborted || signal.aborted ? abortError() : new Error(event.message || "Filter render failed"));
+        };
         signal.addEventListener("abort", onAbort, { once: true });
 
         // Copied into a fresh, worker-bound buffer — `input.pixels` may be a subarray view this

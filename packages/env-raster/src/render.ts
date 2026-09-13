@@ -521,6 +521,7 @@ export function sampleAverage(pixels: Uint8ClampedArray, width: number, height: 
  */
 export interface LayerRenderSignature {
   readonly id: string;
+  readonly kind: RasterLayer["kind"];
   readonly pixels: Uint8ClampedArray;
   /**
    * Where that buffer lives, and the geometry it has to be read with.
@@ -549,6 +550,7 @@ export interface LayerRenderSignature {
 export function layerRenderSignatures(state: RasterDocumentState): LayerRenderSignature[] {
   return flattenRasterLayers(state.layers).map((layer) => ({
     id: layer.id,
+    kind: layer.kind,
     pixels: layer.pixels,
     bounds: layer.bounds,
     mask: layer.mask?.pixels ?? null,
@@ -568,7 +570,7 @@ export function layerRenderSignatures(state: RasterDocumentState): LayerRenderSi
 }
 
 const sameSignature = (a: LayerRenderSignature, b: LayerRenderSignature): boolean =>
-  a.pixels === b.pixels && a.mask === b.mask && a.maskEnabled === b.maskEnabled
+  a.kind === b.kind && a.pixels === b.pixels && a.mask === b.mask && a.maskEnabled === b.maskEnabled
   && a.maskDensity === b.maskDensity && a.maskFeather === b.maskFeather
   && a.visible === b.visible && a.opacity === b.opacity && a.fillOpacity === b.fillOpacity
   && a.blendMode === b.blendMode && a.clipping === b.clipping
@@ -617,6 +619,11 @@ export function changedRenderRegion(
   for (let index = 0; index < before.length; index += 1) {
     const was = before[index]!, now = after[index]!;
     if (sameSignature(was, now)) continue;
+    // A group has no drawable pixels of its own, yet its properties affect the
+    // composite contribution of every descendant. Its empty buffer cannot be
+    // an honest dirty rectangle, so take the safe full-document path until
+    // RasterRenderPlan can provide descendant ink bounds directly.
+    if (was.kind === "group" || now.kind === "group") return null;
     // An adjustment reads everything below it and an effect paints outside the
     // layer, so neither can be bounded by the layer's own content.
     if (was.adjustment || now.adjustment || hasEnabledEffectValue(was.effects) || hasEnabledEffectValue(now.effects)) return null;
