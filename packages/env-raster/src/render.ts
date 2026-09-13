@@ -700,6 +700,32 @@ function signatureRegion(signature: LayerRenderSignature): RasterRect | null {
   return { x: local.x + signature.bounds.x, y: local.y + signature.bounds.y, width: local.width, height: local.height };
 }
 
+/** The ink bounds of the small set of effects whose current renderer has a
+ * finite, explicit extent. Returning undefined means "unknown", requiring a
+ * safe full repaint rather than a guessed dirty rectangle. */
+function signatureInkRegion(signature: LayerRenderSignature): RasterRect | null | undefined {
+  let region = signatureRegion(signature);
+  if (!region) return null;
+  const effects = signature.effects;
+  if (!effects || typeof effects !== "object") return region;
+  const union = (other: RasterRect) => {
+    const left = Math.min(region!.x, other.x), top = Math.min(region!.y, other.y);
+    const right = Math.max(region!.x + region!.width, other.x + other.width), bottom = Math.max(region!.y + region!.height, other.y + other.height);
+    region = { x: left, y: top, width: right - left, height: bottom - top };
+  };
+  for (const [name, effect] of Object.entries(effects as Record<string, unknown>)) {
+    if (!effect || typeof effect !== "object" || !(effect as { enabled?: boolean }).enabled) continue;
+    const values = effect as { offsetX?: number; offsetY?: number; radius?: number };
+    if (name === "dropShadow") {
+      union({ x: region.x + Math.round(values.offsetX ?? 0), y: region.y + Math.round(values.offsetY ?? 0), width: region.width, height: region.height });
+    } else if (name === "outerGlow") {
+      const radius = Math.max(0, Math.min(32, Math.ceil(values.radius ?? 0)));
+      union({ x: region.x - radius, y: region.y - radius, width: region.width + radius * 2, height: region.height + radius * 2 });
+    } else if (!["innerShadow", "innerGlow", "bevel", "gradientOverlay", "glass"].includes(name)) return undefined;
+  }
+  return region;
+}
+
 /**
  * The region that can look different between two states, or null for "all of it".
  *
@@ -731,11 +757,13 @@ export function changedRenderRegion(
     // an honest dirty rectangle, so take the safe full-document path until
     // RasterRenderPlan can provide descendant ink bounds directly.
     if (was.kind === "group" || now.kind === "group") return null;
-    // An adjustment reads everything below it and an effect paints outside the
-    // layer, so neither can be bounded by the layer's own content.
-    if (was.adjustment || now.adjustment || hasEnabledEffectValue(was.effects) || hasEnabledEffectValue(now.effects)) return null;
-    include(signatureRegion(was));
-    include(signatureRegion(now));
+    // An adjustment reads everything below it. Known effects have finite ink
+    // bounds; an unfamiliar one remains deliberately conservative.
+    if (was.adjustment || now.adjustment) return null;
+    const wasRegion = signatureInkRegion(was), nowRegion = signatureInkRegion(now);
+    if (wasRegion === undefined || nowRegion === undefined) return null;
+    include(wasRegion);
+    include(nowRegion);
   }
 
   if (right <= left || bottom <= top) return { x: 0, y: 0, width: 0, height: 0 };

@@ -146,15 +146,15 @@ describe("what changed between two renders", () => {
     expect(region(state, before)).toBeNull();
   });
 
-  it("gives up for a layer carrying an effect", () => {
+  it("includes the finite ink bounds of a layer effect", () => {
     const { state, upper } = scene();
     upper.effects = { dropShadow: { enabled: true, color: "#000", opacity: 1, offsetX: 8, offsetY: 8 } };
     const before = layerRenderSignatures(state);
     upper.opacity = 0.5;
 
-    // A shadow paints outside the layer's own pixels; guessing smaller than the
-    // truth leaves stale pixels on screen, which is worse than repainting more.
-    expect(region(state, before)).toBeNull();
+    // The current shadow renderer has no blur: its extent is exactly the
+    // layer plus the offset, so full-document invalidation is needless.
+    expect(region(state, before)).toEqual({ x: 40, y: 40, width: 20, height: 20 });
   });
 
   it("gives up when a reorder keeps the same layers", () => {
