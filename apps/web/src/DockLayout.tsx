@@ -720,7 +720,12 @@ function LayersPanel() {
       };
       return [
         item("layer.duplicate"),
-        ...(layer.kind === "pixel" ? [item("layer.convertToSmartObject")] : []),
+        // This cannot rely on the command catalogue's `isEnabled`: the right
+        // click selects its row immediately before this menu opens, while the
+        // catalogue may still see the formerly active layer for that render.
+        // Bind the exact clicked layer instead, so Convert is always usable on
+        // a pixel layer (including one that was not active a moment ago).
+        ...(layer.kind === "pixel" ? [{ label: text(language, "Convert to Smart Object", "Преобразовать в смарт-объект"), onSelect: () => { selectLayer(layer.id); void kernel.commands.execute("layer.convertToSmartObject", { activeDocumentId: active.id }); } }] : []),
         ...(layer.kind === "smart" ? [item("layer.editSmartObjectContents")] : []),
         ...(layer.kind === "smart" ? [item("layer.newSmartObjectViaCopy")] : []),
         { label: text(language, "Delete Layer", "Удалить слой"), onSelect: deleteLayer, danger: true },
