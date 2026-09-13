@@ -11,24 +11,26 @@ export interface SpotHealSourceMap {
   shift: number;
 }
 
+interface SourceCoordinate { x: number; y: number; }
+
+/** Writes into caller-owned storage so the healing inner loops do not allocate
+ * a `[sourceX, sourceY]` tuple for every mask cell. */
 function mapSource(
   map: SpotHealSourceMap,
   x: number,
-  y: number
-): [number, number] {
+  y: number,
+  output: SourceCoordinate,
+): void {
   if (map.mirrored) {
     const distance =
       (map.anchorX - x) * map.directionX +
       (map.anchorY - y) * map.directionY;
-    return [
-      Math.round(x + 2 * distance * map.directionX),
-      Math.round(y + 2 * distance * map.directionY),
-    ];
+    output.x = Math.round(x + 2 * distance * map.directionX);
+    output.y = Math.round(y + 2 * distance * map.directionY);
+    return;
   }
-  return [
-    Math.round(x + map.shift * map.directionX),
-    Math.round(y + map.shift * map.directionY),
-  ];
+  output.x = Math.round(x + map.shift * map.directionX);
+  output.y = Math.round(y + map.shift * map.directionY);
 }
 
 export function spotHealSourceMap(
@@ -131,10 +133,12 @@ export function spotHealSourceMap(
   // mapSource takes document-space (x,y), returns document-space (sx,sy)
   const violationsFor = (candidate: SpotHealSourceMap): number => {
     let violations = 0;
+    const source: SourceCoordinate = { x: 0, y: 0 };
     for (let y = 0; y < maskHeight; y++) {
       for (let x = 0; x < maskWidth; x++) {
         if (mask[y * maskWidth + x] === 0) continue;
-        const [sx, sy] = mapSource(candidate, boundsX + x, boundsY + y);
+        mapSource(candidate, boundsX + x, boundsY + y, source);
+        const sx = source.x, sy = source.y;
         if (
           sx < 0 ||
           sy < 0 ||
@@ -224,6 +228,7 @@ function applySpotHealToRegion(
 
   const offsets = new Int16Array(maskWidth * maskHeight * 3);
   const interior = new Uint8Array(maskWidth * maskHeight);
+  const source: SourceCoordinate = { x: 0, y: 0 };
 
   // The membrane is solved over the whole mask rectangle, not just the covered
   // part. The cells the mask leaves out are the boundary, and their offset is
@@ -238,7 +243,8 @@ function applySpotHealToRegion(
       const y = maskOriginY + ly;
       if (x < 0 || x >= width || y < 0 || y >= height) continue;
       // mapSource takes and returns document-space coordinates
-      const [sx, sy] = mapSource(sourceMap, x, y);
+      mapSource(sourceMap, x, y, source);
+      const sx = source.x, sy = source.y;
       if (sx < 0 || sx >= width || sy < 0 || sy >= height) continue;
 
       const destIdx = (y * width + x) * 4;
@@ -258,7 +264,8 @@ function applySpotHealToRegion(
       if (mask[ly * maskWidth + lx] === 0) continue;
       const x = maskOriginX + lx;
       const y = maskOriginY + ly;
-      const [sx, sy] = mapSource(sourceMap, x, y);
+      mapSource(sourceMap, x, y, source);
+      const sx = source.x, sy = source.y;
       if (sx < 0 || sx >= width || sy < 0 || sy >= height) continue;
 
       const srcIdx = (sy * width + sx) * 4;

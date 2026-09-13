@@ -6028,7 +6028,8 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
    sin/cos геометрии наконечника один раз на dab/stroke, не на pixel. [x]
    Multigrid coarsening в
    healing membrane больше не создаёт два RGB-массива на каждую coarse-cell,
-   а суммирует scalar channels. [x] `decodeRasterAsset()` выполняет ровно
+   а суммирует scalar channels; Spot Heal переиспользует source-coordinate
+   storage вместо tuple на каждую mask-cell. [x] `decodeRasterAsset()` выполняет ровно
    одну payload-copy в принадлежащий caller buffer вместо `slice` + второго
    typed-array copy. [ ] Оставшийся аудит temporary allocations. [x]
    Transactional fallback undo: ошибка setup/commit asset revision не оставляет
