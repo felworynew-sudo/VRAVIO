@@ -26,11 +26,15 @@ function mixPixelRgba(pixels: Uint8ClampedArray, target: number, r: number, g: n
  * option existed — the default, so a caller that does not pass it keeps
  * exactly the shape it already had.
  */
-function insideBrush(x: number, y: number, point: Point, radius: number, roundness: number, angle: number, hardness = 0): number {
-  const radians = angle * Math.PI / 180, cosine = Math.cos(radians), sine = Math.sin(radians), dx = x + .5 - point.x, dy = y + .5 - point.y;
+function insideBrushAt(x: number, y: number, centerX: number, centerY: number, radius: number, roundness: number, angle: number, hardness = 0): number {
+  const radians = angle * Math.PI / 180, cosine = Math.cos(radians), sine = Math.sin(radians), dx = x + .5 - centerX, dy = y + .5 - centerY;
   const rx = dx * cosine + dy * sine, ry = -dx * sine + dy * cosine, distance = Math.hypot(rx / radius, ry / Math.max(.5, radius * roundness));
   if (distance > 1) return 0;
   return distance <= hardness ? 1 : 1 - (distance - hardness) / Math.max(0.0001, 1 - hardness);
+}
+
+function insideBrush(x: number, y: number, point: Point, radius: number, roundness: number, angle: number, hardness = 0): number {
+  return insideBrushAt(x, y, point.x, point.y, radius, roundness, angle, hardness);
 }
 
 export function blurDab(pixels: Uint8ClampedArray, source: Uint8ClampedArray, width: number, height: number, point: Point, size: number, strength: number, selectionMask?: Uint8ClampedArray, roundness = 1, angle = 0, hardness = 0): void {
@@ -66,7 +70,7 @@ export function blurStrokeSegment(pixels: Uint8ClampedArray, source: Uint8Clampe
   const average = new Uint8ClampedArray(4);
   for (let y = effectTop; y <= effectBottom; y += 1) for (let x = effectLeft; x <= effectRight; x += 1) {
     const projection = lengthSquared ? Math.max(0, Math.min(1, ((x + .5 - from.x) * dx + (y + .5 - from.y) * dy) / lengthSquared)) : 0;
-    const center = { x: from.x + dx * projection, y: from.y + dy * projection }, coverage = insideBrush(x, y, center, radius, roundness, angle, hardness); if (!coverage) continue;
+    const coverage = insideBrushAt(x, y, from.x + dx * projection, from.y + dy * projection, radius, roundness, angle, hardness); if (!coverage) continue;
     const selection = selectionMask ? selectionMask[y * width + x]! / 255 : 1; if (!selection) continue;
     const x0 = Math.max(sampleLeft, x - sampleRadius) - sampleLeft, x1 = Math.min(sampleRight, x + sampleRadius) - sampleLeft + 1, y0 = Math.max(sampleTop, y - sampleRadius) - sampleTop, y1 = Math.min(sampleBottom, y + sampleRadius) - sampleTop + 1;
     const count = (x1 - x0) * (y1 - y0), topLeft = (y0 * integralWidth + x0) * 4, topRight = (y0 * integralWidth + x1) * 4, bottomLeft = (y1 * integralWidth + x0) * 4, bottomRight = (y1 * integralWidth + x1) * 4;
