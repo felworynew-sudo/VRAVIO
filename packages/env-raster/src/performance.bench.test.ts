@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compositeRasterDocument } from "./render";
+import { compositeRasterDocument, compositeRasterRegion } from "./render";
 import { createRasterDocument, createRasterLayer } from "./document";
 import { appendLayer } from "./layer-tree";
 import { translateLayerPixels, translateSelection } from "./transform";
@@ -42,6 +42,28 @@ function fastestOf(fn: () => void, samples = 5): number {
     best = Math.min(best, performance.now() - started);
   }
   return best;
+}
+
+/**
+ * Interactive work is harmed more by the slowest frames than by an average.
+ * Keep this separate from the existing fastest-of floors: the latter protect
+ * hot-path throughput, while this records the median and p95 that a person
+ * actually perceives while panning, selecting or painting.
+ */
+function latencyPercentiles(fn: () => void, samples = 15): { p50: number; p95: number } {
+  // Let V8 compile the hot loop before timing. This is deliberately not part
+  // of the samples: the first frame after opening a document is covered by
+  // startup work elsewhere, whereas this benchmark guards sustained editing.
+  fn();
+  const values: number[] = [];
+  for (let index = 0; index < samples; index += 1) {
+    const started = performance.now();
+    fn();
+    values.push(performance.now() - started);
+  }
+  values.sort((left, right) => left - right);
+  const at = (percentile: number) => values[Math.min(values.length - 1, Math.ceil(percentile * values.length) - 1)]!;
+  return { p50: at(0.5), p95: at(0.95) };
 }
 
 /**
@@ -93,6 +115,22 @@ describe("performance floor (stage 0 of the catalogue migration)", () => {
 
     // Measured on this fixture: ~27ms.
     expect(elapsed).toBeLessThan(27 * THRESHOLD_MULTIPLIER);
+  });
+
+  it("records p50/p95 for a sustained viewport composite", () => {
+    const state = realisticDocument();
+    // A 960×540 visible viewport is the work performed repeatedly during
+    // canvas navigation and pointer feedback, not an artificial full export.
+    const latency = latencyPercentiles(() => {
+      compositeRasterRegion(state, { x: 480, y: 270, width: 960, height: 540 });
+    });
+
+    // The exact measurements are intentionally kept in the assertion output
+    // instead of a platform-specific snapshot. The ceilings are loose enough
+    // for cold CI, yet distinguish a responsive interaction from a frame that
+    // visibly stalls. p95 is the guard against periodic GC/cache regressions.
+    expect(latency.p50).toBeLessThan(50);
+    expect(latency.p95).toBeLessThan(100);
   });
 
   it("translates a layer with no active selection", () => {
