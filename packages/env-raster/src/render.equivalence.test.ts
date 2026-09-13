@@ -135,6 +135,33 @@ describe("composite output is stable", () => {
     }
   });
 
+  it("renders Dissolve as deterministic binary coverage across tile boundaries", () => {
+    const state = createRasterDocument(size, size);
+    for (let index = 0; index < state.layers[0]!.pixels.length; index += 4) {
+      state.layers[0]!.pixels[index + 2] = 255;
+      state.layers[0]!.pixels[index + 3] = 255;
+    }
+    const top = createRasterLayer(size, size, "Dissolve");
+    for (let index = 0; index < top.pixels.length; index += 4) { top.pixels[index] = 255; top.pixels[index + 3] = 255; }
+    top.opacity = 0.5;
+    top.blendMode = "dissolve";
+    appendLayer(state, top);
+
+    const full = compositeRasterRegion(state, whole);
+    const part = compositeRasterRegion(state, { x: 5, y: 6, width: 9, height: 8 });
+    let red = 0, blue = 0;
+    for (let index = 0; index < full.length; index += 4) {
+      if (full[index] === 255) red += 1;
+      if (full[index + 2] === 255) blue += 1;
+    }
+    expect(red).toBeGreaterThan(0);
+    expect(blue).toBeGreaterThan(0);
+    for (let row = 0; row < 8; row += 1) {
+      const from = ((6 + row) * size + 5) * 4;
+      expect([...part.slice(row * 9 * 4, (row + 1) * 9 * 4)]).toEqual([...full.slice(from, from + 9 * 4)]);
+    }
+  });
+
   it("subsampling picks the same pixels the full composite has", () => {
     const state = scene();
     const full = compositeRasterRegion(state, whole);

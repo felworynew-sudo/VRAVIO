@@ -15,7 +15,7 @@ import { layerDocumentPixels } from "./layer-bounds";
 const NORMAL = 0, DARKEN = 1, MULTIPLY = 2, COLOR_BURN = 3, LINEAR_BURN = 4, LIGHTEN = 5, SCREEN = 6,
   COLOR_DODGE = 7, LINEAR_DODGE = 8, OVERLAY = 9, SOFT_LIGHT = 10, HARD_LIGHT = 11, VIVID_LIGHT = 12,
   LINEAR_LIGHT = 13, PIN_LIGHT = 14, HARD_MIX = 15, DIFFERENCE = 16, EXCLUSION = 17, SUBTRACT = 18,
-  DIVIDE = 19, HUE = 20, SATURATION = 21, COLOR = 22, LUMINOSITY = 23, DARKER_COLOR = 24, LIGHTER_COLOR = 25;
+  DIVIDE = 19, HUE = 20, SATURATION = 21, COLOR = 22, LUMINOSITY = 23, DARKER_COLOR = 24, LIGHTER_COLOR = 25, DISSOLVE = 26;
 
 const blendCodes: Record<string, number> = {
   darken: DARKEN, multiply: MULTIPLY, colorBurn: COLOR_BURN, linearBurn: LINEAR_BURN,
@@ -23,13 +23,13 @@ const blendCodes: Record<string, number> = {
   overlay: OVERLAY, softLight: SOFT_LIGHT, hardLight: HARD_LIGHT, vividLight: VIVID_LIGHT,
   linearLight: LINEAR_LIGHT, pinLight: PIN_LIGHT, hardMix: HARD_MIX, difference: DIFFERENCE,
   exclusion: EXCLUSION, subtract: SUBTRACT, divide: DIVIDE, hue: HUE, saturation: SATURATION,
-  color: COLOR, luminosity: LUMINOSITY, darkerColor: DARKER_COLOR, lighterColor: LIGHTER_COLOR,
+  color: COLOR, luminosity: LUMINOSITY, darkerColor: DARKER_COLOR, lighterColor: LIGHTER_COLOR, dissolve: DISSOLVE,
 };
 
 /** Modes that mix whole colours rather than each channel on its own. */
 const isNonSeparable = (code: number) => code >= HUE;
 
-/** Unknown modes composite as `normal`, which is what `dissolve` currently does. */
+/** Unknown modes composite as `normal`. */
 const blendCode = (mode: string): number => blendCodes[mode] ?? NORMAL;
 
 function blendChannel(code: number, source: number, destination: number): number {
@@ -78,6 +78,17 @@ function hslToRgb(h: number, s: number, l: number, out: Float64Array): void {
 }
 
 const luma = (r: number, g: number, b: number) => r * .2126 + g * .7152 + b * .0722;
+
+/** Stable per-document-pixel noise for Photoshop-style Dissolve coverage. */
+function dissolveNoise(x: number, y: number, layerIndex: number): number {
+  let value = Math.imul(x | 0, 0x1f123bb5) ^ Math.imul(y | 0, 0x5f356495) ^ Math.imul(layerIndex, 0x6c8e9cf5);
+  value ^= value >>> 16;
+  value = Math.imul(value, 0x7feb352d);
+  value ^= value >>> 15;
+  value = Math.imul(value, 0x846ca68b);
+  value ^= value >>> 16;
+  return (value >>> 0) / 0x1_0000_0000;
+}
 
 /**
  * Blends a whole colour for the modes that cannot work channel by channel,
@@ -323,7 +334,8 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
   const clippedParents = new Set<string>();
   for (const layer of layers) if (layer.clipping) clippedParents.add(layer.parentId ?? "root");
 
-  for (const layer of layers) {
+  for (let layerIndex = 0; layerIndex < layers.length; layerIndex += 1) {
+    const layer = layers[layerIndex]!;
     const parentKey = layer.parentId ?? "root";
     const effectiveOpacity = effectiveLayerOpacity(layer, state.layers);
     if (layer.kind === "group" || !isLayerEffectivelyVisible(layer, state.layers) || effectiveOpacity <= 0) {
@@ -389,7 +401,7 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
     const clipping = layer.clipping === true;
     const glass = layer.effects?.glass?.enabled ? layer.effects.glass : null;
     if (glass) applyGlassBackdrop(output, outWidth, outHeight, layer, renderedLayer, area, state.width, step, maskPixels, maskDensity, clippingBase, layerAlpha);
-    const opaqueNormal = code === NORMAL && layerAlpha >= 1 && !clipping && !glass;
+    const opaqueNormal = (code === NORMAL || code === DISSOLVE) && !clipping && !glass;
 
     for (let row = firstRow; row <= lastRow; row += 1) {
       const documentRow = (area.y + row * step) * width + area.x;
@@ -409,6 +421,10 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
         // The backdrop was already frosted above. The painted pixels are only
         // the pane's tint, so an opaque white source never hides its own blur.
         if (glass) sourceAlpha *= clamp01(glass.tintOpacity);
+        // Dissolve makes a pixel fully present or absent instead of blending
+        // it semi-transparently. The coordinate hash keeps tiles and exports
+        // byte-identical without mutable RNG state.
+        if (code === DISSOLVE) sourceAlpha = dissolveNoise(area.x + column * step, documentY, layerIndex + 1) < sourceAlpha ? 1 : 0;
         if (sourceAlpha <= 0) continue;
 
         const sourceRed = renderedLayer[sourceIndex]!, sourceGreen = renderedLayer[sourceIndex + 1]!, sourceBlue = renderedLayer[sourceIndex + 2]!;
@@ -421,7 +437,7 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
         }
         const destinationRed = output[index]!, destinationGreen = output[index + 1]!, destinationBlue = output[index + 2]!;
         let blendedRed: number, blendedGreen: number, blendedBlue: number;
-        if (code === NORMAL) {
+        if (code === NORMAL || code === DISSOLVE) {
           // The overwhelmingly common case: the source colour passes through
           // untouched and only the Porter-Duff weighting below applies.
           blendedRed = sourceRed; blendedGreen = sourceGreen; blendedBlue = sourceBlue;

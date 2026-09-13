@@ -5917,8 +5917,11 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
       projection tile/ROI, скомпоновать детей внутри и лишь затем один раз
       смешаться с родителем. `passThrough` можно раскрывать в parent graph.
       Это исправляет overlap при group opacity и adjustment внутри группы.
-- [ ] **Честный каталог режимов/фильтров.** Реализовать deterministic
-      dissolve либо скрыть его из UI до реализации. Развести настоящие
+- [x] **Deterministic Dissolve.** Режим теперь использует стабильную
+      координатную hash-coverage: полупрозрачный пиксель становится полностью
+      видимым или отсутствует, а tile, preview и export дают одинаковый
+      результат. Покрыто тестом tile boundary.
+- [ ] **Честный каталог фильтров.** Развести настоящие
       Gaussian/Median/Motion/Radial/Lens/Iris/Tilt-Shift/Surface/
       Dust & Scratches: сейчас нельзя рекламировать разные фильтры, если
       они вычисляются одним Box Blur. Одновременно обновить их
