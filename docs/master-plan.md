@@ -2417,8 +2417,10 @@ Pointer Events → Stroke Smoothing → Stroke Resampling → Stamp Positions
       `toolOptions`-контракт, последовательность stamps детерминирована,
       а dynamics считаются до пиксельного цикла. В том же контракте работает
       базовый Transfer (`Opacity/Flow Jitter` и минимумы), не смешивая потолок
-      opacity со скоростью накопления flow. Texture/Dual/Color и контроллеры
-      стилуса остаются следующими шагами.
+      opacity со скоростью накопления flow. Контроллеры `Pen Pressure`,
+      `Fade` и `Direction` сохраняются в preset и уже управляют применимыми
+      Size/Angle/Roundness/Opacity/Flow settings; Texture/Dual/Color и
+      дополнительные контроллеры стилуса остаются следующими шагами.
 - [ ] Единая грамматика параметра во всех секциях: `Slider/Number +
       Jitter + Control ▾ (Off/Fade/Pen Pressure/Pen Tilt/Stylus Wheel/…)`.
 - [ ] Владелец-ревьюер предлагает **чуть упростить** относительно

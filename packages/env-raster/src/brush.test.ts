@@ -206,6 +206,17 @@ describe("brush dynamics", () => {
     expect(alpha).toBeGreaterThanOrEqual(Math.round(.25 * .25 * .8 * 255) - 1);
     expect(alpha).toBeLessThanOrEqual(normal[100 * W + 200]!);
   });
+
+  it("uses pressure and fade controllers instead of random jitter", () => {
+    const light = blankCoverage(), hard = blankCoverage(), faded = blankCoverage();
+    const dynamics = { sizeJitter: 1, minimumDiameter: .2, sizeControl: "pressure" as const };
+    accumulateDab(light, W, H, { x: 200, y: 100, pressure: .2 }, 100, 1, 1, 1, undefined, 1, 0, true, false, dynamics, { seed: 1, index: 0 });
+    accumulateDab(hard, W, H, { x: 200, y: 100, pressure: 1 }, 100, 1, 1, 1, undefined, 1, 0, true, false, dynamics, { seed: 999, index: 0 });
+    accumulateDab(faded, W, H, { x: 200, y: 100, pressure: 1 }, 100, 1, 1, 1, undefined, 1, 0, true, false,
+      { sizeJitter: 1, minimumDiameter: .2, sizeControl: "fade", fadeSteps: 10 }, { seed: 1, index: 10 });
+    expect(painted(light)).toBeLessThan(painted(hard));
+    expect(painted(faded)).toBeLessThan(painted(hard));
+  });
 });
 
 describe("stroke coverage", () => {

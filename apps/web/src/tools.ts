@@ -54,6 +54,11 @@ const brushDynamicsOptions: readonly ToolOption[] = [
   { id: "minimumOpacity", label: { en: "Minimum Opacity", ru: "Минимальная непрозрачность" }, type: "number", min: 0, max: 100, step: 1, defaultValue: 0, unit: "%", hideFromBar: true },
   { id: "flowJitter", label: { en: "Flow Jitter", ru: "Колебание подачи" }, type: "number", min: 0, max: 100, step: 1, defaultValue: 0, unit: "%", hideFromBar: true },
   { id: "minimumFlow", label: { en: "Minimum Flow", ru: "Минимальная подача" }, type: "number", min: 0, max: 100, step: 1, defaultValue: 0, unit: "%", hideFromBar: true },
+  ...(["size", "angle", "roundness", "opacity", "flow"] as const).map((field) => ({
+    id: `${field}Control`, label: { en: `${field} control`, ru: `Управление ${field}` }, type: "select" as const, defaultValue: "off",
+    values: [{ value: "off", label: { en: "Off", ru: "Выкл" } }, { value: "pressure", label: { en: "Pen pressure", ru: "Нажим пера" } }, { value: "fade", label: { en: "Fade", ru: "Угасание" } }, { value: "direction", label: { en: "Direction", ru: "Направление" } }], hideFromBar: true,
+  })),
+  { id: "fadeSteps", label: { en: "Fade steps", ru: "Шаги угасания" }, type: "number", min: 1, max: 10000, step: 1, defaultValue: 100, hideFromBar: true },
 ];
 
 export const tools: readonly ToolDefinition[] = [

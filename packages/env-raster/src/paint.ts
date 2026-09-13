@@ -17,7 +17,16 @@ export interface BrushDynamics {
   readonly minimumOpacity?: number;
   readonly flowJitter?: number;
   readonly minimumFlow?: number;
+  readonly sizeControl?: BrushDynamicControl;
+  readonly angleControl?: BrushDynamicControl;
+  readonly roundnessControl?: BrushDynamicControl;
+  readonly opacityControl?: BrushDynamicControl;
+  readonly flowControl?: BrushDynamicControl;
+  /** Number of stamps over which a Fade controller reaches its minimum. */
+  readonly fadeSteps?: number;
 }
+
+export type BrushDynamicControl = "off" | "pressure" | "fade" | "direction";
 
 /** Kept for the lifetime of one stroke so a preview, re-render, and a saved
  * history result all use the same dab sequence instead of Math.random(). */
@@ -31,6 +40,12 @@ function brushRandom(seed: number, stamp: number, channel: number): number {
 }
 
 const clamp01 = (value: number): number => Math.max(0, Math.min(1, value));
+
+function controllerAmount(control: BrushDynamicControl | undefined, random: number, point: Point, stamp: number, fadeSteps: number): number {
+  if (control === "pressure") return 1 - clamp01(point.pressure ?? 1);
+  if (control === "fade") return Math.min(1, stamp / Math.max(1, fadeSteps));
+  return random;
+}
 
 /**
  * GIMP's own brush falloff, from `app/core/gimpbrushgenerated.c`.
@@ -167,14 +182,16 @@ export function accumulateDab(
   const minimumOpacity = clamp01(dynamics?.minimumOpacity ?? 0);
   const flowJitter = clamp01(dynamics?.flowJitter ?? 0);
   const minimumFlow = clamp01(dynamics?.minimumFlow ?? 0);
+  const fadeSteps = Math.max(1, Math.round(dynamics?.fadeSteps ?? 100));
   const baseCount = Math.max(1, Math.min(16, Math.round(dynamics?.count ?? 1)));
   const count = Math.max(1, Math.min(16, Math.round(baseCount * (1 - countJitter * brushRandom(seed, stamp, 0)))));
   const scatter = Math.max(0, dynamics?.scatter ?? 0);
 
   for (let copy = 0; copy < count; copy += 1) {
-    const sizeFactor = Math.max(minimumDiameter, 1 - sizeJitter * brushRandom(seed, stamp, 1 + copy * 5));
-    const currentRoundness = Math.max(minimumRoundness, roundness * (1 - roundnessJitter * brushRandom(seed, stamp, 2 + copy * 5)));
-    const currentAngle = angleDegrees + (brushRandom(seed, stamp, 3 + copy * 5) * 2 - 1) * (dynamics?.angleJitter ?? 0);
+    const sizeFactor = Math.max(minimumDiameter, 1 - sizeJitter * controllerAmount(dynamics?.sizeControl, brushRandom(seed, stamp, 1 + copy * 8), point, stamp, fadeSteps));
+    const currentRoundness = Math.max(minimumRoundness, roundness * (1 - roundnessJitter * controllerAmount(dynamics?.roundnessControl, brushRandom(seed, stamp, 2 + copy * 8), point, stamp, fadeSteps)));
+    const directedAngle = dynamics?.angleControl === "direction" && strokeDirectionRadians !== undefined ? strokeDirectionRadians * 180 / Math.PI : 0;
+    const currentAngle = angleDegrees + directedAngle + (brushRandom(seed, stamp, 3 + copy * 8) * 2 - 1) * (dynamics?.angleJitter ?? 0);
     const scatterRadius = size * (scatter / 100) * Math.sqrt(brushRandom(seed, stamp, 4 + copy * 5));
     const scatterAngle = brushRandom(seed, stamp, 5 + copy * 5) * Math.PI * 2;
     const axisAngle = (strokeDirectionRadians ?? 0) + Math.PI / 2;
@@ -182,8 +199,8 @@ export function accumulateDab(
     // screen X. Both Axes turns it into the full radial cloud.
     const offsetX = dynamics?.bothAxes ? scatterRadius * Math.cos(scatterAngle) : scatterRadius * (brushRandom(seed, stamp, 8 + copy * 5) * 2 - 1) * Math.cos(axisAngle);
     const offsetY = dynamics?.bothAxes ? scatterRadius * Math.sin(scatterAngle) : scatterRadius * (brushRandom(seed, stamp, 8 + copy * 5) * 2 - 1) * Math.sin(axisAngle);
-    const opacityFactor = Math.max(minimumOpacity, 1 - opacityJitter * brushRandom(seed, stamp, 6 + copy * 5));
-    const flowFactor = Math.max(minimumFlow, 1 - flowJitter * brushRandom(seed, stamp, 7 + copy * 5));
+    const opacityFactor = Math.max(minimumOpacity, 1 - opacityJitter * controllerAmount(dynamics?.opacityControl, brushRandom(seed, stamp, 6 + copy * 8), point, stamp, fadeSteps));
+    const flowFactor = Math.max(minimumFlow, 1 - flowJitter * controllerAmount(dynamics?.flowControl, brushRandom(seed, stamp, 7 + copy * 8), point, stamp, fadeSteps));
     accumulateRoundDab(coverage, width, height, { ...point, x: point.x + offsetX, y: point.y + offsetY }, size * sizeFactor, flow * flowFactor, ceiling * opacityFactor, hardness, selectionMask, currentRoundness, currentAngle, pressureSize, pressureOpacity);
   }
 }

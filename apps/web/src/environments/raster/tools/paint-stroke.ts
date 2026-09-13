@@ -91,6 +91,11 @@ function resolveColor(context: ToolContext<PaintStrokeState>, config: PaintStrok
   return parseHexColor(context.paintColor);
 }
 
+type DynamicControl = NonNullable<BrushDynamics["sizeControl"]>;
+function dynamicControl(value: unknown): DynamicControl {
+  return value === "pressure" || value === "fade" || value === "direction" ? value : "off";
+}
+
 function resolvedOptions(context: ToolContext<PaintStrokeState>, config: PaintStrokeConfig) {
   const options = context.options;
   return {
@@ -120,6 +125,12 @@ function resolvedOptions(context: ToolContext<PaintStrokeState>, config: PaintSt
       minimumOpacity: Number(options.minimumOpacity ?? 0) / 100,
       flowJitter: Number(options.flowJitter ?? 0) / 100,
       minimumFlow: Number(options.minimumFlow ?? 0) / 100,
+      sizeControl: dynamicControl(options.sizeControl),
+      angleControl: dynamicControl(options.angleControl),
+      roundnessControl: dynamicControl(options.roundnessControl),
+      opacityControl: dynamicControl(options.opacityControl),
+      flowControl: dynamicControl(options.flowControl),
+      fadeSteps: Number(options.fadeSteps ?? 100),
     } satisfies BrushDynamics,
   };
 }

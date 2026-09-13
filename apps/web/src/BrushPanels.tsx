@@ -46,7 +46,7 @@ const initialDraft: DraftValues = {
   tiltX: 0, tiltY: 0, rotation: 0, pressure: 100,
 };
 
-const controlOptions = ["Off", "Pen pressure", "Pen tilt", "Fade", "Direction"] as const;
+const controlOptions = ["off", "pressure", "fade", "direction"] as const;
 
 function NumberField({ label, value, min = 0, max = 100, unit = "%", onChange }: { label: string; value: number; min?: number; max?: number; unit?: string; onChange: (value: number) => void }) {
   return <label className="brush-setting-field">
@@ -56,8 +56,9 @@ function NumberField({ label, value, min = 0, max = 100, unit = "%", onChange }:
   </label>;
 }
 
-function ControlField({ language }: { language: Language }) {
-  return <label className="brush-setting-control"><span>{text(language, "Control", "Управление")}</span><select defaultValue="Off">{controlOptions.map((value) => <option key={value}>{text(language, value, value === "Off" ? "Выкл" : value === "Pen pressure" ? "Нажим пера" : value === "Pen tilt" ? "Наклон пера" : value === "Fade" ? "Угасание" : "Направление")}</option>)}</select></label>;
+function ControlField({ language, value, onChange }: { language: Language; value: string; onChange: (value: string) => void }) {
+  const label = (control: (typeof controlOptions)[number]) => control === "off" ? text(language, "Off", "Выкл") : control === "pressure" ? text(language, "Pen pressure", "Нажим пера") : control === "fade" ? text(language, "Fade", "Угасание") : text(language, "Direction", "Направление");
+  return <label className="brush-setting-control"><span>{text(language, "Control", "Управление")}</span><select value={value} onChange={(event) => onChange(event.currentTarget.value)}>{controlOptions.map((control) => <option key={control} value={control}>{label(control)}</option>)}</select></label>;
 }
 
 function BrushStrokePreview({ hardness, roundness }: { hardness: number; roundness: number }) {
@@ -88,6 +89,7 @@ export function BrushSettingsPanel() {
 
   const draftField = (key: string, label: string, options: { min?: number; max?: number; unit?: string } = {}) => <NumberField label={label} value={Number(toolOptions[key] ?? initialDraft[key])} onChange={(next) => setDraftValue(key, next)} {...options} />;
   const checkbox = (key: string, label: string) => <label className="brush-inline-checkbox"><input type="checkbox" checked={Boolean(toolOptions[key] ?? initialDraft[key])} onChange={(event) => setDraftValue(key, event.currentTarget.checked)} />{label}</label>;
+  const control = (key: string) => <ControlField language={language} value={String(toolOptions[key] ?? "off")} onChange={(next) => setDraftValue(key, next)} />;
 
   let editor: ReactNode;
   if (selected === "tip") editor = <>
@@ -102,25 +104,25 @@ export function BrushSettingsPanel() {
     <NumberField label={text(language, "Spacing", "Интервалы")} value={liveValue("spacing", 12)} min={1} max={300} onChange={(next) => setToolOption("raster.brush", "spacing", next)} />
   </>;
   else if (selected === "shape") editor = <>
-    {draftField("sizeJitter", text(language, "Size Jitter", "Колебание размера"))}<ControlField language={language} />
+    {draftField("sizeJitter", text(language, "Size Jitter", "Колебание размера"))}{control("sizeControl")}
     {draftField("minimumDiameter", text(language, "Minimum Diameter", "Минимальный диаметр"))}
-    {draftField("angleJitter", text(language, "Angle Jitter", "Колебание угла"))}<ControlField language={language} />
-    {draftField("roundnessJitter", text(language, "Roundness Jitter", "Колебание формы"))}<ControlField language={language} />
+    {draftField("angleJitter", text(language, "Angle Jitter", "Колебание угла"))}{control("angleControl")}
+    {draftField("roundnessJitter", text(language, "Roundness Jitter", "Колебание формы"))}{control("roundnessControl")}
     {draftField("minimumRoundness", text(language, "Minimum Roundness", "Минимальная форма"))}
     <div className="brush-inline-row">{checkbox("flipXJitter", text(language, "Flip X Jitter", "Отразить X колебания"))}{checkbox("flipYJitter", text(language, "Flip Y Jitter", "Отразить Y колебания"))}</div>
     {checkbox("projection", text(language, "Brush Projection", "Проекция кисти"))}
   </>;
   else if (selected === "scatter") editor = <>
     <div className="brush-inline-row">{checkbox("bothAxes", text(language, "Both Axes", "Обе оси"))}</div>
-    {draftField("scatter", text(language, "Scatter", "Рассеивание"), { max: 1000 })}<ControlField language={language} />
+    {draftField("scatter", text(language, "Scatter", "Рассеивание"), { max: 1000 })}
     {draftField("count", text(language, "Count", "Счётчик"), { min: 1, max: 16, unit: "" })}
-    {draftField("countJitter", text(language, "Count Jitter", "Колебание счётчика"))}<ControlField language={language} />
+    {draftField("countJitter", text(language, "Count Jitter", "Колебание счётчика"))}
   </>;
   else if (selected === "texture") editor = <>
     <button className="brush-pattern-select" type="button"><span className="brush-pattern-sample" />{text(language, "Choose pattern", "Выбрать текстуру")}</button>
     <div className="brush-inline-row">{checkbox("invertTexture", text(language, "Invert", "Инвертировать"))}{checkbox("textureEachTip", text(language, "Texture Each Tip", "Текстурировать каждый отпечаток"))}</div>
     {draftField("textureScale", text(language, "Scale", "Шкала"))}{draftField("textureBrightness", text(language, "Brightness", "Яркость"), { min: -100, max: 100 })}{draftField("textureContrast", text(language, "Contrast", "Контрастность"), { min: -100, max: 100 })}
-    <ControlField language={language} />{draftField("textureDepth", text(language, "Depth", "Глубина"))}{draftField("textureDepthJitter", text(language, "Depth Jitter", "Колебание глубины"))}
+    {draftField("textureDepth", text(language, "Depth", "Глубина"))}{draftField("textureDepthJitter", text(language, "Depth Jitter", "Колебание глубины"))}
   </>;
   else if (selected === "dual") editor = <>
     <label className="brush-setting-control"><span>{text(language, "Mode", "Режим")}</span><select defaultValue="Darken"><option>{text(language, "Darken", "Затемнение основы")}</option></select></label>
@@ -129,12 +131,12 @@ export function BrushSettingsPanel() {
   </>;
   else if (selected === "color") editor = <>
     {checkbox("applyPerTip", text(language, "Apply Per Tip", "Применить для кончика"))}
-    {draftField("foregroundBackgroundJitter", text(language, "Foreground/Background Jitter", "Колебание переднего/заднего плана"))}<ControlField language={language} />
+    {draftField("foregroundBackgroundJitter", text(language, "Foreground/Background Jitter", "Колебание переднего/заднего плана"))}
     {draftField("hueJitter", text(language, "Hue Jitter", "Колебание цветового тона"))}{draftField("saturationJitter", text(language, "Saturation Jitter", "Колебание насыщенности"))}{draftField("brightnessJitter", text(language, "Brightness Jitter", "Колебание яркости"))}{draftField("purity", text(language, "Purity", "Чистота"), { min: -100, max: 100 })}
   </>;
   else if (selected === "transfer") editor = <>
-    {draftField("opacityJitter", text(language, "Opacity Jitter", "Колебание непрозрачности"))}<ControlField language={language} />{draftField("minimumOpacity", text(language, "Minimum", "Минимальное"))}
-    {draftField("flowJitter", text(language, "Flow Jitter", "Колебание количества краски"))}<ControlField language={language} />{draftField("minimumFlow", text(language, "Minimum", "Минимальное"))}
+    {draftField("opacityJitter", text(language, "Opacity Jitter", "Колебание непрозрачности"))}{control("opacityControl")}{draftField("minimumOpacity", text(language, "Minimum", "Минимальное"))}
+    {draftField("flowJitter", text(language, "Flow Jitter", "Колебание количества краски"))}{control("flowControl")}{draftField("minimumFlow", text(language, "Minimum", "Минимальное"))}
   </>;
   else if (selected === "pose") editor = <>
     {draftField("tiltX", text(language, "Tilt X", "Наклон по оси X"), { min: -100, max: 100 })}{checkbox("overrideTiltX", text(language, "Override Tilt X", "Переопределить наклон по оси X"))}
