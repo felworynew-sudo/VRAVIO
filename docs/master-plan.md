@@ -6087,10 +6087,13 @@ mip обязана повторно blit'ить валидные visible tiles; 
     `previewWithLayerHidden()` не может замыкаться на `state` из момента
     создания ToolContext. В момент cleanup читать live state по document ID;
     regression: transform A → изменить/скрыть B → commit/cancel A.
-12. [ ] **P1 — vector live modifiers не должны временно показывать старый
-    result.** Cache modifiers вести по `{ shapeId, inputSignature }`; при
-    изменении input shape сразу помечать unresolved и показывать base geometry,
-    сохраняя cached result только для неизменившихся shapes.
+12. [x] **P1 — vector live modifiers не должны временно показывать старый
+    result.** `useModifierResults()` теперь помечает асинхронный cache номером
+    исходной document revision; при первом render новой revision возвращает
+    пустой map и `VectorWorkspace` показывает base geometry, а новый result
+    подменяется только после resolve. Это закрывает stale-result кадр без
+    ожидания тяжёлого per-`{shapeId,inputSignature}` cache: он остаётся
+    отдельной оптимизацией для сохранения результатов неизменившихся shapes.
 13. [x] **P2 — atomic swap raster asset в Vector.** При `assetId/rev` update
     `useAssetBitmapUrl()` удерживает прежний bitmap до успешного decode новой
     версии; placeholder допустим только при первом load. Неуспешный read/decode

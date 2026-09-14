@@ -21,6 +21,11 @@ import { createWasmCurvePort, createWasmGeometryPort } from "./vector-geometry-w
  */
 let sharedCurvePort: ReturnType<typeof createWasmCurvePort> | null = null;
 let sharedGeometryPort: ReturnType<typeof createWasmGeometryPort> | null = null;
+const emptyModifierResults: ReadonlyMap<string, string> = new Map();
+interface ModifierResultsForRevision {
+  readonly revision: number;
+  readonly paths: ReadonlyMap<string, string>;
+}
 function sharedPorts() {
   sharedCurvePort ??= createWasmCurvePort();
   sharedGeometryPort ??= createWasmGeometryPort();
@@ -28,12 +33,12 @@ function sharedPorts() {
 }
 
 export function useModifierResults(state: VectorDocumentState, revision: number): ReadonlyMap<string, string> {
-  const [results, setResults] = useState<ReadonlyMap<string, string>>(new Map());
+  const [results, setResults] = useState<ModifierResultsForRevision>({ revision: -1, paths: emptyModifierResults });
 
   useEffect(() => {
     const shapesWithModifiers = state.shapes.filter((shape) => shape.geometry.length > 0);
     if (!shapesWithModifiers.length) {
-      setResults(new Map());
+      setResults({ revision, paths: emptyModifierResults });
       return;
     }
     let cancelled = false;
@@ -50,11 +55,15 @@ export function useModifierResults(state: VectorDocumentState, revision: number)
       if (cancelled) return;
       const map = new Map<string, string>();
       for (const [id, path] of entries) if (path !== null) map.set(id, path);
-      setResults(map);
+      setResults({ revision, paths: map });
     });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on revision exactly like the spatial index's own useMemo, not on `state` itself
   }, [revision]);
 
-  return results;
+  // Effects run after React has rendered. Tagging the asynchronous cache with
+  // its source revision makes that intervening render use base geometry,
+  // rather than briefly showing a modifier result computed for the prior
+  // document revision.
+  return results.revision === revision ? results.paths : emptyModifierResults;
 }
