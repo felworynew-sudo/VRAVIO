@@ -127,7 +127,16 @@ function documentFixture(): RasterDocumentState {
 
 function pointerAt(x: number, y: number, pointerId = 1): ToolPointer {
   return {
-    point: { x, y }, screenX: x, screenY: y, pointerId,
+    // `pressure` lives on `point`, not on the pointer itself — the real bridge
+    // (raster-coordinates.ts's `pointFromNativeEvent`) puts it there via
+    // `strokePressure(event)`, and every tool that reads pressure (clone's and
+    // paint-stroke's `pressureSize`/`pressureOpacity`) reads `point.pressure`,
+    // never this field. Setting it only here, as this harness did before,
+    // synthesized a pointer no real bridge produces: `point.pressure` fell
+    // through to `?? 1` regardless of this value, so `raster.clone`'s
+    // "pressureSize" option looked like a no-op — the option was fine, the
+    // fixture wasn't shaped like production input.
+    point: { x, y, pressure: 0.5 }, screenX: x, screenY: y, pointerId,
     shiftKey: false, altKey: false, ctrlKey: false, metaKey: false, button: 0, pressure: 0.5,
   };
 }
