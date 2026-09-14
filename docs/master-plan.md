@@ -6686,8 +6686,11 @@ Group Selection и выбор по object type. Отдельный P1-workflow �
 | 🔴 True 16-bit/channel raster | Реальные 16-bit буферы во всей цепочке paint/filter/composite/export | Adobe Help | Krita |
 | 🔴 True 32-bit float/HDR | Floating-point document pipeline | Adobe Help | GEGL |
 | 🔴 Raster CMYK editing | Документ реально живёт в CMYK, не просто конвертируется на входе | Adobe Help | Krita |
-| 🟠 Full ICC v2/v4 color management | Input/display/output/printer profiles, rendering intents | Adobe Help | LittleCMS |
+| 🟠 Full ICC v2/v4 color management | Input/display/output/printer profiles; sRGB, Display P3 и Adobe RGB как рабочие пространства; rendering intents | Adobe Help | LittleCMS |
+| 🔴 Assign Profile / Convert Profile | Assign меняет интерпретацию чисел без пересчёта пикселей; Convert пересчитывает pixels так, чтобы визуальный вид сохранился. Нужны document history, preview и корректные profile transforms, это не один dropdown. | Adobe Help | LittleCMS |
+| 🔴 Raster Lab editing | Документ реально живёт и редактируется в Lab (`L/a/b`), а не только проходит через конвертацию при import/export. | Adobe Help | Krita / LittleCMS |
 | 🔴 Soft Proof | Симуляция вида документа под конкретный printer/profile | Adobe Help | LittleCMS |
+| 🔴 Gamut Warning | Отдельный overlay областей, не попадающих в выбранный proof/output gamut; связан с Soft Proof, proof profile и rendering intent, но не заменяется ими. | Adobe Help | Krita / LittleCMS |
 | 🔴 Spot colors | Pantone-подобные именованные печатные краски | Adobe Help | Scribus |
 | 🔴 Overprint preview/settings | Проверка наложения печатных красок | Adobe Help | Scribus |
 | 🔴 Color Separations preview | Отдельно видеть C/M/Y/K/spot plates | Adobe Help | Scribus |
