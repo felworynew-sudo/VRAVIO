@@ -6016,6 +6016,90 @@ custom layers, assets, lifecycle, GPU-доступа, dependencies. Это
       `cloneDab()` и stroke interpolation; настройки размера и opacity
       добавлены в Tool Options, проверено unit-тестом.
 
+#### 25.3.11.1. Visual/presentation correctness audit — 14 сентября 2026
+
+Отдельный аудит публичного `main` проверял не скорость вообще, а расхождение
+между правильным состоянием документа/кэша и тем, что физически остаётся
+нарисовано в `<canvas>`: устаревшие mip, preview после commit, неправильные
+group/mask/effect кадры. Перед каждым пунктом повторно читать актуальный код и
+воспроизводить живьём: часть исходных находок уже закрыта пунктами 25.3.11, но
+это не отменяет необходимость регрессионных сценариев.
+
+**Архитектурный вывод.** «В cache лежат правильные pixels» и «эти pixels
+сейчас представлены canvas'ом» — разные инварианты. Нужен явный presentation
+state: `{ documentRevision, mip, presentationGeneration }`. Любая transient
+запись в canvas помечает presentation отдельно от canonical tile cache; смена
+mip обязана повторно blit'ить валидные visible tiles; commit/cancel/switch tool
+увеличивают generation, и callback от старого `requestAnimationFrame` больше
+не имеет права писать в canvas.
+
+1. [ ] **P0 — stale mip после `zoom-out → быстрый zoom-in`.**
+   `RasterTileCache.update()` может вернуть high-res tile в `visible`, но не в
+   `repainted`: кэш уже верный, а canvas продолжает показывать растянутый
+   low-res mip. При смене mip повторно blit'ить все `visible`, не только
+   пересчитанные tiles; добавить regression test именно на возврат к уже
+   закэшированному mip.
+2. [ ] **P0 — отмена устаревшего rAF live-transform.** `scheduleWork()`
+   может выполнить preview drag уже после синхронного final на `pointerup` и
+   зрительно откатить Scale/Rotate/Warp. Добавить generation token и
+   `cancel/flushPendingWork()` перед `onGestureEnd`, commit, cancel и сменой
+   инструмента.
+3. [ ] **P0 — отмена rAF обычных tool-preview.** Тот же контракт нужен для
+   `schedulePreview()`/`schedulePreviewLayers()`: старый working-buffer
+   callback не должен перерисовать canvas поверх committed результата после
+   commit/cancel/tool switch.
+4. [x] **Group opacity/visibility invalidation.** Исходный аудит нашёл риск:
+   signature группы меняется, signatures детей — нет, а bounds пустого group
+   buffer могли дать нулевой dirty-region. Закрыто текущим безопасным
+   full-document repaint при group signature change (25.3.11); обязателен
+   живой regression: два child layers, group opacity `100 → 30 → 100` и
+   visibility toggle без pan/zoom.
+5. [x] **Mask Density/Feather invalidation и compositor.** Исходный аудит
+   верно отметил отсутствие density/feather в signature и неработающий
+   feather. Закрыто 25.3.11: density/feather в signature и cached separable
+   feathered mask; не возвращать старый placeholder-план из §19.1.
+6. [x] **Isolated group surface/mask/effects.** Исходная проблема «group
+   пропускается compositor'ом» закрыта для `groupMode: isolated`, blend,
+   effects и clipping в 25.3.11. Остаётся отдельный P1 Group Masks для
+   Pass Through (§19.2), его нельзя ошибочно считать закрытым одной isolated
+   surface.
+7. [x] **Parity direct live-preview и final composite.** Исходный fast-path
+   игнорировал fillOpacity/mask/effects/clipping. Закрыто строгим
+   `canDirectRasterPreviewBlit()` для Brush/Spot Heal/Selection Brush
+   (25.3.11); новые preview paths обязаны пользоваться только этим общим
+   predicate, не заводить локальные упрощённые проверки.
+8. [ ] **P1 — качество mip.** Downsample не должен быть point-decimation:
+   сейчас на тонких линиях, текстурах и фотографиях возможны aliasing, moiré
+   и заметный pop между mip. Ввести box/area downsample как минимум, затем
+   полноценную mip pyramid/качественный resampler; тестировать тонкие линии,
+   диагональный градиент и фото на 12.5/18/25/37 %.
+9. [ ] **P1 — seams между independently scaled mip tiles.** Потенциальны
+   тонкие линии на smooth gradient/blur, когда low-res tiles растягиваются
+   независимо и затем stage ещё CSS-scaled. Сначала живой тест: медленный pan
+   по tile boundaries на диагональном градиенте и размытом фото; при
+   воспроизведении добавить sampling halo/overlap или общий mip surface.
+10. [ ] **P1 — above-layer overlay во время live transform.** Overlay
+    верхних слоёв снимается один раз и может устареть, если во время pending
+    transform меняются их content/opacity/visibility или происходит undo.
+    Перекомпоновывать только above-overlay по изменению document revision,
+    не ресемплируя transforming layer.
+11. [ ] **P1 — cleanup transform не должен рисовать snapshot.**
+    `previewWithLayerHidden()` не может замыкаться на `state` из момента
+    создания ToolContext. В момент cleanup читать live state по document ID;
+    regression: transform A → изменить/скрыть B → commit/cancel A.
+12. [ ] **P1 — vector live modifiers не должны временно показывать старый
+    result.** Cache modifiers вести по `{ shapeId, inputSignature }`; при
+    изменении input shape сразу помечать unresolved и показывать base geometry,
+    сохраняя cached result только для неизменившихся shapes.
+13. [ ] **P2 — atomic swap raster asset в Vector.** При `assetId/rev` update
+    удерживать прежний bitmap до decode новой версии; placeholder допустим
+    только при первом load. Это исключит `old image → empty rect → new image`
+    при apply/undo/redo/linked update.
+
+**Порядок закрытия:** 1 → 2/3 → живые проверки 4–7 → 8/9 → 10/11 → 12 → 13.
+Первые семь — display correctness: пользователь не должен видеть неверный
+кадр, который «сам исправился после следующего действия».
+
 #### 25.3.12. Full-canvas escape hatches и порядок архитектурной миграции — 13 сентября 2026
 
 Главное противоречие Raster: tile/dirty-region outer shell уже есть, но
