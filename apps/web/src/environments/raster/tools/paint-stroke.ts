@@ -229,6 +229,11 @@ function commitStroke(context: ToolContext<PaintStrokeState>, config: PaintStrok
   // so it does not matter which way this reads for it.
   const erase = config.erase && stroke.target === "pixels";
   void context.commit(stroke.before, stroke.working, label, stroke.target, stroke.layerId, stroke.strokeBounds, erase);
+  // `stroke.coverage` has done everything it will ever do — every accumulated dab already
+  // landed in `stroke.working` via `layStroke`, synchronously, on every step of this gesture.
+  // Handing its bounds back now is what lets the *next* stroke's `borrowCoverageScratch` clear
+  // only this rectangle instead of the whole canvas.
+  context.releaseCoverageScratch(stroke.strokeBounds);
 }
 
 export function createPaintStrokeTool(config: PaintStrokeConfig): RasterToolDefinition<PaintStrokeState> {
@@ -267,19 +272,22 @@ export function createPaintStrokeTool(config: PaintStrokeConfig): RasterToolDefi
         // gesture in progress — same as in the old switch, which never
         // touched `gesture.current` for this case either.
         const control: Point = { x: (shiftFrom.x + pointer.point.x) / 2, y: (shiftFrom.y + pointer.point.y) / 2, pressure: 1 };
-        const lineCoverage = new Uint8ClampedArray(context.document.width * context.document.height);
+        const lineCoverage = context.borrowCoverageScratch();
         const lineOptions = resolvedOptions(context, config);
         paintSegment(context, config, lineCoverage, shiftFrom, control, pointer.point, 0, lineOptions.dynamics, { seed: Math.round(shiftFrom.x * 13 + shiftFrom.y * 29 + pointer.point.x * 47 + pointer.point.y * 97), index: 0 });
         const pad = brushPaintPad(context);
         const line = unionRect(null, shiftFrom.x, shiftFrom.y, pointer.point.x, pointer.point.y, pad);
         layStroke(context, config, { before, working, coverage: lineCoverage } as Stroke, line);
+        // Read synchronously, above, into `working` — safe to hand straight back for the next
+        // borrow (see ToolContext.releaseCoverageScratch's own contract).
+        context.releaseCoverageScratch(line);
         context.setLastStrokePoint({ toolId: config.id, layerId: key, point: pointer.point });
         context.schedulePreview(working, context.paintTarget.kind, context.paintTarget.layerId, null);
         void context.commit(before, working, context.paintTarget.kind === "mask" ? "Paint Layer Mask (Рисование по маске слоя)" : "Straight Brush Line (Прямая линия кисти)", context.paintTarget.kind, context.paintTarget.layerId);
         return;
       }
 
-      const coverage = new Uint8ClampedArray(context.document.width * context.document.height);
+      const coverage = context.borrowCoverageScratch();
       const strokeOptions = resolvedOptions(context, config);
       const stroke: Stroke = { pointerId: pointer.pointerId, before, working, coverage, curveStart: pointer.point, pending: pointer.point, dirty: null, strokeBounds: null, spacingCarry: 0, dynamics: strokeOptions.dynamics, stampState: { seed: Math.round(pointer.point.x * 13 + pointer.point.y * 29 + pointer.pointerId * 47), index: 0 }, axisLock: null, target: context.paintTarget.kind, layerId: context.paintTarget.layerId };
       paintDab(context, config, coverage, pointer.point, stroke.dynamics, stroke.stampState);

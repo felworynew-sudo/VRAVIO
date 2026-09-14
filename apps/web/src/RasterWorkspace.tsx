@@ -26,7 +26,7 @@ import { useCanvasNavigation } from "./raster-navigation";
 import { useBrushCursor } from "./raster-brush-cursor";
 import { useRasterRulerGuides } from "./raster-ruler-guides";
 import { MarchingAnts } from "./marching-ants";
-import { useRasterCommit } from "./raster-commit";
+import { borrowCoverage, releaseCoverage, useRasterCommit, type CoverageScratch } from "./raster-commit";
 import { cancelTransientCanvasFrames } from "./raster-transient-frames";
 import { useRasterContextMenus } from "./raster-context-menus";
 import { useContextMenu } from "./ContextMenu";
@@ -179,6 +179,13 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   // expensive per-frame recompute later.
   const workFrameRef = useRef<number | null>(null);
   const pendingWorkRef = useRef<(() => void) | null>(null);
+  // Backs ToolContext.borrowCoverageScratch/releaseCoverageScratch (docs/master-plan.md §37.6):
+  // one document-sized coverage buffer reused across every brush stroke instead of allocated
+  // fresh per stroke, cleared only over the rectangle the previous stroke actually touched.
+  // Resized (a fresh allocation, unavoidably) whenever the document's own dimensions differ from
+  // what is currently held — a canvas resize invalidates it the same way a dimension mismatch
+  // already invalidates any other per-canvas cache in this file.
+  const coverageScratchRef = useRef<CoverageScratch | null>(null);
   /**
    * A transient rAF may otherwise run after a synchronous commit/cancel has
    * drawn the canonical document and overwrite that correct frame with an old
@@ -246,6 +253,12 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       paintColor,
       paintMask: brushMask,
       targetPixels: () => (maskTarget?.mask ? maskToRgba(maskTarget.mask.pixels) : (activeLayer ? canvasPixels(activeLayer) : new Uint8ClampedArray(state.width * state.height * 4)).slice()),
+      borrowCoverageScratch: () => {
+        const scratch = borrowCoverage(coverageScratchRef.current, state.width, state.height);
+        coverageScratchRef.current = scratch;
+        return scratch.buffer;
+      },
+      releaseCoverageScratch: (dirty) => releaseCoverage(coverageScratchRef.current, dirty),
       schedulePreview: (pixels, target, layerId, dirty) => {
         let current = previewFrameRef.current;
         if (!current || current.target !== target || current.layerId !== layerId) {

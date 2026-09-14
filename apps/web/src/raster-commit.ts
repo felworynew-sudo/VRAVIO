@@ -2,7 +2,7 @@ import { useEffect, useRef, type RefObject } from "react";
 import {
   activeRasterLayer, changedRenderRegion, clampRegionToDocument, cloneRasterState, compositeRasterDocument, compositeRasterRegion,
   cropRegion, cropRegionAsMask, DirtyRegion, flattenRasterLayers, layerRenderSignatures, mipForZoom, RasterTileCache, setLayerPixels,
-  swapLayerRegion, swapMaskRegion, RASTER_ASSET_MIME,
+  swapLayerRegion, swapMaskRegion, unionRect, RASTER_ASSET_MIME,
   type LayerRenderSignature, type PixelSelection, type RasterDocumentState, type RasterLayer, type RasterRect,
   type TileUpdate,
 } from "@vravio/env-raster";
@@ -54,6 +54,43 @@ export function canDirectRasterPreviewBlit(state: RasterDocumentState, layer: Ra
  */
 export function tilesForCanvasPresentation(update: TileUpdate, mipChanged: boolean) {
   return mipChanged ? update.visible : update.repainted;
+}
+
+/** One document-sized coverage scratch buffer, reused across strokes — see `ToolContext.borrowCoverageScratch`'s own doc comment (docs/master-plan.md §37.6) for why only this one of a stroke's three buffers is safe to pool. */
+export interface CoverageScratch {
+  readonly buffer: Uint8ClampedArray;
+  readonly width: number;
+  readonly height: number;
+  dirty: RasterRect | null;
+}
+
+/**
+ * `ToolContext.borrowCoverageScratch`'s actual logic, pulled out as a pure function so the one
+ * thing worth getting exactly right here — clearing precisely the rectangle the previous stroke
+ * touched, no more and no less — has a test that does not require mounting `RasterWorkspace`.
+ *
+ * A dimension mismatch (the document resized since the last stroke) discards `current` outright
+ * rather than trying to resize it in place: cheap, since this only happens on a canvas resize,
+ * not on every stroke, and it sidesteps deciding what a partially-valid old buffer would even mean
+ * at a new size.
+ */
+export function borrowCoverage(current: CoverageScratch | null, width: number, height: number): CoverageScratch {
+  if (current && current.width === width && current.height === height) {
+    if (current.dirty) {
+      const left = Math.max(0, Math.floor(current.dirty.x)), top = Math.max(0, Math.floor(current.dirty.y));
+      const right = Math.min(width, Math.ceil(current.dirty.x + current.dirty.width));
+      const bottom = Math.min(height, Math.ceil(current.dirty.y + current.dirty.height));
+      for (let y = top; y < bottom; y += 1) current.buffer.fill(0, y * width + left, y * width + right);
+      current.dirty = null;
+    }
+    return current;
+  }
+  return { buffer: new Uint8ClampedArray(width * height), width, height, dirty: null };
+}
+
+/** `ToolContext.releaseCoverageScratch`'s actual logic — records what to clear on the next `borrowCoverage`, growing the pending rectangle rather than replacing it, in case a scratch is released more than once before its next borrow. */
+export function releaseCoverage(scratch: CoverageScratch | null, dirty: RasterRect | null): void {
+  if (scratch && dirty) scratch.dirty = scratch.dirty ? unionRect(scratch.dirty, dirty.x, dirty.y, dirty.x + dirty.width, dirty.y + dirty.height, 0) : dirty;
 }
 
 export function useRasterCommit(params: {

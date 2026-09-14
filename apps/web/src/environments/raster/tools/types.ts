@@ -116,6 +116,45 @@ export interface ToolContext<TState> {
   targetPixels(): Uint8ClampedArray;
 
   /**
+   * A reused, document-sized coverage scratch buffer (1 byte per pixel — the
+   * shape `accumulateDab`/`accumulateStrokeSegment`'s own `coverage`
+   * parameter expects) — paired with {@link releaseCoverageScratch}.
+   *
+   * docs/master-plan.md §37.6 measured every brush stroke allocating three
+   * full-canvas buffers on `onPointerDown` — 80ms on an 8000×6000 canvas,
+   * before a single pixel is painted. `before`/`working` cannot be pooled the
+   * same way: `raster-commit.ts`'s `commitQueue` closes over exactly those
+   * two buffers and reads them whenever an earlier queued commit's asset
+   * write finally finishes, which can be well after the *next* stroke has
+   * already started — reusing that array out from under the queue would
+   * silently feed a half-painted buffer to the previous stroke's undo
+   * history and asset revision. `coverage` carries no such hazard: nothing
+   * outside the stroke that produced it ever reads it — `layStroke` consumes
+   * it synchronously into `working`, and no async continuation holds a
+   * reference afterwards — so it is the one of the three safe to reuse.
+   *
+   * Returns a fresh `Uint8ClampedArray(width*height)` on the first call after
+   * the document's dimensions change (or the very first stroke ever painted
+   * in this workspace); every call after that returns the same buffer, with
+   * only the rectangle the *previous* stroke's matching
+   * {@link releaseCoverageScratch} reported actually cleared —
+   * `O(that stroke's area)`, not `O(document area)`. Call this once per
+   * stroke, exactly where the old code did
+   * `new Uint8ClampedArray(width*height)`.
+   */
+  borrowCoverageScratch(): Uint8ClampedArray;
+  /**
+   * Reports what a stroke actually touched, so the *next* {@link
+   * borrowCoverageScratch} clears only that — call once a stroke's `working`
+   * has read everything it will ever read from `coverage` (gesture end, or a
+   * mid-drag tool switch), with the same rectangle passed to `commit`.
+   * `null` when the stroke touched nothing (e.g. a click immediately
+   * cancelled), which leaves the scratch buffer exactly as the previous
+   * release left it.
+   */
+  releaseCoverageScratch(dirty: RasterRect | null): void;
+
+  /**
    * Draws in-progress pixel work straight to the canvas, without going
    * through React.
    *

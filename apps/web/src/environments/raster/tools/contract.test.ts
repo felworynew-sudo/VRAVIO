@@ -196,6 +196,11 @@ function drive(
     paintColor: "#101317",
     paintMask,
     targetPixels: () => materialise(document.layers.find((item) => item.id === document.activeLayerId)!, document),
+    // Real pooling (docs/master-plan.md §37.6) is a memory optimisation invisible to what this
+    // harness checks — a fresh buffer every call is an equally correct implementation of the
+    // interface, and simpler than reproducing RasterWorkspace.tsx's reuse bookkeeping here.
+    borrowCoverageScratch: () => new Uint8ClampedArray(document.width * document.height),
+    releaseCoverageScratch: () => {},
     commit: async (before, after, label, target = "pixels", layerId = document.activeLayerId, bounds = null) => { effects.commits.push({ before, after, label, target, layerId, bounds }); },
     commitSelection: async (before, after, label) => { effects.selectionCommits.push({ before, after, label }); },
     commitDocument: async (before, after, label, bounds = null) => { effects.documentCommits.push({ before, after, label, bounds }); },

@@ -40,6 +40,8 @@ function driveBrush(path: readonly { x: number; y: number; shiftKey?: boolean }[
     paintColor: "#000000",
     paintMask: undefined,
     targetPixels: () => before.slice(),
+    borrowCoverageScratch: () => new Uint8ClampedArray(WIDTH * HEIGHT),
+    releaseCoverageScratch: () => {},
     schedulePreview: (pixels: Uint8ClampedArray) => { recorded.working = pixels; },
     lastStrokePoint: null,
     setLastStrokePoint: () => {},
