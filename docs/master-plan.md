@@ -1248,7 +1248,7 @@ Claude Code и является приоритетным источником и
 | Layer Mask | второй grayscale thumbnail | ✅ уже было |
 | Active edit target | рамка конкретного thumbnail (не вся строка) | ✅ уже было (`.editing` на thumbnail) |
 | Disabled mask | X/пунктир поверх thumbnail | ❌ нет |
-| Smart Object | badge в углу thumbnail | ❌ Smart Object пока нет вообще |
+| Smart Object | badge в углу thumbnail | 🟠 Raster Smart Object уже есть: `kind: "smart"` + `RasterSmartSource { assetId, pinnedRev, sourceKind }`, affine placement, thumbnail type-icon и Edit Contents; универсальный badge для linked/missing состояния ещё не доведён |
 | Layer Effects (fx) | `fx` + раскрываемые child rows | ⚠️ §1.9 п.11 (индикатор есть частично, раскрытия нет) |
 | Vector Mask | отдельный mask thumbnail от raster mask | ❌ Vector Mask пока не отдельная сущность (§19.3) |
 | Attachment zone (несколько масок) | несколько thumbnail-слотов справа от layer thumbnail | ❌ сейчас захардкожено на одну маску |
@@ -1258,13 +1258,12 @@ Claude Code и является приоритетным источником и
       thumbnail маски показывать с приглушённой opacity и тонким
       перечёркиванием, не ярко-красным крестом (владелец явно
       предпочитает аккуратный индикатор, не кислотный).
-- [ ] **Badge-система для thumbnail** — единый маленький маркер в углу
-      thumbnail для: Smart Object, externally linked asset, missing
-      asset, generated/spatial content — не отдельная строка текста
-      под именем слоя. Задел на будущее (Smart Object/Spatial Card —
-      §23 ещё не реализованы), но сам механизм (`.thumbnail-badge`
-      как переиспользуемый компонент) стоит спроектировать сразу
-      универсальным, не «одна маска — один захардкоженный слот».
+- [ ] **Единая badge-система для thumbnail** — Raster Smart Object уже
+      показывает type-icon, но нужны различимые corner-маркеры для current
+      state: embedded Smart, linked Smart, missing/broken link,
+      generated/spatial content — не отдельная строка текста под именем слоя.
+      Строить как переиспользуемый `.thumbnail-badge`, не «одна маска — один
+      захардкоженный слот».
 - [ ] **Layer Effects как раскрываемые child rows** — `fx`-индикатор
       уже частично описан в §1.9 пункте 11; довести до реального
       раскрытия под строкой слоя (`▼ 👁 [thumb] Logo  fx` → дочерние
@@ -1284,9 +1283,9 @@ Claude Code и является приоритетным источником и
       справа строки — другой; оба используют одну и ту же SVG-иконку
       `МАСКА-СВЯЗАНА.svg`, но в разных, однозначно читаемых позициях —
       сохранить этот принцип при добавлении будущих видов связи
-      (Spatial Card → Raster Asset, §23; Smart Object → external file
-      — оба должны получить каждый свой badge, не переиспользовать
-      chain-глиф не по смыслу).
+      (Spatial Card → Raster Asset, §23; Smart Object → embedded/linked
+      source — linked workflow уже есть для desktop) — оба должны получить
+      каждый свой badge, не переиспользовать chain-глиф не по смыслу).
 - [ ] **Group + Mask** — маска, назначенная самой группе (не отдельному
       слою внутри неё), должна отображаться в строке группы тем же
       языком, что у обычного слоя (`▼ 📁 [MASK] Character`), с той же
