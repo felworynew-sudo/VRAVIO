@@ -4,6 +4,7 @@ import {
   cropRegion, cropRegionAsMask, DirtyRegion, flattenRasterLayers, layerRenderSignatures, mipForZoom, RasterTileCache, setLayerPixels,
   swapLayerRegion, swapMaskRegion, RASTER_ASSET_MIME,
   type LayerRenderSignature, type PixelSelection, type RasterDocumentState, type RasterLayer, type RasterRect,
+  type TileUpdate,
 } from "@vravio/env-raster";
 import { createBufferRevisionOperation, type AssetId, type VravioDocument } from "@vravio/kernel";
 import { kernel } from "./kernel";
@@ -46,6 +47,15 @@ export function canDirectRasterPreviewBlit(state: RasterDocumentState, layer: Ra
   return !Object.values(layer.effects ?? {}).some((effect) => effect?.enabled);
 }
 
+/**
+ * Cache validity and canvas presentation are deliberately separate: a tile
+ * already cached at a newly selected mip did not need recompositing, but the
+ * physical canvas may still contain the stretched pixels of the old mip.
+ */
+export function tilesForCanvasPresentation(update: TileUpdate, mipChanged: boolean) {
+  return mipChanged ? update.visible : update.repainted;
+}
+
 export function useRasterCommit(params: {
   document: VravioDocument;
   state: RasterDocumentState;
@@ -80,7 +90,8 @@ export function useRasterCommit(params: {
     // at six percent a 1920x1080 canvas is 115 pixels across on screen, and
     // fifteen of every sixteen pixels composited for it are thrown away.
     const mip = mipForZoom(viewport.zoom);
-    const revised = document.revision !== painted.current.revision || painted.current.mip !== mip;
+    const mipChanged = painted.current.mip !== undefined && painted.current.mip !== mip;
+    const revised = document.revision !== painted.current.revision || mipChanged;
     const signatures = layerRenderSignatures(state);
     const previousSignatures = painted.current.signatures;
     painted.current = { canvas, revision: document.revision, signatures, mip };
@@ -114,13 +125,17 @@ export function useRasterCommit(params: {
     let next: ReturnType<typeof setTimeout> | undefined;
     const drain = (budgetMs: number) => {
       const visible = visibleRasterDocumentRect(workspaceSize, viewport, state.width, state.height);
-      const { repainted, pending } = tiles.current.update(state, visible, { mip, budgetMs });
-      for (const tile of repainted) putRegionPixels(canvas, tile.pixels, tile.rect, tile.step);
+      const update = tiles.current.update(state, visible, { mip, budgetMs });
+      // Returning to an earlier zoom often finds a valid high-resolution mip
+      // in the cache. It is absent from `repainted`, yet the canvas still
+      // physically contains the low-resolution pixels from the zoomed-out
+      // view. A mip change must therefore re-blit every visible valid tile.
+      for (const tile of tilesForCanvasPresentation(update, mipChanged)) putRegionPixels(canvas, tile.pixels, tile.rect, tile.step);
       // A timer, not `requestAnimationFrame`: frames stop in a hidden window, and the first
       // version of this left the tail of a stroke unpainted for exactly that reason — the canvas
       // held the stale tiles until something else forced a render. Caught by comparing the visible
       // canvas against the layer's own pixels, which is the check CLAUDE.md §2 exists for.
-      if (pending) next = setTimeout(() => drain(budgetMs), 0);
+      if (update.pending) next = setTimeout(() => drain(budgetMs), 0);
     };
     drain(TILE_BUDGET_MS);
     return () => clearTimeout(next);

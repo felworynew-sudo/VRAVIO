@@ -6033,12 +6033,13 @@ mip обязана повторно blit'ить валидные visible tiles; 
 увеличивают generation, и callback от старого `requestAnimationFrame` больше
 не имеет права писать в canvas.
 
-1. [ ] **P0 — stale mip после `zoom-out → быстрый zoom-in`.**
+1. [x] **P0 — stale mip после `zoom-out → быстрый zoom-in`.**
    `RasterTileCache.update()` может вернуть high-res tile в `visible`, но не в
    `repainted`: кэш уже верный, а canvas продолжает показывать растянутый
-   low-res mip. При смене mip повторно blit'ить все `visible`, не только
-   пересчитанные tiles; добавить regression test именно на возврат к уже
-   закэшированному mip.
+   low-res mip. `raster-commit.ts` теперь отделяет cache validity от canvas
+   presentation и при смене mip повторно blit'ит все `visible`, а не только
+   пересчитанные tiles. Regression test покрывает возврат к уже закэшированному
+   full-resolution mip.
 2. [ ] **P0 — отмена устаревшего rAF live-transform.** `scheduleWork()`
    может выполнить preview drag уже после синхронного final на `pointerup` и
    зрительно откатить Scale/Rotate/Warp. Добавить generation token и
