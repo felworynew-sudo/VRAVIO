@@ -6091,10 +6091,11 @@ mip обязана повторно blit'ить валидные visible tiles; 
     result.** Cache modifiers вести по `{ shapeId, inputSignature }`; при
     изменении input shape сразу помечать unresolved и показывать base geometry,
     сохраняя cached result только для неизменившихся shapes.
-13. [ ] **P2 — atomic swap raster asset в Vector.** При `assetId/rev` update
-    удерживать прежний bitmap до decode новой версии; placeholder допустим
-    только при первом load. Это исключит `old image → empty rect → new image`
-    при apply/undo/redo/linked update.
+13. [x] **P2 — atomic swap raster asset в Vector.** При `assetId/rev` update
+    `useAssetBitmapUrl()` удерживает прежний bitmap до успешного decode новой
+    версии; placeholder допустим только при первом load. Неуспешный read/decode
+    также не стирает последний корректный кадр. Это исключает `old image →
+    empty rect → new image` при apply/undo/redo/linked update.
 
 **Порядок закрытия:** 1 → 2/3 → живые проверки 4–7 → 8/9 → 10/11 → 12 → 13.
 Первые семь — display correctness: пользователь не должен видеть неверный

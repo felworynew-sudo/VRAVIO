@@ -85,18 +85,25 @@ function useAssetBitmapUrl(assetId: string, rev: number): string | null {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    setUrl(null);
     void (async () => {
-      const bytes = await kernel.assets.read(assetId as AssetId, rev).catch(() => null);
-      if (!bytes || cancelled) return;
-      const image = decodeRasterAsset(bytes);
-      const canvas = window.document.createElement("canvas");
-      canvas.width = image.width;
-      canvas.height = image.height;
-      const context = canvas.getContext("2d");
-      if (!context) return;
-      context.putImageData(new ImageData(new Uint8ClampedArray(image.pixels), image.width, image.height), 0, 0);
-      if (!cancelled) setUrl(canvas.toDataURL());
+      try {
+        const bytes = await kernel.assets.read(assetId as AssetId, rev);
+        if (!bytes || cancelled) return;
+        const image = decodeRasterAsset(bytes);
+        const canvas = window.document.createElement("canvas");
+        canvas.width = image.width;
+        canvas.height = image.height;
+        const context = canvas.getContext("2d");
+        if (!context) return;
+        context.putImageData(new ImageData(new Uint8ClampedArray(image.pixels), image.width, image.height), 0, 0);
+        // Do not blank a ready image while another asset revision decodes:
+        // `<image>` switches atomically only after the replacement data URL
+        // exists. The placeholder remains reserved for the first-ever load.
+        if (!cancelled) setUrl(canvas.toDataURL());
+      } catch {
+        // Keep the last successfully decoded bitmap on failed linked/asset
+        // reads. A later revision or explicit relink can still replace it.
+      }
     })();
     return () => { cancelled = true; };
   }, [assetId, rev]);
