@@ -222,6 +222,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     return {
       documentId: document.id,
       document: state,
+      documentRevision: document.revision,
       viewport,
       options: (toolOptions[toolId] ?? {}) as Readonly<Record<string, string | number | boolean>>,
       activeLayer,

@@ -56,6 +56,8 @@ export interface PaintTarget {
 export interface ToolContext<TState> {
   readonly documentId: string;
   readonly document: RasterDocumentState;
+  /** Monotonic host revision; overlays use it to refresh external previews without tracking each layer reference. */
+  readonly documentRevision?: number;
   readonly viewport: DocumentViewport;
   /** This tool's own options, as the options bar has them. */
   readonly options: Readonly<Record<string, string | number | boolean>>;

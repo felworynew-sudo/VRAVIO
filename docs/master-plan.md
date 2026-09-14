@@ -6079,11 +6079,11 @@ mip обязана повторно blit'ить валидные visible tiles; 
    независимо и затем stage ещё CSS-scaled. Сначала живой тест: медленный pan
    по tile boundaries на диагональном градиенте и размытом фото; при
    воспроизведении добавить sampling halo/overlap или общий mip surface.
-10. [ ] **P1 — above-layer overlay во время live transform.** Overlay
-    верхних слоёв снимается один раз и может устареть, если во время pending
-    transform меняются их content/opacity/visibility или происходит undo.
-    Перекомпоновывать только above-overlay по изменению document revision,
-    не ресемплируя transforming layer.
+10. [x] **P1 — above-layer overlay во время live transform.** Overlay
+    верхних слоёв больше не заморожен на gesture start: он перекомпоновывается
+    по `document.revision`, если во время pending transform меняются их
+    content/opacity/visibility или происходит undo. Сам transforming layer
+    остаётся CSS-preview и не ресемплируется от этого изменения.
 11. [ ] **P1 — cleanup transform не должен рисовать snapshot.**
     `previewWithLayerHidden()` не может замыкаться на `state` из момента
     создания ToolContext. В момент cleanup читать live state по document ID;

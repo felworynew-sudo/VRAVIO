@@ -946,9 +946,9 @@ const move: RasterToolDefinition<MoveState> = {
     // too, or a lower layer being rotated/scaled would paint over layers stacked on top of it —
     // `livePreviewRef` is one DOM element floating over the whole canvas by construction, with no
     // idea where in the layer order it belongs, so nothing routed it through compositing order at
-    // all until this. Composited once, at gesture start, same as the live preview canvas itself
-    // (`document.layers` reference alone is not in this effect's own dependency list, deliberately
-    // — a re-render mid-drag must not resample this any more than it resamples that one).
+    // all until this. The transforming layer itself stays CSS-only, but an independent document
+    // revision can change a layer above it (visibility/opacity/content/undo), so that overlay
+    // must be recomposited on `document.revision` rather than frozen at gesture start.
     const aboveLayersRef = useRef<HTMLCanvasElement>(null);
     useEffect(() => {
       const overlay = aboveLayersRef.current;
@@ -963,7 +963,7 @@ const move: RasterToolDefinition<MoveState> = {
       const onlyAbove = compositeRasterDocument({ ...document, layers: document.layers.map((item) => above.has(item.id) ? item : { ...item, visible: false }) });
       ctx2d.putImageData(new ImageData(onlyAbove as Uint8ClampedArray<ArrayBuffer>, document.width, document.height), 0, 0);
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [Boolean(live), pending?.layerId]);
+    }, [Boolean(live), pending?.layerId, context.documentRevision]);
     useEffect(() => {
       const overlay = livePreviewRef.current;
       if (!live || !overlay || !pending) return;
