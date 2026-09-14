@@ -6084,10 +6084,11 @@ mip обязана повторно blit'ить валидные visible tiles; 
     по `document.revision`, если во время pending transform меняются их
     content/opacity/visibility или происходит undo. Сам transforming layer
     остаётся CSS-preview и не ресемплируется от этого изменения.
-11. [ ] **P1 — cleanup transform не должен рисовать snapshot.**
-    `previewWithLayerHidden()` не может замыкаться на `state` из момента
-    создания ToolContext. В момент cleanup читать live state по document ID;
-    regression: transform A → изменить/скрыть B → commit/cancel A.
+11. [x] **P1 — cleanup transform не должен рисовать snapshot.**
+    `previewWithLayerHidden()` больше не замыкается только на `state` из
+    момента создания ToolContext: при каждом canonical preview/cleanup читает
+    live state по document ID. Поэтому transform A → изменение/скрытие B →
+    commit/cancel A не может физически вернуть B к старому кадру.
 12. [x] **P1 — vector live modifiers не должны временно показывать старый
     result.** `useModifierResults()` теперь помечает асинхронный cache номером
     исходной document revision; при первом render новой revision возвращает

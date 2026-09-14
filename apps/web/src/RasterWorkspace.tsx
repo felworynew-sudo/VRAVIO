@@ -295,7 +295,12 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       previewWithLayerHidden: (layerId) => {
         if (!canvas) return;
         cancelTransientCanvasWork();
-        putPixels(canvas, layerId ? compositeRasterDocument({ ...state, layers: state.layers.map((item) => item.id === layerId ? { ...item, visible: false } : item) }) : compositeRasterDocument(state), state.width, state.height);
+        // Overlay cleanup may run after another command/undo changed the document.
+        // Read its current state instead of repainting the state captured when
+        // this ToolContext was created, which could visually roll back an
+        // unrelated layer until the next canonical repaint.
+        const liveState = kernel.documents.get<RasterDocumentState>(document.id)?.state ?? state;
+        putPixels(canvas, layerId ? compositeRasterDocument({ ...liveState, layers: liveState.layers.map((item) => item.id === layerId ? { ...item, visible: false } : item) }) : compositeRasterDocument(liveState), liveState.width, liveState.height);
       },
       setMaskForegroundWhite: (white) => setMaskForegroundWhite(document.id, white),
       lastStrokePoint: lastBrushPointRef.current,
