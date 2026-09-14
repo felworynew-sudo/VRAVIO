@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import {
   activeRasterLayer, appendLayer, layerAccepts, layerLockReason, paintMask, pickLayerAt, compositeRasterDocument,
   layerDocumentPixels, isRasterDocumentState, selectionOutlinePath,
@@ -27,6 +27,7 @@ import { useBrushCursor } from "./raster-brush-cursor";
 import { useRasterRulerGuides } from "./raster-ruler-guides";
 import { MarchingAnts } from "./marching-ants";
 import { useRasterCommit } from "./raster-commit";
+import { cancelTransientCanvasFrames } from "./raster-transient-frames";
 import { useRasterContextMenus } from "./raster-context-menus";
 import { useContextMenu } from "./ContextMenu";
 import { RasterBrushTipPopup } from "./RasterBrushTipPopup";
@@ -178,7 +179,20 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   // expensive per-frame recompute later.
   const workFrameRef = useRef<number | null>(null);
   const pendingWorkRef = useRef<(() => void) | null>(null);
+  /**
+   * A transient rAF may otherwise run after a synchronous commit/cancel has
+   * drawn the canonical document and overwrite that correct frame with an old
+   * working buffer. Preview validity and canvas presentation are separate,
+   * just as they are for the raster tile cache.
+   */
+  const cancelTransientCanvasWork = useCallback(() => {
+    cancelTransientCanvasFrames({ preview: previewFrameRef, layeredPreview: previewLayersFrameRef, workFrame: workFrameRef, pendingWork: pendingWorkRef });
+  }, []);
   toolStatesRef.current = toolStates;
+
+  // Tool switches have no commit of their own, but they are still a terminal
+  // boundary for a preview produced by the previous tool.
+  useEffect(() => cancelTransientCanvasWork, [activeToolId, cancelTransientCanvasWork]);
 
   const toolPointerFromNative = (native: PointerEvent, workspace: HTMLDivElement, rect: DOMRect): ToolPointer => ({
     point: pointFromNativeEvent(workspace, viewport, state.width, state.height, native),
@@ -270,15 +284,16 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
           renderWorkingMultiple(entry.layers, region);
         });
       },
-      commit: (before, after, label, target = paintTarget.kind, layerId = paintTarget.layerId, bounds = null, canShrinkBounds) => commitPixels(before, after, label, target, layerId, bounds, canShrinkBounds),
-      commitSelection: (before, after, label) => commitSelection(before, after, label),
-      commitDocument: (before, after, label, bounds) => commitDocumentState(before, after, label, bounds),
+      commit: (before, after, label, target = paintTarget.kind, layerId = paintTarget.layerId, bounds = null, canShrinkBounds) => { cancelTransientCanvasWork(); return commitPixels(before, after, label, target, layerId, bounds, canShrinkBounds); },
+      commitSelection: (before, after, label) => { cancelTransientCanvasWork(); return commitSelection(before, after, label); },
+      commitDocument: (before, after, label, bounds) => { cancelTransientCanvasWork(); return commitDocumentState(before, after, label, bounds); },
       resetViewportToFit: () => setViewport(document.id, { mode: "fit", panX: 0, panY: 0 }),
       setActiveLayer: (layerId) => kernel.documents.update<RasterDocumentState>(document.id, (current) => { current.activeLayerId = layerId; }),
       foregroundColor,
       setForegroundColor,
       previewWithLayerHidden: (layerId) => {
         if (!canvas) return;
+        cancelTransientCanvasWork();
         putPixels(canvas, layerId ? compositeRasterDocument({ ...state, layers: state.layers.map((item) => item.id === layerId ? { ...item, visible: false } : item) }) : compositeRasterDocument(state), state.width, state.height);
       },
       setMaskForegroundWhite: (white) => setMaskForegroundWhite(document.id, white),

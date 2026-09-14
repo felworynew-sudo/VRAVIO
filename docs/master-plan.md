@@ -6040,15 +6040,15 @@ mip обязана повторно blit'ить валидные visible tiles; 
    presentation и при смене mip повторно blit'ит все `visible`, а не только
    пересчитанные tiles. Regression test покрывает возврат к уже закэшированному
    full-resolution mip.
-2. [ ] **P0 — отмена устаревшего rAF live-transform.** `scheduleWork()`
-   может выполнить preview drag уже после синхронного final на `pointerup` и
-   зрительно откатить Scale/Rotate/Warp. Добавить generation token и
-   `cancel/flushPendingWork()` перед `onGestureEnd`, commit, cancel и сменой
-   инструмента.
-3. [ ] **P0 — отмена rAF обычных tool-preview.** Тот же контракт нужен для
-   `schedulePreview()`/`schedulePreviewLayers()`: старый working-buffer
-   callback не должен перерисовать canvas поверх committed результата после
-   commit/cancel/tool switch.
+2. [x] **P0 — отмена устаревшего rAF live-transform.** `scheduleWork()`
+   мог выполнить preview drag уже после синхронного final на `pointerup` и
+   зрительно откатить Scale/Rotate/Warp. Единый `cancelTransientCanvasFrames()`
+   отменяет work rAF и сбрасывает его payload перед любым commit/cancel
+   canonical preview и при смене инструмента.
+3. [x] **P0 — отмена rAF обычных tool-preview.** Тот же контракт применён к
+   `schedulePreview()`/`schedulePreviewLayers()`: перед commit/cancel/tool
+   switch отменяются single- и multi-layer preview frames, поэтому старый
+   working-buffer не может перерисовать canvas поверх committed результата.
 4. [x] **Group opacity/visibility invalidation.** Исходный аудит нашёл риск:
    signature группы меняется, signatures детей — нет, а bounds пустого group
    buffer могли дать нулевой dirty-region. Закрыто текущим безопасным
