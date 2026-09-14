@@ -8789,6 +8789,120 @@ CLAUDE.md, прежде чем считаться сделанным.
    и ставить его первым в очередь означает построить его поверх формы
    памяти, которая всё равно должна измениться под пунктом 1.
 
+### 37.4. Целевая миграция Raster Core — Krita-class фундамент без переписывания VRAVIO, 14 сентября 2026
+
+Это не задача «сделать Krita на TypeScript» и не повод выбросить kernel,
+commands, document tree, asset revisions, dirty tracking или UI VRAVIO. Это
+план заменить нижний пиксельный фундамент: сейчас тайлы в основном являются
+*кэшем результата*, тогда как в Krita-подобной модели тайлы — *само
+изображение*. Раздел расширяет порядок §37.3 и §25.3.12, не конкурирует с
+ним.
+
+**Проблема в одной схеме.** Сейчас основной путь выглядит как
+`RasterLayer.pixels (Uint8ClampedArray) → layerDocumentPixels() →
+compositor/filters/brushes → tile render cache → Canvas`. Это означает, что
+малая операция всё ещё периодически материализует full-document буфер.
+Целевое направление: `Layer/Node → RasterSurface (sparse tiles) → Projection
+Graph → Update Scheduler → Projection Surface → display tile cache`.
+
+#### 37.4.1. Инварианты будущего ядра
+
+1. **RasterSurface/PaintDevice — единственный пиксельный носитель.**
+   `RasterLayer` хранит `surfaceId`, а не `pixels`. Поверхность имеет
+   origin, dimensions, `PixelFormat`, color information, default pixel,
+   tile map и revision. Единый `SurfaceReader/SurfaceWriter` обслуживает
+   layers, masks, selections и будущие channels; операции работают через
+   `readRegion/writeRegion/readTile/editTile`, а не через full-canvas bridge.
+2. **Sparse tiles с default pixel.** Пустая поверхность не выделяет массив
+   для всего холста: `tiles = {}`, `defaultPixel = transparent`; физический
+   tile появляется только при записи. Это обязательное условие честной
+   поддержки 100000×100000 canvas, маленьких масок и Smart Object projection.
+3. **Tile COW + `RasterTransaction`.** Мазок/маска/фильтр фиксируют только
+   изменённые tile revisions (`before → after`). Undo/redo меняют эти tiles
+   обратно, а не копируют весь `RasterDocumentState` или слой. Нынешний
+   `TileStore.clone()` и patch-undo — переходный фундамент, не финальная
+   модель.
+4. **PixelFormat вместо декоративного `bitDepth`.** Авторитетный storage
+   определяет format, model/profile, alpha mode и transfer function:
+   `RGBA8_UNORM`, `RGBA16_UNORM`, `RGBA16_FLOAT`, `RGBA32_FLOAT`,
+   `GRAY8/16/16F/32F`; CMYK/Lab — позднее. Поле `bitDepth` без реального
+   16/32-bit storage не считается поддержкой high-bit raster.
+5. **Документная математика отделена от display.** CPU/WASM raster core
+   производит authoritative projection; display выполняет ICC/monitor/HDR
+   transform и кладёт tiles в WebGPU/Canvas. Canvas2D остаётся fallback, но
+   браузерный premultiplied sRGB path не определяет пиксели документа.
+
+#### 37.4.2. Projection, операции и scheduler
+
+6. **Projection Graph.** Каждый layer/group/adjustment/effect node имеет
+   projection surface, revision и dirty tiles. Правка A tile 5,9 грязнит
+   только зависимые group/root tiles; isolated group, mask и Smart Filter —
+   явные graph nodes, а не специальные full-canvas ветки.
+7. **Контракт операций.** Все filters, adjustments, layer effects,
+   transforms, Liquify и Camera Raw реализуют
+   `requiredInputRegion(output)`, `affectedOutputRegion(input)` и
+   `supportsLod(level)`. Blur с radius 20 тем самым объявляет halo вместо
+   того, чтобы тайловый исполнитель угадывал или молча читал весь документ.
+8. **Настоящий update scheduler.** Очереди и приоритеты независимы от
+   React/browser lifecycle: pointer/brush → visible dirty projection →
+   visible filters → near viewport → offscreen → mip/compression. Он знает
+   операции `MERGE/STROKE/SEQUENTIAL/CONCURRENT/BARRIER` и отменяет stale
+   jobs по generation/revision.
+9. **LoD внутри Surface/Projection, не только viewport cache.** LOD0…LOD3
+   создаются lazy; edit LOD0 инвалидирует зависимые low-res tiles, которые
+   обновляются фоном. При zoom 6 % compositor читает низкий LOD, а не каждый
+   раз full-resolution data с point-decimation.
+10. **Memory hierarchy.** `TileBackingStore`: HOT raw RAM → WARM compressed
+    RAM → COLD OPFS (web) / temp-swap (Tauri), с общим memory budget,
+    LRU/priority и безопасной подгрузкой. Physical storage tile (64×64)
+    отделён от размера processing job: кистям нужны мелкие tiles, а blur
+    может батчить 4×4/8×8 tiles.
+
+#### 37.4.3. Исполнитель и верхние системы
+
+11. **Rust raster core.** `packages/env-raster` сохраняет TS API/commands,
+    UI, serialization orchestration и plugin boundary; плотная pixel
+    arithmetic переезжает в `crates/raster-core`: WASM+SIMD+Workers для web,
+    тот же Rust native для Tauri. Main thread принимает input и представляет
+    готовый результат, но не перебирает миллионы пикселей.
+12. **Brush Engine поверх Surface.** Общий interface
+    `beginStroke/paint/endStroke`, inputs pressure/tilt/rotation/direction/
+    velocity/time/random; Basic Pixel, Airbrush, Smudge, Color Smudge,
+    Texture и будущие engines пишут touched RasterSurface tiles, а не canvas
+    buffer. Текущий `paint.ts` и Brush Settings — первый engine, не место для
+    бесконечного добавления специальных параметров.
+13. **Color engine — самостоятельный модуль.** Pixel format, ICC, linear
+    conversion, premultiply/unpremultiply, rendering intent, HDR/display
+    transform не живут как частные условия compositor. Разные CPU/GPU paths
+    сравниваются fixture-тестами с заданным tolerance.
+14. **WebGPU — ускоритель, не источник истины.** CPU/WASM остаётся
+    deterministic reference для import/export, tests, fallback и background;
+    WebGPU ускоряет composite, transforms, blur, conversion и часть filters
+    без readback между соседними GPU-операциями.
+
+#### 37.4.4. Порядок реализации и границы
+
+| Этап | Результат | Почему раньше следующего |
+|---|---|---|
+| 1 | `RasterLayer.pixels → RasterSurface/TileStore` | без авторитетных tiles остальное лишь обвязывает flat buffer |
+| 2 | sparse tiles + default pixel; запрет full materialisation hot paths | масштаб canvas перестаёт определять цену малого мазка |
+| 3 | tile transactions + tile-memento history | дешёвые undo/redo и COW snapshots |
+| 4 | реальный PixelFormat | 16/32-bit становится реальной функцией, не metadata |
+| 5 | Rust/WASM core + worker scheduler | pixel work уходит с UI thread |
+| 6 | projection graph + operation ROI/halo | layers/effects пересчитываются по зависимостям |
+| 7 | Surface LoD + memory/swap | большие документы и zoom без RAM cliffs |
+| 8 | Brush Engine abstraction + color engine | профессиональная живопись и colour correctness |
+| 9 | WebGPU acceleration | скорость поверх уже правильной модели |
+
+**Критерий решения.** До этапов 1–3 не расширять массово новые raster
+инструменты, которым понадобятся full-canvas buffers. Нынешние Kernel,
+document tree, commands, assets, dirty tracking, cropped layer bounds,
+mip presentation и начатый COW TileStore сохраняются; заменяется нижний
+pixel-storage/projection слой. Это движение к общему знаменателю Krita и
+Photoshop: tiled/region processing, multi-level caches, changed-pixel history,
+RAM→disk hierarchy, multithread compositor и GPU как accelerator — без
+заявлений о неизвестных внутренних классах Photoshop.
+
 ### 37.5. Сделано на 11 сентября 2026
 
 Первый заход по роадмапу, сверху вниз, каждый шаг измерен и проверен
