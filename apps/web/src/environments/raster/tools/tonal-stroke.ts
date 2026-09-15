@@ -127,6 +127,9 @@ function appendPoint(context: ToolContext<TonalStrokeState>, config: TonalStroke
 
 function commitStroke(context: ToolContext<TonalStrokeState>, config: TonalStrokeConfig, stroke: Stroke): void {
   void context.commit(stroke.before, stroke.working, config.label, "pixels", context.paintTarget.layerId, stroke.strokeBounds);
+  // Only Dodge/Burn ever borrowed the scratch (see `onPointerDown`) — releasing on a blur/smudge
+  // stroke that never touched it would just mark someone else's rectangle for clearing.
+  if (stroke.coverage) context.releaseCoverageScratch(stroke.strokeBounds);
 }
 
 export function createTonalStrokeTool(config: TonalStrokeConfig): RasterToolDefinition<TonalStrokeState> {
@@ -162,13 +165,20 @@ export function createTonalStrokeTool(config: TonalStrokeConfig): RasterToolDefi
       const before = context.targetPixels();
       const working = before.slice();
       const isDodgeBurn = config.kind === "dodge" || config.kind === "burn";
-      const coverage = isDodgeBurn ? new Uint8ClampedArray(context.document.width * context.document.height) : null;
+      // Same pool paint-stroke.ts's brush family uses (docs/master-plan.md §37.6/§37.6.1) — this
+      // buffer has the identical safety profile: a synchronous scratch space `layDodgeBurn`
+      // consumes into `working` on every dab, never handed to the async commit queue.
+      const coverage = isDodgeBurn ? context.borrowCoverageScratch() : null;
 
       if (shiftFrom) {
         paintSegment(context, config, working, before, coverage, shiftFrom, pointer.point, 0);
         context.setLastStrokePoint({ toolId: config.id, layerId: key, point: pointer.point });
         context.schedulePreview(working, "pixels", context.paintTarget.layerId, null);
         void context.commit(before, working, "Straight Brush Line (Прямая линия кисти)", "pixels", context.paintTarget.layerId);
+        if (coverage) {
+          const pad = Number(context.options.size ?? 24) / 2 + 2;
+          context.releaseCoverageScratch(unionRect(null, shiftFrom.x, shiftFrom.y, pointer.point.x, pointer.point.y, pad));
+        }
         return;
       }
 
