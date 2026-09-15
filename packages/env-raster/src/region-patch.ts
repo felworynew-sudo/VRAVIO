@@ -97,7 +97,6 @@ export function swapLayerRegion(
   growToInclude(layer, region);
 
   const bounds = layer.bounds;
-  const original = layer.pixels;
   const previous = new Uint8ClampedArray(region.width * region.height * 4);
   for (let y = 0; y < region.height; y += 1) {
     const rowStart = ((region.y + y - bounds.y) * bounds.width + (region.x - bounds.x)) * 4;
@@ -106,19 +105,13 @@ export function swapLayerRegion(
     layer.pixels.set(patch.subarray(y * rowBytes, y * rowBytes + rowBytes), rowStart);
   }
   trimInPlace(layer);
-  // Two signals during the migration docs/master-plan.md §37.6.2 describes, deliberately kept
-  // both live at once rather than swapped in one step: the identity fallback below is what this
-  // function has always done — `layerDocumentPixels` caches its canvas-sized materialisation
-  // against the buffer object, and `layerRenderSignatures` decides whether a layer looks
-  // different by comparing that same object, both on the standing rule that every path which
-  // edits pixels assigns a new one. Writing into the old buffer in place broke both at once:
-  // undoing a stroke changed the picture and the screen was never told, because nothing about
-  // the layer had "changed". Caught live, by comparing the visible canvas against the layer's
-  // own pixels. `pixelsRevision` is the replacement signal, bumped unconditionally because this
-  // function's whole point is that the content changed — once every consumer of the identity
-  // check reads this instead, the line below can go, saving the full-layer copy it exists only
-  // to manufacture.
-  if (layer.pixels === original) layer.pixels = original.slice();
+  // Phase 3 of the migration docs/master-plan.md §37.6.2 describes: every consumer that used to
+  // tell "layer changed" from a fresh `pixels` object now reads `pixelsRevision` instead
+  // (`layerDocumentPixels`'s materialisation cache, `layerRenderSignatures`'s comparison, and four
+  // others), so the buffer can finally be written in place — `trimInPlace` above still replaces it
+  // when the edit actually shrinks the layer's bounds, but the common case (bounds unchanged) no
+  // longer pays for a whole-layer copy manufactured only to change an object identity nothing
+  // reads anymore.
   layer.pixelsRevision += 1;
   return previous;
 }
@@ -130,17 +123,17 @@ export function swapMaskRegion(
   const region = clampRect(rect, documentWidth, documentHeight);
   if (!region.width || !region.height) return patch;
   const previous = new Uint8ClampedArray(region.width * region.height);
-  const next = mask.pixels.slice();
+  const pixels = mask.pixels;
   for (let y = 0; y < region.height; y += 1) {
     const rowStart = (region.y + y) * documentWidth + region.x;
-    previous.set(mask.pixels.subarray(rowStart, rowStart + region.width), y * region.width);
-    next.set(patch.subarray(y * region.width, y * region.width + region.width), rowStart);
+    previous.set(pixels.subarray(rowStart, rowStart + region.width), y * region.width);
+    pixels.set(patch.subarray(y * region.width, y * region.width + region.width), rowStart);
   }
-  // New buffer for the same reason as above: a mask's identity is half of the layer's signature.
-  // `mask.pixelsRevision` is the migration's replacement signal (docs/master-plan.md §37.6.2) —
-  // bumped alongside, not instead of, the fresh buffer, until every consumer of the identity
-  // check reads this number instead.
-  mask.pixels = next;
+  // Written in place, not into a fresh buffer: a mask's identity used to be half of the layer's
+  // signature, which is why this function always allocated a whole-document copy for even a
+  // one-pixel edit — the 8.5ms-on-a-48MB-mask cost docs/master-plan.md §37.6.2 measured. Phase 2
+  // of that migration moved every consumer (five WeakMap caches plus `sameSignature`) onto
+  // `mask.pixelsRevision`, so bumping it below is now the whole signal and the copy is gone.
   mask.pixelsRevision += 1;
   return previous;
 }

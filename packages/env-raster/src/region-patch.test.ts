@@ -43,15 +43,21 @@ describe("a rectangle of pixels, swapped in and out — GIMP's undo record", () 
     expect(Array.from(layer.pixels)).toEqual(Array.from(edited));
   });
 
-  it("hands the layer a new buffer, because that is how the screen learns anything changed", () => {
-    // `layerRenderSignatures` compares `layer.pixels` by identity and `layerDocumentPixels` caches
-    // against it. The first version of this swapped in place, and undoing a stroke left the canvas
-    // showing the picture from before the undo: every reader agreed nothing had changed.
+  it("bumps pixelsRevision in place, because that is how the screen now learns anything changed", () => {
+    // `layerRenderSignatures` compares `pixelsRevision`, not `layer.pixels` by identity — the
+    // phase 2 migration of docs/master-plan.md §37.6.2 moved every such reader
+    // (`layerDocumentPixels`'s cache, `layerOpaqueBounds`'s cache, and three others) off identity
+    // first. Before that migration, this function had to hand back a fresh buffer on every call
+    // just to make identity comparisons see a change — undoing a stroke without one left the
+    // canvas showing the picture from before the undo, because every reader agreed nothing had
+    // changed. Now that every reader checks the revision instead, phase 3 writes into the same
+    // buffer: bounds unchanged, so `trimInPlace` has no reason to replace it either.
     const layer = createRasterLayer(W, H, "L");
     setLayerPixels(layer, fill(0), W, H);
-    const buffer = layer.pixels;
+    const buffer = layer.pixels, revision = layer.pixelsRevision;
     swapLayerRegion(layer, rect, cropRegion(fill(90), W, rect), W, H);
-    expect(layer.pixels).not.toBe(buffer);
+    expect(layer.pixels).toBe(buffer);
+    expect(layer.pixelsRevision).toBe(revision + 1);
   });
 
   it("costs the rectangle, not the layer", () => {
@@ -104,18 +110,24 @@ describe("a rectangle of pixels, swapped in and out — GIMP's undo record", () 
   });
 
   it("swaps a mask by its own bytes, not by a colour buffer", () => {
-    const mask: RasterLayerMask = { pixels: new Uint8ClampedArray(W * H).fill(255), enabled: true, linked: true, density: 1, feather: 0 };
+    const mask: RasterLayerMask = { pixels: new Uint8ClampedArray(W * H).fill(255), pixelsRevision: 0, enabled: true, linked: true, density: 1, feather: 0 };
     const before = fill(0);
     const patch = cropRegionAsMask(before, W, rect);
     expect(patch.length).toBe(rect.width * rect.height);
 
+    const buffer = mask.pixels;
     const redo = swapMaskRegion(mask, rect, patch, W, H);
     expect(Array.from(redo)).toEqual(Array.from(new Uint8ClampedArray(rect.width * rect.height).fill(255)));
     expect(mask.pixels[(rect.y * W + rect.x)]).toBe(patch[0]);
     // Outside the rectangle the mask is untouched.
     expect(mask.pixels[0]).toBe(255);
+    // Phase 3 of docs/master-plan.md §37.6.2: written into the same buffer, `pixelsRevision` is
+    // the sole change signal now that `featheredMasks` and `maskScratchByCommitted` both read it.
+    expect(mask.pixels).toBe(buffer);
+    expect(mask.pixelsRevision).toBe(1);
 
     swapMaskRegion(mask, rect, redo, W, H);
     expect(mask.pixels[(rect.y * W + rect.x)]).toBe(255);
+    expect(mask.pixelsRevision).toBe(2);
   });
 });
