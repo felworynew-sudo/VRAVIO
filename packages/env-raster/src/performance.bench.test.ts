@@ -459,6 +459,62 @@ describe("performance floor (stage 0 of the catalogue migration)", () => {
     expect(cropped).toBeLessThan(full / 5);
   });
 
+  it("docs/master-plan.md §37.3 item 3: repeatedly editing one layer does not scale with how many layers sit below it", () => {
+    // Before this step, a stale tile's recompute always walked the whole layer stack from scratch
+    // (docs/master-plan.md §37.5's own re-assessment: "правка верхнего из 80 слоёв по-прежнему
+    // пересчитывает все 80"). A checkpoint resumes past every layer that did not change, so this
+    // isolates the one claim item 3 actually makes: cost tracks layers *above* the edit (still
+    // recomposited fresh every time, unavoidably) plus a constant, not layers *below* it (skipped
+    // via the checkpoint) — two fixed layers above the edited one in both variants, only the
+    // number below changes.
+    const editSameLayerRepeatedly = (belowCount: number): number => {
+      const state = createRasterDocument(1920, 1080);
+      state.layers = [];
+      for (let index = 0; index < belowCount; index += 1) {
+        const layer = createRasterLayer(state.width, state.height, `Below ${index}`);
+        const painted = new Uint8ClampedArray(layer.width * layer.height * 4);
+        for (let i = 3; i < painted.length; i += 4) painted[i] = 200;
+        setLayerPixels(layer, painted, state.width, state.height);
+        appendLayer(state, layer);
+      }
+      const edited = createRasterLayer(300, 300, "Edited");
+      const editedPixels = new Uint8ClampedArray(300 * 300 * 4);
+      for (let i = 3; i < editedPixels.length; i += 4) editedPixels[i] = 255;
+      edited.tiles = TileStore.fromPixels(editedPixels, 300, 300);
+      edited.bounds = { x: 100, y: 100, width: 300, height: 300 };
+      appendLayer(state, edited);
+      for (let index = 0; index < 2; index += 1) {
+        const layer = createRasterLayer(state.width, state.height, `Above ${index}`);
+        layer.opacity = 0.5;
+        appendLayer(state, layer);
+      }
+
+      const cache = new RasterTileCache({ tileSize: 256 });
+      const viewport = { x: 100, y: 100, width: 256, height: 256 };
+      cache.update(state, viewport);
+
+      const localPixels = edited.tiles.toPixels();
+      let toggle = 0;
+      return fastestOf(() => {
+        toggle = (toggle + 1) % 2;
+        localPixels[3] = toggle * 255;
+        edited.tiles = TileStore.fromPixels(localPixels, 300, 300);
+        edited.pixelsRevision += 1;
+        cache.invalidate({ x: 100, y: 100, width: 1, height: 1 });
+        cache.update(state, viewport);
+      });
+    };
+
+    const fewLayersBelow = editSameLayerRepeatedly(3);
+    const manyLayersBelow = editSameLayerRepeatedly(60);
+
+    // Generous absolute ceiling, not a ratio, for the same reason as this file's other
+    // does-not-scale benchmarks: refreshing the same tile after editing the same layer costs
+    // about the same whatever sits below it, because a valid checkpoint skips all of that.
+    expect(fewLayersBelow).toBeLessThan(20);
+    expect(manyLayersBelow).toBeLessThan(20);
+  });
+
   it("keeps a 21-layer document's pixel storage proportional to what is painted, not the canvas", () => {
     const state = realisticDocument();
 

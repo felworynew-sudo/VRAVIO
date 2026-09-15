@@ -1,4 +1,5 @@
-import { clampRegionToDocument, compositeRasterRegion } from "./render";
+import { clampRegionToDocument, compositeRasterRegionWithCheckpoint } from "./render";
+import type { RasterRenderCheckpoint } from "./render";
 import type { RasterDocumentState, RasterRect } from "./types";
 
 /**
@@ -119,6 +120,16 @@ export class RasterTileCache {
   readonly tileSize: number;
   readonly #budgetBytes: number;
   readonly #tiles = new Map<string, RasterTile>();
+  /**
+   * A resumable layer-stack boundary per tile (docs/master-plan.md §37.3 item 3), keyed the same
+   * as `#tiles`. Not touched by `invalidate()` — a checkpoint self-invalidates by comparing layer
+   * signatures on the next `update()`, so it needs no spatial bookkeeping of its own, unlike a
+   * finished tile's pixels. `checkpoint.output` is the very same array as the finished tile's own
+   * `pixels` (set together below), so it costs nothing extra to keep — the only thing this map
+   * adds beyond `#tiles` is the small `clippingBaseByParent`/`groupCheckpoints` bookkeeping,
+   * currently left out of `#bytes`'s budget accounting as a known, minor simplification.
+   */
+  readonly #checkpoints = new Map<string, RasterRenderCheckpoint>();
   /** Every cached mip key at one document-tile coordinate. Keeps invalidation O(changed tiles). */
   readonly #keysByCoordinate = new Map<string, Set<string>>();
   readonly #invalid = new Set<string>();
@@ -153,6 +164,7 @@ export class RasterTileCache {
   /** Drops everything; used when the document itself is resized or replaced. */
   reset(): void {
     this.#tiles.clear();
+    this.#checkpoints.clear();
     this.#keysByCoordinate.clear();
     this.#invalid.clear();
     this.#bytes = 0;
@@ -188,7 +200,9 @@ export class RasterTileCache {
       const rect = clampRegionToDocument(state, { x: col * this.tileSize, y: row * this.tileSize, width: this.tileSize, height: this.tileSize });
       if (!rect.width || !rect.height) continue;
       const step = stepForMip(mip);
-      const tile: RasterTile = { col, row, rect, pixels: compositeRasterRegion(state, rect, { step }), step };
+      const result = compositeRasterRegionWithCheckpoint(state, rect, this.#checkpoints.get(cacheKey) ?? null, { step });
+      if (result.checkpoint) this.#checkpoints.set(cacheKey, result.checkpoint); else this.#checkpoints.delete(cacheKey);
+      const tile: RasterTile = { col, row, rect, pixels: result.pixels, step };
       const replaced = this.#tiles.get(cacheKey);
       this.#tiles.delete(cacheKey);
       this.#tiles.set(cacheKey, tile);
@@ -221,6 +235,7 @@ export class RasterTileCache {
       if (protectedKeys.has(cacheKey)) continue;
       const tile = this.#tiles.get(cacheKey);
       this.#tiles.delete(cacheKey);
+      this.#checkpoints.delete(cacheKey);
       if (tile) {
         this.#bytes -= tile.pixels.byteLength;
         const coordinate = coordinateKey(tile.col, tile.row);

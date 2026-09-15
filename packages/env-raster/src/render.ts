@@ -371,6 +371,67 @@ const subdivideAbove = 512 * 512;
 const subdivisionSize = 256;
 
 export function compositeRasterRegion(state: RasterDocumentState, region: RasterRect, options: CompositeOptions = {}): Uint8ClampedArray {
+  return compositeRasterRegionWithCheckpoint(state, region, null, options).pixels;
+}
+
+/**
+ * A saved boundary inside a layer stack's bottom-to-top walk (docs/master-plan.md §37.3 item 3,
+ * donor GEGL's `valid_region[level]`): everything a resumed composite needs to skip the layers a
+ * previous call already accounted for. `output`/`clippingBaseByParent` are exactly the two loop
+ * variables in `compositeRasterRegionWithCheckpoint` that cannot be reconstructed without walking
+ * the stack — `clippedParents`/`consumedByIsolatedGroup` are cheap, order-independent derivations
+ * of the layer list and are simply recomputed every call, not stored here.
+ *
+ * A checkpoint's boundary sits exactly at whichever layer most recently turned out to have
+ * changed — not "the active layer" (which breaks down inside nested isolated groups and clipping
+ * stacks — see the plan's own findings) and not always "everything" either: a checkpoint only
+ * ever has a snapshot *at its own recorded boundary*, nothing in between, so a layer that changed
+ * anywhere *before* that boundary makes the whole snapshot unusable as a resume point for this
+ * call (the walk below has to start over at 0) even though it is still exactly the right boundary
+ * to hand back for the *next* call, once this one captures a fresh snapshot there. Repeatedly
+ * editing the same layer is therefore the case this actually speeds up: the first such edit after
+ * any other change pays for one full walk and relocates the boundary; every edit after that to the
+ * same layer resumes from it directly.
+ */
+export interface RasterRenderCheckpoint {
+  readonly signatures: readonly LayerRenderSignature[];
+  readonly output: Uint8ClampedArray;
+  readonly clippingBaseByParent: ReadonlyMap<string, Uint8ClampedArray>;
+  /** One entry per isolated group reached so far, keyed by that group's own layer id — each
+   *  group's recursive composite keeps its own checkpoint, at its own recursion level, the same
+   *  mechanism applied one level down. Untouched groups' entries simply ride along unread until
+   *  the outer walk reaches them again. */
+  readonly groupCheckpoints: ReadonlyMap<string, RasterRenderCheckpoint>;
+}
+
+export interface RasterCompositeResult {
+  readonly pixels: Uint8ClampedArray;
+  readonly checkpoint: RasterRenderCheckpoint | null;
+}
+
+/** `signatures[index]` matches `checkpoint.signatures[index]` exactly, including identity — the
+ *  same two-part check `changedRenderRegion` already makes (id, then everything else), just at
+ *  a single index rather than over a whole array. */
+const sameSignatureAndId = (a: LayerRenderSignature, b: LayerRenderSignature): boolean => a.id === b.id && sameSignature(a, b);
+
+/**
+ * The checkpoint-aware core. `compositeRasterRegion` above is the public, checkpoint-less entry
+ * point every existing caller keeps using unchanged; `RasterTileCache` is the one caller that
+ * keeps a checkpoint across calls and passes it back in, letting a request for the same tile skip
+ * straight past every layer a checkpoint already accounted for.
+ *
+ * A checkpoint only ever helps here: Glass padding, step>1 (reduced/thumbnail) previews and
+ * `compositeInPieces`'s own per-piece subdivision all recurse through the plain, checkpoint-less
+ * `compositeRasterRegion` (a `null` checkpoint on those paths) — narrower than "every path
+ * benefits," but exactly the common, highest-frequency case a live brush stroke or a slider drag
+ * actually hits: one un-padded, un-subdivided, full-resolution tile request.
+ */
+export function compositeRasterRegionWithCheckpoint(
+  state: RasterDocumentState,
+  region: RasterRect,
+  checkpoint: RasterRenderCheckpoint | null,
+  options: CompositeOptions = {},
+): RasterCompositeResult {
   const { width } = state;
   const area = clampRegionToDocument(state, region);
   const step = Math.max(1, Math.floor(options.step ?? 1));
@@ -383,38 +444,93 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
   // N, so preview/thumbnail paths use the exact full-resolution result then
   // sample it — the same representation as a normal reduced composite.
   if (padding && step > 1 && area.width && area.height) {
-    return sampleComposite(compositeRasterRegion(state, area), area.width, area.height, step);
+    return { pixels: sampleComposite(compositeRasterRegion(state, area), area.width, area.height, step), checkpoint: null };
   }
   if (padding && step === 1 && area.width && area.height) {
     const expanded = clampRegionToDocument(state, { x: area.x - padding, y: area.y - padding, width: area.width + padding * 2, height: area.height + padding * 2 });
-    return cropComposite(compositeRasterRegion(state, expanded, { ...options, backdropContext: true }), expanded, area);
+    return { pixels: cropComposite(compositeRasterRegion(state, expanded, { ...options, backdropContext: true }), expanded, area), checkpoint: null };
   }
 
   if (step === 1 && area.width * area.height > subdivideAbove && state.layers.length > 1) {
-    return compositeInPieces(state, area);
+    return { pixels: compositeInPieces(state, area), checkpoint: null };
   }
   const outWidth = Math.ceil(area.width / step), outHeight = Math.ceil(area.height / step);
-  const output = new Uint8ClampedArray(outWidth * outHeight * 4);
-  if (!area.width || !area.height) return output;
-  const clippingBaseByParent = new Map<string, Uint8ClampedArray>();
+  if (!area.width || !area.height) return { pixels: new Uint8ClampedArray(outWidth * outHeight * 4), checkpoint: null };
   // Allocated once per composite rather than per pixel; see blendNonSeparable.
   const blendScratch = new Float64Array(3), sourceHsl = new Float64Array(3), destinationHsl = new Float64Array(3);
   const layers = [...flattenRasterLayers(state.layers)];
+  const signatures = layers.map(signatureOf);
   // A layer only has to record its own coverage when something above it clips
   // to it. Recording it unconditionally costs a buffer and a write per pixel
   // per layer, which most documents never read back.
   const clippedParents = new Set<string>();
   for (const layer of layers) if (layer.clipping) clippedParents.add(layer.parentId ?? "root");
+  // Derived from the whole layer list up front, not accumulated during the loop below: a resumed
+  // composite may start past an isolated group's own index, and this set has to already be
+  // correct for every group at or before the resume point, or its descendants — still present as
+  // separate entries in `layers` — would be walked a second time as if they were top-level layers.
   const consumedByIsolatedGroup = new Set<string>();
+  for (const candidate of layers) {
+    if (candidate.kind === "group" && candidate.groupMode === "isolated" && isLayerEffectivelyVisible(candidate, state.layers) && effectiveLayerOpacity(candidate, state.layers) > 0) {
+      for (const id of rasterLayerDescendantIds(state.layers, candidate.id)) consumedByIsolatedGroup.add(id);
+    }
+  }
 
-  for (let layerIndex = 0; layerIndex < layers.length; layerIndex += 1) {
+  // Where the incoming checkpoint's own recorded prefix first disagrees with the current layers —
+  // `checkpoint.signatures.length` itself when every one of them still matches (the checkpoint's
+  // own boundary was already exactly right, or every layer it names is simply unchanged and there
+  // happen to be more layers now than it recorded). A checkpoint's `output`/`clippingBaseByParent`
+  // are a snapshot of "everything up to its own boundary" and nothing in between — so a mismatch
+  // found *before* that boundary makes the whole snapshot unusable as a resume point (there is no
+  // saved state at that earlier position to resume from), not just "everything past it": the walk
+  // below still has to start at 0 in that case. What survives is knowing *where* the mismatch is,
+  // which becomes the new checkpoint's own boundary once this walk captures a fresh snapshot there.
+  let divergedAt: number | null = null;
+  let resumed = false;
+  let resumeIndex = 0;
+  let output = new Uint8ClampedArray(outWidth * outHeight * 4);
+  let clippingBaseByParent = new Map<string, Uint8ClampedArray>();
+  let groupCheckpoints = new Map<string, RasterRenderCheckpoint>();
+  if (checkpoint && checkpoint.output.length === output.length && checkpoint.signatures.length <= signatures.length) {
+    divergedAt = checkpoint.signatures.length;
+    for (let index = 0; index < checkpoint.signatures.length; index += 1) {
+      if (!sameSignatureAndId(checkpoint.signatures[index]!, signatures[index]!)) { divergedAt = index; break; }
+    }
+    if (divergedAt === checkpoint.signatures.length) {
+      // The checkpoint's own boundary is still exactly right: resume from it as-is, and the new
+      // checkpoint this call saves is simply the same one, unmodified — see the save below.
+      resumed = true;
+      resumeIndex = divergedAt;
+      output = checkpoint.output.slice();
+      clippingBaseByParent = new Map(checkpoint.clippingBaseByParent);
+      groupCheckpoints = new Map(checkpoint.groupCheckpoints);
+    }
+  }
+  // A snapshot of (signatures, output, clippingBaseByParent, groupCheckpoints) at `divergedAt` —
+  // exactly what the next call's own checkpoint should be. When the resume above succeeded, this
+  // is just the incoming checkpoint again (already the right boundary). When it did not, this walk
+  // has to capture it itself, the moment it reaches `divergedAt` fresh — captured further down,
+  // right before that layer is processed, from the *unmutated* variables (not the ones the rest of
+  // this walk keeps writing into). `resumed` (not a coincidental `resumeIndex === divergedAt`,
+  // which also holds — for an unrelated reason — whenever the very first layer is what changed)
+  // is what actually distinguishes the two cases.
+  let boundarySnapshot: RasterRenderCheckpoint | null = resumed && checkpoint ? checkpoint : null;
+
+  for (let layerIndex = resumeIndex; layerIndex < layers.length; layerIndex += 1) {
+    if (layerIndex === divergedAt && !boundarySnapshot) {
+      boundarySnapshot = {
+        signatures: signatures.slice(0, divergedAt),
+        output: output.slice(),
+        clippingBaseByParent: new Map(clippingBaseByParent),
+        groupCheckpoints: new Map(groupCheckpoints),
+      };
+    }
     const layer = layers[layerIndex]!;
     if (consumedByIsolatedGroup.has(layer.id)) continue;
     const parentKey = layer.parentId ?? "root";
     const effectiveOpacity = effectiveLayerOpacity(layer, state.layers);
     if (layer.kind === "group" && layer.groupMode === "isolated" && isLayerEffectivelyVisible(layer, state.layers) && effectiveOpacity > 0) {
       const descendantIds = rasterLayerDescendantIds(state.layers, layer.id);
-      for (const id of descendantIds) consumedByIsolatedGroup.add(id);
       // Render the group's descendants against transparent black in their own
       // stack. The immediate children become roots; nested groups preserve
       // their relationships and therefore recurse naturally.
@@ -424,7 +540,9 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
         layers: state.layers.filter((candidate) => inside.has(candidate.id)).map((candidate) =>
           candidate.parentId === layer.id ? { ...candidate, parentId: null } : candidate),
       };
-      const rawGroupPixels = compositeRasterRegion(groupState, area, options);
+      const groupResult = compositeRasterRegionWithCheckpoint(groupState, area, groupCheckpoints.get(layer.id) ?? null, options);
+      if (groupResult.checkpoint) groupCheckpoints.set(layer.id, groupResult.checkpoint); else groupCheckpoints.delete(layer.id);
+      const rawGroupPixels = groupResult.pixels;
       // Reuse the layer-style renderer on the subtree's already-composited
       // surface. A group effect belongs outside its children, unlike effects
       // on each child, so this is intentionally after the recursive pass.
@@ -606,7 +724,10 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
     }
     if (ownAlpha) clippingBaseByParent.set(parentKey, ownAlpha);
   }
-  return output;
+  // No checkpoint was passed in at all: there is no earlier-run signal for where a future edit is
+  // likely to land, so the only sound default is "everything" — the very next call, if anything
+  // changed, discovers the real boundary itself and narrows to it from there.
+  return { pixels: output, checkpoint: boundarySnapshot ?? { signatures, output, clippingBaseByParent, groupCheckpoints } };
 }
 
 /**
@@ -710,8 +831,11 @@ export interface LayerRenderSignature {
   readonly smartTransform: unknown;
 }
 
-export function layerRenderSignatures(state: RasterDocumentState): LayerRenderSignature[] {
-  return flattenRasterLayers(state.layers).map((layer) => ({
+/** One layer's own comparable snapshot — shared by `layerRenderSignatures` (a fresh scan over
+ *  the whole document) and `compositeRasterRegionWithCheckpoint` (mapped once over a `layers`
+ *  array it already has), so the field list lives in exactly one place. */
+function signatureOf(layer: RasterLayer): LayerRenderSignature {
+  return {
     id: layer.id,
     kind: layer.kind,
     pixelsRevision: layer.pixelsRevision,
@@ -731,7 +855,11 @@ export function layerRenderSignatures(state: RasterDocumentState): LayerRenderSi
     parentId: layer.parentId,
     orderKey: layer.orderKey,
     smartTransform: layer.smartTransform,
-  }));
+  };
+}
+
+export function layerRenderSignatures(state: RasterDocumentState): LayerRenderSignature[] {
+  return flattenRasterLayers(state.layers).map(signatureOf);
 }
 
 const sameTransform = (a: unknown, b: unknown): boolean => {
