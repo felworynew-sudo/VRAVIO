@@ -182,6 +182,13 @@ export function layerOpaqueBounds(pixels: Uint8ClampedArray, width: number, heig
 const overlaps = (a: RasterRect, b: RasterRect): boolean =>
   a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
+/** The rectangle two regions share, or `null` when they don't overlap at all. */
+export function intersectRect(a: RasterRect, b: RasterRect): RasterRect | null {
+  const x = Math.max(a.x, b.x), y = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.width, b.x + b.width), bottom = Math.min(a.y + a.height, b.y + b.height);
+  return right > x && bottom > y ? { x, y, width: right - x, height: bottom - y } : null;
+}
+
 function hasEnabledEffect(layer: RasterLayer): boolean {
   const effects = layer.effects as Record<string, unknown> | undefined;
   if (!effects) return false;
@@ -308,7 +315,8 @@ function sampleComposite(source: Uint8ClampedArray, width: number, height: numbe
 function applyGlassBackdrop(
   output: Uint8ClampedArray, width: number, height: number,
   layer: RasterLayer, renderedLayer: Uint8ClampedArray, area: RasterRect,
-  stateWidth: number, step: number, maskPixels: Uint8ClampedArray | undefined,
+  stateWidth: number, sourceWidth: number, sourceOriginX: number, sourceOriginY: number,
+  step: number, maskPixels: Uint8ClampedArray | undefined,
   maskDensity: number, clippingBase: Uint8ClampedArray | undefined,
   layerAlpha: number,
 ): void {
@@ -319,10 +327,11 @@ function applyGlassBackdrop(
   const low = applyRasterFilter(output, width, height, "box_blur", { radius: Math.max(1, Math.round(maxBlur / 3)) });
   const middle = applyRasterFilter(output, width, height, "box_blur", { radius: Math.max(1, Math.round(maxBlur * 2 / 3)) });
   const high = applyRasterFilter(output, width, height, "box_blur", { radius: maxBlur });
-  const sourceWidth = stateWidth;
   for (let row = 0; row < height; row += 1) for (let column = 0; column < width; column += 1) {
     const documentX = area.x + column * step, documentY = area.y + row * step;
-    const sourceIndex = (documentY * sourceWidth + documentX) * 4;
+    // `renderedLayer` is `layerDocumentPixels(layer, ..., area)`'s ROI-cropped result (docs/master-plan.md
+    // §37.3 item 2) — indexed from `area`'s own origin, not the document's, unlike `maskPixels` below.
+    const sourceIndex = ((documentY - sourceOriginY) * sourceWidth + (documentX - sourceOriginX)) * 4;
     const alpha = renderedLayer[sourceIndex + 3]! / 255;
     if (!alpha) continue;
     const documentIndex = documentY * stateWidth + documentX;
@@ -512,12 +521,16 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
     // source, while its placement is materialised only for this composite.
     const smartSurface = layer.kind === "smart" && Boolean(layer.smartTransform);
     const documentSurface = wholeCanvas || smartSurface;
+    // Both branches ask for exactly `area`, not the whole document (docs/master-plan.md §37.3
+    // item 2) — the blend loop below only ever reads within `area` anyway, so a cache miss no
+    // longer pays for the rest of the document just to answer this one piece/tile's request.
     const renderedLayer = wholeCanvas
-      ? (hasRenderableEffect(layer) ? renderLayerEffects(layer, state.width, state.height) : layerDocumentPixels(layer, state.width, state.height))
-      : smartSurface ? layerDocumentPixels(layer, state.width, state.height) : layerPixelsView(layer);
-    const sourceWidth = documentSurface ? width : layer.bounds.width;
-    const sourceOriginX = documentSurface ? 0 : layer.bounds.x;
-    const sourceOriginY = documentSurface ? 0 : layer.bounds.y;
+      ? (hasRenderableEffect(layer) ? renderLayerEffects(layer, state.width, state.height, area) : layerDocumentPixels(layer, state.width, state.height, area))
+      : smartSurface ? layerDocumentPixels(layer, state.width, state.height, area) : layerPixelsView(layer);
+    const sourceWidth = documentSurface ? area.width : layer.bounds.width;
+    const sourceHeight = documentSurface ? area.height : layer.bounds.height;
+    const sourceOriginX = documentSurface ? area.x : layer.bounds.x;
+    const sourceOriginY = documentSurface ? area.y : layer.bounds.y;
     const clippingBase = layer.clipping ? clippingBaseByParent.get(parentKey) : undefined;
     const ownAlpha = layer.clipping || !clippedParents.has(parentKey) ? null : new Uint8ClampedArray(outWidth * outHeight);
     // Everything constant for the layer is read once. Inside the loop these are
@@ -529,7 +542,7 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
     const layerAlpha = effectiveOpacity * (layer.fillOpacity ?? 1);
     const clipping = layer.clipping === true;
     const glass = layer.effects?.glass?.enabled ? layer.effects.glass : null;
-    if (glass) applyGlassBackdrop(output, outWidth, outHeight, layer, renderedLayer, area, state.width, step, maskPixels, maskDensity, clippingBase, layerAlpha);
+    if (glass) applyGlassBackdrop(output, outWidth, outHeight, layer, renderedLayer, area, state.width, sourceWidth, sourceOriginX, sourceOriginY, step, maskPixels, maskDensity, clippingBase, layerAlpha);
     const opaqueNormal = (code === NORMAL || code === DISSOLVE) && !clipping && !glass;
 
     for (let row = firstRow; row <= lastRow; row += 1) {
@@ -540,7 +553,7 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
         const regionIndex = outputRow + column, index = regionIndex * 4;
         const documentIndex = documentRow + column * step;
         const sourceX = area.x + column * step - sourceOriginX, sourceY = documentY - sourceOriginY;
-        if (sourceX < 0 || sourceY < 0 || sourceX >= sourceWidth || sourceY >= (documentSurface ? state.height : layer.bounds.height)) continue;
+        if (sourceX < 0 || sourceY < 0 || sourceX >= sourceWidth || sourceY >= sourceHeight) continue;
         const sourceIndex = (sourceY * sourceWidth + sourceX) * 4;
         const maskAlpha = maskPixels ? (maskPixels[documentIndex]! / 255) * maskDensity : 1;
         const baseAlpha = clippingBase ? clippingBase[regionIndex]! / 255 : clipping ? 0 : 1;

@@ -48,10 +48,6 @@ export function boundingBox(rects: readonly RasterRect[]): RasterRect {
   return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
-export function rectsIntersect(a: RasterRect, b: RasterRect): boolean {
-  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-}
-
 export interface RasterTile {
   readonly col: number;
   readonly row: number;

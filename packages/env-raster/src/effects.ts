@@ -1,6 +1,6 @@
 import { layerDocumentPixels, layerPixelsView } from "./layer-bounds";
 import { parseHexColor } from "./color";
-import type { RasterLayer, RgbaColor } from "./types";
+import type { RasterLayer, RasterRect, RgbaColor } from "./types";
 
 const clampByte = (value: number) => Math.max(0, Math.min(255, Math.round(value)));
 
@@ -59,6 +59,37 @@ function neighborhoodMinimumAlpha(source: Uint8ClampedArray, width: number, heig
   return minimum / 255;
 }
 
+/**
+ * The rectangle of a layer's own content an effect needs to read to correctly paint a given
+ * output rectangle — GEGL's `get_required_for_output`, applied to this file's five spatial
+ * effects (docs/master-plan.md §37.3 item 2). Deliberately a different question from `render.ts`'s
+ * `signatureInkRegion` ("how far can this effect's ink bleed, for invalidation"), not the same
+ * computation under two names: `innerShadow`/`innerGlow`/`bevel` never paint outside a layer's own
+ * opaque footprint, so `signatureInkRegion` correctly treats them as non-expanding for that
+ * purpose — but they still *read* a shifted or neighbouring pixel (below), so a cropped render
+ * still needs the wider input or it silently darkens/dims near the crop's own edge, not the
+ * layer's. `gradientOverlay`/`glass` read no neighbour at all, so they need no expansion here.
+ */
+export function requiredSourceRegion(layer: RasterLayer, outputRegion: RasterRect, documentWidth: number, documentHeight: number): RasterRect {
+  const effects = layer.effects ?? {};
+  let left = outputRegion.x, top = outputRegion.y;
+  let right = outputRegion.x + outputRegion.width, bottom = outputRegion.y + outputRegion.height;
+  const include = (x: number, y: number, width: number, height: number) => {
+    left = Math.min(left, x); top = Math.min(top, y);
+    right = Math.max(right, x + width); bottom = Math.max(bottom, y + height);
+  };
+  const shift = (offsetX: number, offsetY: number) => include(outputRegion.x - Math.round(offsetX), outputRegion.y - Math.round(offsetY), outputRegion.width, outputRegion.height);
+  const grow = (radius: number) => include(outputRegion.x - radius, outputRegion.y - radius, outputRegion.width + radius * 2, outputRegion.height + radius * 2);
+  if (effects.dropShadow?.enabled) shift(effects.dropShadow.offsetX, effects.dropShadow.offsetY);
+  if (effects.innerShadow?.enabled) shift(effects.innerShadow.offsetX, effects.innerShadow.offsetY);
+  if (effects.outerGlow?.enabled) grow(Math.max(1, Math.min(32, Math.round(effects.outerGlow.radius))));
+  if (effects.innerGlow?.enabled) grow(Math.max(1, Math.min(32, Math.round(effects.innerGlow.radius))));
+  if (effects.bevel?.enabled) grow(1);
+  const x = Math.max(0, left), y = Math.max(0, top);
+  const clampedRight = Math.min(documentWidth, right), clampedBottom = Math.min(documentHeight, bottom);
+  return { x, y, width: Math.max(0, clampedRight - x), height: Math.max(0, clampedBottom - y) };
+}
+
 interface RenderedEffects { readonly effects: unknown; readonly width: number; readonly height: number; readonly output: Uint8ClampedArray; readonly pixelsRevision: number }
 
 /**
@@ -79,16 +110,35 @@ interface RenderedEffects { readonly effects: unknown; readonly width: number; r
  */
 const renderedEffects = new WeakMap<RasterLayer, RenderedEffects>();
 
-/** Produces a temporary rendered surface; source pixels remain untouched. */
-export function renderLayerEffects(layer: RasterLayer, width: number, height: number): Uint8ClampedArray {
+/**
+ * Produces a temporary rendered surface; source pixels remain untouched.
+ *
+ * `region`, when given, asks for only that document-space rectangle of the result — the ROI half
+ * of the same GEGL-style contract `requiredSourceRegion` above declares for the input side
+ * (docs/master-plan.md §37.3 item 2). A region smaller than the full document skips the
+ * whole-surface cache below entirely (a partial result is never stored as if it were the full
+ * one — the next full-document request still recomputes and caches normally, so this path can
+ * only ever save work, never serve stale or incomplete data through the cache). Every existing
+ * call site omits `region` and gets today's exact behaviour, unchanged.
+ */
+export function renderLayerEffects(layer: RasterLayer, width: number, height: number, region?: RasterRect): Uint8ClampedArray {
   const effects = layer.effects ?? {};
   // Allocate only once an effect is actually enabled: the compositor calls this for every
   // layer on every frame, and the no-effects case is by far the most common.
   // Glass is rendered by the compositor because it reads the backdrop, not by
   // this source-only layer-style renderer.
   if (!Object.entries(effects).some(([key, effect]) => key !== "glass" && effect?.enabled)) return layerPixelsView(layer);
-  const cached = renderedEffects.get(layer);
-  if (cached && cached.effects === layer.effects && cached.width === width && cached.height === height && cached.pixelsRevision === layer.pixelsRevision) return cached.output;
+  const fullRegion = !region || (region.x === 0 && region.y === 0 && region.width === width && region.height === height);
+  if (fullRegion) {
+    const cached = renderedEffects.get(layer);
+    if (cached && cached.effects === layer.effects && cached.width === width && cached.height === height && cached.pixelsRevision === layer.pixelsRevision) return cached.output;
+  }
+  const outputRegion = fullRegion ? { x: 0, y: 0, width, height } : region!;
+  // The rectangle of the layer's own content this call actually needs to read — for the
+  // full-document case this is the whole document, same as before; for a cropped `region` it is
+  // `region` grown by however far each enabled effect reaches (see `requiredSourceRegion`'s own
+  // comment for why this can't just reuse `signatureInkRegion`).
+  const sourceRegion = fullRegion ? outputRegion : requiredSourceRegion(layer, outputRegion, width, height);
   // Document space, both in and out. A layer's pixels are stored in the layer's
   // own bounds — the optimisation that took 21 layers from 166 MB to 3.1 MB —
   // so a trimmed layer's buffer has a stride of its own, while everything below
@@ -97,37 +147,45 @@ export function renderLayerEffects(layer: RasterLayer, width: number, height: nu
   // document's stride sheared the picture and ran off the end of a buffer that
   // was also too short: the "turning on a layer style distorts the layer" the
   // owner reported. The materialised copy is what the WeakMap above caches, so
-  // it is paid once per edit, not once per tile.
-  const source = layerDocumentPixels(layer, width, height);
-  const output = new Uint8ClampedArray(width * height * 4);
+  // it is paid once per edit, not once per tile — and now, once per requested
+  // region on a cache miss, instead of once for the whole document regardless.
+  const source = layerDocumentPixels(layer, width, height, fullRegion ? undefined : sourceRegion);
+  const srcX = sourceRegion.x, srcY = sourceRegion.y, srcW = sourceRegion.width, srcH = sourceRegion.height;
+  const outX = outputRegion.x, outY = outputRegion.y, outW = outputRegion.width, outH = outputRegion.height;
+  const output = new Uint8ClampedArray(outW * outH * 4);
   const shadow = effects.dropShadow;
   if (shadow?.enabled) {
-    const color = parseHexColor(shadow.color);
-    for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
-      const sourceX = x - Math.round(shadow.offsetX), sourceY = y - Math.round(shadow.offsetY);
-      if (sourceX < 0 || sourceY < 0 || sourceX >= width || sourceY >= height) continue;
-      overlayPixel(output, (y * width + x) * 4, color, source[(sourceY * width + sourceX) * 4 + 3]! / 255 * shadow.opacity);
+    const color = parseHexColor(shadow.color), offsetX = Math.round(shadow.offsetX), offsetY = Math.round(shadow.offsetY);
+    for (let oy = 0; oy < outH; oy += 1) for (let ox = 0; ox < outW; ox += 1) {
+      const shadowSourceX = outX + ox - offsetX - srcX, shadowSourceY = outY + oy - offsetY - srcY;
+      if (shadowSourceX < 0 || shadowSourceY < 0 || shadowSourceX >= srcW || shadowSourceY >= srcH) continue;
+      overlayPixel(output, (oy * outW + ox) * 4, color, source[(shadowSourceY * srcW + shadowSourceX) * 4 + 3]! / 255 * shadow.opacity);
     }
   }
   const outer = effects.outerGlow;
   if (outer?.enabled) {
     const color = parseHexColor(outer.color), disc = discOffsets(Math.max(1, Math.min(32, Math.round(outer.radius))));
-    for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
-      const index = (y * width + x) * 4, own = source[index + 3]! / 255;
+    for (let oy = 0; oy < outH; oy += 1) for (let ox = 0; ox < outW; ox += 1) {
+      const sourceX = outX + ox - srcX, sourceY = outY + oy - srcY, index = (oy * outW + ox) * 4;
+      const own = source[(sourceY * srcW + sourceX) * 4 + 3]! / 255;
       if (own >= 1) continue;
-      overlayPixel(output, index, color, (neighborhoodAlpha(source, width, height, x, y, disc) - own) * outer.opacity);
+      overlayPixel(output, index, color, (neighborhoodAlpha(source, srcW, srcH, sourceX, sourceY, disc) - own) * outer.opacity);
     }
   }
-  for (let index = 0; index < source.length; index += 4) {
-    overlayChannels(output, index, source[index]!, source[index + 1]!, source[index + 2]!, 255, source[index + 3]! / 255);
+  for (let oy = 0; oy < outH; oy += 1) for (let ox = 0; ox < outW; ox += 1) {
+    const sourceX = outX + ox - srcX, sourceY = outY + oy - srcY, sourceIndex = (sourceY * srcW + sourceX) * 4, outputIndex = (oy * outW + ox) * 4;
+    overlayChannels(output, outputIndex, source[sourceIndex]!, source[sourceIndex + 1]!, source[sourceIndex + 2]!, 255, source[sourceIndex + 3]! / 255);
   }
   const gradient = effects.gradientOverlay;
   if (gradient?.enabled) {
+    // The gradient's phase is relative to the whole document, not to `region` — the same stripe
+    // has to land at the same place whichever piece of it is being rendered right now.
     const from = parseHexColor(gradient.from), to = parseHexColor(gradient.to), radians = gradient.angle * Math.PI / 180, dx = Math.cos(radians), dy = Math.sin(radians), extent = Math.max(1, Math.abs(dx) * width + Math.abs(dy) * height);
-    for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
-      const index = (y * width + x) * 4; if (!source[index + 3]) continue;
-      const t = Math.max(0, Math.min(1, .5 + ((x - width / 2) * dx + (y - height / 2) * dy) / extent));
-      overlayChannels(output, index, from.r + (to.r - from.r) * t, from.g + (to.g - from.g) * t, from.b + (to.b - from.b) * t, 255, gradient.opacity);
+    for (let oy = 0; oy < outH; oy += 1) for (let ox = 0; ox < outW; ox += 1) {
+      const documentX = outX + ox, documentY = outY + oy, sourceX = documentX - srcX, sourceY = documentY - srcY;
+      const outputIndex = (oy * outW + ox) * 4; if (!source[(sourceY * srcW + sourceX) * 4 + 3]) continue;
+      const t = Math.max(0, Math.min(1, .5 + ((documentX - width / 2) * dx + (documentY - height / 2) * dy) / extent));
+      overlayChannels(output, outputIndex, from.r + (to.r - from.r) * t, from.g + (to.g - from.g) * t, from.b + (to.b - from.b) * t, 255, gradient.opacity);
     }
   }
   const innerShadow = effects.innerShadow;
@@ -137,27 +195,31 @@ export function renderLayerEffects(layer: RasterLayer, width: number, height: nu
   const innerShadowColor = innerShadow?.enabled ? parseHexColor(innerShadow.color) : null;
   const innerGlowColor = innerGlow?.enabled ? parseHexColor(innerGlow.color) : null;
   const innerGlowDisc = innerGlow?.enabled ? discOffsets(Math.max(1, Math.min(32, Math.round(innerGlow.radius)))) : null;
-  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
-    const index = (y * width + x) * 4, own = source[index + 3]! / 255; if (own <= 0) continue;
+  const innerShadowOffsetX = innerShadow?.enabled ? Math.round(innerShadow.offsetX) : 0, innerShadowOffsetY = innerShadow?.enabled ? Math.round(innerShadow.offsetY) : 0;
+  for (let oy = 0; oy < outH; oy += 1) for (let ox = 0; ox < outW; ox += 1) {
+    const sourceX = outX + ox - srcX, sourceY = outY + oy - srcY, outputIndex = (oy * outW + ox) * 4;
+    const own = source[(sourceY * srcW + sourceX) * 4 + 3]! / 255; if (own <= 0) continue;
     if (innerShadow?.enabled && innerShadowColor) {
-      const shiftedX = x - Math.round(innerShadow.offsetX), shiftedY = y - Math.round(innerShadow.offsetY);
-      const shifted = shiftedX < 0 || shiftedY < 0 || shiftedX >= width || shiftedY >= height ? 0 : source[(shiftedY * width + shiftedX) * 4 + 3]! / 255;
-      overlayPixel(output, index, innerShadowColor, own * (1 - shifted) * innerShadow.opacity);
+      const shiftedX = sourceX - innerShadowOffsetX, shiftedY = sourceY - innerShadowOffsetY;
+      const shifted = shiftedX < 0 || shiftedY < 0 || shiftedX >= srcW || shiftedY >= srcH ? 0 : source[(shiftedY * srcW + shiftedX) * 4 + 3]! / 255;
+      overlayPixel(output, outputIndex, innerShadowColor, own * (1 - shifted) * innerShadow.opacity);
     }
     if (innerGlow?.enabled && innerGlowColor && innerGlowDisc) {
-      const edge = 1 - neighborhoodMinimumAlpha(source, width, height, x, y, innerGlowDisc);
-      overlayPixel(output, index, innerGlowColor, Math.max(0, edge) * innerGlow.opacity);
+      const edge = 1 - neighborhoodMinimumAlpha(source, srcW, srcH, sourceX, sourceY, innerGlowDisc);
+      overlayPixel(output, outputIndex, innerGlowColor, Math.max(0, edge) * innerGlow.opacity);
     }
     if (bevel?.enabled) {
-      const left = x > 0 ? source[(y * width + x - 1) * 4 + 3]! : 0, top = y > 0 ? source[((y - 1) * width + x) * 4 + 3]! : 0;
+      const left = sourceX > 0 ? source[(sourceY * srcW + sourceX - 1) * 4 + 3]! : 0, top = sourceY > 0 ? source[((sourceY - 1) * srcW + sourceX) * 4 + 3]! : 0;
       const shade = ((left + top) / 510 - own) * bevel.strength;
       const channel = shade >= 0 ? 255 : 0;
-      overlayChannels(output, index, channel, channel, channel, 255, Math.min(1, Math.abs(shade)));
+      overlayChannels(output, outputIndex, channel, channel, channel, 255, Math.min(1, Math.abs(shade)));
     }
   }
-  // Keyed on the layer itself, not the materialised copy: that copy is new
-  // every call, so keying on it would cache nothing and hold the entry alive
-  // by its only reference.
-  renderedEffects.set(layer, { effects: layer.effects, width, height, output, pixelsRevision: layer.pixelsRevision });
+  if (fullRegion) {
+    // Keyed on the layer itself, not the materialised copy: that copy is new
+    // every call, so keying on it would cache nothing and hold the entry alive
+    // by its only reference.
+    renderedEffects.set(layer, { effects: layer.effects, width, height, output, pixelsRevision: layer.pixelsRevision });
+  }
   return output;
 }

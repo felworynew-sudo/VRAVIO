@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { compositeRasterDocument, compositeRasterRegion } from "./render";
+import { renderLayerEffects } from "./effects";
 import { createRasterDocument, createRasterLayer } from "./document";
 import { appendLayer } from "./layer-tree";
 import { translateLayerPixels, translateSelection } from "./transform";
@@ -392,6 +393,70 @@ describe("performance floor (stage 0 of the catalogue migration)", () => {
     // GC noise for nothing.
     expect(smallElapsed).toBeLessThan(2);
     expect(largeElapsed).toBeLessThan(2);
+  });
+
+  it("docs/master-plan.md §37.3 item 2: refreshing one stale tile of an effect-bearing layer does not scale with canvas size", () => {
+    // Before this step, `renderLayerEffects`'s cache-miss path always recomputed the whole
+    // document regardless of how small a region the caller (here, `RasterTileCache` refreshing
+    // one stale tile after a small edit) actually asked for — this holds `RasterTileCache`'s own
+    // promise ("only the touched tile recomputes") all the way down through the effect surface it
+    // reads, instead of it being defeated one layer below.
+    const shadowedTileRefresh = (width: number, height: number): number => {
+      const state = createRasterDocument(width, height);
+      const layer = createRasterLayer(width, height, "Shadowed");
+      const pixels = new Uint8ClampedArray(width * height * 4);
+      for (let i = 3; i < pixels.length; i += 4) pixels[i] = 255;
+      setLayerPixels(layer, pixels, width, height);
+      layer.effects = { dropShadow: { enabled: true, color: "#000000", opacity: 1, offsetX: 8, offsetY: 8 } };
+      appendLayer(state, layer);
+
+      const cache = new RasterTileCache({ tileSize: 256 });
+      const viewport = { x: Math.floor(width / 2) - 128, y: Math.floor(height / 2) - 128, width: 256, height: 256 };
+      cache.update(state, viewport);
+
+      // A small brush dab lands inside the already-warm tile — the realistic case: painting on a
+      // large layer that already has a drop shadow enabled.
+      const dabRect = { x: viewport.x + 100, y: viewport.y + 100, width: 20, height: 20 };
+      const dabPixels = layerDocumentPixels(layer, width, height).slice();
+      for (let y = dabRect.y; y < dabRect.y + dabRect.height; y += 1) for (let x = dabRect.x; x < dabRect.x + dabRect.width; x += 1) {
+        dabPixels[(y * width + x) * 4 + 3] = 128;
+      }
+      setLayerPixels(layer, dabPixels, width, height, { bounds: dabRect, canShrink: false });
+
+      // `invalidate` has to run inside the timed closure: `fastestOf` takes the minimum of several
+      // calls, and only a genuinely stale tile forces the recompute this benchmark measures — an
+      // already-warm second call would report a free cache hit instead.
+      return fastestOf(() => { cache.invalidate(dabRect); cache.update(state, viewport); });
+    };
+
+    const small = shadowedTileRefresh(1920, 1080);
+    const large = shadowedTileRefresh(4000, 3000);
+
+    // Measured on this fixture: ~6-8ms for either canvas size. Generous absolute ceiling, not a
+    // ratio, for the same reason as the duplicateLayer/TileStore benchmarks above: refreshing one
+    // 256px tile plus a small drop-shadow bleed costs about the same whatever the rest of the
+    // canvas measures, because the rest of it is never touched.
+    expect(small).toBeLessThan(50);
+    expect(large).toBeLessThan(50);
+  });
+
+  it("docs/master-plan.md §37.3 item 2: a cropped renderLayerEffects call is far cheaper than a full one on a large canvas", () => {
+    // The direct measurement behind the tile-refresh benchmark above: on a 4000x3000 canvas, a
+    // full recompute (~1000ms measured on this fixture — most of it the two full-document passes
+    // effects.ts's drop shadow and base-composite loops make) against one small 256px region
+    // (~50ms measured, dominated by `requiredSourceRegion`'s modest bleed, not the document).
+    const width = 4000, height = 3000;
+    const layer = createRasterLayer(width, height, "Shadowed");
+    const pixels = new Uint8ClampedArray(width * height * 4);
+    for (let i = 3; i < pixels.length; i += 4) pixels[i] = 255;
+    setLayerPixels(layer, pixels, width, height);
+    layer.effects = { dropShadow: { enabled: true, color: "#000000", opacity: 1, offsetX: 8, offsetY: 8 } };
+
+    layer.pixelsRevision += 1; // force a cache miss, same as a real edit would
+    const full = fastestOf(() => { layer.pixelsRevision += 1; renderLayerEffects(layer, width, height); }, 3);
+    const cropped = fastestOf(() => { layer.pixelsRevision += 1; renderLayerEffects(layer, width, height, { x: 1900, y: 1400, width: 256, height: 256 }); }, 3);
+
+    expect(cropped).toBeLessThan(full / 5);
   });
 
   it("keeps a 21-layer document's pixel storage proportional to what is painted, not the canvas", () => {

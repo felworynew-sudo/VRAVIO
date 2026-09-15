@@ -140,3 +140,54 @@ describe("Smart Object projection", () => {
     expect(second[11]).toBe(255);
   });
 });
+
+/**
+ * docs/master-plan.md §37.3 item 2: `layerDocumentPixels`'s optional `region` must produce exactly
+ * what the full-document call would have produced at that rectangle, for both branches (plain
+ * bounds-crop and Smart Object placement) — it only changes how much gets materialised, never what.
+ */
+describe("layerDocumentPixels with an explicit region", () => {
+  it("plain bounds-crop: a region matches the equivalent crop of the full projection", () => {
+    const layer = createRasterLayer(10, 10, "Trimmed");
+    const size = 6, pixels = new Uint8ClampedArray(size * size * 4);
+    for (let i = 0; i < size * size; i += 1) { pixels[i * 4] = 200; pixels[i * 4 + 1] = 40; pixels[i * 4 + 2] = 40; pixels[i * 4 + 3] = 255; }
+    layer.tiles = TileStore.fromPixels(pixels, size, size);
+    layer.bounds = { x: 12, y: 12, width: size, height: size };
+    layer.width = size; layer.height = size;
+
+    const full = layerDocumentPixels(layer, W, H);
+    const region = { x: 10, y: 10, width: 8, height: 8 };
+    const cropped = layerDocumentPixels(layer, W, H, region);
+
+    for (let y = 0; y < region.height; y += 1) {
+      const from = ((region.y + y) * W + region.x) * 4;
+      expect(cropped.slice(y * region.width * 4, (y + 1) * region.width * 4)).toEqual(full.slice(from, from + region.width * 4));
+    }
+  });
+
+  it("Smart Object placement: a region matches the equivalent crop of the full projection", () => {
+    const layer = createRasterLayer(2, 1, "Two colours");
+    layer.tiles = TileStore.fromPixels(new Uint8ClampedArray([255, 0, 0, 255, 0, 0, 255, 255]), 2, 1);
+    convertLayerToEmbeddedSmartObject(layer, "asset-colours");
+    transformSmartObject(layer, { x: 0, y: 0, width: 2, height: 1 }, { x: 0, y: 0, width: 6, height: 1 }, 0);
+
+    const full = layerDocumentPixels(layer, 6, 1);
+    const region = { x: 2, y: 0, width: 3, height: 1 };
+    const cropped = layerDocumentPixels(layer, 6, 1, region);
+
+    expect(cropped).toEqual(full.slice(region.x * 4, (region.x + region.width) * 4));
+  });
+
+  it("never stores a partial result under the full-document cache key", () => {
+    const layer = createRasterLayer(10, 10, "Trimmed");
+    layer.bounds = { x: 2, y: 2, width: 4, height: 4 };
+    layer.width = 4; layer.height = 4;
+    layer.tiles = TileStore.fromPixels(new Uint8ClampedArray(4 * 4 * 4).fill(255), 4, 4);
+
+    layerDocumentPixels(layer, W, H, { x: 0, y: 0, width: 3, height: 3 });
+    const full = layerDocumentPixels(layer, W, H);
+
+    expect(full.length).toBe(W * H * 4);
+    expect(layerDocumentPixels(layer, W, H)).toBe(full);
+  });
+});

@@ -132,19 +132,31 @@ function sampleBilinear(source: Uint8ClampedArray, width: number, height: number
   target[targetOffset + 3] = Math.round(alpha * 255);
 }
 
-export function layerDocumentPixels(layer: RasterLayer, documentWidth: number, documentHeight: number): Uint8ClampedArray {
+/**
+ * `region`, when given, asks for only that document-space rectangle of the result instead of the
+ * whole document (docs/master-plan.md §37.3 item 2 — the same ROI contract `effects.ts`'s
+ * `renderLayerEffects` takes). A region smaller than the full document never reads or writes
+ * `cachedMaterialisation`/`cacheMaterialisation` below — a partial result is never mistaken for
+ * the cached whole one, so this path only ever skips unneeded work, never serves stale data.
+ */
+export function layerDocumentPixels(layer: RasterLayer, documentWidth: number, documentHeight: number, region?: RasterRect): Uint8ClampedArray {
   const bounds = layer.bounds;
+  const fullRegion = !region || (region.x === 0 && region.y === 0 && region.width === documentWidth && region.height === documentHeight);
+  const target = fullRegion ? { x: 0, y: 0, width: documentWidth, height: documentHeight } : region!;
   const placement = smartObjectTransform(layer);
   if (placement) {
-    const placementKey = `${placement.a},${placement.b},${placement.c},${placement.d},${placement.e},${placement.f}`;
-    const cacheKey = `smart:${documentWidth}x${documentHeight}:${placementKey}`;
-    const cached = cachedMaterialisation(layer, cacheKey);
-    if (cached) return cached;
+    let cacheKey = "";
+    if (fullRegion) {
+      const placementKey = `${placement.a},${placement.b},${placement.c},${placement.d},${placement.e},${placement.f}`;
+      cacheKey = `smart:${documentWidth}x${documentHeight}:${placementKey}`;
+      const cached = cachedMaterialisation(layer, cacheKey);
+      if (cached) return cached;
+    }
     const determinant = placement.a * placement.d - placement.b * placement.c;
-    const pixels = new Uint8ClampedArray(documentWidth * documentHeight * 4);
+    const pixels = new Uint8ClampedArray(target.width * target.height * 4);
     if (Math.abs(determinant) > 1e-8) {
-      const left = Math.max(0, bounds.x), right = Math.min(documentWidth, bounds.x + bounds.width);
-      const top = Math.max(0, bounds.y), bottom = Math.min(documentHeight, bounds.y + bounds.height);
+      const left = Math.max(target.x, bounds.x), right = Math.min(target.x + target.width, bounds.x + bounds.width);
+      const top = Math.max(target.y, bounds.y), bottom = Math.min(target.y + target.height, bounds.y + bounds.height);
       // Materialised once, not once per destination pixel — this loop can run millions of times.
       const source = layerPixelsView(layer);
       for (let y = top; y < bottom; y += 1) for (let x = left; x < right; x += 1) {
@@ -157,35 +169,38 @@ export function layerDocumentPixels(layer: RasterLayer, documentWidth: number, d
         if (sourceCentreX < 0 || sourceCentreY < 0 || sourceCentreX >= layer.width || sourceCentreY >= layer.height) continue;
         const sourceX = sourceCentreX - .5;
         const sourceY = sourceCentreY - .5;
-        sampleBilinear(source, layer.width, layer.height, sourceX, sourceY, pixels, (y * documentWidth + x) * 4);
+        sampleBilinear(source, layer.width, layer.height, sourceX, sourceY, pixels, ((y - target.y) * target.width + (x - target.x)) * 4);
       }
     }
-    cacheMaterialisation(layer, cacheKey, documentWidth, documentHeight, bounds, pixels);
+    if (fullRegion) cacheMaterialisation(layer, cacheKey, documentWidth, documentHeight, bounds, pixels);
     return pixels;
   }
-  if (bounds.x === 0 && bounds.y === 0 && bounds.width === documentWidth && bounds.height === documentHeight) return layerPixelsView(layer);
+  if (fullRegion && bounds.x === 0 && bounds.y === 0 && bounds.width === documentWidth && bounds.height === documentHeight) return layerPixelsView(layer);
 
-  const cacheKey = `layer:${documentWidth}x${documentHeight}:${bounds.x},${bounds.y},${bounds.width},${bounds.height}`;
-  const cached = cachedMaterialisation(layer, cacheKey);
-  if (cached) return cached;
+  let cacheKey = "";
+  if (fullRegion) {
+    cacheKey = `layer:${documentWidth}x${documentHeight}:${bounds.x},${bounds.y},${bounds.width},${bounds.height}`;
+    const cached = cachedMaterialisation(layer, cacheKey);
+    if (cached) return cached;
+  }
 
   const source = layerPixelsView(layer);
-  const pixels = new Uint8ClampedArray(documentWidth * documentHeight * 4);
+  const pixels = new Uint8ClampedArray(target.width * target.height * 4);
   // Non-destructive crop can put retained pixels left/above the canvas. Read
   // only the visible intersection, never using a negative destination offset.
-  const visibleLeft = Math.max(0, bounds.x);
-  const visibleRight = Math.min(documentWidth, bounds.x + bounds.width);
+  const visibleLeft = Math.max(target.x, bounds.x);
+  const visibleRight = Math.min(target.x + target.width, bounds.x + bounds.width);
   const rowBytes = Math.max(0, visibleRight - visibleLeft) * 4;
   const sourceOffset = Math.max(0, visibleLeft - bounds.x) * 4;
   if (rowBytes > 0) {
     for (let y = 0; y < bounds.height; y += 1) {
       const documentY = bounds.y + y;
-      if (documentY < 0 || documentY >= documentHeight) continue;
+      if (documentY < target.y || documentY >= target.y + target.height) continue;
       const from = y * bounds.width * 4 + sourceOffset;
-      pixels.set(source.subarray(from, from + rowBytes), (documentY * documentWidth + visibleLeft) * 4);
+      pixels.set(source.subarray(from, from + rowBytes), ((documentY - target.y) * target.width + (visibleLeft - target.x)) * 4);
     }
   }
-  cacheMaterialisation(layer, cacheKey, documentWidth, documentHeight, bounds, pixels);
+  if (fullRegion) cacheMaterialisation(layer, cacheKey, documentWidth, documentHeight, bounds, pixels);
   return pixels;
 }
 

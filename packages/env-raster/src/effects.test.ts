@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { appendLayer, compositeRasterDocument, compositeRasterRegion, createRasterDocument, createRasterLayer, renderLayerEffects } from "./index";
+import { appendLayer, compositeRasterDocument, compositeRasterRegion, createRasterDocument, createRasterLayer, renderLayerEffects, requiredSourceRegion } from "./index";
 import { layerPixelsView } from "./layer-bounds";
 import { TileStore } from "./tile-store";
-import type { RasterLayer, RasterLayerEffects } from "./types";
+import type { RasterLayer, RasterLayerEffects, RasterRect } from "./types";
 
 const W = 40, H = 40;
 
@@ -254,5 +254,127 @@ describe("Glass backdrop effect", () => {
     const full = compositeRasterDocument(document);
     const reduced = compositeRasterRegion(document, { x: 0, y: 0, width: 9, height: 1 }, { step: 2 });
     expect(reduced.slice(2 * 4, 3 * 4)).toEqual(full.slice(4 * 4, 5 * 4));
+  });
+});
+
+/**
+ * docs/master-plan.md §37.3 item 2: `renderLayerEffects`'s optional `region` must never change
+ * *what* it computes, only how much of it — a region-cropped call is required to produce exactly
+ * the same bytes a full render would have produced at that same rectangle. This is the safety net
+ * for `requiredSourceRegion`'s input-expansion math: get an offset/radius wrong and a crop would
+ * quietly darken or dim near its own edge instead of the layer's.
+ */
+describe("region-scoped rendering matches the full render", () => {
+  const cropOf = (full: Uint8ClampedArray, region: RasterRect): Uint8ClampedArray => {
+    const cropped = new Uint8ClampedArray(region.width * region.height * 4);
+    for (let y = 0; y < region.height; y += 1) {
+      const from = ((region.y + y) * W + region.x) * 4;
+      cropped.set(full.subarray(from, from + region.width * 4), y * region.width * 4);
+    }
+    return cropped;
+  };
+
+  const cases: Array<[string, RasterLayerEffects]> = [
+    ["drop shadow", { dropShadow: { enabled: true, color: "#000000", opacity: 1, offsetX: 4, offsetY: 4 } }],
+    ["outer glow", { outerGlow: { enabled: true, color: "#ffffff", opacity: 1, radius: 6 } }],
+    ["inner glow", { innerGlow: { enabled: true, color: "#ffffff", opacity: 1, radius: 4 } }],
+    ["inner shadow", { innerShadow: { enabled: true, color: "#000000", opacity: 1, offsetX: 3, offsetY: -2 } }],
+    ["bevel", { bevel: { enabled: true, strength: 1 } }],
+    ["gradient overlay", { gradientOverlay: { enabled: true, from: "#000000", to: "#ffffff", opacity: 1, angle: 30 } }],
+    ["drop shadow + outer glow + bevel together", {
+      dropShadow: { enabled: true, color: "#000000", opacity: 1, offsetX: 4, offsetY: 4 },
+      outerGlow: { enabled: true, color: "#ffffff", opacity: 1, radius: 6 },
+      bevel: { enabled: true, strength: 1 },
+    }],
+  ];
+
+  for (const [name, effects] of cases) {
+    it(`${name}: a region strictly inside the document matches the equivalent crop of the full render`, () => {
+      const layer = squareLayer();
+      layer.effects = effects;
+      const full = renderLayerEffects(layer, W, H);
+      const region: RasterRect = { x: 14, y: 14, width: 10, height: 10 };
+
+      expect(renderLayerEffects(layer, W, H, region)).toEqual(cropOf(full, region));
+    });
+
+    it(`${name}: a region touching the document's own edge matches the equivalent crop of the full render`, () => {
+      // The most exposed case for bevel/innerShadow/innerGlow (docs/master-plan.md §37.3 item 2's
+      // own finding 6): `requiredSourceRegion`'s growth gets clamped to the document boundary
+      // here, which must read as "no real neighbour" (0), the same as the un-cropped render does
+      // at x=0/y=0 — not as an out-of-range read into a wrongly-sized buffer.
+      const layer = squareLayer();
+      layer.effects = effects;
+      const full = renderLayerEffects(layer, W, H);
+      const region: RasterRect = { x: 0, y: 0, width: 10, height: 10 };
+
+      expect(renderLayerEffects(layer, W, H, region)).toEqual(cropOf(full, region));
+    });
+  }
+
+  it("matches the full render on a layer stored in its own (non-origin) bounds", () => {
+    const layer = createRasterLayer(W, H, "Shape");
+    const size = 16;
+    const pixels = new Uint8ClampedArray(size * size * 4);
+    for (let index = 0; index < size * size; index += 1) {
+      pixels[index * 4] = 180; pixels[index * 4 + 1] = 120; pixels[index * 4 + 2] = 90; pixels[index * 4 + 3] = 255;
+    }
+    layer.tiles = TileStore.fromPixels(pixels, size, size);
+    layer.bounds = { x: 12, y: 12, width: size, height: size };
+    layer.width = size; layer.height = size;
+    layer.effects = { dropShadow: { enabled: true, color: "#000000", opacity: 1, offsetX: 4, offsetY: 4 }, bevel: { enabled: true, strength: 1 } };
+    const full = renderLayerEffects(layer, W, H);
+    const region: RasterRect = { x: 20, y: 20, width: 12, height: 12 };
+
+    expect(renderLayerEffects(layer, W, H, region)).toEqual(cropOf(full, region));
+  });
+
+  it("never stores a partial result in the whole-surface cache", () => {
+    const layer = squareLayer();
+    layer.effects = { dropShadow: { enabled: true, color: "#000000", opacity: 1, offsetX: 4, offsetY: 4 } };
+    const region: RasterRect = { x: 14, y: 14, width: 10, height: 10 };
+
+    renderLayerEffects(layer, W, H, region);
+    const full = renderLayerEffects(layer, W, H);
+
+    // A stale/partial cache entry would either return the small region's buffer (wrong length) or
+    // an empty/garbage full surface here.
+    expect(full.length).toBe(W * H * 4);
+    expect(renderLayerEffects(layer, W, H)).toBe(full);
+  });
+});
+
+describe("requiredSourceRegion", () => {
+  it("returns the output region itself when no effect reads a neighbour", () => {
+    const layer = squareLayer();
+    layer.effects = { gradientOverlay: { enabled: true, from: "#000000", to: "#ffffff", opacity: 1, angle: 0 } };
+    const region: RasterRect = { x: 10, y: 10, width: 5, height: 5 };
+
+    expect(requiredSourceRegion(layer, region, W, H)).toEqual(region);
+  });
+
+  it("shifts for a drop shadow's offset", () => {
+    const layer = squareLayer();
+    layer.effects = { dropShadow: { enabled: true, color: "#000000", opacity: 1, offsetX: 4, offsetY: -3 } };
+    const region: RasterRect = { x: 10, y: 10, width: 5, height: 5 };
+
+    // Union of the region itself (the base layer draw) and the region shifted by (-4, 3).
+    expect(requiredSourceRegion(layer, region, W, H)).toEqual({ x: 6, y: 10, width: 9, height: 8 });
+  });
+
+  it("grows for a glow's radius", () => {
+    const layer = squareLayer();
+    layer.effects = { outerGlow: { enabled: true, color: "#ffffff", opacity: 1, radius: 6 } };
+    const region: RasterRect = { x: 10, y: 10, width: 5, height: 5 };
+
+    expect(requiredSourceRegion(layer, region, W, H)).toEqual({ x: 4, y: 4, width: 17, height: 17 });
+  });
+
+  it("clamps to the document bounds", () => {
+    const layer = squareLayer();
+    layer.effects = { outerGlow: { enabled: true, color: "#ffffff", opacity: 1, radius: 6 } };
+    const region: RasterRect = { x: 0, y: 0, width: 5, height: 5 };
+
+    expect(requiredSourceRegion(layer, region, W, H)).toEqual({ x: 0, y: 0, width: 11, height: 11 });
   });
 });
