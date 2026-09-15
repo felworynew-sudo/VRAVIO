@@ -117,7 +117,7 @@ export async function updateScene3DLayer(documentId: string, layerId: string, pa
   const state = document.state;
   const layer = state.layers.find((item) => item.id === layerId);
   if (!layer?.scene3d) return;
-  // layer.pixels is stored trimmed to its opaque bounds, not full-canvas-sized — setLayerPixels
+  // layer.tiles is stored trimmed to its opaque bounds, not full-canvas-sized — setLayerPixels
   // needs a full document-sized buffer to trim from, so the "before" snapshot has to go through
   // layerDocumentPixels rather than reusing the trimmed buffer directly (that silently corrupted
   // the restored image on undo: the trimmed bytes got reinterpreted at the wrong stride).

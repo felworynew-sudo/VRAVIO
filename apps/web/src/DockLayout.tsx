@@ -840,7 +840,7 @@ function LayersPanel() {
      * removes the mask. Layers are already always RGBA here, unlike
      * Patchy's RGB-by-default model, so there's no separate "promote to
      * RGBA first" step to port. Goes through `layerDocumentPixels` because
-     * `mask.tiles` is always document-sized but `layer.pixels` is trimmed to
+     * `mask.tiles` is always document-sized but `layer.tiles` is trimmed to
      * the layer's own bounds (CLAUDE.md §1) — `setLayerPixels` re-trims the
      * result afterward.
      */
