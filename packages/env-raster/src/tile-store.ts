@@ -157,6 +157,59 @@ export class TileStore {
     }
   }
 
+  /**
+   * A new store framed to `width`×`height`, whose own (0,0) is this store's (`dx`, `dy`) —
+   * windows, crops, or pads this store into a different rectangle. This is `growToInclude`'s and
+   * `trimInPlace`'s actual job: a layer's buffer is exactly its own opaque bounds (CLAUDE.md §4),
+   * so every bounds change — every stroke that extends past what a layer used to hold, every trim
+   * back afterward — needs exactly this. Pixels the new frame reaches that this store never
+   * covered read back transparent, the same convention `readPixel` already uses for a plain
+   * out-of-bounds read.
+   *
+   * A full (`TILE_SIZE`×`TILE_SIZE`) destination tile whose corresponding source tile is also
+   * full-size — only possible when `dx`/`dy` are exact multiples of `TILE_SIZE` — is shared by
+   * reference, the same trade `clone()` makes. Every other tile (the frame's own edges, and every
+   * tile at all when the shift is not tile-aligned) is rebuilt from whatever this store holds at
+   * the corresponding source pixels — real work, but bounded to that one destination tile, not to
+   * this store's own extent: reframing a small rectangle out of a huge layer costs the small
+   * rectangle, not the huge layer, which is the whole reason `growToInclude` on a layer that
+   * already covers most of a large canvas is worth fixing.
+   */
+  reframe(dx: number, dy: number, width: number, height: number): TileStore {
+    const tiles = new Map<number, Uint8ClampedArray>();
+    const columns = Math.ceil(width / TILE_SIZE), rows = Math.ceil(height / TILE_SIZE);
+    const tileAligned = dx % TILE_SIZE === 0 && dy % TILE_SIZE === 0;
+    for (let row = 0; row < rows; row += 1) {
+      for (let col = 0; col < columns; col += 1) {
+        const destRect = tileRect(col, row, width, height);
+        if (tileAligned && destRect.width === TILE_SIZE && destRect.height === TILE_SIZE) {
+          const sourceCol = col + dx / TILE_SIZE, sourceRow = row + dy / TILE_SIZE;
+          const sourceFullSize = sourceCol >= 0 && sourceRow >= 0
+            && tileRect(sourceCol, sourceRow, this.width, this.height).width === TILE_SIZE
+            && tileRect(sourceCol, sourceRow, this.width, this.height).height === TILE_SIZE;
+          if (sourceFullSize) {
+            tiles.set(key(col, row), this.#tiles.get(key(sourceCol, sourceRow)) ?? new Uint8ClampedArray(TILE_SIZE * TILE_SIZE * 4));
+            continue;
+          }
+        }
+        // General path: this destination tile has no single same-size source tile to borrow, so
+        // it is rebuilt pixel by pixel from wherever this store holds content at (x+dx, y+dy) —
+        // `readPixel` already knows out-of-range means transparent, which is exactly what a
+        // frame reaching past this store's own edge should read as.
+        const tile = new Uint8ClampedArray(destRect.width * destRect.height * 4);
+        for (let y = 0; y < destRect.height; y += 1) {
+          for (let x = 0; x < destRect.width; x += 1) {
+            const [r, g, b, a] = this.readPixel(destRect.x + x + dx, destRect.y + y + dy);
+            const index = (y * destRect.width + x) * 4;
+            tile[index] = r; tile[index + 1] = g; tile[index + 2] = b; tile[index + 3] = a;
+          }
+        }
+        tiles.set(key(col, row), tile);
+      }
+    }
+    return new TileStore(width, height, tiles);
+  }
+
   /** Bytes held by tiles unique to this store — `seen` lets a caller price several clones
    *  together the same way `accumulateUniquePixelBytes` prices layers sharing whole buffers. */
   uniqueBytes(seen: Set<Uint8ClampedArray>): number {

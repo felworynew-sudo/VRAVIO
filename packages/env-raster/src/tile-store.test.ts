@@ -196,3 +196,99 @@ describe("TileStore.uniqueBytes", () => {
     expect(clone.uniqueBytes(seen)).toBe(TILE_SIZE * TILE_SIZE * 4);
   });
 });
+
+/** A reference crop/pad over a flat buffer — the same convention `cropToRect`/`growToInclude`
+ *  already use: `(dx, dy)` names this store's own coordinates that land at the new frame's (0,0),
+ *  and anything the new frame reaches outside the source buffer reads as transparent. */
+function referenceReframe(source: Uint8ClampedArray, sourceWidth: number, sourceHeight: number, dx: number, dy: number, width: number, height: number): Uint8ClampedArray {
+  const out = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    const sourceY = y + dy;
+    if (sourceY < 0 || sourceY >= sourceHeight) continue;
+    for (let x = 0; x < width; x += 1) {
+      const sourceX = x + dx;
+      if (sourceX < 0 || sourceX >= sourceWidth) continue;
+      const from = (sourceY * sourceWidth + sourceX) * 4, to = (y * width + x) * 4;
+      out[to] = source[from]!; out[to + 1] = source[from + 1]!; out[to + 2] = source[from + 2]!; out[to + 3] = source[from + 3]!;
+    }
+  }
+  return out;
+}
+
+describe("TileStore.reframe", () => {
+  it("crops to a smaller, tile-unaligned rectangle fully inside the store — trimInPlace's own shape", () => {
+    const w = TILE_SIZE * 2 + 10, h = TILE_SIZE * 2 + 3;
+    const source = fixture(w, h);
+    const store = TileStore.fromPixels(source, w, h);
+    const dx = 17, dy = 9, width = TILE_SIZE + 30, height = TILE_SIZE + 5;
+    const reference = referenceReframe(source, w, h, dx, dy, width, height);
+    expect([...store.reframe(dx, dy, width, height).toPixels()]).toEqual([...reference]);
+  });
+
+  it("pads to a larger rectangle anchored at a positive offset — growToInclude's own shape", () => {
+    const w = 40, h = 30;
+    const source = fixture(w, h);
+    const store = TileStore.fromPixels(source, w, h);
+    // The old content lands at (dx, dy) inside the new, bigger frame — negative dx/dy, the same
+    // sign growToInclude passes when the grown rect extends up/left of the original bounds.
+    const dx = -15, dy = -8, width = w + 50, height = h + 40;
+    const reference = referenceReframe(source, w, h, dx, dy, width, height);
+    expect([...store.reframe(dx, dy, width, height).toPixels()]).toEqual([...reference]);
+    // The padding itself must actually be transparent, not garbage from an uninitialised tile.
+    expect(store.reframe(dx, dy, width, height).readPixel(0, 0)).toEqual([0, 0, 0, 0]);
+  });
+
+  it("a same-size, zero-offset reframe is the identity", () => {
+    const w = TILE_SIZE + 5, h = TILE_SIZE * 2;
+    const source = fixture(w, h);
+    const store = TileStore.fromPixels(source, w, h);
+    expect([...store.reframe(0, 0, w, h).toPixels()]).toEqual([...source]);
+  });
+
+  it("a frame entirely outside the source reads back entirely transparent", () => {
+    const store = TileStore.fromPixels(fixture(20, 20), 20, 20);
+    const reframed = store.reframe(1000, 1000, 20, 20);
+    expect([...reframed.toPixels()]).toEqual([...new Uint8ClampedArray(20 * 20 * 4)]);
+  });
+
+  it("matches a reference crop/pad for an offset that is not a multiple of TILE_SIZE", () => {
+    const w = TILE_SIZE * 3, h = TILE_SIZE * 2;
+    const source = fixture(w, h);
+    const store = TileStore.fromPixels(source, w, h);
+    const dx = 23, dy = -11, width = TILE_SIZE * 2 + 40, height = TILE_SIZE + 60;
+    const reference = referenceReframe(source, w, h, dx, dy, width, height);
+    expect([...store.reframe(dx, dy, width, height).toPixels()]).toEqual([...reference]);
+  });
+
+  it("shares full interior tiles by reference on a tile-aligned shift, and keeps the two stores independent afterward", () => {
+    const w = TILE_SIZE * 4, h = TILE_SIZE * 4;
+    const store = TileStore.fromPixels(fixture(w, h), w, h);
+    // Shifting by exactly one tile in each direction is the fast path: every full destination
+    // tile away from the new frame's own edges should borrow its source tile outright.
+    const reframed = store.reframe(TILE_SIZE, TILE_SIZE, w, h);
+    expect([...reframed.toPixels()]).toEqual([...referenceReframe(store.toPixels(), w, h, TILE_SIZE, TILE_SIZE, w, h)]);
+
+    // Writing to the *source* after reframing must not leak into the reframed store's shared
+    // tiles — the same CoW contract `clone()` already guarantees, now exercised through reframe.
+    const beforeWrite = reframed.toPixels();
+    store.writeRegion({ x: TILE_SIZE * 2, y: TILE_SIZE * 2, width: 10, height: 10 }, new Uint8ClampedArray(10 * 10 * 4).fill(255), 10);
+    expect([...reframed.toPixels()]).toEqual([...beforeWrite]);
+
+    // And the reverse: writing to the reframed store must not disturb the original.
+    const beforeSourceWrite = store.toPixels();
+    reframed.writeRegion({ x: TILE_SIZE, y: TILE_SIZE, width: 10, height: 10 }, new Uint8ClampedArray(10 * 10 * 4).fill(128), 10);
+    expect([...store.toPixels()]).toEqual([...beforeSourceWrite]);
+  });
+
+  it("rebuilds edge tiles instead of borrowing a wrong-sized source tile on a tile-aligned shift", () => {
+    // The store's own edge tiles are smaller than TILE_SIZE. A tile-aligned shift that lines a
+    // destination's full-size tile up with one of those undersized source tiles must not borrow
+    // it outright — it has the wrong length for the destination tile it would be assigned to.
+    const w = TILE_SIZE + 10, h = TILE_SIZE + 10;
+    const source = fixture(w, h);
+    const store = TileStore.fromPixels(source, w, h);
+    const width = TILE_SIZE * 2, height = TILE_SIZE * 2;
+    const reference = referenceReframe(source, w, h, -TILE_SIZE, -TILE_SIZE, width, height);
+    expect([...store.reframe(-TILE_SIZE, -TILE_SIZE, width, height).toPixels()]).toEqual([...reference]);
+  });
+});
