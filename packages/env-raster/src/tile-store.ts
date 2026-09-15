@@ -124,6 +124,28 @@ export class TileStore {
     return pixels;
   }
 
+  /**
+   * A plain, JSON-safe snapshot — `width`/`height`/`channels` plus one flat `pixels` buffer
+   * (`toPixels()`). Exists because a bare `TileStore` instance is not one: its actual data lives
+   * in a private `#tiles` field, which `JSON.stringify` cannot see at all — a naive
+   * `JSON.stringify(store)` silently produces `{"width":W,"height":H,"channels":C}` with every
+   * tile gone and no error anywhere. `document-snapshot-store.ts`'s autosave serializes a whole
+   * `RasterDocumentState` this way (with a replacer that already knows how to serialize the
+   * typed array this method's `pixels` field is), so anything reachable from a layer or mask
+   * that is a `TileStore` needs this method to survive a save/reload — see `fromJSON`, the other
+   * half of the round trip, and `document.ts`'s `migrateRasterDocumentState`, the one place that
+   * calls it.
+   */
+  toJSON(): { width: number; height: number; channels: number; pixels: Uint8ClampedArray } {
+    return { width: this.width, height: this.height, channels: this.channels, pixels: this.toPixels() };
+  }
+
+  /** The other half of `toJSON()`'s round trip — rebuilds a real `TileStore` (tiled, with a
+   *  working `#tiles` map) from the plain shape `toJSON()`/`JSON.parse` leave behind. */
+  static fromJSON(value: { width: number; height: number; channels: number; pixels: Uint8ClampedArray }): TileStore {
+    return TileStore.fromPixels(value.pixels, value.width, value.height, value.channels);
+  }
+
   /** One pixel's channel values, without materialising anything — `layerAlphaAt`'s reason to
    *  exist, generalised to a tiled store. Out-of-bounds reads as all-zero (transparent black for
    *  RGBA, 0 for a mask), the same convention `layerAlphaAt` uses. Always `this.channels` long —

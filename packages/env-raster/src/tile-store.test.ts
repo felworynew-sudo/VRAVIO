@@ -52,6 +52,73 @@ describe("TileStore.fromPixels / toPixels", () => {
   });
 });
 
+describe("TileStore.toJSON / fromJSON — the document-snapshot-store.ts round trip", () => {
+  it("a bare instance, JSON.stringified without toJSON, would lose every tile silently", () => {
+    // Not testing TileStore's real toJSON here — testing the failure mode it exists to prevent.
+    // `#tiles` is a private field: plain JSON.stringify never sees it, with no error of any kind,
+    // which is exactly how this would fail in production (a saved document that quietly comes
+    // back with an empty mask, not a thrown exception pointing at the cause).
+    class Bare { readonly width = 10; readonly height = 10; readonly channels = 4; #tiles = new Map([[0, new Uint8ClampedArray(4)]]); }
+    expect(JSON.parse(JSON.stringify(new Bare()))).toEqual({ width: 10, height: 10, channels: 4 });
+  });
+
+  it("toJSON()'s pixels field is a real typed array, the shape document-snapshot-store.ts's replacer already knows how to serialize", () => {
+    // document-snapshot-store.ts's own replacer intercepts `ArrayBuffer.isView(value)` *before*
+    // JSON.stringify's default (and lossy, for a typed array — see the sibling test below)
+    // per-index serialization ever runs. toJSON() only has to hand back that shape; the actual
+    // typed-array-safe encoding is the kernel's job, downstream of this method, not this file's.
+    const store = TileStore.fromPixels(fixture(TILE_SIZE, TILE_SIZE), TILE_SIZE, TILE_SIZE);
+    const snapshot = store.toJSON();
+    expect(ArrayBuffer.isView(snapshot.pixels)).toBe(true);
+    expect(snapshot.pixels).toBeInstanceOf(Uint8ClampedArray);
+    expect(snapshot).toEqual({ width: TILE_SIZE, height: TILE_SIZE, channels: 4, pixels: store.toPixels() });
+  });
+
+  it("plain JSON.stringify (no replacer) on a typed array is itself lossy in shape, not just on TileStore — confirming why a replacer is required downstream", () => {
+    // A typed array is not `Array.isArray`, so JSON.stringify serializes it index-by-index as a
+    // plain object (`{"0":v0,"1":v1,...}`), not as a `[...]` array. This is why
+    // document-snapshot-store.ts's replacer exists and intercepts typed arrays explicitly — a
+    // naive round trip through bare JSON.stringify/JSON.parse would not reconstruct an array-like
+    // `pixels` at all, with or without toJSON() in the picture.
+    const raw = JSON.parse(JSON.stringify(new Uint8ClampedArray([1, 2, 3])));
+    expect(Array.isArray(raw)).toBe(false);
+    expect(raw).toEqual({ 0: 1, 1: 2, 2: 3 });
+  });
+
+  it("fromJSON rebuilds a working, tiled store from toJSON()'s shape", () => {
+    const w = TILE_SIZE + 9, h = TILE_SIZE * 2 + 3;
+    const source = fixture(w, h);
+    const store = TileStore.fromPixels(source, w, h);
+    const rebuilt = TileStore.fromJSON(store.toJSON());
+    expect(rebuilt.width).toBe(w);
+    expect(rebuilt.height).toBe(h);
+    expect(rebuilt.channels).toBe(4);
+    expect([...rebuilt.toPixels()]).toEqual([...source]);
+    // A real tiled store, not a flat-buffer impostor: writeRegion still only touches the tiles
+    // the region overlaps, same as any other TileStore.
+    rebuilt.writeRegion({ x: 0, y: 0, width: 5, height: 5 }, new Uint8ClampedArray(w * h * 4).fill(200), w);
+    expect(rebuilt.readPixel(2, 2)).toEqual([200, 200, 200, 200]);
+  });
+
+  it("round-trips a mask-shaped (channels: 1) store the same way", () => {
+    const w = TILE_SIZE * 2, h = TILE_SIZE;
+    const source = new Uint8ClampedArray(w * h);
+    for (let i = 0; i < source.length; i += 1) source[i] = (i * 41 + 5) % 256;
+    const store = TileStore.fromPixels(source, w, h, 1);
+    const rebuilt = TileStore.fromJSON(store.toJSON());
+    expect(rebuilt.channels).toBe(1);
+    expect([...rebuilt.toPixels()]).toEqual([...source]);
+  });
+
+  it("the round trip is a real, independent copy, not a shared reference back to the original store", () => {
+    const w = TILE_SIZE, h = TILE_SIZE;
+    const store = TileStore.fromPixels(fixture(w, h), w, h);
+    const rebuilt = TileStore.fromJSON(store.toJSON());
+    store.writeRegion({ x: 0, y: 0, width: 5, height: 5 }, new Uint8ClampedArray(w * h * 4).fill(255), w);
+    expect(rebuilt.readPixel(2, 2)).not.toEqual([255, 255, 255, 255]);
+  });
+});
+
 describe("TileStore.readPixel", () => {
   it("matches the flat buffer at every corner of a multi-tile store", () => {
     const w = TILE_SIZE + 20, h = TILE_SIZE + 10;
