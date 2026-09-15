@@ -59,20 +59,25 @@ function neighborhoodMinimumAlpha(source: Uint8ClampedArray, width: number, heig
   return minimum / 255;
 }
 
-interface RenderedEffects { readonly effects: unknown; readonly width: number; readonly height: number; readonly output: Uint8ClampedArray }
+interface RenderedEffects { readonly effects: unknown; readonly width: number; readonly height: number; readonly output: Uint8ClampedArray; readonly pixelsRevision: number }
 
 /**
- * The last rendered surface for a given pixel buffer.
+ * The last rendered surface for a given layer.
  *
  * The compositor works in tiles, and each tile asks for the whole layer's
  * effects: a viewport of forty tiles rendered the same document-sized surface
- * forty times, which turned a glow from slow into unusable. Every path that
- * edits a layer assigns it a fresh buffer and every style edit replaces the
- * effects object, so buffer identity plus effects identity is enough to know
- * the surface is still the right one. A WeakMap lets the entry go when the
- * buffer does.
+ * forty times, which turned a glow from slow into unusable. Every style edit
+ * replaces the effects object, and `pixelsRevision` (docs/master-plan.md
+ * §37.6.2) is bumped by every path that edits a layer's pixels — together
+ * they are enough to know the surface is still the right one, without
+ * requiring a fresh buffer *object* on every edit the way keying on
+ * `layer.pixels` itself used to. Keyed on the layer, not the buffer: a
+ * WeakMap still lets the entry go when the layer does, and a layer is the
+ * more stable of the two — `swapLayerRegion`'s undo/redo swap already
+ * mutates the same buffer in place when it can, `pixelsRevision` is what
+ * tells this cache that happened.
  */
-const renderedEffects = new WeakMap<Uint8ClampedArray, RenderedEffects>();
+const renderedEffects = new WeakMap<RasterLayer, RenderedEffects>();
 
 /** Produces a temporary rendered surface; source pixels remain untouched. */
 export function renderLayerEffects(layer: RasterLayer, width: number, height: number): Uint8ClampedArray {
@@ -82,8 +87,8 @@ export function renderLayerEffects(layer: RasterLayer, width: number, height: nu
   // Glass is rendered by the compositor because it reads the backdrop, not by
   // this source-only layer-style renderer.
   if (!Object.entries(effects).some(([key, effect]) => key !== "glass" && effect?.enabled)) return layer.pixels;
-  const cached = renderedEffects.get(layer.pixels);
-  if (cached && cached.effects === layer.effects && cached.width === width && cached.height === height) return cached.output;
+  const cached = renderedEffects.get(layer);
+  if (cached && cached.effects === layer.effects && cached.width === width && cached.height === height && cached.pixelsRevision === layer.pixelsRevision) return cached.output;
   // Document space, both in and out. A layer's pixels are stored in the layer's
   // own bounds — the optimisation that took 21 layers from 166 MB to 3.1 MB —
   // so a trimmed layer's buffer has a stride of its own, while everything below
@@ -150,9 +155,9 @@ export function renderLayerEffects(layer: RasterLayer, width: number, height: nu
       overlayChannels(output, index, channel, channel, channel, 255, Math.min(1, Math.abs(shade)));
     }
   }
-  // Keyed on the layer's own buffer, not the materialised copy: that copy is
-  // new every call, so keying on it would cache nothing and hold the entry
-  // alive by its only reference.
-  renderedEffects.set(layer.pixels, { effects: layer.effects, width, height, output });
+  // Keyed on the layer itself, not the materialised copy: that copy is new
+  // every call, so keying on it would cache nothing and hold the entry alive
+  // by its only reference.
+  renderedEffects.set(layer, { effects: layer.effects, width, height, output, pixelsRevision: layer.pixelsRevision });
   return output;
 }

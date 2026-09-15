@@ -130,7 +130,11 @@ describe("layer effects cache", () => {
       const index = (y * W + x) * 4;
       moved.pixels[index + 3] = 255;
     }
+    // The raw reassignment setLayerPixels does in production, including the
+    // revision bump renderLayerEffects's cache now keys on instead of pixels
+    // identity (docs/master-plan.md §37.6.2).
     layer.pixels = moved.pixels;
+    layer.pixelsRevision += 1;
     const second = renderLayerEffects(layer, W, H);
 
     expect(second).not.toBe(first);
