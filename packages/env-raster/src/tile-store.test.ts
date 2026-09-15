@@ -292,3 +292,73 @@ describe("TileStore.reframe", () => {
     expect([...store.reframe(-TILE_SIZE, -TILE_SIZE, width, height).toPixels()]).toEqual([...reference]);
   });
 });
+
+/** A deterministic, non-uniform single-channel buffer — `RasterLayerMask.pixels`'s own shape
+ *  (one grayscale byte per pixel, no alpha/colour channels), the reason `channels` exists at all. */
+function maskFixture(width: number, height: number): Uint8ClampedArray {
+  const pixels = new Uint8ClampedArray(width * height);
+  for (let i = 0; i < pixels.length; i += 1) pixels[i] = (i * 53 + 7) % 256;
+  return pixels;
+}
+
+describe("TileStore with channels: 1 (a mask-shaped store)", () => {
+  it("round-trips a mask-shaped buffer, edges and all", () => {
+    const w = TILE_SIZE + 9, h = TILE_SIZE * 2 + 5;
+    const source = maskFixture(w, h);
+    expect([...TileStore.fromPixels(source, w, h, 1).toPixels()]).toEqual([...source]);
+  });
+
+  it("rejects a buffer sized for the wrong channel count", () => {
+    // The same buffer that fromPixels(..., 4) would happily accept is the wrong length at
+    // channels: 1 — this is the exact mismatch that made `TileStore` unusable for masks until
+    // `channels` existed, so it stays a hard error rather than silently misreading the tiling.
+    const rgbaSized = new Uint8ClampedArray(4 * 4 * 4);
+    expect(() => TileStore.fromPixels(rgbaSized, 4, 4, 1)).toThrow(RangeError);
+  });
+
+  it("readPixel returns one value, not a padded RGBA tuple", () => {
+    const w = TILE_SIZE + 3, h = TILE_SIZE;
+    const source = maskFixture(w, h);
+    const store = TileStore.fromPixels(source, w, h, 1);
+    for (const [x, y] of [[0, 0], [w - 1, h - 1], [TILE_SIZE, 0], [TILE_SIZE - 1, TILE_SIZE - 1]]) {
+      expect(store.readPixel(x!, y!)).toEqual([source[y! * w + x!]]);
+    }
+    expect(store.readPixel(-1, 0)).toEqual([0]);
+  });
+
+  it("writeRegion touches only the tiles the region overlaps, at one byte per pixel", () => {
+    const w = TILE_SIZE * 2, h = TILE_SIZE * 2;
+    const store = TileStore.fromPixels(maskFixture(w, h), w, h, 1);
+    const rect = { x: TILE_SIZE - 5, y: TILE_SIZE - 5, width: 20, height: 20 };
+    const patch = new Uint8ClampedArray(w * h);
+    for (let y = rect.y; y < rect.y + rect.height; y += 1) for (let x = rect.x; x < rect.x + rect.width; x += 1) patch[y * w + x] = 200;
+    store.writeRegion(rect, patch, w);
+    expect(store.readPixel(rect.x, rect.y)).toEqual([200]);
+    expect(store.readPixel(0, 0)).toEqual([maskFixture(w, h)[0]]);
+  });
+
+  it("keeps the CoW contract at one byte per pixel: a clone's write never touches its source", () => {
+    const w = TILE_SIZE * 2, h = TILE_SIZE * 2;
+    const source = maskFixture(w, h);
+    const store = TileStore.fromPixels(source, w, h, 1);
+    const clone = store.clone();
+    clone.writeRegion({ x: 0, y: 0, width: 10, height: 10 }, new Uint8ClampedArray(w * h).fill(255), w);
+    expect([...store.toPixels()]).toEqual([...source]);
+    expect(clone.readPixel(5, 5)).toEqual([255]);
+  });
+
+  it("reframe crops/pads a mask-shaped store the same way as an RGBA one", () => {
+    const w = TILE_SIZE * 2 + 4, h = TILE_SIZE + 6;
+    const source = maskFixture(w, h);
+    const store = TileStore.fromPixels(source, w, h, 1);
+    const dx = -12, dy = 8, width = TILE_SIZE * 2, height = TILE_SIZE;
+    const reframed = store.reframe(dx, dy, width, height);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        const sourceX = x + dx, sourceY = y + dy;
+        const expected = sourceX >= 0 && sourceX < w && sourceY >= 0 && sourceY < h ? source[sourceY * w + sourceX]! : 0;
+        expect(reframed.readPixel(x, y)).toEqual([expected]);
+      }
+    }
+  });
+});

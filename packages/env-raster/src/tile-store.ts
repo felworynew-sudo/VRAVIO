@@ -19,7 +19,7 @@ import type { RasterRect } from "./types";
 
 /** Krita's own tile edge (`kis_tile.h`'s `KisTile::WIDTH`/`HEIGHT`) — 64x64 is small enough that
  *  a brush dab touches only a handful of tiles, large enough that the tile-map bookkeeping
- *  itself stays cheap relative to what a tile holds (64*64*4 = 16KB per full tile). */
+ *  itself stays cheap relative to what a tile holds (64*64*4 = 16KB per full RGBA tile). */
 export const TILE_SIZE = 64;
 
 const key = (col: number, row: number) => col * 0x10000 + row;
@@ -27,7 +27,7 @@ const key = (col: number, row: number) => col * 0x10000 + row;
 /** One tile's own rectangle within the store, clamped to the store's bounds — the tiles along
  *  the right/bottom edge are smaller than `TILE_SIZE` rather than padded, the same convention
  *  `tiles.ts`'s `RasterTileCache` already uses for the identical reason (no invented pixels to
- *  keep meaningless, and `width * height * 4` stays the buffer's real length always). */
+ *  keep meaningless, and `width * height * channels` stays the buffer's real length always). */
 function tileRect(col: number, row: number, width: number, height: number): RasterRect {
   const x = col * TILE_SIZE, y = row * TILE_SIZE;
   return { x, y, width: Math.min(TILE_SIZE, width - x), height: Math.min(TILE_SIZE, height - y) };
@@ -44,55 +44,71 @@ function tileRect(col: number, row: number, width: number, height: number): Rast
  * stores that share a tile because one was cloned from the other therefore can never see each
  * other's writes, with no bookkeeping needed to know whether the tile is "actually" shared at
  * the moment of the write — cheaper to always replace than to ask.
+ *
+ * A `TileStore` instance itself is *not* one of the immutable, freely-shareable things this
+ * class produces: `writeRegion` mutates this store's own tile map in place (`Map.set`). Two
+ * owners (a layer and its `duplicateLayer` copy, a document and a history snapshot) may safely
+ * share one *reference* to the same store only as long as neither ever calls a mutating method
+ * on it directly — every caller that means to change one owner's content without the other
+ * seeing it must `clone()` first, exactly as `region-patch.ts`'s functions do.
+ *
+ * `channels` generalises RGBA8 (4 bytes/pixel, every `RasterLayer.pixels` caller) to any fixed
+ * per-pixel byte count — `RasterLayerMask.pixels` is grayscale, one byte per pixel, and needs
+ * the identical tiling/CoW machinery with a different stride, not a second, parallel
+ * implementation of it (CLAUDE.md §4's "дубликат — это два будущих, которые разойдутся").
+ * Defaults to 4 so every existing RGBA caller is unaffected.
  */
 export class TileStore {
   readonly width: number;
   readonly height: number;
+  readonly channels: number;
   readonly #tiles: Map<number, Uint8ClampedArray>;
 
-  private constructor(width: number, height: number, tiles: Map<number, Uint8ClampedArray>) {
+  private constructor(width: number, height: number, channels: number, tiles: Map<number, Uint8ClampedArray>) {
     this.width = width;
     this.height = height;
+    this.channels = channels;
     this.#tiles = tiles;
   }
 
   /** Builds a store from a flat, document/layer-shaped buffer — one crop per tile. */
-  static fromPixels(pixels: Uint8ClampedArray, width: number, height: number): TileStore {
-    if (pixels.length !== width * height * 4) throw new RangeError("TileStore.fromPixels: buffer length does not match width*height*4");
+  static fromPixels(pixels: Uint8ClampedArray, width: number, height: number, channels = 4): TileStore {
+    if (pixels.length !== width * height * channels) throw new RangeError("TileStore.fromPixels: buffer length does not match width*height*channels");
     const tiles = new Map<number, Uint8ClampedArray>();
     const columns = Math.ceil(width / TILE_SIZE), rows = Math.ceil(height / TILE_SIZE);
     for (let row = 0; row < rows; row += 1) {
       for (let col = 0; col < columns; col += 1) {
         const rect = tileRect(col, row, width, height);
-        const tile = new Uint8ClampedArray(rect.width * rect.height * 4);
+        const tile = new Uint8ClampedArray(rect.width * rect.height * channels);
         for (let y = 0; y < rect.height; y += 1) {
-          const from = ((rect.y + y) * width + rect.x) * 4;
-          tile.set(pixels.subarray(from, from + rect.width * 4), y * rect.width * 4);
+          const from = ((rect.y + y) * width + rect.x) * channels;
+          tile.set(pixels.subarray(from, from + rect.width * channels), y * rect.width * channels);
         }
         tiles.set(key(col, row), tile);
       }
     }
-    return new TileStore(width, height, tiles);
+    return new TileStore(width, height, channels, tiles);
   }
 
-  /** An all-transparent store of the given size — every tile allocated (not sparse), so a
-   *  freshly created layer costs one real materialize either way; sparse-on-read is a later
-   *  optimisation this constructor deliberately leaves for when a real caller needs it. */
-  static empty(width: number, height: number): TileStore {
-    return TileStore.fromPixels(new Uint8ClampedArray(width * height * 4), width, height);
+  /** An all-zero (transparent, for RGBA; black, for a mask) store of the given size — every tile
+   *  allocated (not sparse), so a freshly created layer costs one real materialize either way;
+   *  sparse-on-read is a later optimisation this constructor deliberately leaves for when a real
+   *  caller needs it. */
+  static empty(width: number, height: number, channels = 4): TileStore {
+    return TileStore.fromPixels(new Uint8ClampedArray(width * height * channels), width, height, channels);
   }
 
   /** O(tile count): copies the *map*, not the tiles it points to. The two stores diverge only
    *  where either one is actually written to afterward. */
   clone(): TileStore {
-    return new TileStore(this.width, this.height, new Map(this.#tiles));
+    return new TileStore(this.width, this.height, this.channels, new Map(this.#tiles));
   }
 
   /** Rebuilds one flat buffer — the escape hatch every existing consumer that still thinks in
    *  `Uint8ClampedArray` needs, the same role `layerDocumentPixels` already plays for
    *  bounds-cropped layers. */
   toPixels(): Uint8ClampedArray {
-    const pixels = new Uint8ClampedArray(this.width * this.height * 4);
+    const pixels = new Uint8ClampedArray(this.width * this.height * this.channels);
     const columns = Math.ceil(this.width / TILE_SIZE), rows = Math.ceil(this.height / TILE_SIZE);
     for (let row = 0; row < rows; row += 1) {
       for (let col = 0; col < columns; col += 1) {
@@ -100,25 +116,28 @@ export class TileStore {
         if (!tile) continue;
         const rect = tileRect(col, row, this.width, this.height);
         for (let y = 0; y < rect.height; y += 1) {
-          const from = y * rect.width * 4;
-          pixels.set(tile.subarray(from, from + rect.width * 4), ((rect.y + y) * this.width + rect.x) * 4);
+          const from = y * rect.width * this.channels;
+          pixels.set(tile.subarray(from, from + rect.width * this.channels), ((rect.y + y) * this.width + rect.x) * this.channels);
         }
       }
     }
     return pixels;
   }
 
-  /** One pixel's RGBA, without materialising anything — `layerAlphaAt`'s reason to exist,
-   *  generalised to all four channels for a tiled store. Out-of-bounds reads as transparent
-   *  black, the same convention `layerAlphaAt` uses. */
-  readPixel(x: number, y: number): readonly [number, number, number, number] {
-    if (x < 0 || y < 0 || x >= this.width || y >= this.height) return [0, 0, 0, 0];
+  /** One pixel's channel values, without materialising anything — `layerAlphaAt`'s reason to
+   *  exist, generalised to a tiled store. Out-of-bounds reads as all-zero (transparent black for
+   *  RGBA, 0 for a mask), the same convention `layerAlphaAt` uses. Always `this.channels` long —
+   *  an RGBA store's callers destructure `[r, g, b, a]` exactly as before `channels` existed. */
+  readPixel(x: number, y: number): readonly number[] {
+    if (x < 0 || y < 0 || x >= this.width || y >= this.height) return new Array(this.channels).fill(0);
     const col = Math.floor(x / TILE_SIZE), row = Math.floor(y / TILE_SIZE);
     const tile = this.#tiles.get(key(col, row));
-    if (!tile) return [0, 0, 0, 0];
+    if (!tile) return new Array(this.channels).fill(0);
     const rect = tileRect(col, row, this.width, this.height);
-    const index = ((y - rect.y) * rect.width + (x - rect.x)) * 4;
-    return [tile[index]!, tile[index + 1]!, tile[index + 2]!, tile[index + 3]!];
+    const index = ((y - rect.y) * rect.width + (x - rect.x)) * this.channels;
+    const out = new Array<number>(this.channels);
+    for (let c = 0; c < this.channels; c += 1) out[c] = tile[index + c]!;
+    return out;
   }
 
   /**
@@ -138,19 +157,20 @@ export class TileStore {
     const left = Math.max(0, rect.x), top = Math.max(0, rect.y);
     const right = Math.min(this.width, rect.x + rect.width), bottom = Math.min(this.height, rect.y + rect.height);
     if (right <= left || bottom <= top) return;
+    const channels = this.channels;
     const firstCol = Math.floor(left / TILE_SIZE), lastCol = Math.floor((right - 1) / TILE_SIZE);
     const firstRow = Math.floor(top / TILE_SIZE), lastRow = Math.floor((bottom - 1) / TILE_SIZE);
     for (let row = firstRow; row <= lastRow; row += 1) {
       for (let col = firstCol; col <= lastCol; col += 1) {
         const tileArea = tileRect(col, row, this.width, this.height);
         const existing = this.#tiles.get(key(col, row));
-        const next = existing ? existing.slice() : new Uint8ClampedArray(tileArea.width * tileArea.height * 4);
+        const next = existing ? existing.slice() : new Uint8ClampedArray(tileArea.width * tileArea.height * channels);
         const writeLeft = Math.max(left, tileArea.x), writeTop = Math.max(top, tileArea.y);
         const writeRight = Math.min(right, tileArea.x + tileArea.width), writeBottom = Math.min(bottom, tileArea.y + tileArea.height);
         for (let y = writeTop; y < writeBottom; y += 1) {
-          const fromSource = (y * sourceWidth + writeLeft) * 4;
-          const toTile = ((y - tileArea.y) * tileArea.width + (writeLeft - tileArea.x)) * 4;
-          next.set(source.subarray(fromSource, fromSource + (writeRight - writeLeft) * 4), toTile);
+          const fromSource = (y * sourceWidth + writeLeft) * channels;
+          const toTile = ((y - tileArea.y) * tileArea.width + (writeLeft - tileArea.x)) * channels;
+          next.set(source.subarray(fromSource, fromSource + (writeRight - writeLeft) * channels), toTile);
         }
         this.#tiles.set(key(col, row), next);
       }
@@ -176,6 +196,7 @@ export class TileStore {
    * already covers most of a large canvas is worth fixing.
    */
   reframe(dx: number, dy: number, width: number, height: number): TileStore {
+    const channels = this.channels;
     const tiles = new Map<number, Uint8ClampedArray>();
     const columns = Math.ceil(width / TILE_SIZE), rows = Math.ceil(height / TILE_SIZE);
     const tileAligned = dx % TILE_SIZE === 0 && dy % TILE_SIZE === 0;
@@ -188,7 +209,7 @@ export class TileStore {
             && tileRect(sourceCol, sourceRow, this.width, this.height).width === TILE_SIZE
             && tileRect(sourceCol, sourceRow, this.width, this.height).height === TILE_SIZE;
           if (sourceFullSize) {
-            tiles.set(key(col, row), this.#tiles.get(key(sourceCol, sourceRow)) ?? new Uint8ClampedArray(TILE_SIZE * TILE_SIZE * 4));
+            tiles.set(key(col, row), this.#tiles.get(key(sourceCol, sourceRow)) ?? new Uint8ClampedArray(TILE_SIZE * TILE_SIZE * channels));
             continue;
           }
         }
@@ -196,18 +217,18 @@ export class TileStore {
         // it is rebuilt pixel by pixel from wherever this store holds content at (x+dx, y+dy) —
         // `readPixel` already knows out-of-range means transparent, which is exactly what a
         // frame reaching past this store's own edge should read as.
-        const tile = new Uint8ClampedArray(destRect.width * destRect.height * 4);
+        const tile = new Uint8ClampedArray(destRect.width * destRect.height * channels);
         for (let y = 0; y < destRect.height; y += 1) {
           for (let x = 0; x < destRect.width; x += 1) {
-            const [r, g, b, a] = this.readPixel(destRect.x + x + dx, destRect.y + y + dy);
-            const index = (y * destRect.width + x) * 4;
-            tile[index] = r; tile[index + 1] = g; tile[index + 2] = b; tile[index + 3] = a;
+            const sample = this.readPixel(destRect.x + x + dx, destRect.y + y + dy);
+            const index = (y * destRect.width + x) * channels;
+            for (let c = 0; c < channels; c += 1) tile[index + c] = sample[c]!;
           }
         }
         tiles.set(key(col, row), tile);
       }
     }
-    return new TileStore(width, height, tiles);
+    return new TileStore(width, height, channels, tiles);
   }
 
   /** Bytes held by tiles unique to this store — `seen` lets a caller price several clones
