@@ -256,16 +256,25 @@ export interface RasterLayer {
    * handful of caches that need to know *whether* they changed since a
    * result was last computed from them (docs/master-plan.md §37.6.2).
    *
-   * `swapLayerRegion`'s GIMP-style undo/redo swap used to manufacture a
-   * fresh buffer object on every call — `original.slice()`, an O(layer
-   * area) copy — purely so five independent `WeakMap`s keyed on `pixels`
-   * identity (rendered effects, Smart Object materialisation, opaque
-   * bounds, feathered masks, mask scratch reuse) and `sameSignature`'s own
-   * `===` would see it as changed. Measured at 8.5ms on a 4000×3000 layer,
-   * felt on every undo/redo of a large background layer. This field lets
-   * `swapLayerRegion` write the already-cheap in-place row copy it was
-   * already doing and stop there, while every consumer that used to
-   * compare `pixels` identity compares this number instead.
+   * Five independent `WeakMap`s keyed on `pixels` identity (rendered
+   * effects, Smart Object materialisation, opaque bounds, feathered masks,
+   * mask scratch reuse) and `sameSignature`'s own `===` used to rely on
+   * `swapLayerRegion`'s GIMP-style undo/redo swap manufacturing a fresh
+   * buffer object on every call to see a change. This field replaced that:
+   * every one of those six now reads `pixelsRevision` instead of comparing
+   * `pixels` by identity.
+   *
+   * `swapLayerRegion` still hands back a fresh buffer on every call — not
+   * for those six readers' sake any more, but because `layer-ops.ts`'s
+   * `duplicateLayer` shares this very buffer object with a duplicate
+   * without cloning it, safe only as long as nothing writes through the
+   * shared reference (region-patch.ts's own comment on `swapLayerRegion`
+   * has the incident report; `duplicate-swap-sharing.test.ts` is the
+   * regression test). Writing in place is not available here until the
+   * package tracks *which* buffers are actually shared — real per-tile
+   * copy-on-write (docs/master-plan.md §37.4.4 étape 1, `tile-store.ts`)
+   * gets this right structurally; a hand-audited "shared buffers" registry
+   * would not.
    */
   pixelsRevision: number;
   visible: boolean;
