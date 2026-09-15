@@ -10,7 +10,8 @@ import { duplicateLayer } from "./layer-ops";
 import { appendLayer, flattenRasterLayers } from "./layer-tree";
 import { decodeRasterAsset, encodeRasterAsset, isRasterAsset } from "./raster-asset";
 import { convertLayerToEmbeddedSmartObject } from "./smart-object";
-import type { RasterDocumentState } from "./types";
+import { TileStore } from "./tile-store";
+import type { RasterDocumentState, RasterLayer } from "./types";
 
 const W = 8, H = 6;
 
@@ -21,6 +22,12 @@ const solid = (r: number, g: number, b: number, a = 255) => {
 };
 
 const firstPixel = (pixels: Uint8ClampedArray) => [pixels[0], pixels[1], pixels[2], pixels[3]];
+
+/** Replaces a layer's whole store with a solid colour sized to its own current width/height —
+ *  the fixture-building shape `layer.pixels = solid(...)` used to be before §37.6.3. */
+const setSolid = (layer: RasterLayer, r: number, g: number, b: number, a = 255) => {
+  layer.tiles = TileStore.fromPixels(solid(r, g, b, a), layer.width, layer.height);
+};
 
 describe("raster asset container", () => {
   it("round-trips pixels and their dimensions", () => {
@@ -85,7 +92,7 @@ describe("raster round-trip", () => {
   const parentDocument = async (): Promise<VravioDocument<RasterDocumentState>> => {
     const document = await environment.createEmpty({ width: W, height: H, name: "Parent" });
     const layer = createRasterLayer(W, H, "Red");
-    layer.pixels = solid(255, 0, 0);
+    setSolid(layer, 255, 0, 0);
     documents.update<RasterDocumentState>(document.id, (state) => { appendLayer(state, layer); });
     histories.set(document.id, new HistoryManager({ limit: 20 }));
     return document;
@@ -102,7 +109,7 @@ describe("raster round-trip", () => {
     const child = documents.get<RasterDocumentState>(session.childDocId)!;
 
     expect(child.state.width).toBe(W);
-    expect(firstPixel(child.state.layers[0]!.pixels)).toEqual([255, 0, 0, 255]);
+    expect(firstPixel(child.state.layers[0]!.tiles.toPixels())).toEqual([255, 0, 0, 255]);
     expect(child.name).toBe("Red");
     expect(child.provenance).toMatchObject({ parentDocId: parent.id, writeBack: "replace-asset" });
   });
@@ -112,8 +119,9 @@ describe("raster round-trip", () => {
     const layer = createRasterLayer(W, H, "Small red mark");
     const local = new Uint8ClampedArray(2 * 2 * 4);
     local.set([255, 0, 0, 255], 0);
-    layer.pixels = local;
+    layer.tiles = TileStore.fromPixels(local, 2, 2);
     layer.bounds = { x: 5, y: 3, width: 2, height: 2 };
+    layer.width = 2; layer.height = 2;
     documents.update<RasterDocumentState>(parent.id, (state) => { state.layers = [layer]; });
 
     const extracted = await environment.extractAsset(parent, { kind: "raster-layer", layerId: layer.id }, { forceNew: true });
@@ -127,20 +135,24 @@ describe("raster round-trip", () => {
   it("keeps a compact layer at its document origin after child apply", async () => {
     const parent = await environment.createEmpty({ width: W, height: H, name: "Offset parent" });
     const layer = createRasterLayer(W, H, "Offset mark");
-    layer.pixels = new Uint8ClampedArray(2 * 2 * 4);
-    layer.pixels.set([255, 0, 0, 255], 0);
+    const offsetPixels = new Uint8ClampedArray(2 * 2 * 4);
+    offsetPixels.set([255, 0, 0, 255], 0);
+    layer.tiles = TileStore.fromPixels(offsetPixels, 2, 2);
     layer.bounds = { x: 5, y: 3, width: 2, height: 2 };
     layer.width = 2; layer.height = 2;
     documents.update<RasterDocumentState>(parent.id, (state) => { state.layers = [layer]; });
     const session = await roundtrip.open({ parentDocId: parent.id, target: { kind: "raster-layer", layerId: layer.id }, targetEnv: "raster" });
     const child = documents.get<RasterDocumentState>(session.childDocId)!;
-    child.state.layers[0]!.pixels.set([0, 0, 255, 255], 0);
+    const childLayer = child.state.layers[0]!;
+    const childPixels = childLayer.tiles.toPixels();
+    childPixels.set([0, 0, 255, 255], 0);
+    childLayer.tiles = TileStore.fromPixels(childPixels, childLayer.width, childLayer.height);
     await roundtrip.apply(child.id);
     await environment.whenSettled();
 
     const returned = flattenRasterLayers(documents.get<RasterDocumentState>(parent.id)!.state.layers).find((item) => item.id === layer.id)!;
     expect(returned.bounds).toEqual({ x: 5, y: 3, width: 2, height: 2 });
-    expect(firstPixel(returned.pixels)).toEqual([0, 0, 255, 255]);
+    expect(firstPixel(returned.tiles.toPixels())).toEqual([0, 0, 255, 255]);
   });
 
   it("binds the layer to the asset so the parent and child share one reference", async () => {
@@ -168,18 +180,18 @@ describe("raster round-trip", () => {
 
     expect(session.assetId).toBe(legacy);
     expect(documents.get<RasterDocumentState>(session.childDocId)!.state.width).toBe(W);
-    expect(firstPixel(documents.get<RasterDocumentState>(session.childDocId)!.state.layers[0]!.pixels)).toEqual([255, 0, 0, 255]);
+    expect(firstPixel(documents.get<RasterDocumentState>(session.childDocId)!.state.layers[0]!.tiles.toPixels())).toEqual([255, 0, 0, 255]);
   });
 
   it("sends the child's work back into the parent's layer", async () => {
     const parent = await parentDocument();
     const session = await roundtrip.open({ parentDocId: parent.id, target: { kind: "raster-layer", layerId: topLayer(parent).id }, targetEnv: "raster" });
 
-    documents.update<RasterDocumentState>(session.childDocId, (state) => { state.layers[0]!.pixels = solid(0, 0, 255); });
+    documents.update<RasterDocumentState>(session.childDocId, (state) => { setSolid(state.layers[0]!, 0, 0, 255); });
     await roundtrip.apply(session.childDocId);
     await environment.whenSettled();
 
-    expect(firstPixel(topLayer(documents.get<RasterDocumentState>(parent.id)!).pixels)).toEqual([0, 0, 255, 255]);
+    expect(firstPixel(topLayer(documents.get<RasterDocumentState>(parent.id)!).tiles.toPixels())).toEqual([0, 0, 255, 255]);
     expect(roundtrip.sessionOf(session.childDocId)?.status).toBe("applied");
   });
 
@@ -198,14 +210,14 @@ describe("raster round-trip", () => {
     documents.addAssetRef(parent.id, extracted.assetId);
 
     const session = await roundtrip.open({ parentDocId: parent.id, target: { kind: "raster-layer", layerId: source.id }, targetEnv: "raster" });
-    documents.update<RasterDocumentState>(session.childDocId, (state) => { state.layers[0]!.pixels = solid(0, 0, 255); });
+    documents.update<RasterDocumentState>(session.childDocId, (state) => { setSolid(state.layers[0]!, 0, 0, 255); });
     await roundtrip.apply(session.childDocId);
     await environment.whenSettled();
 
     const instances = flattenRasterLayers(documents.get<RasterDocumentState>(parent.id)!.state.layers).filter((layer) => layer.kind === "smart");
     expect(instances).toHaveLength(2);
     expect(instances.every((layer) => layer.pixelAssetId === extracted.assetId)).toBe(true);
-    expect(instances.map((layer) => firstPixel(layer.pixels))).toEqual([[0, 0, 255, 255], [0, 0, 255, 255]]);
+    expect(instances.map((layer) => firstPixel(layer.tiles.toPixels()))).toEqual([[0, 0, 255, 255], [0, 0, 255, 255]]);
   });
 
   it("does not make the child reload the bytes it just produced", async () => {
@@ -215,7 +227,7 @@ describe("raster round-trip", () => {
     // The child holds a second, hidden layer that the export flattens away.
     // Reloading it from its own export would silently delete that work.
     documents.update<RasterDocumentState>(session.childDocId, (state) => {
-      state.layers[0]!.pixels = solid(0, 0, 255);
+      setSolid(state.layers[0]!, 0, 0, 255);
       const hidden = createRasterLayer(W, H, "Notes");
       hidden.visible = false;
       appendLayer(state, hidden);
@@ -230,7 +242,7 @@ describe("raster round-trip", () => {
     const parent = await parentDocument();
     const session = await roundtrip.open({ parentDocId: parent.id, target: { kind: "raster-layer", layerId: topLayer(parent).id }, targetEnv: "raster" });
 
-    documents.update<RasterDocumentState>(session.childDocId, (state) => { state.layers[0]!.pixels = solid(0, 0, 255); });
+    documents.update<RasterDocumentState>(session.childDocId, (state) => { setSolid(state.layers[0]!, 0, 0, 255); });
     await roundtrip.apply(session.childDocId);
     await environment.whenSettled();
 
@@ -239,17 +251,17 @@ describe("raster round-trip", () => {
 
     // Undo moves the asset head, and the parent hears about it through exactly
     // the same path as the apply did.
-    expect(firstPixel(topLayer(documents.get<RasterDocumentState>(parent.id)!).pixels)).toEqual([255, 0, 0, 255]);
+    expect(firstPixel(topLayer(documents.get<RasterDocumentState>(parent.id)!).tiles.toPixels())).toEqual([255, 0, 0, 255]);
 
     await histories.get(parent.id)!.redo();
     await environment.whenSettled();
-    expect(firstPixel(topLayer(documents.get<RasterDocumentState>(parent.id)!).pixels)).toEqual([0, 0, 255, 255]);
+    expect(firstPixel(topLayer(documents.get<RasterDocumentState>(parent.id)!).tiles.toPixels())).toEqual([0, 0, 255, 255]);
   });
 
   it("leaves the open child alone when the parent undoes", async () => {
     const parent = await parentDocument();
     const session = await roundtrip.open({ parentDocId: parent.id, target: { kind: "raster-layer", layerId: topLayer(parent).id }, targetEnv: "raster" });
-    documents.update<RasterDocumentState>(session.childDocId, (state) => { state.layers[0]!.pixels = solid(0, 0, 255); });
+    documents.update<RasterDocumentState>(session.childDocId, (state) => { setSolid(state.layers[0]!, 0, 0, 255); });
     await roundtrip.apply(session.childDocId);
     await environment.whenSettled();
 
@@ -259,8 +271,8 @@ describe("raster round-trip", () => {
     // An undo in the composition says something about the composition. It is
     // not an instruction to throw away the work still open in another tab, and
     // the user did not press undo there.
-    expect(firstPixel(topLayer(documents.get<RasterDocumentState>(parent.id)!).pixels)).toEqual([255, 0, 0, 255]);
-    expect(firstPixel(documents.get<RasterDocumentState>(session.childDocId)!.state.layers[0]!.pixels)).toEqual([0, 0, 255, 255]);
+    expect(firstPixel(topLayer(documents.get<RasterDocumentState>(parent.id)!).tiles.toPixels())).toEqual([255, 0, 0, 255]);
+    expect(firstPixel(documents.get<RasterDocumentState>(session.childDocId)!.state.layers[0]!.tiles.toPixels())).toEqual([0, 0, 255, 255]);
   });
 
   it("says when the parent no longer shows what the child sent", async () => {
@@ -270,7 +282,7 @@ describe("raster round-trip", () => {
     // Nothing sent yet: there is nothing to be out of step with.
     expect(roundtrip.isOutOfSync(session.childDocId)).toBe(false);
 
-    documents.update<RasterDocumentState>(session.childDocId, (state) => { state.layers[0]!.pixels = solid(0, 0, 255); });
+    documents.update<RasterDocumentState>(session.childDocId, (state) => { setSolid(state.layers[0]!, 0, 0, 255); });
     await roundtrip.apply(session.childDocId);
     await environment.whenSettled();
     expect(roundtrip.isOutOfSync(session.childDocId)).toBe(false);
@@ -288,7 +300,7 @@ describe("raster round-trip", () => {
   it("sends the child's work up again after the parent undid it", async () => {
     const parent = await parentDocument();
     const session = await roundtrip.open({ parentDocId: parent.id, target: { kind: "raster-layer", layerId: topLayer(parent).id }, targetEnv: "raster" });
-    documents.update<RasterDocumentState>(session.childDocId, (state) => { state.layers[0]!.pixels = solid(0, 0, 255); });
+    documents.update<RasterDocumentState>(session.childDocId, (state) => { setSolid(state.layers[0]!, 0, 0, 255); });
     await roundtrip.apply(session.childDocId);
     await histories.get(parent.id)!.undo();
     await environment.whenSettled();
@@ -298,7 +310,7 @@ describe("raster round-trip", () => {
     await roundtrip.apply(session.childDocId);
     await environment.whenSettled();
 
-    expect(firstPixel(topLayer(documents.get<RasterDocumentState>(parent.id)!).pixels)).toEqual([0, 0, 255, 255]);
+    expect(firstPixel(topLayer(documents.get<RasterDocumentState>(parent.id)!).tiles.toPixels())).toEqual([0, 0, 255, 255]);
     expect(roundtrip.isOutOfSync(session.childDocId)).toBe(false);
   });
 
@@ -319,14 +331,14 @@ describe("raster round-trip", () => {
 
     // And the link works again: applying reaches the parent, and the parent's
     // undo still leaves the child alone.
-    documents.update<RasterDocumentState>(childId, (state) => { state.layers[0]!.pixels = solid(0, 0, 255); });
+    documents.update<RasterDocumentState>(childId, (state) => { setSolid(state.layers[0]!, 0, 0, 255); });
     await reloaded.apply(childId);
     await environment.whenSettled();
-    expect(firstPixel(topLayer(documents.get<RasterDocumentState>(parent.id)!).pixels)).toEqual([0, 0, 255, 255]);
+    expect(firstPixel(topLayer(documents.get<RasterDocumentState>(parent.id)!).tiles.toPixels())).toEqual([0, 0, 255, 255]);
 
     await histories.get(parent.id)!.undo();
     await environment.whenSettled();
-    expect(firstPixel(documents.get<RasterDocumentState>(childId)!.state.layers[0]!.pixels)).toEqual([0, 0, 255, 255]);
+    expect(firstPixel(documents.get<RasterDocumentState>(childId)!.state.layers[0]!.tiles.toPixels())).toEqual([0, 0, 255, 255]);
   });
 
   it("does not rebuild a link twice", async () => {
@@ -342,7 +354,7 @@ describe("raster round-trip", () => {
     const session = await roundtrip.open({ parentDocId: parent.id, target: { kind: "raster-layer", layerId: topLayer(parent).id }, targetEnv: "raster", branch: true });
     const originalRevisions = assets.mustGet(session.assetId).revisions.length;
 
-    documents.update<RasterDocumentState>(session.childDocId, (state) => { state.layers[0]!.pixels = solid(0, 255, 0); });
+    documents.update<RasterDocumentState>(session.childDocId, (state) => { setSolid(state.layers[0]!, 0, 255, 0); });
     await roundtrip.apply(session.childDocId);
     await environment.whenSettled();
 
@@ -351,7 +363,7 @@ describe("raster round-trip", () => {
     expect(layer.pixelAssetId).not.toBe(session.assetId);
     expect(layer.smartSource?.assetId ?? layer.pixelAssetId).not.toBe(session.assetId);
     expect(documents.get(parent.id)!.assetRefs.has(session.assetId)).toBe(false);
-    expect(firstPixel(layer.pixels)).toEqual([0, 255, 0, 255]);
+    expect(firstPixel(layer.tiles.toPixels())).toEqual([0, 255, 0, 255]);
   });
 
   it("stops writing back once detached", async () => {
@@ -372,12 +384,12 @@ describe("raster round-trip", () => {
       layer.smartSource = { assetId: session.assetId, pinnedRev: "0", sourceKind: "raster" };
     });
 
-    documents.update<RasterDocumentState>(session.childDocId, (state) => { state.layers[0]!.pixels = solid(0, 0, 255); });
+    documents.update<RasterDocumentState>(session.childDocId, (state) => { setSolid(state.layers[0]!, 0, 0, 255); });
     await roundtrip.apply(session.childDocId);
     await environment.whenSettled();
 
     // Pinning exists so a source can change without moving what depends on it.
-    expect(firstPixel(topLayer(documents.get<RasterDocumentState>(parent.id)!).pixels)).toEqual([255, 0, 0, 255]);
+    expect(firstPixel(topLayer(documents.get<RasterDocumentState>(parent.id)!).tiles.toPixels())).toEqual([255, 0, 0, 255]);
   });
 
   it("places a result of a different size instead of stretching it", async () => {
@@ -387,7 +399,7 @@ describe("raster round-trip", () => {
     // The child was cropped in the other editor.
     documents.update<RasterDocumentState>(session.childDocId, (state) => {
       state.width = 4; state.height = 3;
-      state.layers[0]!.pixels = new Uint8ClampedArray(4 * 3 * 4).fill(255);
+      state.layers[0]!.tiles = TileStore.fromPixels(new Uint8ClampedArray(4 * 3 * 4).fill(255), 4, 3);
     });
     await roundtrip.apply(session.childDocId);
     await environment.whenSettled();
@@ -448,9 +460,9 @@ describe("raster environment on its own", () => {
 
     const document = await environment.createEmpty({ width: W, height: H });
     documents.update<RasterDocumentState>(document.id, (state) => {
-      state.layers[0]!.pixels = solid(255, 0, 0);
+      setSolid(state.layers[0]!, 255, 0, 0);
       const top = createRasterLayer(W, H, "Blue");
-      top.pixels = solid(0, 0, 255);
+      setSolid(top, 0, 0, 255);
       top.opacity = 0.5;
       appendLayer(state, top);
     });

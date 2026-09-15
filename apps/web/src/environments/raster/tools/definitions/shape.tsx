@@ -65,7 +65,8 @@ const shape: RasterToolDefinition<ShapeState> = {
     const before = cloneRasterState(context.document);
     const after = cloneRasterState(context.document);
     const layer = createRasterLayer(context.document.width, context.document.height, shapeLayerName(kind));
-    drawShape(layer.pixels, context.document.width, context.document.height, {
+    const pixels = new Uint8ClampedArray(context.document.width * context.document.height * 4);
+    drawShape(pixels, context.document.width, context.document.height, {
       kind,
       rect,
       cornerRadius: Number(options.cornerRadius ?? 16),
@@ -74,7 +75,7 @@ const shape: RasterToolDefinition<ShapeState> = {
       fill: mode === "stroke" ? null : parseHexColor(String(options.color ?? context.paintColor)),
       stroke: mode === "fill" ? null : parseHexColor(String(options.strokeColor ?? "#ffffff")),
     }, context.selection?.mask);
-    setLayerPixels(layer, layer.pixels, context.document.width, context.document.height);
+    setLayerPixels(layer, pixels, context.document.width, context.document.height);
     appendLayer(after, layer);
     after.activeLayerId = layer.id;
 

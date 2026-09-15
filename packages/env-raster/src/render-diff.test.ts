@@ -1,14 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { appendLayer, changedRenderRegion, createAdjustmentLayer, createRasterDocument, createRasterGroup, createRasterLayer, createRasterLayerMask, layerRenderSignatures, setLayerPixels } from "./index";
+import { TileStore } from "./tile-store";
 import type { RasterDocumentState, RasterLayer } from "./types";
 
 const W = 64, H = 64;
 
 const paint = (layer: RasterLayer, x0: number, y0: number, size: number) => {
+  const pixels = layer.tiles.toPixels();
   for (let y = y0; y < y0 + size; y += 1) for (let x = x0; x < x0 + size; x += 1) {
     const at = (y * W + x) * 4;
-    layer.pixels[at] = 200; layer.pixels[at + 1] = 80; layer.pixels[at + 2] = 60; layer.pixels[at + 3] = 255;
+    pixels[at] = 200; pixels[at + 1] = 80; pixels[at + 2] = 60; pixels[at + 3] = 255;
   }
+  layer.tiles = TileStore.fromPixels(pixels, layer.width, layer.height);
 };
 
 const scene = () => {
@@ -61,9 +64,9 @@ describe("what changed between two renders", () => {
     const moved = createRasterLayer(W, H, "Upper");
     paint(moved, 20, 20, 12);
     // A raw reassignment, the same shape `setLayerPixels` does in production — including the
-    // revision bump `sameSignature` now reads instead of comparing `.pixels` identity directly
+    // revision bump `sameSignature` now reads instead of comparing identity directly
     // (docs/master-plan.md §37.6.2), since this test's whole point is a signature comparison.
-    upper.pixels = moved.pixels;
+    upper.tiles = moved.tiles;
     upper.pixelsRevision += 1;
 
     expect(region(state, before)).toEqual({ x: 20, y: 20, width: 32, height: 32 });
@@ -102,7 +105,7 @@ describe("what changed between two renders", () => {
     const layer = createRasterLayer(W, H, "Trimmed");
     setLayerPixels(layer, strokeBuffer(40, 40, 12), W, H);
     appendLayer(state, layer);
-    expect(layer.pixels.length).toBe(12 * 12 * 4);
+    expect(layer.tiles.width * layer.tiles.height * 4).toBe(12 * 12 * 4);
 
     const before = layerRenderSignatures(state);
     setLayerPixels(layer, strokeBuffer(40, 40, 20), W, H);

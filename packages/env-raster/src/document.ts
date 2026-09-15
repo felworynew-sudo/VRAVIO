@@ -10,7 +10,7 @@ export function createRasterLayer(width: number, height: number, name = "Layer (
   // Created at canvas size: a tool needs somewhere to paint before it knows
   // where the paint will land. What gets stored is trimmed when the edit is
   // committed, which is where the size actually matters.
-  return { id: crypto.randomUUID(), name, bounds: { x: 0, y: 0, width, height }, width, height, pixels: new Uint8ClampedArray(width * height * 4), pixelsRevision: 0, visible: true, opacity: 1, fillOpacity: 1, blendMode: "normal", locked: false, kind: "pixel", effects: {}, parentId: null, orderKey: makeLayerOrderKey(0), clipping: false };
+  return { id: crypto.randomUUID(), name, bounds: { x: 0, y: 0, width, height }, width, height, tiles: TileStore.empty(width, height), pixelsRevision: 0, visible: true, opacity: 1, fillOpacity: 1, blendMode: "normal", locked: false, kind: "pixel", effects: {}, parentId: null, orderKey: makeLayerOrderKey(0), clipping: false };
 }
 
 export function createRasterGroup(width: number, height: number, name = "Group (Группа)"): RasterLayer {
@@ -66,7 +66,9 @@ export function createRasterDocument(width = 1280, height = 720, options: Raster
   const layer = createRasterLayer(width, height, "Layer 1 (Слой 1)");
   if (options.backgroundColor) {
     const color = parseHexColor(options.backgroundColor);
-    for (let index = 0; index < layer.pixels.length; index += 4) { layer.pixels[index] = color.r; layer.pixels[index + 1] = color.g; layer.pixels[index + 2] = color.b; layer.pixels[index + 3] = color.a; }
+    const pixels = new Uint8ClampedArray(width * height * 4);
+    for (let index = 0; index < pixels.length; index += 4) { pixels[index] = color.r; pixels[index + 1] = color.g; pixels[index + 2] = color.b; pixels[index + 3] = color.a; }
+    layer.tiles = TileStore.fromPixels(pixels, width, height);
   }
   return {
     kind: "raster", schemaVersion: 2, width, height, colorSpace: "srgb",
@@ -104,6 +106,25 @@ export function migrateRasterDocumentState(state: RasterDocumentState): RasterDo
     // regardless of how many edits actually produced the pixels on disk, since nothing
     // has read a revision number for this layer yet to compare against.
     if (typeof layer.pixelsRevision !== "number") layer.pixelsRevision = 0;
+    // The layer analogue of the mask reconstruction below — same two cases, same reasoning
+    // (docs/master-plan.md §37.6.3's step 4): a save from before the TileStore migration held a
+    // flat `pixels` field directly; a save from after it, round-tripped through
+    // document-snapshot-store.ts's JSON.stringify/JSON.parse, comes back as `TileStore.toJSON()`'s
+    // plain {width, height, channels, pixels} shape, not a class instance. `layer.bounds` is
+    // already settled by this point (just above), so its width/height are the right frame for a
+    // layer's own bounds-local buffer — never `state.width`/`state.height`, which is a mask's
+    // frame, not a layer's.
+    {
+      const rawLayer = layer as RasterLayer & { pixels?: Uint8ClampedArray };
+      if (!(rawLayer.tiles instanceof TileStore)) {
+        if (rawLayer.pixels) {
+          rawLayer.tiles = TileStore.fromPixels(rawLayer.pixels, layer.bounds.width, layer.bounds.height);
+          delete rawLayer.pixels;
+        } else if (rawLayer.tiles) {
+          rawLayer.tiles = TileStore.fromJSON(rawLayer.tiles as unknown as { width: number; height: number; channels: number; pixels: Uint8ClampedArray });
+        }
+      }
+    }
     if (layer.mask) {
       const mask = layer.mask as RasterLayerMask & { pixels?: Uint8ClampedArray };
       if (!(mask.tiles instanceof TileStore)) {

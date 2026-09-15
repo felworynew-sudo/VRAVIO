@@ -3,7 +3,8 @@ import { renderLayerEffects } from "./effects";
 import { applyAdjustment } from "./adjustments";
 import { applyRasterFilter } from "./filters";
 import { effectiveLayerOpacity, flattenRasterLayers, isLayerEffectivelyVisible, rasterLayerDescendantIds } from "./layer-tree";
-import { layerDocumentPixels } from "./layer-bounds";
+import { layerDocumentPixels, layerPixelsView } from "./layer-bounds";
+import { TileStore } from "./tile-store";
 
 /**
  * Blend modes as integers.
@@ -418,8 +419,14 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
       // Reuse the layer-style renderer on the subtree's already-composited
       // surface. A group effect belongs outside its children, unlike effects
       // on each child, so this is intentionally after the recursive pass.
+      // `TileStore.fromPixels`/its later `.toPixels()` round-trip is pure overhead here —
+      // `rawGroupPixels` is already exactly the flat buffer `renderLayerEffects` will read back
+      // out — but this synthetic wrapper is a fresh object every call regardless (no caching ever
+      // applied to it, tiled or flat), and an isolated group with its own enabled layer style is
+      // rare enough that a real API change to let `renderLayerEffects` take a bare buffer directly
+      // isn't worth it for this one call site.
       const groupSurfaceLayer: RasterLayer = {
-        ...layer, kind: "pixel", parentId: null, pixels: rawGroupPixels,
+        ...layer, kind: "pixel", parentId: null, tiles: TileStore.fromPixels(rawGroupPixels, outWidth, outHeight),
         bounds: { x: 0, y: 0, width: outWidth, height: outHeight }, width: outWidth, height: outHeight,
       };
       const groupPixels = hasRenderableEffect(layer) ? renderLayerEffects(groupSurfaceLayer, outWidth, outHeight) : rawGroupPixels;
@@ -507,7 +514,7 @@ export function compositeRasterRegion(state: RasterDocumentState, region: Raster
     const documentSurface = wholeCanvas || smartSurface;
     const renderedLayer = wholeCanvas
       ? (hasRenderableEffect(layer) ? renderLayerEffects(layer, state.width, state.height) : layerDocumentPixels(layer, state.width, state.height))
-      : smartSurface ? layerDocumentPixels(layer, state.width, state.height) : layer.pixels;
+      : smartSurface ? layerDocumentPixels(layer, state.width, state.height) : layerPixelsView(layer);
     const sourceWidth = documentSurface ? width : layer.bounds.width;
     const sourceOriginX = documentSurface ? 0 : layer.bounds.x;
     const sourceOriginY = documentSurface ? 0 : layer.bounds.y;
@@ -695,7 +702,7 @@ export function layerRenderSignatures(state: RasterDocumentState): LayerRenderSi
     id: layer.id,
     kind: layer.kind,
     pixelsRevision: layer.pixelsRevision,
-    pixels: layer.pixels,
+    pixels: layerPixelsView(layer),
     bounds: layer.bounds,
     maskPixelsRevision: layer.mask?.pixelsRevision ?? null,
     maskEnabled: layer.mask?.enabled ?? false,

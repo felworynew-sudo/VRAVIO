@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import {
-  cloneRasterState, compositeRasterDocument, flattenRasterLayers, layerAccepts, layerDocumentPixels, layerLockReason, layerOpaqueBounds, liftSelection, linkedLayers, meshLayerPixels, meshSelection,
+  cloneRasterState, compositeRasterDocument, flattenRasterLayers, layerAccepts, layerDocumentPixels, layerLockReason, layerOpaqueBounds, layerPixelsView, liftSelection, linkedLayers, meshLayerPixels, meshSelection,
   pickLayerAt, quadLayerPixels, quadSelection, regularMesh, restrictSelectionToContent, rotateLayerPixels, rotateSelection,
   rotatedDestinationBounds, scaleLayerPixels, scaleSelection, setLayerPixels, stampFloating, transformLayerPixels, transformSmartObject, translateLayerPixels, translateSelection, translateSmartObject, unionRect, WARP_GRID, warpPresetMesh,
   type WarpPresetId,
@@ -512,7 +512,7 @@ function beginMoveDrag(context: ToolContext<MoveState>, pointer: ToolPointer, pe
   // empty layer: retain its own local opaque bounds so the active layer can be
   // dragged back in and its stored pixels never enter a clipping path.
   const storedBounds = !pending && !state.selection && layer.kind !== "text"
-    ? layerOpaqueBounds(layer.pixels, layer.bounds.width, layer.bounds.height, layer.pixelsRevision)
+    ? layerOpaqueBounds(layerPixelsView(layer), layer.bounds.width, layer.bounds.height, layer.pixelsRevision)
     : null;
   const freshOpaqueBounds = visibleBounds ?? (storedBounds
     ? { ...storedBounds, x: layer.bounds.x + storedBounds.x, y: layer.bounds.y + storedBounds.y }
@@ -583,7 +583,7 @@ function beginMoveDrag(context: ToolContext<MoveState>, pointer: ToolPointer, pe
       ...(origin ? { fromOrigin: true } : {}),
       ...(linkedBase ? { linkedBase } : {}),
       ...(float ? { float } : {}),
-      ...(liveEligible ? { sourceBounds: { ...layer.bounds }, livePixels: layer.pixels } : {}),
+      ...(liveEligible ? { sourceBounds: { ...layer.bounds }, livePixels: layerPixelsView(layer) } : {}),
       // A scale (or rotate) left the session in "described, not resampled" mode — see
       // `PendingTransform.live`'s own doc comment. Carried through so this move-drag can shift
       // that description's own target rect instead of quietly reverting to `basePixels` at its

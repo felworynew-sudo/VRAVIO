@@ -70,7 +70,7 @@ function commitDraft(context: ToolContext<TextState>, draft: Draft): void {
   const before = cloneRasterState(context.document);
   const existing = draft.layerId ? context.document.layers.find((item) => item.id === draft.layerId) : null;
   const layer: RasterLayer = existing
-    ? { ...existing, pixels: existing.pixels.slice(), ...(existing.text ? { text: { ...existing.text } } : {}) }
+    ? { ...existing, tiles: existing.tiles.clone(), ...(existing.text ? { text: { ...existing.text } } : {}) }
     : createRasterLayer(context.document.width, context.document.height, draft.value.slice(0, 28));
   const options = context.options;
   const fontSize = existing?.text?.fontSize ?? Number(options.fontSize ?? 48);

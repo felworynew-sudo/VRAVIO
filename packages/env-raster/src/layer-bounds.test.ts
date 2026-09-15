@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createRasterLayer } from "./document";
 import { layerDocumentPixels, setLayerPixels } from "./layer-bounds";
 import { convertLayerToEmbeddedSmartObject, transformSmartObject } from "./smart-object";
+import { TileStore } from "./tile-store";
 
 const W = 40, H = 40;
 
@@ -18,7 +19,8 @@ function withSquare(x: number, y: number, size: number): Uint8ClampedArray {
 /** docs/master-plan.md §32.4's invariant, CLAUDE.md §4: the pair a layer's own buffer
  *  and its recorded bounds must never disagree on, whichever path set them. */
 function expectBoundsMatchBuffer(layer: ReturnType<typeof createRasterLayer>): void {
-  expect(layer.pixels.length).toBe(layer.bounds.width * layer.bounds.height * 4);
+  expect(layer.tiles.width).toBe(layer.bounds.width);
+  expect(layer.tiles.height).toBe(layer.bounds.height);
   expect(layer.width).toBe(layer.bounds.width);
   expect(layer.height).toBe(layer.bounds.height);
 }
@@ -45,10 +47,10 @@ describe("setLayerPixels' §32.6 add-only fast path", () => {
     // Both squares actually survived the union, not just the bounds rectangle: the
     // first stroke's own pixel and the new stroke's own pixel both read back correctly
     // from the cropped buffer at their respective offsets within it.
-    const firstLocal = ((5 - 5) * layer.bounds.width + (5 - 5)) * 4;
-    expect([layer.pixels[firstLocal], layer.pixels[firstLocal + 1], layer.pixels[firstLocal + 2]]).toEqual([200, 40, 40]);
-    const secondLocal = ((20 - 5) * layer.bounds.width + (20 - 5)) * 4;
-    expect([layer.pixels[secondLocal], layer.pixels[secondLocal + 1], layer.pixels[secondLocal + 2]]).toEqual([40, 200, 40]);
+    const firstPixel = layer.tiles.readPixel(5 - 5, 5 - 5);
+    expect([firstPixel[0], firstPixel[1], firstPixel[2]]).toEqual([200, 40, 40]);
+    const secondPixel = layer.tiles.readPixel(20 - 5, 20 - 5);
+    expect([secondPixel[0], secondPixel[1], secondPixel[2]]).toEqual([40, 200, 40]);
   });
 
   it("a hinted edit outside the document clamps to the document instead of producing an invalid buffer", () => {
@@ -98,10 +100,11 @@ describe("layerDocumentPixels outside the canvas", () => {
     const layer = createRasterLayer(3, 2, "Retained crop pixels");
     layer.bounds = { x: -1, y: -1, width: 3, height: 2 };
     layer.width = 3; layer.height = 2;
-    layer.pixels.fill(0);
+    const pixels = new Uint8ClampedArray(3 * 2 * 4);
     // Local (1,1) lands at document (0,0); local (0,0) remains off-canvas.
-    layer.pixels[(1 * 3 + 1) * 4 + 3] = 255;
-    layer.pixels[3] = 255;
+    pixels[(1 * 3 + 1) * 4 + 3] = 255;
+    pixels[3] = 255;
+    layer.tiles = TileStore.fromPixels(pixels, 3, 2);
 
     const canvas = layerDocumentPixels(layer, 2, 2);
     expect(canvas[3]).toBe(255);
@@ -112,7 +115,7 @@ describe("layerDocumentPixels outside the canvas", () => {
 describe("Smart Object projection", () => {
   it("bilinearly resamples a fractional Smart Object scale without transparent edge fringes", () => {
     const layer = createRasterLayer(2, 1, "Two colours");
-    layer.pixels.set([255, 0, 0, 255, 0, 0, 255, 255]);
+    layer.tiles = TileStore.fromPixels(new Uint8ClampedArray([255, 0, 0, 255, 0, 0, 255, 255]), 2, 1);
     convertLayerToEmbeddedSmartObject(layer, "asset-colours");
     transformSmartObject(layer, { x: 0, y: 0, width: 2, height: 1 }, { x: 0, y: 0, width: 3, height: 1 }, 0);
 
@@ -126,7 +129,7 @@ describe("Smart Object projection", () => {
 
   it("keeps projections for two placements of one immutable source independently cached", () => {
     const source = createRasterLayer(1, 1, "Source");
-    source.pixels.set([10, 20, 30, 255]);
+    source.tiles = TileStore.fromPixels(new Uint8ClampedArray([10, 20, 30, 255]), 1, 1);
     convertLayerToEmbeddedSmartObject(source, "asset-shared");
     const first = layerDocumentPixels(source, 4, 1);
     transformSmartObject(source, { x: 0, y: 0, width: 1, height: 1 }, { x: 2, y: 0, width: 1, height: 1 }, 0);

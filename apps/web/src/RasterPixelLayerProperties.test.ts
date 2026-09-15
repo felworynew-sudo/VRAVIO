@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { RasterLayer } from "@vravio/env-raster";
+import { TileStore, type RasterLayer } from "@vravio/env-raster";
 import { documentMaskFromLayerMask } from "./RasterPixelLayerProperties";
 
 const layerAt = (x: number, y: number, width: number, height: number): RasterLayer => ({
   id: "layer", name: "Layer", bounds: { x, y, width, height }, width, height,
-  pixels: new Uint8ClampedArray(width * height * 4), pixelsRevision: 0, visible: true, opacity: 1, fillOpacity: 1,
+  tiles: TileStore.empty(width, height), pixelsRevision: 0, visible: true, opacity: 1, fillOpacity: 1,
   blendMode: "normal", locked: false, kind: "pixel", effects: {}, parentId: null, orderKey: "0", clipping: false,
 });
 

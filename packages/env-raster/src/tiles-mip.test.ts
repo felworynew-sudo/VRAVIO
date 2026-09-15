@@ -7,11 +7,12 @@ const W = 512, H = 512;
 const scene = (): RasterDocumentState => {
   const state = createRasterDocument(W, H);
   const layer = createRasterLayer(W, H, "Block");
+  const pixels = layer.tiles.toPixels();
   for (let y = 64; y < 320; y += 1) for (let x = 64; x < 320; x += 1) {
     const at = (y * W + x) * 4;
-    layer.pixels[at] = 200; layer.pixels[at + 1] = 90; layer.pixels[at + 2] = 40; layer.pixels[at + 3] = 255;
+    pixels[at] = 200; pixels[at + 1] = 90; pixels[at + 2] = 40; pixels[at + 3] = 255;
   }
-  setLayerPixels(layer, layer.pixels, W, H);
+  setLayerPixels(layer, pixels, W, H);
   appendLayer(state, layer);
   return state;
 };
@@ -100,6 +101,12 @@ describe("pricing pixel memory once per buffer", () => {
     const seen: ArrayBufferView[] = [];
     visitPixelBuffers(state, (buffer) => seen.push(buffer));
 
-    expect(seen).toHaveLength(state.layers.length);
+    // One visit per *tile*, not per layer (docs/master-plan.md §37.6.3) — a layer's tiles
+    // partition its content with no overlap, so the total bytes visited must still equal the
+    // sum of every layer's own buffer size exactly, however many tile-sized pieces that comes in.
+    expect(seen.length).toBeGreaterThan(0);
+    const totalBytes = seen.reduce((sum, buffer) => sum + buffer.byteLength, 0);
+    const expectedBytes = state.layers.reduce((sum, layer) => sum + layer.width * layer.height * 4, 0);
+    expect(totalBytes).toBe(expectedBytes);
   });
 });

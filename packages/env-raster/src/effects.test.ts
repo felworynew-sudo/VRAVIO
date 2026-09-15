@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { appendLayer, compositeRasterDocument, compositeRasterRegion, createRasterDocument, createRasterLayer, renderLayerEffects } from "./index";
+import { layerPixelsView } from "./layer-bounds";
+import { TileStore } from "./tile-store";
 import type { RasterLayer, RasterLayerEffects } from "./types";
 
 const W = 40, H = 40;
@@ -7,10 +9,12 @@ const W = 40, H = 40;
 /** An opaque square in the middle of a transparent layer. */
 function squareLayer(): RasterLayer {
   const layer = createRasterLayer(W, H, "Shape");
+  const pixels = new Uint8ClampedArray(W * H * 4);
   for (let y = 12; y < 28; y += 1) for (let x = 12; x < 28; x += 1) {
     const index = (y * W + x) * 4;
-    layer.pixels[index] = 180; layer.pixels[index + 1] = 120; layer.pixels[index + 2] = 90; layer.pixels[index + 3] = 255;
+    pixels[index] = 180; pixels[index + 1] = 120; pixels[index + 2] = 90; pixels[index + 3] = 255;
   }
+  layer.tiles = TileStore.fromPixels(pixels, W, H);
   return layer;
 }
 
@@ -30,17 +34,17 @@ describe("layer effects", () => {
 
     // Not merely equal: allocating a copy per layer per tile is the cost this
     // shortcut exists to avoid.
-    expect(renderLayerEffects(layer, W, H)).toBe(layer.pixels);
-    expect(render({ dropShadow: { enabled: false, color: "#000000", opacity: 1, offsetX: 4, offsetY: 4 } }, layer)).toBe(layer.pixels);
+    expect(renderLayerEffects(layer, W, H)).toBe(layerPixelsView(layer));
+    expect(render({ dropShadow: { enabled: false, color: "#000000", opacity: 1, offsetX: 4, offsetY: 4 } }, layer)).toBe(layerPixelsView(layer));
   });
 
   it("never writes into the source buffer", () => {
     const layer = squareLayer();
-    const before = layer.pixels.slice();
+    const before = layer.tiles.toPixels();
 
     render({ dropShadow: { enabled: true, color: "#000000", opacity: 1, offsetX: 4, offsetY: 4 } }, layer);
 
-    expect([...layer.pixels]).toEqual([...before]);
+    expect([...layer.tiles.toPixels()]).toEqual([...before]);
   });
 
   it("casts a drop shadow on the offset side and leaves the other side clear", () => {
@@ -125,15 +129,15 @@ describe("layer effects cache", () => {
     layer.effects = shadow(4);
     const first = renderLayerEffects(layer, W, H);
 
-    const moved = createRasterLayer(W, H, "Moved");
+    const movedPixels = new Uint8ClampedArray(W * H * 4);
     for (let y = 2; y < 8; y += 1) for (let x = 2; x < 8; x += 1) {
       const index = (y * W + x) * 4;
-      moved.pixels[index + 3] = 255;
+      movedPixels[index + 3] = 255;
     }
     // The raw reassignment setLayerPixels does in production, including the
     // revision bump renderLayerEffects's cache now keys on instead of pixels
     // identity (docs/master-plan.md §37.6.2).
-    layer.pixels = moved.pixels;
+    layer.tiles = TileStore.fromPixels(movedPixels, W, H);
     layer.pixelsRevision += 1;
     const second = renderLayerEffects(layer, W, H);
 
@@ -172,7 +176,7 @@ describe("layer effects on a layer stored in its own bounds", () => {
     for (let index = 0; index < size * size; index += 1) {
       pixels[index * 4] = 180; pixels[index * 4 + 1] = 120; pixels[index * 4 + 2] = 90; pixels[index * 4 + 3] = 255;
     }
-    layer.pixels = pixels;
+    layer.tiles = TileStore.fromPixels(pixels, size, size);
     layer.bounds = { x: 12, y: 12, width: size, height: size };
     layer.width = size; layer.height = size;
     return layer;
@@ -212,9 +216,13 @@ describe("Glass backdrop effect", () => {
   function backdropDocument(luminance: number) {
     const document = createRasterDocument(9, 1, { backgroundColor: "#000000" });
     // A single white impulse makes any blur at the centre unambiguous.
-    document.layers[0]!.pixels.set([255, 255, 255, 255], 2 * 4);
+    const basePixels = document.layers[0]!.tiles.toPixels();
+    basePixels.set([255, 255, 255, 255], 2 * 4);
+    document.layers[0]!.tiles = TileStore.fromPixels(basePixels, 9, 1);
     const glass = createRasterLayer(9, 1, "Glass");
-    glass.pixels.set([luminance, luminance, luminance, 255], 4 * 4);
+    const glassPixels = glass.tiles.toPixels();
+    glassPixels.set([luminance, luminance, luminance, 255], 4 * 4);
+    glass.tiles = TileStore.fromPixels(glassPixels, 9, 1);
     glass.effects = { glass: { enabled: true, blur: 6, tintOpacity: 0, invertLuminance: false } };
     appendLayer(document, glass);
     return document;

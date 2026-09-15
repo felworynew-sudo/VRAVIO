@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { createLiquifyState, isLiquifyIdentity, liquifyFreeze, liquifyPuckerBloat, liquifyReconstruct, liquifySmooth, liquifyTwirl, liquifyWarp, renderLiquify, type LiquifyState, type LiquifyTool, type RasterLayer } from "@vravio/env-raster";
+import { createLiquifyState, isLiquifyIdentity, layerPixelsView, liquifyFreeze, liquifyPuckerBloat, liquifyReconstruct, liquifySmooth, liquifyTwirl, liquifyWarp, renderLiquify, type LiquifyState, type LiquifyTool, type RasterLayer } from "@vravio/env-raster";
 import { text } from "./i18n";
 import type { Language } from "./store";
 
@@ -33,13 +33,14 @@ export function LiquifyDialog({ layer, onApply, onClose, language }: { layer: Ra
   toolRef.current = tool;
   const cursorRef = useRef<HTMLDivElement>(null);
   const proxyPixels = useMemo(() => {
-    if (displayWidth === layer.width && displayHeight === layer.height) return layer.pixels;
+    const source0 = layerPixelsView(layer);
+    if (displayWidth === layer.width && displayHeight === layer.height) return source0;
     const source = document.createElement("canvas"), target = document.createElement("canvas");
     source.width = layer.width; source.height = layer.height; target.width = displayWidth; target.height = displayHeight;
-    source.getContext("2d")!.putImageData(new ImageData(layer.pixels as Uint8ClampedArray<ArrayBuffer>, layer.width, layer.height), 0, 0);
+    source.getContext("2d")!.putImageData(new ImageData(source0 as Uint8ClampedArray<ArrayBuffer>, layer.width, layer.height), 0, 0);
     const context = target.getContext("2d")!; context.imageSmoothingEnabled = true; context.imageSmoothingQuality = "high"; context.drawImage(source, 0, 0, displayWidth, displayHeight);
     return context.getImageData(0, 0, displayWidth, displayHeight).data;
-  }, [displayHeight, displayWidth, layer.height, layer.pixels, layer.width]);
+  }, [displayHeight, displayWidth, layer, layer.height, layer.pixelsRevision, layer.width]);
 
   useEffect(() => { stateRef.current = createLiquifyState(displayWidth, displayHeight); setVersion((value) => value + 1); }, [displayHeight, displayWidth, layer.id]);
 
@@ -167,7 +168,7 @@ export function LiquifyDialog({ layer, onApply, onClose, language }: { layer: Ra
   const restoreAll = () => { stateRef.current = createLiquifyState(displayWidth, displayHeight); setVersion((value) => value + 1); };
   const apply = () => {
     if (isLiquifyIdentity(stateRef.current)) { onClose(); return; }
-    onApply(renderLiquify(layer.pixels, layer.width, layer.height, stateRef.current), "Liquify (Пластика)");
+    onApply(renderLiquify(layerPixelsView(layer), layer.width, layer.height, stateRef.current), "Liquify (Пластика)");
     onClose();
   };
 

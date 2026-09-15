@@ -32,15 +32,22 @@ function fillPattern(pixels: Uint8ClampedArray, seed: number): void {
   }
 }
 
+/** Builds a `size`×`size` pattern via `fillPattern` and wraps it as a fresh `TileStore`. */
+function patternTiles(seed: number): TileStore {
+  const pixels = new Uint8ClampedArray(size * size * 4);
+  fillPattern(pixels, seed);
+  return TileStore.fromPixels(pixels, size, size);
+}
+
 function scene(mutate?: (state: RasterDocumentState) => void): RasterDocumentState {
   const state = createRasterDocument(size, size);
-  fillPattern(state.layers[0]!.pixels, 7);
+  state.layers[0]!.tiles = patternTiles(7);
   const middle = createRasterLayer(size, size, "Middle");
-  fillPattern(middle.pixels, 31);
+  middle.tiles = patternTiles(31);
   middle.opacity = 0.75;
   appendLayer(state, middle);
   const top = createRasterLayer(size, size, "Top");
-  fillPattern(top.pixels, 97);
+  top.tiles = patternTiles(97);
   appendLayer(state, top);
   mutate?.(state);
   return state;
@@ -142,12 +149,13 @@ describe("composite output is stable", () => {
 
   it("renders Dissolve as deterministic binary coverage across tile boundaries", () => {
     const state = createRasterDocument(size, size);
-    for (let index = 0; index < state.layers[0]!.pixels.length; index += 4) {
-      state.layers[0]!.pixels[index + 2] = 255;
-      state.layers[0]!.pixels[index + 3] = 255;
-    }
+    const basePixels = new Uint8ClampedArray(size * size * 4);
+    for (let index = 0; index < basePixels.length; index += 4) { basePixels[index + 2] = 255; basePixels[index + 3] = 255; }
+    state.layers[0]!.tiles = TileStore.fromPixels(basePixels, size, size);
     const top = createRasterLayer(size, size, "Dissolve");
-    for (let index = 0; index < top.pixels.length; index += 4) { top.pixels[index] = 255; top.pixels[index + 3] = 255; }
+    const topPixels = new Uint8ClampedArray(size * size * 4);
+    for (let index = 0; index < topPixels.length; index += 4) { topPixels[index] = 255; topPixels[index + 3] = 255; }
+    top.tiles = TileStore.fromPixels(topPixels, size, size);
     top.opacity = 0.5;
     top.blendMode = "dissolve";
     appendLayer(state, top);
@@ -170,7 +178,9 @@ describe("composite output is stable", () => {
   it("applies layer-mask feather non-destructively at composite time", () => {
     const state = createRasterDocument(11, 1);
     const top = createRasterLayer(11, 1, "Masked red");
-    for (let index = 0; index < top.pixels.length; index += 4) { top.pixels[index] = 255; top.pixels[index + 3] = 255; }
+    const topPixels = new Uint8ClampedArray(11 * 1 * 4);
+    for (let index = 0; index < topPixels.length; index += 4) { topPixels[index] = 255; topPixels[index + 3] = 255; }
+    top.tiles = TileStore.fromPixels(topPixels, 11, 1);
     const mask = createRasterLayerMask(11, 1, false);
     mask.tiles.writeLocalRegion({ x: 5, y: 0, width: 1, height: 1 }, new Uint8ClampedArray([255]));
     mask.feather = 2;
@@ -195,9 +205,9 @@ describe("composite output is stable", () => {
       group.opacity = 0.5;
       appendLayer(state, group);
       const red = createRasterLayer(1, 1, "Red");
-      red.parentId = group.id; red.pixels.set([255, 0, 0, 255]); red.opacity = 0.5;
+      red.parentId = group.id; red.tiles = TileStore.fromPixels(new Uint8ClampedArray([255, 0, 0, 255]), 1, 1); red.opacity = 0.5;
       const blue = createRasterLayer(1, 1, "Blue");
-      blue.parentId = group.id; blue.pixels.set([0, 0, 255, 255]); blue.opacity = 0.5;
+      blue.parentId = group.id; blue.tiles = TileStore.fromPixels(new Uint8ClampedArray([0, 0, 255, 255]), 1, 1); blue.opacity = 0.5;
       state.layers.push(red, blue);
       return compositeRasterRegion(state, { x: 0, y: 0, width: 1, height: 1 });
     };
@@ -212,7 +222,7 @@ describe("composite output is stable", () => {
     const state = createRasterDocument(3, 1);
     state.layers = [];
     const backdrop = createRasterLayer(3, 1, "Backdrop");
-    backdrop.pixels.set([100, 200, 50, 255], 0);
+    backdrop.tiles = TileStore.fromPixels(new Uint8ClampedArray([100, 200, 50, 255, 0, 0, 0, 0, 0, 0, 0, 0]), 3, 1);
     state.layers.push(backdrop);
     const group = createRasterGroup(3, 1, "Group");
     group.groupMode = "isolated";
@@ -221,7 +231,7 @@ describe("composite output is stable", () => {
     appendLayer(state, group);
     const child = createRasterLayer(3, 1, "Child");
     child.parentId = group.id;
-    child.pixels.set([200, 100, 200, 255], 0);
+    child.tiles = TileStore.fromPixels(new Uint8ClampedArray([200, 100, 200, 255, 0, 0, 0, 0, 0, 0, 0, 0]), 3, 1);
     state.layers.push(child);
 
     const result = compositeRasterRegion(state, { x: 0, y: 0, width: 3, height: 1 });
@@ -236,7 +246,7 @@ describe("composite output is stable", () => {
     const state = createRasterDocument(2, 1);
     state.layers = [];
     const base = createRasterLayer(2, 1, "Base");
-    base.pixels.set([255, 255, 255, 255], 0);
+    base.tiles = TileStore.fromPixels(new Uint8ClampedArray([255, 255, 255, 255, 0, 0, 0, 0]), 2, 1);
     state.layers.push(base);
     const group = createRasterGroup(2, 1, "Clipped group");
     group.groupMode = "isolated";
@@ -244,7 +254,7 @@ describe("composite output is stable", () => {
     appendLayer(state, group);
     const child = createRasterLayer(2, 1, "Blue child");
     child.parentId = group.id;
-    child.pixels.set([0, 0, 255, 255], 4);
+    child.tiles = TileStore.fromPixels(new Uint8ClampedArray([0, 0, 0, 0, 0, 0, 255, 255]), 2, 1);
     state.layers.push(child);
 
     const result = compositeRasterRegion(state, { x: 0, y: 0, width: 2, height: 1 });
@@ -269,17 +279,21 @@ describe("compositing a large region in pieces", () => {
 
   const largeScene = (): RasterDocumentState => {
     const state = createRasterDocument(LARGE, LARGE);
-    fillPattern(state.layers[0]!.pixels, 3);
+    const basePixels = new Uint8ClampedArray(LARGE * LARGE * 4);
+    fillPattern(basePixels, 3);
+    state.layers[0]!.tiles = TileStore.fromPixels(basePixels, LARGE, LARGE);
     for (let index = 0; index < 4; index += 1) {
       const layer = createRasterLayer(LARGE, LARGE, `Patch ${index}`);
       // Content in one corner each, so most layers miss most pieces — the case
       // subdividing exists to exploit.
       const originX = (index % 2) * 300, originY = Math.floor(index / 2) * 300;
+      const pixels = new Uint8ClampedArray(LARGE * LARGE * 4);
       for (let y = originY; y < originY + 260; y += 1) for (let x = originX; x < originX + 260; x += 1) {
         const at = (y * LARGE + x) * 4;
-        layer.pixels[at] = 40 * index; layer.pixels[at + 1] = 200 - 30 * index; layer.pixels[at + 2] = 90;
-        layer.pixels[at + 3] = 120 + index * 20;
+        pixels[at] = 40 * index; pixels[at + 1] = 200 - 30 * index; pixels[at + 2] = 90;
+        pixels[at + 3] = 120 + index * 20;
       }
+      layer.tiles = TileStore.fromPixels(pixels, LARGE, LARGE);
       layer.blendMode = (["multiply", "screen", "overlay", "normal"] as const)[index]!;
       layer.opacity = 0.8;
       appendLayer(state, layer);
@@ -319,11 +333,13 @@ describe("a layer is read with its own stride", () => {
     const canvasSized = createRasterDocument(48, 48);
     for (const state of [trimmed, canvasSized]) {
       const layer = createRasterLayer(48, 48, "Block");
+      const pixels = new Uint8ClampedArray(48 * 48 * 4);
       for (let y = 12; y < 30; y += 1) for (let x = 8; x < 26; x += 1) {
         const at = (y * 48 + x) * 4;
-        layer.pixels[at] = 220; layer.pixels[at + 1] = 60; layer.pixels[at + 2] = 90; layer.pixels[at + 3] = 255;
+        pixels[at] = 220; pixels[at + 1] = 60; pixels[at + 2] = 90; pixels[at + 3] = 255;
       }
-      if (state === trimmed) setLayerPixels(layer, layer.pixels, 48, 48);
+      if (state === trimmed) setLayerPixels(layer, pixels, 48, 48);
+      else layer.tiles = TileStore.fromPixels(pixels, 48, 48);
       appendLayer(state, layer);
     }
 
@@ -337,13 +353,14 @@ describe("a layer is read with its own stride", () => {
   it("keeps bounds and buffer in step when a working buffer is swapped in", () => {
     const state = createRasterDocument(32, 32);
     const layer = createRasterLayer(32, 32, "Block");
-    for (let index = 3; index < layer.pixels.length; index += 4) layer.pixels[index] = 255;
-    setLayerPixels(layer, layer.pixels, 32, 32);
+    const pixels = new Uint8ClampedArray(32 * 32 * 4);
+    for (let index = 3; index < pixels.length; index += 4) pixels[index] = 255;
+    setLayerPixels(layer, pixels, 32, 32);
     appendLayer(state, layer);
 
     // Whatever a caller substitutes, the two have to describe the same buffer.
     for (const item of state.layers) {
-      expect(item.pixels.length).toBe(item.bounds.width * item.bounds.height * 4);
+      expect(item.tiles.width * item.tiles.height * 4).toBe(item.bounds.width * item.bounds.height * 4);
       expect(item.width).toBe(item.bounds.width);
       expect(item.height).toBe(item.bounds.height);
     }

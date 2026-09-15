@@ -3,18 +3,19 @@ import { createRasterLayer } from "./document";
 import { duplicateLayer, layerAccepts, layerLockReason } from "./layer-ops";
 import { compositeRasterDocument } from "./render";
 import { convertLayerToEmbeddedSmartObject, isEditableEmbeddedSmartObject, makeIndependentEmbeddedSmartObjectCopy, replaceSmartObjectSourcePixels, smartObjectSourceMode, transformSmartObject, translateSmartObject } from "./smart-object";
+import { TileStore } from "./tile-store";
 import type { RasterDocumentState } from "./types";
 
 describe("embedded Smart Objects", () => {
   it("converts a pixel layer into a source-backed embedded object", () => {
     const layer = createRasterLayer(2, 2, "Mark");
-    layer.pixels[3] = 255;
+    const pixels = layer.tiles.toPixels(); pixels[3] = 255; layer.tiles = TileStore.fromPixels(pixels, 2, 2);
 
     expect(convertLayerToEmbeddedSmartObject(layer, "asset-mark")).toBe(true);
     expect(layer.kind).toBe("smart");
     expect(layer.pixelAssetId).toBe("asset-mark");
     expect(layer.smartSource).toEqual({ assetId: "asset-mark", pinnedRev: null, sourceKind: "raster", mode: "embedded" });
-    expect(layer.pixels[3]).toBe(255);
+    expect(layer.tiles.readPixel(0, 0)[3]).toBe(255);
     expect(isEditableEmbeddedSmartObject(layer)).toBe(true);
     expect(smartObjectSourceMode(layer.smartSource)).toBe("embedded");
   });
@@ -47,15 +48,17 @@ describe("embedded Smart Objects", () => {
 
   it("changes placement rather than resampling source pixels on transforms", () => {
     const layer = createRasterLayer(2, 2, "Mark");
-    for (let pixel = 0; pixel < layer.pixels.length; pixel += 4) { layer.pixels[pixel] = 240; layer.pixels[pixel + 3] = 255; }
-    const source = layer.pixels.slice();
+    const initial = new Uint8ClampedArray(2 * 2 * 4);
+    for (let pixel = 0; pixel < initial.length; pixel += 4) { initial[pixel] = 240; initial[pixel + 3] = 255; }
+    layer.tiles = TileStore.fromPixels(initial, 2, 2);
+    const source = layer.tiles.toPixels();
     convertLayerToEmbeddedSmartObject(layer, "asset-mark");
 
     expect(transformSmartObject(layer, { x: 0, y: 0, width: 2, height: 2 }, { x: 1, y: 1, width: 4, height: 4 }, 0)).toBe(true);
-    expect(layer.pixels).toEqual(source);
+    expect(layer.tiles.toPixels()).toEqual(source);
     expect(layer.bounds).toEqual({ x: 1, y: 1, width: 4, height: 4 });
     expect(translateSmartObject(layer, 1, 0)).toBe(true);
-    expect(layer.pixels).toEqual(source);
+    expect(layer.tiles.toPixels()).toEqual(source);
 
     const state: RasterDocumentState = { kind: "raster", schemaVersion: 2, width: 8, height: 8, colorSpace: "srgb", resolution: 72, resolutionUnit: "ppi", bitDepth: 8, pixelAspectRatio: 1, backgroundColor: null, layers: [layer], activeLayerId: layer.id, selection: null, guides: [] };
     const composited = compositeRasterDocument(state);

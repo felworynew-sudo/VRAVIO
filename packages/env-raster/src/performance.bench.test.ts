@@ -4,7 +4,7 @@ import { createRasterDocument, createRasterLayer } from "./document";
 import { appendLayer } from "./layer-tree";
 import { translateLayerPixels, translateSelection } from "./transform";
 import { combineSelections, createEllipseSelection } from "./selection";
-import { accumulateUniquePixelBytes, layerDocumentPixels, setLayerPixels } from "./layer-bounds";
+import { accumulateUniquePixelBytes, layerDocumentPixels, layerPixelsView, setLayerPixels } from "./layer-bounds";
 import { duplicateLayer } from "./layer-ops";
 import { TileStore } from "./tile-store";
 import { RasterTileCache } from "./tiles";
@@ -91,7 +91,7 @@ function realisticDocument(layerCount = 21): RasterDocumentState {
   const state = createRasterDocument(1920, 1080);
   for (let index = 1; index < layerCount; index += 1) {
     const layer = createRasterLayer(state.width, state.height, `Layer ${index}`);
-    const painted = new Uint8ClampedArray(layer.pixels.length);
+    const painted = new Uint8ClampedArray(layer.width * layer.height * 4);
     const boxWidth = 180 + (index * 37) % 220, boxHeight = 140 + (index * 53) % 200;
     const originX = (index * 227) % Math.max(1, state.width - boxWidth);
     const originY = (index * 311) % Math.max(1, state.height - boxHeight);
@@ -167,7 +167,7 @@ describe("performance floor (stage 0 of the catalogue migration)", () => {
 
   it("records p50/p95 from a brush pointer sample to its painted preview", () => {
     const state = realisticDocument(1);
-    const before = state.layers[0]!.pixels;
+    const before = layerPixelsView(state.layers[0]!);
     let sample = 0;
     const latency = latencyPercentiles(() => {
       // A fresh per-gesture coverage/output pair mirrors the buffers a brush
@@ -270,7 +270,7 @@ describe("performance floor (stage 0 of the catalogue migration)", () => {
   it("trims a full-canvas edit down to its painted bounds", () => {
     const state = realisticDocument(2);
     const layer = state.layers[1] as RasterLayer;
-    const painted = new Uint8ClampedArray(layer.pixels.length);
+    const painted = new Uint8ClampedArray(layer.width * layer.height * 4);
     // A small stroke on an otherwise transparent canvas-sized buffer — what a
     // single brush dab hands to setLayerPixels before it gets trimmed to the
     // part that actually has something in it.

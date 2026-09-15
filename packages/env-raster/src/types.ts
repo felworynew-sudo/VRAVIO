@@ -260,36 +260,41 @@ export interface RasterLayer {
   bounds: RasterRect;
   width: number;
   height: number;
-  /** Sized to `bounds`, addressed in bounds-local coordinates. Smart Objects
-   * are the deliberate exception: their buffer is the unscaled source and
-   * `smartTransform` maps it onto the document. */
-  pixels: Uint8ClampedArray;
+  /**
+   * Sized to `bounds` (`tiles.width`/`.height` mirror `bounds.width`/`.height` exactly, the same
+   * invariant the old flat `pixels` field held), addressed in bounds-local coordinates. Smart
+   * Objects are the deliberate exception: their surface is the unscaled source and
+   * `smartTransform` maps it onto the document.
+   *
+   * Backed by `TileStore` (docs/master-plan.md §37.6.3, étape 1's step 4) — real per-tile
+   * copy-on-write via `clone()`/`writeRegion()`/`writeLocalRegion()`, replacing the flat
+   * `Uint8ClampedArray` this field used to be. A reader that wants the whole buffer as one
+   * contiguous array goes through `layer-bounds.ts`'s `layerPixelsView(layer)` (cached by
+   * `pixelsRevision`, the same trade `layerDocumentPixels`'s own cache already makes one level
+   * up) rather than calling `.toPixels()` itself on a hot path — a single-pixel read
+   * (`layerAlphaAt`) goes to `tiles.readPixel` directly instead, never materialising anything.
+   *
+   * Like `RasterLayerMask.tiles`, a `TileStore` instance mutates its own tile map in place on a
+   * write, so two owners (`duplicateLayer`'s copy, a `changeRasterDocument` snapshot) may safely
+   * share a bare reference only as long as every writer clones first — `swapLayerRegion` does,
+   * for the identical reason its own comment documents for the mask analogue,
+   * `swapMaskRegion`.
+   */
+  tiles: TileStore;
   /**
    * Bumped by every function through this package's single door for writing
-   * `pixels` (`setLayerPixels`, `setLayerLocalPixels`, `swapLayerRegion`) —
+   * `tiles` (`setLayerPixels`, `setLayerLocalPixels`, `swapLayerRegion`) —
    * never read by anything that just wants the current bytes, only by the
    * handful of caches that need to know *whether* they changed since a
    * result was last computed from them (docs/master-plan.md §37.6.2).
    *
-   * Five independent `WeakMap`s keyed on `pixels` identity (rendered
+   * Five independent `WeakMap`s keyed on the buffer's identity (rendered
    * effects, Smart Object materialisation, opaque bounds, feathered masks,
    * mask scratch reuse) and `sameSignature`'s own `===` used to rely on
    * `swapLayerRegion`'s GIMP-style undo/redo swap manufacturing a fresh
    * buffer object on every call to see a change. This field replaced that:
    * every one of those six now reads `pixelsRevision` instead of comparing
-   * `pixels` by identity.
-   *
-   * `swapLayerRegion` still hands back a fresh buffer on every call — not
-   * for those six readers' sake any more, but because `layer-ops.ts`'s
-   * `duplicateLayer` shares this very buffer object with a duplicate
-   * without cloning it, safe only as long as nothing writes through the
-   * shared reference (region-patch.ts's own comment on `swapLayerRegion`
-   * has the incident report; `duplicate-swap-sharing.test.ts` is the
-   * regression test). Writing in place is not available here until the
-   * package tracks *which* buffers are actually shared — real per-tile
-   * copy-on-write (docs/master-plan.md §37.4.4 étape 1, `tile-store.ts`)
-   * gets this right structurally; a hand-audited "shared buffers" registry
-   * would not.
+   * identity.
    */
   pixelsRevision: number;
   visible: boolean;

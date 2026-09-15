@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { createRasterLayerMaskFromSelection, selectionBounds, type PixelSelection, type RasterDocumentState, type RasterLayer, type RasterLayerMask } from "@vravio/env-raster";
+import { createRasterLayerMaskFromSelection, layerPixelsView, selectionBounds, type PixelSelection, type RasterDocumentState, type RasterLayer, type RasterLayerMask } from "@vravio/env-raster";
 import { kernel } from "./kernel";
 import { beginBusy } from "./busy";
 import { confirmModal, errorModal } from "./modals/runtime";
@@ -100,7 +100,7 @@ export function RasterPixelLayerProperties({ documentId, document, layer, langua
     setRunning(kind);
     const done = beginBusy(kind === "remove" ? t(language, "Removing background", "Удаление фона") : t(language, "Selecting subject", "Выделение объекта"));
     try {
-      const outcome = await runSegmentation(model, layer.pixels, layer.bounds.width, layer.bounds.height);
+      const outcome = await runSegmentation(model, layerPixelsView(layer), layer.bounds.width, layer.bounds.height);
       if (outcome.error) { errorModal({ title: t(language, "Segmentation failed", "Сегментация не удалась"), message: outcome.error }); return; }
       if (!outcome.mask) return;
 

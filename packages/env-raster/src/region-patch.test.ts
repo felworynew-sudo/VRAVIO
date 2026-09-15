@@ -36,29 +36,29 @@ describe("a rectangle of pixels, swapped in and out — GIMP's undo record", () 
     // Undo: swap the record in. What comes back is what redo needs.
     const patch = cropRegion(before, W, rect);
     const redo = swapLayerRegion(layer, rect, patch, W, H);
-    expect(Array.from(layer.pixels)).toEqual(Array.from(before));
+    expect(Array.from(layer.tiles.toPixels())).toEqual(Array.from(before));
     expect(Array.from(redo)).toEqual(Array.from(cropRegion(after, W, rect)));
 
     // Redo: the same operation again, which is the whole point of a swap.
     swapLayerRegion(layer, rect, redo, W, H);
-    expect(Array.from(layer.pixels)).toEqual(Array.from(edited));
+    expect(Array.from(layer.tiles.toPixels())).toEqual(Array.from(edited));
   });
 
-  it("hands the layer a new buffer and bumps pixelsRevision, because either could be the only signal a reader still checks", () => {
-    // `layerRenderSignatures` compares `pixelsRevision` now, not `layer.pixels` by identity — the
+  it("hands the layer a new TileStore instance and bumps pixelsRevision, because either could be the only signal a reader still checks", () => {
+    // `layerRenderSignatures` compares `pixelsRevision` now, not the buffer's identity — the
     // phase 2 migration of docs/master-plan.md §37.6.2 moved every such reader
     // (`layerDocumentPixels`'s cache, `layerOpaqueBounds`'s cache, and three others) off identity.
-    // Phase 3 tried retiring the fresh-buffer fallback on the strength of that migration and had
+    // Phase 3 tried retiring the fresh-instance fallback on the strength of that migration and had
     // to be reverted (see this file's `duplicate-swap-sharing.test.ts` sibling): `duplicateLayer`
-    // shares this exact buffer object with a copy without cloning it, safe only as long as nothing
-    // ever writes through the shared reference — which writing in place here would do. The
-    // original identity-based reason for the fresh buffer is gone, but a second, independent
-    // reason (never mutate a possibly-shared buffer) means the fresh buffer stays.
+    // shares this exact `TileStore` instance with a copy without cloning it, safe only as long as
+    // nothing ever writes through the shared reference — which writing in place here would do. The
+    // original identity-based reason for the fresh instance is gone, but a second, independent
+    // reason (never mutate a possibly-shared instance) means the fresh instance stays.
     const layer = createRasterLayer(W, H, "L");
     setLayerPixels(layer, fill(0), W, H);
-    const buffer = layer.pixels, revision = layer.pixelsRevision;
+    const store = layer.tiles, revision = layer.pixelsRevision;
     swapLayerRegion(layer, rect, cropRegion(fill(90), W, rect), W, H);
-    expect(layer.pixels).not.toBe(buffer);
+    expect(layer.tiles).not.toBe(store);
     expect(layer.pixelsRevision).toBe(revision + 1);
   });
 
@@ -90,7 +90,9 @@ describe("a rectangle of pixels, swapped in and out — GIMP's undo record", () 
     const strokeRect = { x: 40, y: 30, width: 10, height: 10 };
     swapLayerRegion(layer, strokeRect, cropRegion(dot, W, strokeRect), W, H);
     expect(layer.bounds).toEqual(small);
-    expect(layer.pixels.length).toBe(small.width * small.height * 4);
+    expect(layer.tiles.width).toBe(small.width);
+    expect(layer.tiles.height).toBe(small.height);
+    expect(layer.tiles.toPixels().length).toBe(small.width * small.height * 4);
   });
 
   it("grows the layer when the rectangle being restored falls outside it", () => {
@@ -106,9 +108,9 @@ describe("a rectangle of pixels, swapped in and out — GIMP's undo record", () 
     swapLayerRegion(layer, far, content, W, H);
 
     expect(layer.bounds.x + layer.bounds.width).toBeGreaterThanOrEqual(far.x + far.width);
-    expect(layer.pixels[((far.y - layer.bounds.y) * layer.bounds.width + (far.x - layer.bounds.x)) * 4 + 3]).toBe(255);
+    expect(layer.tiles.readPixel(far.x - layer.bounds.x, far.y - layer.bounds.y)[3]).toBe(255);
     // The dot it already had is still there, in its new place in the buffer.
-    expect(layer.pixels[((4 - layer.bounds.y) * layer.bounds.width + (4 - layer.bounds.x)) * 4 + 3]).toBe(255);
+    expect(layer.tiles.readPixel(4 - layer.bounds.x, 4 - layer.bounds.y)[3]).toBe(255);
   });
 
   it("swaps a mask by its own bytes, not by a colour buffer", () => {

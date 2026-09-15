@@ -103,7 +103,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const activeLayerForMask = state.layers.find((layer) => layer.id === state.activeLayerId);
   const brushMask = useMemo(
     () => paintMask(state.selection, activeLayerForMask ? canvasPixels(activeLayerForMask) : new Uint8ClampedArray(0), state.width, state.height, activeLayerForMask?.lockTransparent === true),
-    [state.selection, activeLayerForMask?.pixels, activeLayerForMask?.lockTransparent, state.width, state.height],
+    [state.selection, activeLayerForMask, activeLayerForMask?.pixelsRevision, activeLayerForMask?.lockTransparent, state.width, state.height],
   );
   const paintColor = editingMaskLayer ? (maskForegroundIsWhite ? "#ffffff" : "#000000") : foregroundColor;
   const { renderWorking, renderWorkingMultiple, renderWorkingRegion, renderSpotHealOverlay, renderSelectionBrushOverlay, commitPixels, commitDocumentState, commitSelection } = useRasterCommit({ document, state, viewport, workspaceSize, canvasRef, canvasPixels });

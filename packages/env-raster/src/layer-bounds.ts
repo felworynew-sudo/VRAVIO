@@ -1,4 +1,5 @@
 import { smartObjectTransform } from "./smart-object";
+import { TileStore } from "./tile-store";
 import type { RasterLayer, RasterRect } from "./types";
 
 /** The rectangle outside which a buffer has nothing but transparency. */
@@ -85,6 +86,27 @@ function cacheMaterialisation(layer: RasterLayer, key: string, width: number, he
   entries.set(key, { width, height, bounds: { ...bounds }, pixels, pixelsRevision: layer.pixelsRevision });
 }
 
+/**
+ * A layer's own bounds-local buffer, materialised from `layer.tiles` and cached by
+ * `pixelsRevision` — what `layer.pixels` used to just *be*, at zero cost, before
+ * docs/master-plan.md §37.6.3 moved storage to `TileStore`. Every reader that wants the whole
+ * buffer as one contiguous `Uint8ClampedArray` (the compositor's ordinary-layer fast path,
+ * `layerDocumentPixels`'s own two branches, Smart Object resampling) goes through this instead
+ * of touching `layer.tiles` directly, so the materialise happens once per edit instead of once
+ * per read — the same trade `layerDocumentPixels`'s own cache already makes for document-space
+ * projections, one level down. A single-pixel read that must not pay for a full materialise
+ * (`layerAlphaAt`) goes to `layer.tiles.readPixel` instead, never through here.
+ */
+const pixelsViews = new WeakMap<RasterLayer, { pixelsRevision: number; pixels: Uint8ClampedArray }>();
+
+export function layerPixelsView(layer: RasterLayer): Uint8ClampedArray {
+  const cached = pixelsViews.get(layer);
+  if (cached && cached.pixelsRevision === layer.pixelsRevision) return cached.pixels;
+  const pixels = layer.tiles.toPixels();
+  pixelsViews.set(layer, { pixelsRevision: layer.pixelsRevision, pixels });
+  return pixels;
+}
+
 /** Samples straight-alpha source pixels with bilinear filtering in premultiplied
  * space, avoiding both jagged transformed objects and dark transparent fringes. */
 function sampleBilinear(source: Uint8ClampedArray, width: number, height: number, x: number, y: number, target: Uint8ClampedArray, targetOffset: number): void {
@@ -123,6 +145,8 @@ export function layerDocumentPixels(layer: RasterLayer, documentWidth: number, d
     if (Math.abs(determinant) > 1e-8) {
       const left = Math.max(0, bounds.x), right = Math.min(documentWidth, bounds.x + bounds.width);
       const top = Math.max(0, bounds.y), bottom = Math.min(documentHeight, bounds.y + bounds.height);
+      // Materialised once, not once per destination pixel — this loop can run millions of times.
+      const source = layerPixelsView(layer);
       for (let y = top; y < bottom; y += 1) for (let x = left; x < right; x += 1) {
         const dx = x + .5 - placement.e, dy = y + .5 - placement.f;
         // Coordinates above address source-pixel centres. Shift by half a
@@ -133,18 +157,19 @@ export function layerDocumentPixels(layer: RasterLayer, documentWidth: number, d
         if (sourceCentreX < 0 || sourceCentreY < 0 || sourceCentreX >= layer.width || sourceCentreY >= layer.height) continue;
         const sourceX = sourceCentreX - .5;
         const sourceY = sourceCentreY - .5;
-        sampleBilinear(layer.pixels, layer.width, layer.height, sourceX, sourceY, pixels, (y * documentWidth + x) * 4);
+        sampleBilinear(source, layer.width, layer.height, sourceX, sourceY, pixels, (y * documentWidth + x) * 4);
       }
     }
     cacheMaterialisation(layer, cacheKey, documentWidth, documentHeight, bounds, pixels);
     return pixels;
   }
-  if (bounds.x === 0 && bounds.y === 0 && bounds.width === documentWidth && bounds.height === documentHeight) return layer.pixels;
+  if (bounds.x === 0 && bounds.y === 0 && bounds.width === documentWidth && bounds.height === documentHeight) return layerPixelsView(layer);
 
   const cacheKey = `layer:${documentWidth}x${documentHeight}:${bounds.x},${bounds.y},${bounds.width},${bounds.height}`;
   const cached = cachedMaterialisation(layer, cacheKey);
   if (cached) return cached;
 
+  const source = layerPixelsView(layer);
   const pixels = new Uint8ClampedArray(documentWidth * documentHeight * 4);
   // Non-destructive crop can put retained pixels left/above the canvas. Read
   // only the visible intersection, never using a negative destination offset.
@@ -157,7 +182,7 @@ export function layerDocumentPixels(layer: RasterLayer, documentWidth: number, d
       const documentY = bounds.y + y;
       if (documentY < 0 || documentY >= documentHeight) continue;
       const from = y * bounds.width * 4 + sourceOffset;
-      pixels.set(layer.pixels.subarray(from, from + rowBytes), (documentY * documentWidth + visibleLeft) * 4);
+      pixels.set(source.subarray(from, from + rowBytes), (documentY * documentWidth + visibleLeft) * 4);
     }
   }
   cacheMaterialisation(layer, cacheKey, documentWidth, documentHeight, bounds, pixels);
@@ -218,7 +243,7 @@ export function setLayerPixels(layer: RasterLayer, pixels: Uint8ClampedArray, do
       layer.bounds = bounds;
       layer.width = width;
       layer.height = height;
-      layer.pixels = cropToRect(pixels, documentWidth, bounds);
+      layer.tiles = TileStore.fromPixels(cropToRect(pixels, documentWidth, bounds), width, height);
       layer.pixelsRevision += 1;
       return;
     }
@@ -230,7 +255,7 @@ export function setLayerPixels(layer: RasterLayer, pixels: Uint8ClampedArray, do
   layer.bounds = bounds;
   layer.width = bounds.width;
   layer.height = bounds.height;
-  layer.pixels = trimmed;
+  layer.tiles = TileStore.fromPixels(trimmed, bounds.width, bounds.height);
   layer.pixelsRevision += 1;
 }
 
@@ -243,7 +268,7 @@ export function setLayerLocalPixels(layer: RasterLayer, pixels: Uint8ClampedArra
   layer.bounds = { ...bounds };
   layer.width = bounds.width;
   layer.height = bounds.height;
-  layer.pixels = pixels;
+  layer.tiles = TileStore.fromPixels(pixels, bounds.width, bounds.height);
   layer.pixelsRevision += 1;
 }
 
@@ -255,12 +280,12 @@ export function layerAlphaAt(layer: RasterLayer, x: number, y: number): number {
     if (Math.abs(determinant) <= 1e-8) return 0;
     const dx = x + .5 - placement.e, dy = y + .5 - placement.f;
     const localX = Math.floor((placement.d * dx - placement.c * dy) / determinant), localY = Math.floor((-placement.b * dx + placement.a * dy) / determinant);
-    return localX < 0 || localY < 0 || localX >= layer.width || localY >= layer.height ? 0 : layer.pixels[(localY * layer.width + localX) * 4 + 3] ?? 0;
+    return localX < 0 || localY < 0 || localX >= layer.width || localY >= layer.height ? 0 : layer.tiles.readPixel(localX, localY)[3] ?? 0;
   }
   const { bounds } = layer;
   const localX = x - bounds.x, localY = y - bounds.y;
   if (localX < 0 || localY < 0 || localX >= bounds.width || localY >= bounds.height) return 0;
-  return layer.pixels[(localY * bounds.width + localX) * 4 + 3] ?? 0;
+  return layer.tiles.readPixel(localX, localY)[3] ?? 0;
 }
 
 /**
@@ -274,7 +299,7 @@ export function layerAlphaAt(layer: RasterLayer, x: number, y: number): number {
  */
 export function visitPixelBuffers(state: { layers: readonly RasterLayer[]; selection?: { mask: Uint8ClampedArray } | null }, visit: (buffer: ArrayBufferView) => void): void {
   for (const layer of state.layers) {
-    visit(layer.pixels);
+    for (const tile of layer.tiles.tileBuffers()) visit(tile);
     // A mask's tiles partition its content with no overlap, so visiting each one individually
     // still totals the same bytes `visit(mask.pixels)` used to in one call — and now correctly
     // prices a duplicate mask that shares most of its tiles with its source as mostly-free,

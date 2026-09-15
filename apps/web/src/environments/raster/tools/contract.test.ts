@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appendLayer, createRasterDocument, createRasterLayer, setLayerPixels, type PixelSelection, type RasterDocumentState } from "@vravio/env-raster";
+import { appendLayer, createRasterDocument, createRasterLayer, layerPixelsView, setLayerPixels, TileStore, type PixelSelection, type RasterDocumentState } from "@vravio/env-raster";
 import { rasterTools, rasterToolById } from "./registry";
 import { toolById } from "../../../tools";
 import type { NavigationContext, NavigationGesture, RasterToolDefinition, ToolContext, ToolPointer } from "./types";
@@ -152,10 +152,11 @@ function pointerAt(x: number, y: number, pointerId = 1): ToolPointer {
 /** A layer's own pixels, materialised to document size — the same shape
  * `layerPixels()`/`targetPixels()` hand a tool in the real workspace. */
 function materialise(layer: RasterDocumentState["layers"][number], document: RasterDocumentState): Uint8ClampedArray {
+  const source = layerPixelsView(layer);
   const out = new Uint8ClampedArray(document.width * document.height * 4);
   for (let y = 0; y < layer.bounds.height; y += 1) {
     const from = y * layer.bounds.width * 4;
-    out.set(layer.pixels.subarray(from, from + layer.bounds.width * 4), ((layer.bounds.y + y) * document.width + layer.bounds.x) * 4);
+    out.set(source.subarray(from, from + layer.bounds.width * 4), ((layer.bounds.y + y) * document.width + layer.bounds.x) * 4);
   }
   return out;
 }
@@ -185,10 +186,11 @@ function drive(
     compositePixels: () => {
       // Top layer is opaque, so the composite is simply the top layer.
       const top = document.layers[document.layers.length - 1]!;
+      const source = layerPixelsView(top);
       const out = new Uint8ClampedArray(document.width * document.height * 4);
       for (let y = 0; y < top.bounds.height; y += 1) {
         const from = y * top.bounds.width * 4;
-        out.set(top.pixels.subarray(from, from + top.bounds.width * 4), ((top.bounds.y + y) * document.width + top.bounds.x) * 4);
+        out.set(source.subarray(from, from + top.bounds.width * 4), ((top.bounds.y + y) * document.width + top.bounds.x) * 4);
       }
       return out;
     },
@@ -289,7 +291,7 @@ const fullGesture = (context: ToolContext<unknown>, tool: RasterToolDefinition<u
 
 /** Compares two documents by the only thing a tool could have changed. */
 function pixelsOf(state: RasterDocumentState): string {
-  const layers = state.layers.map((layer) => `${layer.id.length}:${layer.bounds.x},${layer.bounds.y},${layer.bounds.width},${layer.bounds.height}:${layer.pixels.join(",")}`).join("|");
+  const layers = state.layers.map((layer) => `${layer.id.length}:${layer.bounds.x},${layer.bounds.y},${layer.bounds.width},${layer.bounds.height}:${layerPixelsView(layer).join(",")}`).join("|");
   // Selection tools write state.selection, not pixels — a tool that reaches
   // in and sets it directly, bypassing commitSelection, has to be caught the
   // same way a direct pixel write is, or "cannot escape commitSelection"
@@ -410,7 +412,7 @@ describe("every tool in the catalogue keeps the contract", () => {
           expect(commit.before, `${tool.id} committed the same buffer as before and after`).not.toBe(commit.after);
           expect(commit.after.length).toBe(commit.before.length);
           expect(commit.before.length, `${tool.id} committed a buffer that is neither document- nor layer-sized`)
-            .toBeOneOf([documentSized, layer.pixels.length]);
+            .toBeOneOf([documentSized, layerPixelsView(layer).length]);
         }
 
         for (const commit of effects.selectionCommits) {
@@ -630,7 +632,9 @@ describe("the checks themselves catch what they are for", () => {
       createState: () => null,
       onPointerDown(context) {
         const layer = context.document.layers[0]!;
-        layer.pixels[0] = 1; layer.pixels[1] = 2; layer.pixels[2] = 3;
+        const pixels = layer.tiles.toPixels();
+        pixels[0] = 1; pixels[1] = 2; pixels[2] = 3;
+        layer.tiles = TileStore.fromPixels(pixels, layer.width, layer.height);
       },
     };
     const { document, untouched } = drive(sneaky, {}, (context) => fullGesture(context, sneaky));

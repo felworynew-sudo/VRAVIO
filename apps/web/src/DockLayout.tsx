@@ -9,7 +9,7 @@ import { RasterWorkspace } from "./RasterWorkspace";
 import { VectorWorkspace } from "./VectorWorkspace";
 import { AudioMassWorkspace } from "./AudioMassWorkspace";
 import { VideoWorkspace } from "./VideoWorkspace";
-import { appendLayer, appendRasterGroup, compositeRasterDocument, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, createRasterLayerMaskFromSelection, defaultScene3DGround, isRasterDocumentState, layerDocumentPixels, punchSelectionIntoMask, rasterLayerDescendantIds, rasterLayerRows, renderLayerEffects, setLayerPixels, TileStore, dropPositionInRow, dropTargetForRow, placeLayer, toggleLayerLink, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerEffects, type RasterLayerMask } from "@vravio/env-raster";
+import { appendLayer, appendRasterGroup, compositeRasterDocument, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, createRasterLayerMaskFromSelection, defaultScene3DGround, isRasterDocumentState, layerDocumentPixels, layerPixelsView, punchSelectionIntoMask, rasterLayerDescendantIds, rasterLayerRows, renderLayerEffects, setLayerPixels, TileStore, dropPositionInRow, dropTargetForRow, placeLayer, toggleLayerLink, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerEffects, type RasterLayerMask } from "@vravio/env-raster";
 import { kernel } from "./kernel";
 import { EnvironmentIcon } from "./EnvironmentIcon";
 import { localized, text } from "./i18n";
@@ -389,13 +389,14 @@ function LayerThumbnail({ layer, active = false, onActivate }: { layer: RasterLa
     const targetWidth = Math.max(1, Math.round(layer.width * scale)), targetHeight = Math.max(1, Math.round(layer.height * scale));
     const left = Math.floor((canvas.width - targetWidth) / 2), top = Math.floor((canvas.height - targetHeight) / 2);
     const thumbnail = context.createImageData(targetWidth, targetHeight);
+    const source = layerPixelsView(layer);
     for (let y = 0; y < targetHeight; y += 1) for (let x = 0; x < targetWidth; x += 1) {
       const sourceX = Math.min(layer.width - 1, Math.floor(x / scale)), sourceY = Math.min(layer.height - 1, Math.floor(y / scale));
       const sourceOffset = (sourceY * layer.width + sourceX) * 4, targetOffset = (y * targetWidth + x) * 4;
-      thumbnail.data[targetOffset] = layer.pixels[sourceOffset]!; thumbnail.data[targetOffset + 1] = layer.pixels[sourceOffset + 1]!; thumbnail.data[targetOffset + 2] = layer.pixels[sourceOffset + 2]!; thumbnail.data[targetOffset + 3] = layer.pixels[sourceOffset + 3]!;
+      thumbnail.data[targetOffset] = source[sourceOffset]!; thumbnail.data[targetOffset + 1] = source[sourceOffset + 1]!; thumbnail.data[targetOffset + 2] = source[sourceOffset + 2]!; thumbnail.data[targetOffset + 3] = source[sourceOffset + 3]!;
     }
     context.putImageData(thumbnail, left, top);
-  }, [layer.pixels, layer.width, layer.height]);
+  }, [layer, layer.pixelsRevision, layer.width, layer.height]);
   if (layer.kind === "group") return <span className="layer-thumb layer-group-thumb"><img src={iconUrl("/ГРУППА.svg")} alt=""/></span>;
   return <span className={`layer-thumb${active ? " editing" : ""}`} onClick={(event) => { event.stopPropagation(); onActivate?.(); }} onDoubleClick={(event) => { if (layer.kind !== "smart") return; event.stopPropagation(); window.dispatchEvent(new CustomEvent("vravio-smart-object-edit", { detail: { layerId: layer.id } })); }}>{layerKindIcon(layer) && <img className="layer-kind-icon" src={layerKindIcon(layer)!} alt="" width={13} height={13}/>}<canvas ref={ref} width="36" height="28" /></span>;
 }
@@ -688,7 +689,7 @@ function LayersPanel() {
       if (!context) return;
       const documentPixels = layerDocumentPixels(layer, state.width, state.height);
       const rendered = Object.values(layer.effects ?? {}).some((effect) => effect?.enabled)
-        ? renderLayerEffects({ ...layer, pixels: documentPixels, bounds: { x: 0, y: 0, width: state.width, height: state.height } }, state.width, state.height)
+        ? renderLayerEffects({ ...layer, tiles: TileStore.fromPixels(documentPixels, state.width, state.height), bounds: { x: 0, y: 0, width: state.width, height: state.height } }, state.width, state.height)
         : documentPixels;
       context.putImageData(new ImageData(new Uint8ClampedArray(rendered), state.width, state.height), 0, 0);
       const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
@@ -879,7 +880,7 @@ function LayersPanel() {
       const target = current.layers.find((item) => item.id === layer.id);
       if (!target || target.kind === "group" || !Object.values(target.effects ?? {}).some((effect) => effect?.enabled)) return false;
       const documentPixels = layerDocumentPixels(target, current.width, current.height);
-      const expanded: RasterLayer = { ...target, pixels: documentPixels, bounds: { x: 0, y: 0, width: current.width, height: current.height } };
+      const expanded: RasterLayer = { ...target, tiles: TileStore.fromPixels(documentPixels, current.width, current.height), bounds: { x: 0, y: 0, width: current.width, height: current.height } };
       const rendered = renderLayerEffects(expanded, current.width, current.height).slice();
       setLayerPixels(target, rendered, current.width, current.height);
       target.effects = {};

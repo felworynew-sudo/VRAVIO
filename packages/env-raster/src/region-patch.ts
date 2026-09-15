@@ -45,7 +45,7 @@ export function cropRegionAsMask(pixels: Uint8ClampedArray, documentWidth: numbe
   return out;
 }
 
-/** Grows a layer's own buffer so `rect` fits inside its bounds, keeping what it already holds. */
+/** Grows a layer's own store so `rect` fits inside its bounds, keeping what it already holds. */
 function growToInclude(layer: RasterLayer, rect: RasterRect): void {
   const bounds = layer.bounds;
   const left = Math.min(bounds.x, rect.x), top = Math.min(bounds.y, rect.y);
@@ -54,31 +54,30 @@ function growToInclude(layer: RasterLayer, rect: RasterRect): void {
   if (left === bounds.x && top === bounds.y && right === bounds.x + bounds.width && bottom === bounds.y + bounds.height) return;
 
   const width = right - left, height = bottom - top;
-  const grown = new Uint8ClampedArray(width * height * 4);
-  for (let y = 0; y < bounds.height; y += 1) {
-    const from = y * bounds.width * 4;
-    grown.set(layer.pixels.subarray(from, from + bounds.width * 4), ((bounds.y + y - top) * width + (bounds.x - left)) * 4);
-  }
+  // `reframe`'s own (dx, dy) name coordinates in *this store's* frame — the old bounds' origin,
+  // relative to the new (grown) one, is (left - bounds.x, top - bounds.y), never (left, top)
+  // directly: a layer's tiles live in bounds-local coordinates, not document ones (unlike a
+  // mask's, which are already document-aligned — see `transform.ts`'s `cropRasterDocument` for
+  // the case where `reframe`'s arguments really are the absolute rect).
+  layer.tiles = layer.tiles.reframe(left - bounds.x, top - bounds.y, width, height);
   layer.bounds = { x: left, y: top, width, height };
   layer.width = width;
   layer.height = height;
-  layer.pixels = grown;
 }
 
 /** Trims a layer back to what it holds, the invariant `setLayerPixels` keeps for whole buffers. */
 function trimInPlace(layer: RasterLayer): void {
-  const local = opaqueBoundsOf(layer.pixels, layer.bounds.width, layer.bounds.height);
+  // `layer.tiles.toPixels()` directly, not the cached `layerPixelsView(layer)` — this runs
+  // between the write that just happened and the `pixelsRevision` bump at the end of
+  // `swapLayerRegion`, so the cache (keyed on that same revision) would still be holding the
+  // pre-write materialisation and hand back stale content to scan.
+  const local = opaqueBoundsOf(layer.tiles.toPixels(), layer.bounds.width, layer.bounds.height);
   const inner = local ?? { x: 0, y: 0, width: 1, height: 1 };
   if (inner.x === 0 && inner.y === 0 && inner.width === layer.bounds.width && inner.height === layer.bounds.height) return;
-  const trimmed = new Uint8ClampedArray(inner.width * inner.height * 4);
-  for (let y = 0; y < inner.height; y += 1) {
-    const from = ((inner.y + y) * layer.bounds.width + inner.x) * 4;
-    trimmed.set(layer.pixels.subarray(from, from + inner.width * 4), y * inner.width * 4);
-  }
+  layer.tiles = layer.tiles.reframe(inner.x, inner.y, inner.width, inner.height);
   layer.bounds = { x: layer.bounds.x + inner.x, y: layer.bounds.y + inner.y, width: inner.width, height: inner.height };
   layer.width = inner.width;
   layer.height = inner.height;
-  layer.pixels = trimmed;
 }
 
 /**
@@ -88,38 +87,32 @@ function trimInPlace(layer: RasterLayer): void {
  * The layer grows to hold the rectangle if the edit being undone had extended it, and is trimmed
  * again afterwards, because "a layer's buffer is exactly its opaque bounds" is the invariant every
  * reader here relies on (CLAUDE.md §4: the pair must never be assigned apart).
+ *
+ * `layer.tiles` is cloned before the write, not written through the instance it started with —
+ * the identical reason `swapMaskRegion`'s own comment gives for a mask's `tiles`: a `TileStore`
+ * mutates its own tile map in place on `writeLocalRegion`, and `duplicateLayer`/
+ * `changeRasterDocument` both share this exact instance across layers/snapshots without cloning
+ * it first. `growToInclude` below already returns a fresh instance whenever it actually changes
+ * anything (`reframe()` always builds one), so the explicit clone here only does real work when
+ * `growToInclude` was a no-op — a stroke's undo/redo staying inside bounds the layer already had,
+ * the common case. This predates the tile migration: a flat-buffer version of the identical bug
+ * (writing through a buffer `duplicateLayer` was still sharing) is what
+ * `duplicate-swap-sharing.test.ts` was written to catch, and the fix here is the same shape one
+ * level up — clone before the write touches anything, not after.
  */
 export function swapLayerRegion(
   layer: RasterLayer, rect: RasterRect, patch: Uint8ClampedArray, documentWidth: number, documentHeight: number,
 ): Uint8ClampedArray {
   const region = clampRect(rect, documentWidth, documentHeight);
   if (!region.width || !region.height) return patch;
-  const before = layer.pixels;
+  const before = layer.tiles;
   growToInclude(layer, region);
-  // Copied *before* the write loop touches a single byte, not after. `layer-ops.ts`'s
-  // `duplicateLayer` shares this exact buffer object with a copy rather than cloning it (§37.5),
-  // safe only because — per its own doc comment — nothing in this package ever writes through a
-  // shared buffer; `changeRasterDocument` in apps/web shares a layer's buffer the same way with
-  // its undo/redo snapshots of every non-pixel command (rename, reorder, opacity, blend mode, …).
-  // A version of this function once copied only *after* the loop below had already written
-  // through whatever `layer.pixels` was at the time — an identity-comparison leftover from before
-  // `pixelsRevision` existed, harmless for that purpose (the fresh object still compared unequal
-  // to the old one) but not for this one: the write already went through the original, possibly
-  // still-shared buffer before the "fresh" one was ever made, so anyone else holding that
-  // reference silently saw the edit too. `duplicate-swap-sharing.test.ts` reproduces it. When
-  // `growToInclude` above already built a fresh buffer (the edit grew the layer), `layer.pixels`
-  // is already private and this is a no-op check; otherwise, copy now, while it is still just a
-  // copy and not a repair.
-  if (layer.pixels === before) layer.pixels = before.slice();
+  if (layer.tiles === before) layer.tiles = before.clone();
 
   const bounds = layer.bounds;
-  const previous = new Uint8ClampedArray(region.width * region.height * 4);
-  for (let y = 0; y < region.height; y += 1) {
-    const rowStart = ((region.y + y - bounds.y) * bounds.width + (region.x - bounds.x)) * 4;
-    const rowBytes = region.width * 4;
-    previous.set(layer.pixels.subarray(rowStart, rowStart + rowBytes), y * rowBytes);
-    layer.pixels.set(patch.subarray(y * rowBytes, y * rowBytes + rowBytes), rowStart);
-  }
+  const localRect = { x: region.x - bounds.x, y: region.y - bounds.y, width: region.width, height: region.height };
+  const previous = layer.tiles.readLocalRegion(localRect);
+  layer.tiles.writeLocalRegion(localRect, patch);
   trimInPlace(layer);
   layer.pixelsRevision += 1;
   return previous;

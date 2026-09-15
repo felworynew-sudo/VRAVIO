@@ -82,17 +82,18 @@ function releaseBrokenClipping(state: RasterDocumentState, layerId: string, befo
  * Copies a layer, its mask and its style, and puts the copy directly above it.
  *
  * Photoshop's Duplicate Layer. docs/master-plan.md §37.3 item 1 (Krita's `KisTileData`
- * copy-on-write): the pixel buffer is *shared*, not copied, at the moment the duplicate
+ * copy-on-write): the pixel store is *shared*, not copied, at the moment the duplicate
  * is created — cloning a 1920x1080 layer used to cost a full-buffer memcpy for a document
  * that, at this instant, has literally nothing new in it. Sharing is safe only because of
  * an invariant that already holds everywhere else in this codebase (the same one
  * `document-edits.ts`'s `changeRasterDocument` snapshot relies on): no path in this package
- * ever mutates a layer's `pixels` array, or a mask's `TileStore`, in place — `setLayerPixels`
- * always *replaces* the array, and `swapMaskRegion` always `.clone()`s the store before writing
- * through it, never after (see the `layer.pixels[i] = ...` audit in the §37 commit message, and
- * region-patch.ts's own comment on why `swapMaskRegion` clones first). The two layers diverge
- * the moment either one is actually painted on, exactly Krita's "copy on write, not on read"
- * trade — free until someone writes.
+ * ever writes through a shared `TileStore` instance without cloning it first —
+ * `setLayerPixels`/`setLayerLocalPixels` always replace it outright, and `swapLayerRegion`/
+ * `swapMaskRegion` both `.clone()` before writing through it (see region-patch.ts's own comment
+ * on why, and `duplicate-swap-sharing.test.ts` for the regression this exact invariant was found
+ * missing once, on the flat-buffer predecessor of this same field). The two layers diverge the
+ * moment either one is actually painted on, exactly Krita's "copy on write, not on read" trade —
+ * free until someone writes.
  */
 export function duplicateLayer(state: RasterDocumentState, layerId: string): RasterLayer | null {
   const source = find(state, layerId);
@@ -104,12 +105,7 @@ export function duplicateLayer(state: RasterDocumentState, layerId: string): Ras
       ...layer,
       id: crypto.randomUUID(),
       parentId,
-      pixels: layer.pixels,
-      // `TileStore` itself mutates its own tile map in place on a write (region-patch.ts's own
-      // comment on `swapMaskRegion` explains why) — sharing the bare instance is still safe by
-      // the identical rule that makes sharing `layer.pixels` safe: every writer clones the store
-      // before writing through it, never after, so no owner still holding this same reference
-      // ever sees a write the other one made.
+      tiles: layer.tiles,
       ...(layer.mask ? { mask: { ...layer.mask, tiles: layer.mask.tiles, assetId: null } } : {}),
       ...(layer.text ? { text: structuredClone(layer.text) } : {}),
       ...(layer.adjustment ? { adjustment: structuredClone(layer.adjustment) } : {}),
@@ -377,20 +373,21 @@ export function layerFromSelection(
   // of its content, so both sides are worked in canvas space and trimmed after.
   const sourcePixels = layerDocumentPixels(source, state.width, state.height);
   const taken = cut ? sourcePixels.slice() : null;
+  const liftedPixels = new Uint8ClampedArray(state.width * state.height * 4);
   for (let index = 0; index < selection.mask.length; index += 1) {
     const coverage = selection.mask[index]! / 255;
     if (coverage <= 0) continue;
     const at = index * 4;
-    lifted.pixels[at] = sourcePixels[at]!;
-    lifted.pixels[at + 1] = sourcePixels[at + 1]!;
-    lifted.pixels[at + 2] = sourcePixels[at + 2]!;
-    lifted.pixels[at + 3] = Math.round(sourcePixels[at + 3]! * coverage);
+    liftedPixels[at] = sourcePixels[at]!;
+    liftedPixels[at + 1] = sourcePixels[at + 1]!;
+    liftedPixels[at + 2] = sourcePixels[at + 2]!;
+    liftedPixels[at + 3] = Math.round(sourcePixels[at + 3]! * coverage);
     // A partially selected pixel is shared: what the copy takes is what the
     // original loses, so a feathered edge stays continuous across the two.
     if (taken) taken[at + 3] = Math.round(sourcePixels[at + 3]! * (1 - coverage));
   }
   if (taken) setLayerPixels(source, taken, state.width, state.height);
-  setLayerPixels(lifted, lifted.pixels, state.width, state.height);
+  setLayerPixels(lifted, liftedPixels, state.width, state.height);
 
   lifted.parentId = source.parentId ?? null;
   state.layers.push(lifted);

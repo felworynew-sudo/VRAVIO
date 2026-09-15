@@ -72,7 +72,7 @@ describe("liquify", () => {
 describe("raster document", () => {
   it("creates a transparent active layer with exact dimensions", () => {
     const document = createRasterDocument(4, 3);
-    expect(document.layers[0]?.pixels).toHaveLength(48);
+    expect(document.layers[0]?.tiles.toPixels()).toHaveLength(48);
     expect(document.activeLayerId).toBe(document.layers[0]?.id);
   });
 
@@ -80,7 +80,7 @@ describe("raster document", () => {
     const document = createRasterDocument(2, 1, { resolution: 300, backgroundColor: "#112233", pixelAspectRatio: 1.5 });
     expect(document.resolution).toBe(300);
     expect(document.pixelAspectRatio).toBe(1.5);
-    expect([...document.layers[0]!.pixels.slice(0, 4)]).toEqual([17, 34, 51, 255]);
+    expect([...document.layers[0]!.tiles.toPixels().slice(0, 4)]).toEqual([17, 34, 51, 255]);
   });
 
   it("migrates restored v1 layers into the normalized tree", () => {
@@ -155,17 +155,17 @@ describe("paint", () => {
 describe("layer rendering", () => {
   it("keeps Fill separate from layer Opacity while compositing", () => {
     const document = createRasterDocument(1, 1, { backgroundColor: "#0000ff" });
-    const top = createRasterLayer(1, 1); top.pixels.set([255, 0, 0, 255]); top.fillOpacity = .5; document.layers.push(top);
+    const top = createRasterLayer(1, 1); top.tiles = TileStore.fromPixels(new Uint8ClampedArray([255, 0, 0, 255]), 1, 1); top.fillOpacity = .5; document.layers.push(top);
     const rendered = compositeRasterDocument(document);
     expect([...rendered]).toEqual([128, 0, 128, 255]);
   });
 
   it("renders layer effects without mutating source pixels", () => {
-    const layer = createRasterLayer(3, 1); layer.pixels.set([255, 255, 255, 255], 0);
+    const layer = createRasterLayer(3, 1); layer.tiles = TileStore.fromPixels(new Uint8ClampedArray([255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0]), 3, 1);
     layer.effects.dropShadow = { enabled: true, color: "#000000", opacity: 1, offsetX: 1, offsetY: 0 };
     const rendered = renderLayerEffects(layer, 3, 1);
     expect(rendered[7]).toBe(255);
-    expect(layer.pixels[7]).toBe(0);
+    expect(layer.tiles.readPixel(1, 0)[3]).toBe(0);
   });
 
   it("applies layer masks and ancestor visibility during compositing", () => {
@@ -173,7 +173,7 @@ describe("layer rendering", () => {
     document.layers[0]!.visible = false;
     const group = appendRasterGroup(document);
     group.opacity = .5;
-    const child = createRasterLayer(2, 1); child.pixels.set([255, 0, 0, 255, 255, 0, 0, 255]);
+    const child = createRasterLayer(2, 1); child.tiles = TileStore.fromPixels(new Uint8ClampedArray([255, 0, 0, 255, 255, 0, 0, 255]), 2, 1);
     child.mask = { tiles: TileStore.fromPixels(new Uint8ClampedArray([255, 0]), 2, 1, 1), pixelsRevision: 0, assetId: null, enabled: true, linked: true, density: 1, feather: 0 };
     appendLayer(document, child, group.id);
     expect([...compositeRasterDocument(document)]).toEqual([255, 0, 0, 128, 0, 0, 0, 0]);
@@ -191,8 +191,8 @@ describe("layer rendering", () => {
 
   it("clips a layer to the alpha of the preceding base layer", () => {
     const document = createRasterDocument(2, 1);
-    const base = document.layers[0]!; base.pixels.set([0, 0, 255, 255, 0, 0, 0, 0]);
-    const clipped = createRasterLayer(2, 1); clipped.pixels.set([255, 0, 0, 255, 255, 0, 0, 255]); clipped.clipping = true;
+    const base = document.layers[0]!; base.tiles = TileStore.fromPixels(new Uint8ClampedArray([0, 0, 255, 255, 0, 0, 0, 0]), 2, 1);
+    const clipped = createRasterLayer(2, 1); clipped.tiles = TileStore.fromPixels(new Uint8ClampedArray([255, 0, 0, 255, 255, 0, 0, 255]), 2, 1); clipped.clipping = true;
     appendLayer(document, clipped);
     expect([...compositeRasterDocument(document)]).toEqual([255, 0, 0, 255, 0, 0, 0, 0]);
     base.visible = false;
@@ -202,12 +202,14 @@ describe("layer rendering", () => {
   it("composites a sub-region identically to the matching slice of the full canvas", () => {
     const document = createRasterDocument(6, 4, { backgroundColor: "#204060" });
     const painted = createRasterLayer(6, 4);
-    for (let index = 0; index < painted.pixels.length; index += 4) painted.pixels.set([index % 255, (index * 3) % 255, (index * 7) % 255, (index * 5) % 255], index);
+    const paintedPixels = new Uint8ClampedArray(6 * 4 * 4);
+    for (let index = 0; index < paintedPixels.length; index += 4) paintedPixels.set([index % 255, (index * 3) % 255, (index * 7) % 255, (index * 5) % 255], index);
+    painted.tiles = TileStore.fromPixels(paintedPixels, 6, 4);
     painted.blendMode = "overlay";
     painted.opacity = .7;
     appendLayer(document, painted);
     const clipped = createRasterLayer(6, 4);
-    clipped.pixels.fill(190); clipped.clipping = true;
+    clipped.tiles = TileStore.fromPixels(new Uint8ClampedArray(6 * 4 * 4).fill(190), 6, 4); clipped.clipping = true;
     appendLayer(document, clipped);
     const adjustment = createAdjustmentLayer(6, 4, "invert");
     adjustment.mask!.tiles = TileStore.fromPixels(new Uint8ClampedArray(6 * 4).fill(120), 6, 4, 1);
@@ -288,7 +290,9 @@ describe("layer rendering", () => {
   it("samples the same colours at reduced resolution as at full resolution", () => {
     const document = createRasterDocument(8, 8);
     const layer = document.layers[0]!;
-    for (let y = 0; y < 8; y += 1) for (let x = 0; x < 8; x += 1) layer.pixels.set([x * 30, y * 30, 0, 255], (y * 8 + x) * 4);
+    const pixels = new Uint8ClampedArray(8 * 8 * 4);
+    for (let y = 0; y < 8; y += 1) for (let x = 0; x < 8; x += 1) pixels.set([x * 30, y * 30, 0, 255], (y * 8 + x) * 4);
+    layer.tiles = TileStore.fromPixels(pixels, 8, 8);
     const full = compositeRasterDocument(document);
     const half = compositeRasterRegion(document, { x: 0, y: 0, width: 8, height: 8 }, { step: 2 });
     for (let row = 0; row < 4; row += 1) for (let column = 0; column < 4; column += 1) {
@@ -415,7 +419,7 @@ describe("raster transform", () => {
     document.selection = createRectangleSelection(4, 3, 1, 1, 4, 3);
     const cropped = cropRasterDocument(document, { x: 1, y: 1, width: 2, height: 2 }, true);
     expect(cropped).toMatchObject({ width: 2, height: 2 });
-    expect(cropped.layers[0]?.pixels).toHaveLength(16);
+    expect(cropped.layers[0]?.tiles.toPixels()).toHaveLength(16);
     expect(cropped.selection?.bounds).toEqual({ x: 0, y: 0, width: 2, height: 2 });
   });
 
@@ -423,24 +427,24 @@ describe("raster transform", () => {
     const document = createRasterDocument(6, 6, { backgroundColor: "#112233" });
     const layer = document.layers[0]!;
     layer.bounds = { x: 2, y: 2, width: 2, height: 2 };
-    layer.pixels = new Uint8ClampedArray(2 * 2 * 4).fill(200);
+    layer.tiles = TileStore.fromPixels(new Uint8ClampedArray(2 * 2 * 4).fill(200), 2, 2);
     layer.width = 2; layer.height = 2;
-    const beforePixels = layer.pixels;
+    const beforeTiles = layer.tiles;
     const cropped = cropRasterDocument(document, { x: 1, y: 1, width: 4, height: 4 });
     expect(cropped).toMatchObject({ width: 4, height: 4 });
     // Entirely inside the crop, shifted by (-1,-1) — bounds.x/y stay >= 0, so the
     // buffer itself is never touched, only its position.
-    expect(cropped.layers[0]?.pixels).toBe(beforePixels);
+    expect(cropped.layers[0]?.tiles).toBe(beforeTiles);
     expect(cropped.layers[0]?.bounds).toEqual({ x: 1, y: 1, width: 2, height: 2 });
   });
 
   it("retains pixels left and above the new canvas when deleteCroppedPixels is false", () => {
     const document = createRasterDocument(4, 3, { backgroundColor: "#112233" });
-    const beforePixels = document.layers[0]!.pixels;
+    const beforeTiles = document.layers[0]!.tiles;
     const cropped = cropRasterDocument(document, { x: 1, y: 1, width: 2, height: 2 });
     expect(cropped).toMatchObject({ width: 2, height: 2 });
     const layer = cropped.layers[0]!;
-    expect(layer.pixels).toBe(beforePixels);
+    expect(layer.tiles).toBe(beforeTiles);
     expect(layer.bounds).toEqual({ x: -1, y: -1, width: 4, height: 3 });
     // The compositor sees only the crop's visible intersection and does not
     // throw on a negative layer origin.

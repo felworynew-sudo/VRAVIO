@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { applyCameraRawFilter, defaultCameraRawFilterSettings, type CameraRawFilterSettings, type RasterLayer } from "@vravio/env-raster";
+import { applyCameraRawFilter, defaultCameraRawFilterSettings, layerPixelsView, type CameraRawFilterSettings, type RasterLayer } from "@vravio/env-raster";
 import { text } from "./i18n";
 import type { Language } from "./store";
 import { CameraRawPanel, CameraRawTabs, downsampleForPreview, type CameraRawTab } from "./CameraRawPanels";
@@ -9,7 +9,7 @@ export function CameraRawFilterDialog({ layer, language, onApply, onClose }: { l
   const [tab, setTab] = useState<CameraRawTab>("basic");
   const [preview, setPreview] = useState<{ pixels: Uint8ClampedArray; width: number; height: number } | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const source = useMemo(() => downsampleForPreview(layer.pixels, layer.width, layer.height), [layer.pixels, layer.width, layer.height]);
+  const source = useMemo(() => downsampleForPreview(layerPixelsView(layer), layer.width, layer.height), [layer, layer.pixelsRevision, layer.width, layer.height]);
   const t = (en: string, ru: string) => text(language, en, ru);
 
   // Debounced live preview at a downsampled size — the full-resolution pass (several box blurs
@@ -31,7 +31,7 @@ export function CameraRawFilterDialog({ layer, language, onApply, onClose }: { l
   const set = <K extends keyof CameraRawFilterSettings>(key: K, value: CameraRawFilterSettings[K]) => setSettings((current) => ({ ...current, [key]: value }));
 
   const apply = () => {
-    onApply(applyCameraRawFilter(layer.pixels, layer.width, layer.height, settings), "Camera Raw");
+    onApply(applyCameraRawFilter(layerPixelsView(layer), layer.width, layer.height, settings), "Camera Raw");
     onClose();
   };
 

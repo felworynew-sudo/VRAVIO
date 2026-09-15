@@ -11,9 +11,11 @@ import type { RasterDocumentState, RasterLayer } from "./types";
 const W = 16, H = 16;
 
 const fill = (layer: RasterLayer, r: number, g: number, b: number, a = 255) => {
-  for (let index = 0; index < layer.pixels.length; index += 4) {
-    layer.pixels[index] = r; layer.pixels[index + 1] = g; layer.pixels[index + 2] = b; layer.pixels[index + 3] = a;
+  const pixels = new Uint8ClampedArray(layer.width * layer.height * 4);
+  for (let index = 0; index < pixels.length; index += 4) {
+    pixels[index] = r; pixels[index + 1] = g; pixels[index + 2] = b; pixels[index + 3] = a;
   }
+  layer.tiles = TileStore.fromPixels(pixels, layer.width, layer.height);
   return layer;
 };
 
@@ -31,7 +33,7 @@ const add = (state: RasterDocumentState, name: string, mutate?: (layer: RasterLa
 };
 
 const names = (state: RasterDocumentState) => rasterLayerRows(state.layers).map((row) => row.layer.name);
-const first = (layer: RasterLayer) => [layer.pixels[0], layer.pixels[1], layer.pixels[2], layer.pixels[3]];
+const first = (layer: RasterLayer) => layer.tiles.readPixel(0, 0);
 
 describe("duplicating a layer", () => {
   it("puts the copy directly above the original", () => {
@@ -52,20 +54,20 @@ describe("duplicating a layer", () => {
     const copy = duplicateLayer(state, source.id)!;
 
     // The whole point of copy-on-write: duplicating costs nothing more than the
-    // layer-tree entry until someone writes, so the two start out as the same buffer.
-    expect(copy.pixels).toBe(source.pixels);
+    // layer-tree entry until someone writes, so the two start out as the same store.
+    expect(copy.tiles).toBe(source.tiles);
 
     // The one path every real edit goes through (`setLayerPixels`) always replaces
-    // the array rather than writing through it — so committing a paint on the copy
+    // the store rather than writing through it — so committing a paint on the copy
     // via that path, not a raw in-place write nothing in this codebase ever does,
     // is what actually has to leave the source untouched.
-    const repainted = source.pixels.slice();
+    const repainted = source.tiles.toPixels();
     repainted[0] = 200;
     setLayerPixels(copy, repainted, state.width, state.height);
 
-    expect(source.pixels[0]).toBe(10);
-    expect(copy.pixels).not.toBe(source.pixels);
-    expect(copy.pixels[0]).toBe(200);
+    expect(source.tiles.readPixel(0, 0)[0]).toBe(10);
+    expect(copy.tiles).not.toBe(source.tiles);
+    expect(copy.tiles.readPixel(0, 0)[0]).toBe(200);
   });
 
   it("copies the mask and drops the asset binding", () => {
@@ -116,8 +118,9 @@ describe("merging down", () => {
     expect(merged.id).toBe(lower.id);
     expect(state.layers).toHaveLength(1);
     // Half blue over red: the merge has to honour opacity, not just copy pixels.
-    expect(merged.pixels[0]).toBeGreaterThan(100);
-    expect(merged.pixels[2]).toBeGreaterThan(100);
+    const mergedPixel = merged.tiles.readPixel(0, 0);
+    expect(mergedPixel[0]).toBeGreaterThan(100);
+    expect(mergedPixel[2]).toBeGreaterThan(100);
     expect(merged.opacity).toBe(1);
     expect(merged.blendMode).toBe("normal");
   });

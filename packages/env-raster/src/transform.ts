@@ -1,6 +1,7 @@
 import { layerDocumentPixels } from "./layer-bounds";
 import { bilinearSample, sampleBilinearInto, type BilinearSample } from "./sampling";
 import { selectionBounds } from "./selection";
+import { TileStore } from "./tile-store";
 import type { PixelSelection, Point, RasterDocumentState, RasterRect } from "./types";
 
 /** Coefficients of the projective map from the unit square (0,0)-(1,0)-(1,1)-(0,1) onto an
@@ -459,12 +460,12 @@ function cropChannel(pixels: Uint8ClampedArray, sourceWidth: number, left: numbe
  * new canvas. `layerDocumentPixels` clips only for compositing, so growing the
  * canvas later reveals the same unmodified layer buffer.
  */
-function slideLayerBounds<T extends { bounds: RasterRect; width: number; height: number; pixels: Uint8ClampedArray }>(layer: T, left: number, top: number): Pick<T, "bounds" | "width" | "height" | "pixels"> {
+function slideLayerBounds<T extends { bounds: RasterRect; width: number; height: number; tiles: TileStore }>(layer: T, left: number, top: number): Pick<T, "bounds" | "width" | "height" | "tiles"> {
   return {
     bounds: { ...layer.bounds, x: layer.bounds.x - left, y: layer.bounds.y - top },
     width: layer.width,
     height: layer.height,
-    pixels: layer.pixels,
+    tiles: layer.tiles,
   };
 }
 
@@ -497,7 +498,7 @@ export function cropRasterDocument(state: RasterDocumentState, crop: RasterRect,
       const source = ((top + y) * state.width + left) * 4;
       pixels.set(canvas.subarray(source, source + width * 4), y * width * 4);
     }
-    return { ...layer, ...maskPatch, bounds: { x: 0, y: 0, width, height }, width, height, pixels };
+    return { ...layer, ...maskPatch, bounds: { x: 0, y: 0, width, height }, width, height, tiles: TileStore.fromPixels(pixels, width, height) };
   });
   let selection: PixelSelection | null = null;
   if (state.selection) {

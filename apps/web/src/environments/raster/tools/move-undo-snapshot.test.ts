@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cloneRasterState, createRasterDocument, layerDocumentPixels, setLayerPixels, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
+import { cloneRasterState, createRasterDocument, layerDocumentPixels, layerPixelsView, setLayerPixels, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
 import move, { type MoveState } from "./definitions/move";
 import type { ToolContext, ToolPointer } from "./types";
 
@@ -79,18 +79,18 @@ describe("commitPending's undo snapshot survives the redo that follows it", () =
   it("keeps a whole layer's stored pixels when Move carries it beyond the canvas", () => {
     const document = paintedDocument();
     const originalLayer = document.layers[0]!;
-    const originalPixels = originalLayer.pixels;
+    const originalTiles = originalLayer.tiles;
     const originalBounds = { ...originalLayer.bounds };
 
     // Drag the entire painted layer beyond the right edge. The commit keeps
     // the layer-local buffer and only moves its bounds; a second active-layer
     // drag can bring that same buffer back.
     const outward = driveMoveAndCapture(document, [{ x: 14, y: 15 }, { x: 70, y: 15 }]).calls[0]!.after;
-    expect(outward.layers[0]!.pixels).toBe(originalPixels);
+    expect(outward.layers[0]!.tiles).toBe(originalTiles);
     expect(outward.layers[0]!.bounds.x).toBe(originalBounds.x + 56);
 
     const returned = driveMoveAndCapture(outward, [{ x: 70, y: 15 }, { x: 14, y: 15 }]).calls[0]!.after;
-    expect(returned.layers[0]!.pixels).toBe(originalPixels);
+    expect(returned.layers[0]!.tiles).toBe(originalTiles);
     expect(returned.layers[0]!.bounds).toEqual(originalBounds);
     expect(layerDocumentPixels(returned.layers[0]!, WIDTH, HEIGHT)[(10 * WIDTH + 8) * 4 + 3]).toBe(255);
   });
@@ -121,7 +121,7 @@ describe("commitPending's undo snapshot survives the redo that follows it", () =
   it("keeps the layer-local source in the live preview when dragging it back", () => {
     const document = paintedDocument();
     const outward = driveMoveAndCapture(document, [{ x: 14, y: 15 }, { x: 70, y: 15 }]).calls[0]!.after;
-    const expectedPixels = outward.layers[0]!.pixels;
+    const expectedPixels = layerPixelsView(outward.layers[0]!);
     const returning = driveMoveAndCapture(outward, [{ x: 70, y: 15 }, { x: 14, y: 15 }], false).state.pending;
 
     // A document-sized materialisation is transparent here, by design. The

@@ -6,7 +6,7 @@ import { appendLayer, flattenRasterLayers } from "./layer-tree";
 import { compositeRasterDocument } from "./render";
 import { RASTER_ASSET_MIME, decodeRasterAsset, encodeRasterAsset, isRasterAsset } from "./raster-asset";
 import type { RasterDocumentOptions, RasterDocumentState, RasterLayer } from "./types";
-import { setLayerLocalPixels, setLayerPixels } from "./layer-bounds";
+import { layerPixelsView, setLayerLocalPixels, setLayerPixels } from "./layer-bounds";
 import { replaceSmartObjectSourcePixels } from "./smart-object";
 
 export interface RasterEnvironmentOptions {
@@ -88,7 +88,7 @@ export class RasterEnvironment implements Environment<RasterDocumentState> {
     // A raster layer already owns a local surface and its document-space
     // origin separately in `bounds`. Preserve that compact representation for
     // cross-environment editing instead of allocating a transparent canvas.
-    const assetPixels = layer.pixels;
+    const assetPixels = layerPixelsView(layer);
 
     // Already bound and nobody asked for a copy: hand over the same asset, so
     // the child's revisions land straight on what the parent is drawing.

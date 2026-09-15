@@ -344,7 +344,7 @@ export function App() {
     // canvas coordinates, so both sides are brought into canvas space before
     // the rule is applied and trimmed again on the way in.
     const before=layerDocumentPixels(target,state0.width,state0.height).slice();
-    const filtered=pixels.length===before.length?pixels:layerDocumentPixels({...target,pixels,bounds:target.bounds,width:target.width,height:target.height},state0.width,state0.height);const assign=(value:Uint8ClampedArray)=>{kernel.documents.update<RasterDocumentState>(id,(state)=>{const layer=state.layers.find((item)=>item.id===layerId);if(layer)setLayerPixels(layer,value,state.width,state.height);});};
+    const filtered=pixels.length===before.length?pixels:layerDocumentPixels({...target,tiles:TileStore.fromPixels(pixels,target.width,target.height),bounds:target.bounds,width:target.width,height:target.height},state0.width,state0.height);const assign=(value:Uint8ClampedArray)=>{kernel.documents.update<RasterDocumentState>(id,(state)=>{const layer=state.layers.find((item)=>item.id===layerId);if(layer)setLayerPixels(layer,value,state.width,state.height);});};
     // The same rule as every other tool: a filter may not touch pixels outside
     // the selection. Filters run over the whole layer, so the confinement is
     // what makes "apply to the selection" mean anything at all.
@@ -460,7 +460,7 @@ export function App() {
       return;
     }
     const before = layerDocumentPixels(target, document.state.width, document.state.height), confined = adjustedPixels(before, value, document.state.selection);
-    const layers = document.state.layers.map((layer) => layer.id === target.id ? { ...layer, pixels: layer.pixels.slice(), effects: structuredClone(layer.effects) } : layer);
+    const layers = document.state.layers.map((layer) => layer.id === target.id ? { ...layer, effects: structuredClone(layer.effects) } : layer);
     const previewState = { ...document.state, layers }; const previewLayer = layers.find((layer) => layer.id === target.id)!; setLayerPixels(previewLayer, confined, previewState.width, previewState.height);
     window.dispatchEvent(new CustomEvent("vravio-raster-preview", { detail: { documentId: document.id, pixels: compositeRasterDocument(previewState) } }));
   };

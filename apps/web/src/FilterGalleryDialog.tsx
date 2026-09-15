@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { rasterFilterCatalog, type RasterFilterDefinition, type RasterLayer } from "@vravio/env-raster";
+import { layerPixelsView, rasterFilterCatalog, type RasterFilterDefinition, type RasterLayer } from "@vravio/env-raster";
 import { filterSpecById, hasGpuFilter } from "@vravio/env-raster";
 import { sharedGlFilterBackend } from "./glFilterBackend";
 import { applyRasterFilterParallel, filterWorkerPool } from "./filter-worker-pool";
@@ -48,7 +48,7 @@ export function FilterGalleryDialog({ layer, onApply, onClose }: { layer: Raster
   useEffect(() => {
     const backend = sharedGlFilterBackend();
     return () => backend?.releaseTexture(layer.id);
-  }, [layer.id, layer.pixels]);
+  }, [layer.id, layer.pixelsRevision]);
 
   useEffect(() => {
     const spec = filterSpecById.get(filterId);
@@ -56,7 +56,7 @@ export function FilterGalleryDialog({ layer, onApply, onClose }: { layer: Raster
     if (backend && spec) {
       // A single shader pass beats posting megabytes to a worker, so the GPU path runs inline
       // and only falls through to the worker if the driver refuses it.
-      const gpuResult = backend.apply(spec, layer.pixels, layer.width, layer.height, effectiveSettings, layer.id);
+      const gpuResult = backend.apply(spec, layerPixelsView(layer), layer.width, layer.height, effectiveSettings, layer.id);
       if (gpuResult) {
         setRendered(gpuResult);
         setIsRendering(false);
@@ -72,7 +72,7 @@ export function FilterGalleryDialog({ layer, onApply, onClose }: { layer: Raster
     const timer = window.setTimeout(() => {
       setIsRendering(true);
       setRenderError(null);
-      applyRasterFilterParallel(filterWorkerPool(), layer.pixels, layer.width, layer.height, filterId, effectiveSettings, controller.signal)
+      applyRasterFilterParallel(filterWorkerPool(), layerPixelsView(layer), layer.width, layer.height, filterId, effectiveSettings, controller.signal)
         .then((pixels) => {
           // Gate on this exact invocation's own signal, not a shared counter compared against
           // `requestIdRef.current`: that comparison raced with `applyRasterFilterParallel`
@@ -95,10 +95,10 @@ export function FilterGalleryDialog({ layer, onApply, onClose }: { layer: Raster
         });
     }, 70);
     return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [layer.id, layer.pixels, layer.width, layer.height, filterId, effectiveSettings]);
+  }, [layer, layer.id, layer.pixelsRevision, layer.width, layer.height, filterId, effectiveSettings]);
   useEffect(()=>{const canvas=canvasRef.current,context=canvas?.getContext("2d");if(canvas&&context&&rendered)context.putImageData(new ImageData(rendered as Uint8ClampedArray<ArrayBuffer>,layer.width,layer.height),0,0);},[rendered,layer.width,layer.height]);
   const select=(next:RasterFilterDefinition)=>{setFilterId(next.id);setSettings(Object.fromEntries(next.parameters.map((parameter)=>[parameter.id,parameter.value])));};
-  const sample = useMemo(() => downsampleThumbnail(layer.pixels, layer.width, layer.height, THUMBNAIL_EDGE), [layer.pixels, layer.width, layer.height]);
+  const sample = useMemo(() => downsampleThumbnail(layerPixelsView(layer), layer.width, layer.height, THUMBNAIL_EDGE), [layer, layer.pixelsRevision, layer.width, layer.height]);
   useEffect(() => {
     const requestId = ++requestIdRef.current;
     const worker = new Worker(new URL("./filter-worker.ts", import.meta.url), { type: "module" });

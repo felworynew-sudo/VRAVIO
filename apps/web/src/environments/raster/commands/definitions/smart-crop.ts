@@ -29,16 +29,15 @@ const RATIOS: Readonly<Record<string, number>> = {
 
 /**
  * A deep copy: history holds both sides, and neither may share a buffer with the live document
- * or an undo would write through to the thing it restores. A mask's `tiles.clone()` is real
- * copy-on-write (docs/master-plan.md §37.6.3) — O(tile count), not O(mask area) — and correct for
- * exactly the reason `region-patch.ts`'s functions already rely on: nothing here ever mutates a
- * `TileStore` instance in place without cloning it first, so a share is as safe as a copy. A
- * layer's own `pixels` is still a flat buffer (`RasterLayer → TileStore` is a later step of the
- * same migration), so it keeps `.slice()`.
+ * or an undo would write through to the thing it restores. `tiles.clone()` is real copy-on-write
+ * (docs/master-plan.md §37.6.3) — O(tile count), not O(pixel area) — and correct for exactly the
+ * reason `region-patch.ts`'s functions already rely on: nothing here ever mutates a `TileStore`
+ * instance in place without cloning it first, so a share is as safe as a copy. Both a layer's own
+ * pixels and its mask's now go through the same `TileStore.clone()`.
  */
 const clone = (snapshot: RasterDocumentState): RasterDocumentState => ({
   ...snapshot,
-  layers: snapshot.layers.map((layer) => ({ ...layer, pixels: layer.pixels.slice(), ...(layer.mask ? { mask: { ...layer.mask, tiles: layer.mask.tiles.clone() } } : {}) })),
+  layers: snapshot.layers.map((layer) => ({ ...layer, tiles: layer.tiles.clone(), ...(layer.mask ? { mask: { ...layer.mask, tiles: layer.mask.tiles.clone() } } : {}) })),
   selection: snapshot.selection ? { mask: snapshot.selection.mask.slice(), bounds: { ...snapshot.selection.bounds } } : null,
   guides: snapshot.guides.map((guide) => ({ ...guide })),
 });

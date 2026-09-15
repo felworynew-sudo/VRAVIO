@@ -1,15 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { createAdjustmentLayer, createRasterDocument, createRasterGroup, createRasterLayer, createRasterLayerMask } from "./document";
 import { appendLayer, pickLayerAt } from "./layer-tree";
+import { TileStore } from "./tile-store";
 import type { RasterDocumentState, RasterLayer } from "./types";
 
 const W = 32, H = 32;
 
 const paint = (layer: RasterLayer, x0: number, y0: number, size: number, alpha = 255) => {
+  const pixels = layer.tiles.toPixels();
   for (let y = y0; y < y0 + size; y += 1) for (let x = x0; x < x0 + size; x += 1) {
     const index = (y * W + x) * 4;
-    layer.pixels[index] = 200; layer.pixels[index + 1] = 40; layer.pixels[index + 2] = 40; layer.pixels[index + 3] = alpha;
+    pixels[index] = 200; pixels[index + 1] = 40; pixels[index + 2] = 40; pixels[index + 3] = alpha;
   }
+  layer.tiles = TileStore.fromPixels(pixels, layer.width, layer.height);
 };
 
 const scene = (): RasterDocumentState => createRasterDocument(W, H);

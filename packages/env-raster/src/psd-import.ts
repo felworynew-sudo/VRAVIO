@@ -1,4 +1,5 @@
 import { createRasterLayer, makeLayerOrderKey } from "./document";
+import { TileStore } from "./tile-store";
 import type { RasterBlendMode, RasterDocumentState, RasterLayer } from "./types";
 
 /**
@@ -230,7 +231,11 @@ export function decodePsd(bytes: Uint8Array): PsdImportResult {
       const layer = createRasterLayer(Math.max(1, layerWidth), Math.max(1, layerHeight), record.name || `Layer ${index + 1}`);
       layer.bounds = { x: record.left, y: record.top, width: layerWidth, height: layerHeight };
       layer.width = layerWidth; layer.height = layerHeight;
-      layer.pixels = pixels;
+      // `layerWidth`/`layerHeight` here, not the `Math.max(1, ...)` passed to `createRasterLayer`
+      // above — that clamp exists only so the constructor's own validation doesn't throw on a
+      // zero-sized PSD layer record; `pixels` itself is sized to the real (possibly zero)
+      // dimensions, matching `bounds`/`width`/`height` set just above.
+      layer.tiles = TileStore.fromPixels(pixels, layerWidth, layerHeight);
       layer.opacity = record.opacity / 255;
       // PSD's visibility bit: bit 1 of the flags byte is 1 when the layer is HIDDEN.
       layer.visible = (record.flags & 0x02) === 0;
@@ -277,7 +282,7 @@ export function decodePsd(bytes: Uint8Array): PsdImportResult {
       } else throw new Error(`Unsupported merged-image compression: ${compression}`);
       const pixels = interleaveRgba(planes, width, height, colorChannelCount);
       const flat = createRasterLayer(width, height, "Layer 1 (Слой 1)");
-      flat.pixels = pixels;
+      flat.tiles = TileStore.fromPixels(pixels, width, height);
       layers.push(flat);
     } catch (error) {
       warnings.push(`Merged image data could not be read: ${error instanceof Error ? error.message : String(error)}`);

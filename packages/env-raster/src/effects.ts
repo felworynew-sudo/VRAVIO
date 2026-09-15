@@ -1,4 +1,4 @@
-import { layerDocumentPixels } from "./layer-bounds";
+import { layerDocumentPixels, layerPixelsView } from "./layer-bounds";
 import { parseHexColor } from "./color";
 import type { RasterLayer, RgbaColor } from "./types";
 
@@ -86,7 +86,7 @@ export function renderLayerEffects(layer: RasterLayer, width: number, height: nu
   // layer on every frame, and the no-effects case is by far the most common.
   // Glass is rendered by the compositor because it reads the backdrop, not by
   // this source-only layer-style renderer.
-  if (!Object.entries(effects).some(([key, effect]) => key !== "glass" && effect?.enabled)) return layer.pixels;
+  if (!Object.entries(effects).some(([key, effect]) => key !== "glass" && effect?.enabled)) return layerPixelsView(layer);
   const cached = renderedEffects.get(layer);
   if (cached && cached.effects === layer.effects && cached.width === width && cached.height === height && cached.pixelsRevision === layer.pixelsRevision) return cached.output;
   // Document space, both in and out. A layer's pixels are stored in the layer's
