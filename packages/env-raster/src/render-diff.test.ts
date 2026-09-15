@@ -60,7 +60,11 @@ describe("what changed between two renders", () => {
     const before = layerRenderSignatures(state);
     const moved = createRasterLayer(W, H, "Upper");
     paint(moved, 20, 20, 12);
+    // A raw reassignment, the same shape `setLayerPixels` does in production — including the
+    // revision bump `sameSignature` now reads instead of comparing `.pixels` identity directly
+    // (docs/master-plan.md §37.6.2), since this test's whole point is a signature comparison.
     upper.pixels = moved.pixels;
+    upper.pixelsRevision += 1;
 
     expect(region(state, before)).toEqual({ x: 20, y: 20, width: 32, height: 32 });
   });

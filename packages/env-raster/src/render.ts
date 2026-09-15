@@ -633,6 +633,9 @@ export function sampleAverage(pixels: Uint8ClampedArray, width: number, height: 
 export interface LayerRenderSignature {
   readonly id: string;
   readonly kind: RasterLayer["kind"];
+  /** `RasterLayer.pixelsRevision` at the moment this signature was taken — `sameSignature` compares this, not `pixels` below, so two signatures pointing at the very same (in-place-mutated) buffer still compare unequal when the content actually changed (docs/master-plan.md §37.6.2). */
+  readonly pixelsRevision: number;
+  /** Kept for `signatureRegion`'s one-time read of a *changed* layer's actual opaque bounds — never used for comparison, `pixelsRevision` above owns that. */
   readonly pixels: Uint8ClampedArray;
   /**
    * Where that buffer lives, and the geometry it has to be read with.
@@ -642,7 +645,8 @@ export interface LayerRenderSignature {
    * with the canvas's dimensions walks off the end of it.
    */
   readonly bounds: RasterRect;
-  readonly mask: Uint8ClampedArray | null;
+  /** `null` when the layer has no mask; its `pixelsRevision` otherwise — the same replacement as `pixelsRevision` above, for the same reason. */
+  readonly maskPixelsRevision: number | null;
   readonly maskEnabled: boolean;
   /** Mask settings alter composite coverage even when its byte buffer stays put. */
   readonly maskDensity: number;
@@ -663,9 +667,10 @@ export function layerRenderSignatures(state: RasterDocumentState): LayerRenderSi
   return flattenRasterLayers(state.layers).map((layer) => ({
     id: layer.id,
     kind: layer.kind,
+    pixelsRevision: layer.pixelsRevision,
     pixels: layer.pixels,
     bounds: layer.bounds,
-    mask: layer.mask?.pixels ?? null,
+    maskPixelsRevision: layer.mask?.pixelsRevision ?? null,
     maskEnabled: layer.mask?.enabled ?? false,
     maskDensity: layer.mask?.density ?? 1,
     maskFeather: layer.mask?.feather ?? 0,
@@ -689,7 +694,7 @@ const sameTransform = (a: unknown, b: unknown): boolean => {
 };
 
 const sameSignature = (a: LayerRenderSignature, b: LayerRenderSignature): boolean =>
-  a.kind === b.kind && a.pixels === b.pixels && a.mask === b.mask && a.maskEnabled === b.maskEnabled
+  a.kind === b.kind && a.pixelsRevision === b.pixelsRevision && a.maskPixelsRevision === b.maskPixelsRevision && a.maskEnabled === b.maskEnabled
   && a.bounds.x === b.bounds.x && a.bounds.y === b.bounds.y && a.bounds.width === b.bounds.width && a.bounds.height === b.bounds.height
   && a.maskDensity === b.maskDensity && a.maskFeather === b.maskFeather
   && a.visible === b.visible && a.opacity === b.opacity && a.fillOpacity === b.fillOpacity
