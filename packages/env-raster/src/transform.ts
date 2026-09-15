@@ -439,10 +439,12 @@ export function computeDistributeOffsets(bounds: RasterRect[], edge: AlignEdge):
 
 /**
  * Crops a document-sized single-channel (grayscale) buffer to a rectangle at
- * the document's own stride — the shared arithmetic {@link cropRasterDocument}
- * uses for both the selection mask and every layer's mask, since a layer
- * mask has no bounds of its own (`RasterLayerMask` — always exactly
- * document-sized, see types.ts's own comment on the field).
+ * the document's own stride — {@link cropRasterDocument}'s arithmetic for
+ * `state.selection`'s own flat mask. A layer's mask has no bounds of its own
+ * to crop this way any more (`RasterLayerMask` — always exactly
+ * document-sized, see types.ts's own comment on the field) — it crops via
+ * its own `TileStore.reframe()` instead, at tile granularity rather than a
+ * full materialise-then-recrop.
  */
 function cropChannel(pixels: Uint8ClampedArray, sourceWidth: number, left: number, top: number, width: number, height: number): Uint8ClampedArray {
   const out = new Uint8ClampedArray(width * height);
@@ -482,7 +484,10 @@ export function cropRasterDocument(state: RasterDocumentState, crop: RasterRect,
   const right = Math.max(left + 1, Math.min(state.width, Math.ceil(crop.x + crop.width))), bottom = Math.max(top + 1, Math.min(state.height, Math.ceil(crop.y + crop.height)));
   const width = right - left, height = bottom - top;
   const layers = state.layers.map((layer) => {
-    const maskPatch = layer.mask ? { mask: { ...layer.mask, pixels: cropChannel(layer.mask.pixels, state.width, left, top, width, height) } } : {};
+    // `reframe` is exactly a crop when the new frame's size and origin both shrink to fit inside
+    // the old one, and it does it at tile granularity — a plain window into the mask's own
+    // TileStore, not the materialise-then-recrop `cropChannel` needs for a flat buffer.
+    const maskPatch = layer.mask ? { mask: { ...layer.mask, tiles: layer.mask.tiles.reframe(left, top, width, height) } } : {};
     if (!deleteCroppedPixels) return { ...layer, ...maskPatch, ...slideLayerBounds(layer, left, top) };
     // Read in canvas space: a layer is stored at the size of its content, so
     // its own buffer cannot be indexed by the document's stride.

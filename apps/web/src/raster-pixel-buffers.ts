@@ -1,4 +1,4 @@
-import { accumulateUniquePixelBytes, decodeRasterAsset, encodeRasterAsset, isRasterAsset, visitPixelBuffers, type RasterDocumentState, type RasterLayerMask, type RasterRect } from "@vravio/env-raster";
+import { accumulateUniquePixelBytes, decodeRasterAsset, encodeRasterAsset, isRasterAsset, TileStore, visitPixelBuffers, type RasterDocumentState, type RasterLayerMask, type RasterRect } from "@vravio/env-raster";
 
 /**
  * Pure pixel-buffer plumbing shared by `RasterWorkspace.tsx`'s render and
@@ -134,12 +134,20 @@ export function rgbaToMask(pixels: Uint8ClampedArray): Uint8ClampedArray {
  * A stroke keeps writing into the same scratch for as long as the layer's committed mask content
  * stays the same — which is exactly the length of one stroke, because committing bumps
  * `pixelsRevision` (docs/master-plan.md §37.6.2, the same replacement as this package's other five
- * identity-keyed caches — `mask.pixels` itself is reassigned to a fresh object on commit today,
- * which would invalidate an identity-keyed WeakMap just as well, but only as an accident of how
- * commit happens to be written, not because anything here asked for it). So the key invalidates
- * itself and there is nothing to remember to clear.
+ * identity-keyed caches — `mask.pixels` itself used to be reassigned to a fresh object on commit,
+ * which would have invalidated an identity-keyed WeakMap just as well, but only as an accident of
+ * how commit happened to be written, not because anything here asked for it). So the key
+ * invalidates itself and there is nothing to remember to clear.
+ *
+ * `scratch` (flat, one byte per pixel) is the buffer this function actually writes into every
+ * frame — `TileStore` has no per-pixel write cheap enough for that. `tiles` mirrors it for the
+ * `RasterLayerMask` this function hands back, kept in sync by `writeLocalRegion`-ing only the
+ * band each frame touched (docs/master-plan.md §37.6.3), not rebuilt from `scratch` on every
+ * frame: a full `TileStore.fromPixels(scratch, ...)` per pointermove would reintroduce, at the
+ * mask→tiles step, the exact "whole-buffer conversion every frame" cost this function's own next
+ * paragraph describes fixing at the RGBA→mask step.
  */
-const maskScratchByCommitted = new WeakMap<RasterLayerMask, { pixelsRevision: number; scratch: Uint8ClampedArray }>();
+const maskScratchByCommitted = new WeakMap<RasterLayerMask, { pixelsRevision: number; scratch: Uint8ClampedArray; tiles: TileStore }>();
 
 /**
  * The document with a mask stroke's *dirty band* swapped in — the region counterpart of
@@ -157,16 +165,19 @@ const maskScratchByCommitted = new WeakMap<RasterLayerMask, { pixelsRevision: nu
 export function withLayerMaskRegion(state: RasterDocumentState, layerId: string, rgba: Uint8ClampedArray, region: RasterRect): RasterDocumentState {
   const layer = state.layers.find((item) => item.id === layerId);
   if (!layer?.mask) return state;
-  const mask = layer.mask, committed = mask.pixels;
+  const mask = layer.mask;
   let entry = maskScratchByCommitted.get(mask);
-  if (!entry || entry.pixelsRevision !== mask.pixelsRevision || entry.scratch.length !== committed.length) {
-    entry = { pixelsRevision: mask.pixelsRevision, scratch: committed.slice() };
+  if (!entry || entry.pixelsRevision !== mask.pixelsRevision) {
+    const flat = mask.tiles.toPixels();
+    entry = { pixelsRevision: mask.pixelsRevision, scratch: flat, tiles: TileStore.fromPixels(flat, state.width, state.height, 1) };
     maskScratchByCommitted.set(mask, entry);
   }
   const scratch = entry.scratch;
+  const left = Math.max(0, region.x), top = Math.max(0, region.y);
   const right = Math.min(state.width, region.x + region.width), bottom = Math.min(state.height, region.y + region.height);
-  for (let y = Math.max(0, region.y); y < bottom; y += 1) {
-    for (let x = Math.max(0, region.x); x < right; x += 1) {
+  if (right <= left || bottom <= top) return state;
+  for (let y = top; y < bottom; y += 1) {
+    for (let x = left; x < right; x += 1) {
       const index = y * state.width + x;
       // The same reduction `rgbaToMask` uses for the whole buffer — the average of the three
       // channels, not just red. They are equal on the grey a mask actually holds, but two
@@ -174,11 +185,17 @@ export function withLayerMaskRegion(state: RasterDocumentState, layerId: string,
       scratch[index] = Math.round((rgba[index * 4]! + rgba[index * 4 + 1]! + rgba[index * 4 + 2]!) / 3);
     }
   }
-  const swapped = scratch;
-  return { ...state, layers: state.layers.map((item) => item.id === layerId && item.mask ? { ...item, mask: { ...item.mask, pixels: swapped } } : item) };
+  const touched = { x: left, y: top, width: right - left, height: bottom - top };
+  const patch = new Uint8ClampedArray(touched.width * touched.height);
+  for (let y = 0; y < touched.height; y += 1) {
+    const from = (touched.y + y) * state.width + touched.x;
+    patch.set(scratch.subarray(from, from + touched.width), y * touched.width);
+  }
+  entry.tiles.writeLocalRegion(touched, patch);
+  return { ...state, layers: state.layers.map((item) => item.id === layerId && item.mask ? { ...item, mask: { ...item.mask, tiles: entry.tiles } } : item) };
 }
 export function withLayerMaskPixels(state: RasterDocumentState, layerId: string, pixels: Uint8ClampedArray): RasterDocumentState {
-  return { ...state, layers: state.layers.map((layer) => layer.id === layerId && layer.mask ? { ...layer, mask: { ...layer.mask, pixels: rgbaToMask(pixels) } } : layer) };
+  return { ...state, layers: state.layers.map((layer) => layer.id === layerId && layer.mask ? { ...layer, mask: { ...layer.mask, tiles: TileStore.fromPixels(rgbaToMask(pixels), state.width, state.height, 1) } } : layer) };
 }
 
 /**

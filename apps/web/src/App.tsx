@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { WARP_PRESETS, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
+import { WARP_PRESETS, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
 import { maskToRgba, rgbaToMask } from "./raster-pixel-buffers";
 import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
 import { withBusyPainted } from "./busy";
@@ -454,8 +454,8 @@ export function App() {
       // A mask is single-channel grayscale, not RGBA — `maskToRgba` gives `adjustedPixels` (built
       // for layer pixels) an R=G=B view to run the same adjustment math against, `rgbaToMask`
       // collapses the result back to one channel per pixel.
-      const before = maskToRgba(target.mask.pixels), confined = adjustedPixels(before, value, document.state.selection);
-      const layers = document.state.layers.map((layer) => layer.id === target.id ? { ...layer, mask: { ...layer.mask!, pixels: rgbaToMask(confined) } } : layer);
+      const before = maskToRgba(target.mask.tiles.toPixels()), confined = adjustedPixels(before, value, document.state.selection);
+      const layers = document.state.layers.map((layer) => layer.id === target.id ? { ...layer, mask: { ...layer.mask!, tiles: TileStore.fromPixels(rgbaToMask(confined), document.state.width, document.state.height, 1) } } : layer);
       window.dispatchEvent(new CustomEvent("vravio-raster-preview", { detail: { documentId: document.id, pixels: compositeRasterDocument({ ...document.state, layers }) } }));
       return;
     }
@@ -491,9 +491,9 @@ export function App() {
     const definition = rasterAdjustmentById.get(value.kind), history = kernel.historyByDocument.get(document.id);
     if (adjustmentDialog.targetsMask) {
       if (!target.mask) return;
-      const before = maskToRgba(target.mask.pixels), confined = adjustedPixels(before, value, document.state.selection);
-      const beforeMask = target.mask.pixels.slice(), afterMask = rgbaToMask(confined);
-      const assignMask = (pixels: Uint8ClampedArray) => { kernel.documents.update<RasterDocumentState>(document.id, (state) => { const layer = state.layers.find((item) => item.id === target.id); if (layer?.mask) { layer.mask.pixels = pixels; layer.mask.pixelsRevision += 1; } }); };
+      const before = maskToRgba(target.mask.tiles.toPixels()), confined = adjustedPixels(before, value, document.state.selection);
+      const beforeMask = target.mask.tiles.toPixels(), afterMask = rgbaToMask(confined);
+      const assignMask = (pixels: Uint8ClampedArray) => { kernel.documents.update<RasterDocumentState>(document.id, (state) => { const layer = state.layers.find((item) => item.id === target.id); if (layer?.mask) { layer.mask.tiles = TileStore.fromPixels(pixels, state.width, state.height, 1); layer.mask.pixelsRevision += 1; } }); };
       if (history) void history.execute({ label: `Mask Adjustment: ${definition?.name.en ?? value.kind}`, memoryEstimate: beforeMask.byteLength + afterMask.byteLength, redo: () => assignMask(afterMask), undo: () => assignMask(beforeMask) }); else assignMask(afterMask);
       previewImageAdjustment(null); setAdjustmentDialog(null);
       return;

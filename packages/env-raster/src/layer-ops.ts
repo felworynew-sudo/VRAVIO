@@ -87,11 +87,12 @@ function releaseBrokenClipping(state: RasterDocumentState, layerId: string, befo
  * that, at this instant, has literally nothing new in it. Sharing is safe only because of
  * an invariant that already holds everywhere else in this codebase (the same one
  * `document-edits.ts`'s `changeRasterDocument` snapshot relies on): no path in this package
- * ever mutates a layer's `pixels`/`mask.pixels` array in place — `setLayerPixels` and its
- * mask equivalent always *replace* the array, never write through the one a sibling might
- * still be holding (see the `layer.pixels[i] = ...`/`mask.pixels[i] = ...` audit in the
- * §37 commit message). The two layers diverge the moment either one is actually painted on,
- * exactly Krita's "copy on write, not on read" trade — free until someone writes.
+ * ever mutates a layer's `pixels` array, or a mask's `TileStore`, in place — `setLayerPixels`
+ * always *replaces* the array, and `swapMaskRegion` always `.clone()`s the store before writing
+ * through it, never after (see the `layer.pixels[i] = ...` audit in the §37 commit message, and
+ * region-patch.ts's own comment on why `swapMaskRegion` clones first). The two layers diverge
+ * the moment either one is actually painted on, exactly Krita's "copy on write, not on read"
+ * trade — free until someone writes.
  */
 export function duplicateLayer(state: RasterDocumentState, layerId: string): RasterLayer | null {
   const source = find(state, layerId);
@@ -104,7 +105,12 @@ export function duplicateLayer(state: RasterDocumentState, layerId: string): Ras
       id: crypto.randomUUID(),
       parentId,
       pixels: layer.pixels,
-      ...(layer.mask ? { mask: { ...layer.mask, pixels: layer.mask.pixels, assetId: null } } : {}),
+      // `TileStore` itself mutates its own tile map in place on a write (region-patch.ts's own
+      // comment on `swapMaskRegion` explains why) — sharing the bare instance is still safe by
+      // the identical rule that makes sharing `layer.pixels` safe: every writer clones the store
+      // before writing through it, never after, so no owner still holding this same reference
+      // ever sees a write the other one made.
+      ...(layer.mask ? { mask: { ...layer.mask, tiles: layer.mask.tiles, assetId: null } } : {}),
       ...(layer.text ? { text: structuredClone(layer.text) } : {}),
       ...(layer.adjustment ? { adjustment: structuredClone(layer.adjustment) } : {}),
       effects: structuredClone(layer.effects ?? {}),

@@ -228,12 +228,24 @@ const featheredMasks = new WeakMap<RasterLayerMask, { pixelsRevision: number; by
 
 function featherMask(mask: RasterLayerMask, width: number, height: number, feather: number): Uint8ClampedArray {
   const radius = Math.max(0, Math.min(64, Math.round(feather)));
-  if (!radius) return mask.pixels;
   let entry = featheredMasks.get(mask);
   if (!entry || entry.pixelsRevision !== mask.pixelsRevision) { entry = { pixelsRevision: mask.pixelsRevision, byRadius: new Map() }; featheredMasks.set(mask, entry); }
   const cached = entry.byRadius.get(radius);
   if (cached) return cached;
-  const pixels = mask.pixels;
+  // `mask.tiles` is always exactly document-sized (unlike a layer's own bounds-cropped tiles),
+  // so `toPixels()` here is the same one-time, cached-by-revision materialisation
+  // `layerDocumentPixels` already does for a layer — not a per-frame cost, because `entry` above
+  // already caches this same flat buffer keyed on `radius` (0 included) until `pixelsRevision`
+  // moves. `radius === 0` used to skip this cache and return `mask.pixels` directly, back when
+  // that was already a flat array with nothing to materialise; now that the source is tiled,
+  // caching the unfiltered view the same way as every other radius is what keeps this a
+  // once-per-edit cost instead of once-per-frame.
+  if (!radius) {
+    const flat = mask.tiles.toPixels();
+    entry.byRadius.set(radius, flat);
+    return flat;
+  }
+  const pixels = mask.tiles.toPixels();
   const horizontal = new Float32Array(pixels.length), output = new Uint8ClampedArray(pixels.length);
   const diameter = radius * 2 + 1;
   const clampX = (x: number) => Math.max(0, Math.min(width - 1, x));

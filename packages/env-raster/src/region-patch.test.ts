@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createRasterLayer, setLayerPixels } from "./index";
 import { cropRegion, cropRegionAsMask, swapLayerRegion, swapMaskRegion } from "./region-patch";
+import { TileStore } from "./tile-store";
 import type { RasterLayerMask } from "./types";
 
 const W = 64, H = 48;
@@ -111,28 +112,29 @@ describe("a rectangle of pixels, swapped in and out — GIMP's undo record", () 
   });
 
   it("swaps a mask by its own bytes, not by a colour buffer", () => {
-    const mask: RasterLayerMask = { pixels: new Uint8ClampedArray(W * H).fill(255), pixelsRevision: 0, enabled: true, linked: true, density: 1, feather: 0 };
+    const mask: RasterLayerMask = { tiles: TileStore.fromPixels(new Uint8ClampedArray(W * H).fill(255), W, H, 1), pixelsRevision: 0, enabled: true, linked: true, density: 1, feather: 0 };
     const before = fill(0);
     const patch = cropRegionAsMask(before, W, rect);
     expect(patch.length).toBe(rect.width * rect.height);
 
-    const buffer = mask.pixels;
+    const store = mask.tiles;
     const redo = swapMaskRegion(mask, rect, patch, W, H);
     expect(Array.from(redo)).toEqual(Array.from(new Uint8ClampedArray(rect.width * rect.height).fill(255)));
-    expect(mask.pixels[(rect.y * W + rect.x)]).toBe(patch[0]);
+    expect(mask.tiles.readPixel(rect.x, rect.y)).toEqual([patch[0]]);
     // Outside the rectangle the mask is untouched.
-    expect(mask.pixels[0]).toBe(255);
-    // A fresh buffer, not the same one — phase 3 of docs/master-plan.md §37.6.2 tried writing
-    // through the existing buffer here and had to be reverted (see
-    // `duplicate-swap-sharing.test.ts`): `duplicateLayer` and `changeRasterDocument` both share a
-    // mask's `pixels` object without cloning it, so writing through it would corrupt whoever else
-    // still holds that reference. `pixelsRevision` is still the sole *change-detection* signal now
-    // that `featheredMasks` and `maskScratchByCommitted` both read it — this is a separate concern.
-    expect(mask.pixels).not.toBe(buffer);
+    expect(mask.tiles.readPixel(0, 0)).toEqual([255]);
+    // A fresh `TileStore` instance, not the same one — swapMaskRegion clones before writing
+    // through it (region-patch.ts's own comment explains why: `duplicateLayer` and
+    // `changeRasterDocument` both share a mask's `tiles` object without cloning it, so writing
+    // through it directly would corrupt whoever else still holds that reference — the same class
+    // of bug `duplicate-swap-sharing.test.ts` catches for a layer's flat buffer). `pixelsRevision`
+    // is the change-detection signal `featheredMasks` and `maskScratchByCommitted` read — a
+    // separate concern from whether the instance itself is fresh.
+    expect(mask.tiles).not.toBe(store);
     expect(mask.pixelsRevision).toBe(1);
 
     swapMaskRegion(mask, rect, redo, W, H);
-    expect(mask.pixels[(rect.y * W + rect.x)]).toBe(255);
+    expect(mask.tiles.readPixel(rect.x, rect.y)).toEqual([255]);
     expect(mask.pixelsRevision).toBe(2);
   });
 });

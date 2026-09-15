@@ -2,7 +2,7 @@ import { useEffect, useRef, type RefObject } from "react";
 import {
   activeRasterLayer, changedRenderRegion, clampRegionToDocument, cloneRasterState, compositeRasterDocument, compositeRasterRegion,
   cropRegion, cropRegionAsMask, DirtyRegion, flattenRasterLayers, layerRenderSignatures, mipForZoom, RasterTileCache, setLayerPixels,
-  swapLayerRegion, swapMaskRegion, unionRect, RASTER_ASSET_MIME,
+  swapLayerRegion, swapMaskRegion, TileStore, unionRect, RASTER_ASSET_MIME,
   type LayerRenderSignature, type PixelSelection, type RasterDocumentState, type RasterLayer, type RasterRect,
   type TileUpdate,
 } from "@vravio/env-raster";
@@ -403,7 +403,7 @@ export function useRasterCommit(params: {
       kernel.documents.update<RasterDocumentState>(document.id, (current) => {
         const layer = current.layers.find((item) => item.id === layerId);
         if (!layer) return;
-        if (target === "mask" && layer.mask) { layer.mask.pixels = rgbaToMask(buffer); layer.mask.pixelsRevision += 1; return; }
+        if (target === "mask" && layer.mask) { layer.mask.tiles = TileStore.fromPixels(rgbaToMask(buffer), current.width, current.height, 1); layer.mask.pixelsRevision += 1; return; }
         // Stored at the size of what was painted, not the size of the canvas.
         // The tool worked at canvas size because a stroke can go anywhere; what
         // is kept afterwards is the part that has something in it.

@@ -70,7 +70,7 @@ async function commitSelection(documentId: string, before: PixelSelection | null
 async function commitLayerMask(documentId: string, layerId: string, before: RasterLayerMask | undefined, after: RasterLayerMask, label: string): Promise<void> {
   const history = kernel.historyByDocument.get(documentId);
   if (!history) return;
-  const clone = (mask: RasterLayerMask | undefined): RasterLayerMask | undefined => mask ? { ...mask, pixels: mask.pixels.slice() } : undefined;
+  const clone = (mask: RasterLayerMask | undefined): RasterLayerMask | undefined => mask ? { ...mask, tiles: mask.tiles.clone() } : undefined;
   const assign = (mask: RasterLayerMask | undefined): void => { kernel.documents.update<RasterDocumentState>(documentId, (state) => { const layer = state.layers.find((item) => item.id === layerId); if (!layer) return; if (mask) layer.mask = mask; else delete layer.mask; }); };
   await history.execute({ label, redo: () => assign(clone(after)), undo: () => assign(clone(before)) });
 }
@@ -111,7 +111,7 @@ export function RasterPixelLayerProperties({ documentId, document, layer, langua
       if (kind === "select") {
         await commitSelection(documentId, document.selection, { mask: documentMask, bounds }, t(language, "Select Subject", "Выделить объект"));
       } else {
-        const nextMask = createRasterLayerMaskFromSelection({ mask: documentMask, bounds });
+        const nextMask = createRasterLayerMaskFromSelection({ mask: documentMask, bounds }, document.width, document.height);
         await commitLayerMask(documentId, layer.id, layer.mask, nextMask, t(language, "Remove Background", "Удалить фон"));
       }
     } catch (error) {

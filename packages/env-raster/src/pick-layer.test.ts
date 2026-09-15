@@ -80,8 +80,7 @@ describe("picking the layer under a click", () => {
     const under = add(state, "Under", (layer) => paint(layer, 4, 4, 12));
     add(state, "Masked", (layer) => {
       paint(layer, 4, 4, 12);
-      layer.mask = createRasterLayerMask(W, H);
-      layer.mask.pixels.fill(0);
+      layer.mask = createRasterLayerMask(W, H, false);
     });
 
     expect(pickLayerAt(state, 8, 8)?.id).toBe(under.id);
@@ -107,8 +106,7 @@ describe("picking the layer under a click", () => {
     const under = add(state, "Under", (layer) => paint(layer, 4, 4, 12));
     add(state, "Base", (layer) => {
       paint(layer, 4, 4, 12);
-      layer.mask = createRasterLayerMask(W, H);
-      layer.mask.pixels.fill(0); // masked out everywhere, even though the base's own paint is opaque
+      layer.mask = createRasterLayerMask(W, H, false); // masked out everywhere, even though the base's own paint is opaque
     });
     add(state, "Clipped", (layer) => { paint(layer, 4, 4, 12); layer.clipping = true; });
 

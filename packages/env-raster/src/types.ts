@@ -1,4 +1,5 @@
 import type { ColorLookupTable } from "./lut";
+import type { TileStore } from "./tile-store";
 
 export type RasterBlendMode = "normal" | "dissolve" | "darken" | "multiply" | "colorBurn" | "linearBurn" | "darkerColor" | "lighten" | "screen" | "colorDodge" | "linearDodge" | "lighterColor" | "overlay" | "softLight" | "hardLight" | "vividLight" | "linearLight" | "pinLight" | "hardMix" | "difference" | "exclusion" | "subtract" | "divide" | "hue" | "saturation" | "color" | "luminosity";
 export type RasterLayerKind = "pixel" | "text" | "adjustment" | "fill" | "group" | "smart" | "shape" | "3d";
@@ -187,9 +188,23 @@ export interface RasterLayerEffects {
 }
 
 export interface RasterLayerMask {
-  /** Working grayscale mask. Asset-backed persistence can replace this buffer without changing the compositor contract. */
-  pixels: Uint8ClampedArray;
-  /** `RasterLayer.pixelsRevision`'s own doc comment explains the contract; this is the same thing for `pixels` above, bumped by `swapMaskRegion` and anything else that writes mask pixels through this package's single door. */
+  /**
+   * Working grayscale mask, one byte per document pixel — always document-sized, unlike a
+   * layer's own `pixels`, which is cropped to its opaque bounds and moves. Backed by `TileStore`
+   * (docs/master-plan.md §37.6.3): a mask never resizes, so unlike a layer's tile store, this one
+   * never needs `reframe()`'d — every edit is a plain `writeRegion()`/`clone()`. Asset-backed
+   * persistence can replace the whole store without changing the compositor contract.
+   *
+   * Read a flat, canvas-sized `Uint8ClampedArray` via `.toPixels()` (cheap only relative to a
+   * document scan — cache the result across a hot loop rather than calling it per pixel); write
+   * only through `swapMaskRegion`/this package's other single doors, which `.clone()` before
+   * `.writeRegion()` so a `duplicateLayer` copy or a history snapshot still sharing this exact
+   * `TileStore` instance is never written through (see `region-patch.ts`'s own comment on why
+   * that matters — the bug it's there to prevent is real and has already happened once, to the
+   * flat-buffer version of this same field).
+   */
+  tiles: TileStore;
+  /** `RasterLayer.pixelsRevision`'s own doc comment explains the contract; this is the same thing for `tiles` above, bumped by `swapMaskRegion` and anything else that writes mask pixels through this package's single door. */
   pixelsRevision: number;
   assetId: string | null;
   enabled: boolean;

@@ -252,7 +252,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       paintTarget,
       paintColor,
       paintMask: brushMask,
-      targetPixels: () => (maskTarget?.mask ? maskToRgba(maskTarget.mask.pixels) : (activeLayer ? canvasPixels(activeLayer) : new Uint8ClampedArray(state.width * state.height * 4)).slice()),
+      targetPixels: () => (maskTarget?.mask ? maskToRgba(maskTarget.mask.tiles.toPixels()) : (activeLayer ? canvasPixels(activeLayer) : new Uint8ClampedArray(state.width * state.height * 4)).slice()),
       borrowCoverageScratch: () => {
         const scratch = borrowCoverage(coverageScratchRef.current, state.width, state.height);
         coverageScratchRef.current = scratch;

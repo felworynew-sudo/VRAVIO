@@ -238,6 +238,77 @@ describe("TileStore.writeRegion", () => {
   });
 });
 
+describe("TileStore.writeLocalRegion / readLocalRegion — the rect-local shape a GIMP-style undo patch actually has", () => {
+  it("readLocalRegion matches readPixel across the region, addressed from its own (0,0)", () => {
+    const w = TILE_SIZE * 2 + 10, h = TILE_SIZE + 5;
+    const source = fixture(w, h);
+    const store = TileStore.fromPixels(source, w, h);
+    const rect = { x: TILE_SIZE - 3, y: 2, width: 30, height: 20 };
+    const region = store.readLocalRegion(rect);
+    for (let y = 0; y < rect.height; y += 1) {
+      for (let x = 0; x < rect.width; x += 1) {
+        const index = (y * rect.width + x) * 4;
+        expect([region[index], region[index + 1], region[index + 2], region[index + 3]]).toEqual(store.readPixel(rect.x + x, rect.y + y));
+      }
+    }
+  });
+
+  it("readLocalRegion reaching past the store's edge reads the overhang as transparent", () => {
+    const w = 20, h = 20;
+    const store = TileStore.fromPixels(fixture(w, h), w, h);
+    const region = store.readLocalRegion({ x: 15, y: 15, width: 10, height: 10 });
+    // (15,15)..(19,19) is real content; (20,20)..(24,24) overhangs past the store.
+    const insideIndex = (0 * 10 + 0) * 4, outsideIndex = (9 * 10 + 9) * 4;
+    expect(region[insideIndex + 3]).not.toBe(0);
+    expect([region[outsideIndex], region[outsideIndex + 1], region[outsideIndex + 2], region[outsideIndex + 3]]).toEqual([0, 0, 0, 0]);
+  });
+
+  it("writeLocalRegion writes a rect-local patch, matching writeRegion given the same content re-shaped", () => {
+    const w = TILE_SIZE * 2, h = TILE_SIZE * 2;
+    const rect = { x: TILE_SIZE - 8, y: TILE_SIZE - 8, width: 30, height: 30 };
+    const local = new Uint8ClampedArray(rect.width * rect.height * 4);
+    for (let i = 0; i < local.length; i += 1) local[i] = (i * 29 + 17) % 256;
+
+    const a = TileStore.fromPixels(fixture(w, h), w, h);
+    a.writeLocalRegion(rect, local);
+
+    // The same patch, re-shaped to writeRegion's store-shaped contract, on an identical source.
+    const storeSized = new Uint8ClampedArray(w * h * 4);
+    for (let y = 0; y < rect.height; y += 1) {
+      const from = y * rect.width * 4, to = ((rect.y + y) * w + rect.x) * 4;
+      storeSized.set(local.subarray(from, from + rect.width * 4), to);
+    }
+    const b = TileStore.fromPixels(fixture(w, h), w, h);
+    b.writeRegion(rect, storeSized, w);
+
+    expect([...a.toPixels()]).toEqual([...b.toPixels()]);
+  });
+
+  it("writeLocalRegion only replaces the tiles the region overlaps — CoW holds at tile granularity", () => {
+    const w = TILE_SIZE * 3, h = TILE_SIZE;
+    const store = TileStore.fromPixels(fixture(w, h), w, h);
+    const clone = store.clone();
+    const rect = { x: 0, y: 0, width: 10, height: 10 };
+    clone.writeLocalRegion(rect, new Uint8ClampedArray(rect.width * rect.height * 4).fill(90));
+    expect(clone.readPixel(5, 5)).toEqual([90, 90, 90, 90]);
+    expect(store.readPixel(5, 5)).not.toEqual([90, 90, 90, 90]);
+    // The untouched tiles (columns 1 and 2) are still the exact same objects on both stores.
+    const seen = new Set<Uint8ClampedArray>();
+    store.uniqueBytes(seen);
+    expect(clone.uniqueBytes(seen)).toBe(TILE_SIZE * TILE_SIZE * 4); // only the touched tile is new
+  });
+
+  it("round-trips a mask-shaped (channels: 1) region through write then read", () => {
+    const w = TILE_SIZE * 2, h = TILE_SIZE;
+    const store = TileStore.fromPixels(new Uint8ClampedArray(w * h), w, h, 1);
+    const rect = { x: TILE_SIZE - 4, y: 3, width: 12, height: 9 };
+    const patch = new Uint8ClampedArray(rect.width * rect.height);
+    for (let i = 0; i < patch.length; i += 1) patch[i] = (i * 7 + 1) % 256;
+    store.writeLocalRegion(rect, patch);
+    expect([...store.readLocalRegion(rect)]).toEqual([...patch]);
+  });
+});
+
 describe("TileStore.uniqueBytes", () => {
   it("counts a fresh store's tiles once, and a clone's shared tiles zero times more", () => {
     const w = TILE_SIZE * 2, h = TILE_SIZE * 2;

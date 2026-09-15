@@ -49,6 +49,7 @@ describe("adjustments", () => {
 });
 import { appendLayer, appendRasterGroup, applyRasterFilter, blurDab, combineSelections, DirtyRegion, RasterTileCache, TileCompositor, extractTile, findSmartCrop, planTiles, saliencyMap, builtInLuts, formatCubeLut, generateLut, identityLut, parseCubeLut, sampleColorLookup, expandRectForFilter, filterPassCount, filterSpecById, filterSpecs, hasGpuFilter, clampRegionToDocument, compositeRasterDocument, compositeRasterRegion, compositeRasterThumbnail, createAdjustmentLayer, createContiguousColorSelection, createEllipseSelection, createPolygonSelection, createRasterDocument, createRasterLayer, createRectangleSelection, cropRasterDocument, accumulateDab, accumulateStrokeSegment, compositeCoverage, drawShape, floodFill, invertPixelSelection, isRasterDocumentState, layerDocumentPixels, parseHexColor, patchFromSelection, rasterLayerDescendantIds, rasterLayerRows, renderLayerEffects, restrictSelectionToAlpha, rotateLayerPixels, rotateSelection, sampleAverage, scaleLayerPixels, scaleSelection, selectAllPixels, selectOpaquePixels, selectionOutlinePath, smudgeStrokeSegment, translateLayerPixels, translateSelection } from "./index";
 import { createLiquifyState, liquifyWarp, renderLiquify } from "./liquify";
+import { TileStore } from "./tile-store";
 import type { RgbaColor } from "./types";
 
 describe("liquify", () => {
@@ -173,7 +174,7 @@ describe("layer rendering", () => {
     const group = appendRasterGroup(document);
     group.opacity = .5;
     const child = createRasterLayer(2, 1); child.pixels.set([255, 0, 0, 255, 255, 0, 0, 255]);
-    child.mask = { pixels: new Uint8ClampedArray([255, 0]), assetId: null, enabled: true, inverted: false, linked: true, density: 1, feather: 0 };
+    child.mask = { tiles: TileStore.fromPixels(new Uint8ClampedArray([255, 0]), 2, 1, 1), pixelsRevision: 0, assetId: null, enabled: true, linked: true, density: 1, feather: 0 };
     appendLayer(document, child, group.id);
     expect([...compositeRasterDocument(document)]).toEqual([255, 0, 0, 128, 0, 0, 0, 0]);
     group.visible = false;
@@ -183,7 +184,7 @@ describe("layer rendering", () => {
   it("creates a white mask for adjustment layers and masks their correction", () => {
     const document = createRasterDocument(2, 1, { backgroundColor: "#102030" });
     const adjustment = createAdjustmentLayer(2, 1, "invert");
-    adjustment.mask!.pixels[1] = 0;
+    adjustment.mask!.tiles.writeLocalRegion({ x: 1, y: 0, width: 1, height: 1 }, new Uint8ClampedArray([0]));
     appendLayer(document, adjustment);
     expect([...compositeRasterDocument(document)]).toEqual([239, 223, 207, 255, 16, 32, 48, 255]);
   });
@@ -209,7 +210,7 @@ describe("layer rendering", () => {
     clipped.pixels.fill(190); clipped.clipping = true;
     appendLayer(document, clipped);
     const adjustment = createAdjustmentLayer(6, 4, "invert");
-    adjustment.mask!.pixels.fill(120);
+    adjustment.mask!.tiles = TileStore.fromPixels(new Uint8ClampedArray(6 * 4).fill(120), 6, 4, 1);
     appendLayer(document, adjustment);
 
     const full = compositeRasterDocument(document);
@@ -451,10 +452,11 @@ describe("raster transform", () => {
     const layer = document.layers[0]!;
     const mask = new Uint8ClampedArray(4 * 3);
     mask[1 * 4 + 1] = 200; // (1,1) — inside the crop rect below, at local (0,0)
-    layer.mask = { pixels: mask, assetId: null, enabled: true, linked: true, density: 1, feather: 0 };
+    layer.mask = { tiles: TileStore.fromPixels(mask, 4, 3, 1), pixelsRevision: 0, assetId: null, enabled: true, linked: true, density: 1, feather: 0 };
     const cropped = cropRasterDocument(document, { x: 1, y: 1, width: 2, height: 2 });
-    expect(cropped.layers[0]?.mask?.pixels).toHaveLength(4);
-    expect(cropped.layers[0]?.mask?.pixels[0]).toBe(200);
+    const croppedPixels = cropped.layers[0]!.mask!.tiles.toPixels();
+    expect(croppedPixels).toHaveLength(4);
+    expect(croppedPixels[0]).toBe(200);
   });
 });
 

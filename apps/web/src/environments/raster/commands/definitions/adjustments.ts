@@ -1,4 +1,4 @@
-import { isRasterDocumentState, type RasterDocumentState } from "@vravio/env-raster";
+import { isRasterDocumentState, TileStore, type RasterDocumentState } from "@vravio/env-raster";
 import { kernel } from "../../../../kernel";
 import { useShellStore } from "../../../../store";
 import { CATEGORY_IMAGE } from "../../../../commands/categories";
@@ -74,19 +74,19 @@ const invertCommand: CommandDefinition = {
       void changeRasterDocument(activeDocumentId, "Invert Layer Mask (Инвертировать маску слоя)", (current) => {
         const layer = current.layers.find((item) => item.id === maskLayerId);
         if (!layer || layer.kind === "group" || !layer.mask) return false;
-        // A new array, not the old one edited in place — render.ts's own
-        // `opaqueBounds` (and anything else that caches against a pixel
-        // buffer's identity) assumes "buffers are replaced rather than
-        // written in place" and answers a mutated-in-place buffer with
-        // whatever it cached before the edit. Found live: the mask visibly
-        // inverted only after some unrelated interaction forced a fresh
-        // render, not on the edit itself — a stale cache reading the old
-        // content through an identity that never changed, same class of bug
-        // `setLayerPixels` exists to rule out for a layer's own pixels
-        // (CLAUDE.md §4's "единственная дверь").
-        const inverted = new Uint8ClampedArray(layer.mask.pixels.length);
-        for (let index = 0; index < inverted.length; index += 1) inverted[index] = 255 - layer.mask.pixels[index]!;
-        layer.mask.pixels = inverted;
+        // A new TileStore, not the old one's tiles edited in place, and `pixelsRevision`
+        // bumped explicitly — render.ts's `featherMask`/`sameSignature` (and anything else
+        // that caches against a mask's changing content) read that revision, not the store's
+        // own identity, but the revision only means anything if it is actually bumped every
+        // time content changes. Found live, originally against a flat buffer before this field
+        // was tiled: the mask visibly inverted only after some unrelated interaction forced a
+        // fresh render, not on the edit itself — a stale cache reading old content through a
+        // signal that never changed, same class of bug `setLayerPixels` exists to rule out for
+        // a layer's own pixels (CLAUDE.md §4's "единственная дверь").
+        const source = layer.mask.tiles.toPixels();
+        const inverted = new Uint8ClampedArray(source.length);
+        for (let index = 0; index < inverted.length; index += 1) inverted[index] = 255 - source[index]!;
+        layer.mask.tiles = TileStore.fromPixels(inverted, current.width, current.height, 1);
         layer.mask.pixelsRevision += 1;
         return true;
       });

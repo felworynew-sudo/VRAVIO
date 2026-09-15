@@ -5,6 +5,7 @@ import {
   mergeVisibleLayers, moveLayerInStack, placeLayer, rasterLayerRows, stampVisibleLayers, ungroupLayer,
   dropPositionInRow, dropTargetForRow, toggleLayerLink, linkedLayers, layerDocumentPixels, setLayerPixels,
 } from "./index";
+import { TileStore } from "./tile-store";
 import type { RasterDocumentState, RasterLayer } from "./types";
 
 const W = 16, H = 16;
@@ -71,15 +72,15 @@ describe("duplicating a layer", () => {
     const state = doc();
     const source = add(state, "Source", (layer) => {
       layer.mask = createRasterLayerMask(W, H);
-      layer.mask.pixels.fill(128);
+      layer.mask.tiles = TileStore.fromPixels(new Uint8ClampedArray(W * H).fill(128), W, H, 1);
       layer.pixelAssetId = "asset-1";
     });
 
     const copy = duplicateLayer(state, source.id)!;
 
-    expect(copy.mask?.pixels[0]).toBe(128);
+    expect(copy.mask?.tiles.toPixels()[0]).toBe(128);
     // Same copy-on-write trade as the layer's own pixels above: shared until written.
-    expect(copy.mask?.pixels).toBe(source.mask?.pixels);
+    expect(copy.mask?.tiles).toBe(source.mask?.tiles);
     // The copy is a new buffer and must not claim the original's revisions.
     expect(copy.pixelAssetId).toBeUndefined();
   });

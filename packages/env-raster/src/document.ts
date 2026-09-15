@@ -1,5 +1,6 @@
 import { builtInLuts } from "./lut";
 import { parseHexColor } from "./color";
+import { TileStore } from "./tile-store";
 import type { PixelSelection, RasterAdjustment, RasterDocumentOptions, RasterDocumentState, RasterLayer, RasterLayerMask } from "./types";
 
 export const makeLayerOrderKey = (index: number): string => Math.max(0, Math.floor(index)).toString(36).padStart(8, "0");
@@ -19,20 +20,22 @@ export function createRasterGroup(width: number, height: number, name = "Group (
 export function createRasterLayerMask(width: number, height: number, reveal = true): RasterLayerMask {
   const pixels = new Uint8ClampedArray(width * height);
   if (reveal) pixels.fill(255);
-  return { pixels, pixelsRevision: 0, assetId: null, enabled: true, linked: true, density: 1, feather: 0 };
+  return { tiles: TileStore.fromPixels(pixels, width, height, 1), pixelsRevision: 0, assetId: null, enabled: true, linked: true, density: 1, feather: 0 };
 }
 
 /**
  * A layer mask that starts as the active pixel selection's shape — inside
  * the selection paints white (reveals), outside stays black (hides), the
  * same convention Photoshop uses for "Add Layer Mask" with a selection
- * active. `PixelSelection.mask` and `RasterLayerMask.pixels` are already
- * the identical shape (grayscale, one byte per document pixel), so this is
- * a copy, not a conversion — `.slice()` so the new mask doesn't alias the
- * selection's own buffer once the caller clears `document.selection`.
+ * active. `PixelSelection.mask` and `RasterLayerMask.tiles` are already
+ * the identical shape (grayscale, one byte per document pixel) — `width`/
+ * `height` are the document's, not `selection.bounds`'s (a selection's own
+ * bounding box is smaller than the document whenever the selection doesn't
+ * cover the whole canvas, but `selection.mask` itself is always
+ * document-sized already, matching `RasterLayerMask`'s own invariant).
  */
-export function createRasterLayerMaskFromSelection(selection: PixelSelection): RasterLayerMask {
-  return { pixels: selection.mask.slice(), pixelsRevision: 0, assetId: null, enabled: true, linked: true, density: 1, feather: 0 };
+export function createRasterLayerMaskFromSelection(selection: PixelSelection, width: number, height: number): RasterLayerMask {
+  return { tiles: TileStore.fromPixels(selection.mask, width, height, 1), pixelsRevision: 0, assetId: null, enabled: true, linked: true, density: 1, feather: 0 };
 }
 
 export function defaultAdjustment(kind: RasterAdjustment["kind"]): RasterAdjustment {
@@ -101,7 +104,25 @@ export function migrateRasterDocumentState(state: RasterDocumentState): RasterDo
     // regardless of how many edits actually produced the pixels on disk, since nothing
     // has read a revision number for this layer yet to compare against.
     if (typeof layer.pixelsRevision !== "number") layer.pixelsRevision = 0;
-    if (layer.mask && typeof layer.mask.pixelsRevision !== "number") layer.mask.pixelsRevision = 0;
+    if (layer.mask) {
+      const mask = layer.mask as RasterLayerMask & { pixels?: Uint8ClampedArray };
+      if (!(mask.tiles instanceof TileStore)) {
+        if (mask.pixels) {
+          // A save from before §37.6.3: the mask was a flat Uint8ClampedArray field, and
+          // document-snapshot-store.ts's existing typed-array handling already round-tripped
+          // it correctly (it always has) — only the field it lived on has moved.
+          mask.tiles = TileStore.fromPixels(mask.pixels, state.width, state.height, 1);
+          delete mask.pixels;
+        } else if (mask.tiles) {
+          // A save from after §37.6.3, round-tripped through document-snapshot-store.ts's
+          // JSON.stringify/JSON.parse: TileStore.toJSON()'s own doc comment names this exact
+          // shape — a plain {width, height, channels, pixels} object, not a class instance,
+          // because JSON.parse has no way to know it used to be one.
+          mask.tiles = TileStore.fromJSON(mask.tiles as unknown as { width: number; height: number; channels: number; pixels: Uint8ClampedArray });
+        }
+      }
+      if (typeof mask.pixelsRevision !== "number") mask.pixelsRevision = 0;
+    }
     if (layer.kind === "group") {
       layer.expanded ??= true;
       layer.groupMode ??= "passThrough";

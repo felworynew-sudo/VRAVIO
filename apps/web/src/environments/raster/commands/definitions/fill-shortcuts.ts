@@ -1,4 +1,4 @@
-import { fillSelectedPixels, fillSelectionInMask, isRasterDocumentState, layerAccepts, layerDocumentPixels, parseHexColor, setLayerPixels, type RasterDocumentState, type RasterLayer } from "@vravio/env-raster";
+import { fillSelectedPixels, fillSelectionInMask, isRasterDocumentState, layerAccepts, layerDocumentPixels, parseHexColor, setLayerPixels, TileStore, type RasterDocumentState, type RasterLayer } from "@vravio/env-raster";
 import { kernel } from "../../../../kernel";
 import { useShellStore } from "../../../../store";
 import { CATEGORY_EDIT } from "../../../../commands/categories";
@@ -52,7 +52,8 @@ function fill(documentId: string, foreground: boolean, label: string): void {
     if (target.maskColor !== null) {
       const layer = draft.layers.find((item) => item.id === target.layer.id);
       if (!layer?.mask) return false;
-      layer.mask.pixels = fillSelectionInMask(layer.mask.pixels, draft.width, draft.height, draft.selection, target.maskColor);
+      const filled = fillSelectionInMask(layer.mask.tiles.toPixels(), draft.width, draft.height, draft.selection, target.maskColor);
+      layer.mask.tiles = TileStore.fromPixels(filled, draft.width, draft.height, 1);
       layer.mask.pixelsRevision += 1;
       return true;
     }

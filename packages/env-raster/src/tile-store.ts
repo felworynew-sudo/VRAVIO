@@ -163,6 +163,27 @@ export class TileStore {
   }
 
   /**
+   * `rect`'s own content as a `rect.width`×`rect.height` buffer addressed from (0,0) — the read
+   * half of `writeLocalRegion`'s pair, and the shape `region-patch.ts`'s undo/redo swap needs for
+   * what it hands back as the redo patch (`cropRegion`/`cropRegionAsMask`'s own output shape).
+   * Bounded to `rect`, not this store's own extent — a small rectangle out of a huge mask costs
+   * the small rectangle. Pixels `rect` reaches outside this store read back all-zero, matching
+   * `readPixel`'s convention for a plain out-of-bounds read.
+   */
+  readLocalRegion(rect: RasterRect): Uint8ClampedArray {
+    const channels = this.channels;
+    const out = new Uint8ClampedArray(rect.width * rect.height * channels);
+    for (let y = 0; y < rect.height; y += 1) {
+      for (let x = 0; x < rect.width; x += 1) {
+        const sample = this.readPixel(rect.x + x, rect.y + y);
+        const index = (y * rect.width + x) * channels;
+        for (let c = 0; c < channels; c += 1) out[index + c] = sample[c]!;
+      }
+    }
+    return out;
+  }
+
+  /**
    * Writes a document/layer-shaped `source` buffer into `rect`, touching only the tiles `rect`
    * overlaps. Each touched tile is replaced wholesale with a freshly built one that merges the
    * tile's own untouched pixels with `source`'s — never mutated in place, so a clone sharing
@@ -193,6 +214,39 @@ export class TileStore {
           const fromSource = (y * sourceWidth + writeLeft) * channels;
           const toTile = ((y - tileArea.y) * tileArea.width + (writeLeft - tileArea.x)) * channels;
           next.set(source.subarray(fromSource, fromSource + (writeRight - writeLeft) * channels), toTile);
+        }
+        this.#tiles.set(key(col, row), next);
+      }
+    }
+  }
+
+  /**
+   * The other shape a region write comes in: `patch` is exactly `rect.width`×`rect.height`,
+   * addressed from its own (0,0) — not store-shaped like `writeRegion`'s `source`. This is what
+   * `region-patch.ts`'s GIMP-style undo/redo swap actually holds (`cropRegionAsMask`'s own
+   * output, and `swapLayerRegion`'s `patch` parameter): the whole reason that mechanism costs one
+   * rectangle instead of a full canvas is that it never materialises a store-shaped buffer just
+   * to hold a small edit. Requiring `writeRegion`'s wider contract here would force exactly that
+   * allocation on every undo/redo, defeating the point for the sake of reusing one method.
+   */
+  writeLocalRegion(rect: RasterRect, patch: Uint8ClampedArray): void {
+    const left = Math.max(0, rect.x), top = Math.max(0, rect.y);
+    const right = Math.min(this.width, rect.x + rect.width), bottom = Math.min(this.height, rect.y + rect.height);
+    if (right <= left || bottom <= top) return;
+    const channels = this.channels;
+    const firstCol = Math.floor(left / TILE_SIZE), lastCol = Math.floor((right - 1) / TILE_SIZE);
+    const firstRow = Math.floor(top / TILE_SIZE), lastRow = Math.floor((bottom - 1) / TILE_SIZE);
+    for (let row = firstRow; row <= lastRow; row += 1) {
+      for (let col = firstCol; col <= lastCol; col += 1) {
+        const tileArea = tileRect(col, row, this.width, this.height);
+        const existing = this.#tiles.get(key(col, row));
+        const next = existing ? existing.slice() : new Uint8ClampedArray(tileArea.width * tileArea.height * channels);
+        const writeLeft = Math.max(left, tileArea.x), writeTop = Math.max(top, tileArea.y);
+        const writeRight = Math.min(right, tileArea.x + tileArea.width), writeBottom = Math.min(bottom, tileArea.y + tileArea.height);
+        for (let y = writeTop; y < writeBottom; y += 1) {
+          const fromPatch = ((y - rect.y) * rect.width + (writeLeft - rect.x)) * channels;
+          const toTile = ((y - tileArea.y) * tileArea.width + (writeLeft - tileArea.x)) * channels;
+          next.set(patch.subarray(fromPatch, fromPatch + (writeRight - writeLeft) * channels), toTile);
         }
         this.#tiles.set(key(col, row), next);
       }
@@ -263,5 +317,13 @@ export class TileStore {
       bytes += tile.byteLength;
     }
     return bytes;
+  }
+
+  /** Every tile array this store currently holds, for a caller doing its own generic
+   *  buffer-identity accounting (`layer-bounds.ts`'s `visitPixelBuffers`) rather than the
+   *  tile-store-specific `uniqueBytes` above — the two clones sharing a tile still visit the
+   *  identical object, so a `Set`-based dedupe on the caller's side works the same as always. */
+  *tileBuffers(): IterableIterator<Uint8ClampedArray> {
+    yield* this.#tiles.values();
   }
 }

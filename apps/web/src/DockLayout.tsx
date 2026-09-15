@@ -9,7 +9,7 @@ import { RasterWorkspace } from "./RasterWorkspace";
 import { VectorWorkspace } from "./VectorWorkspace";
 import { AudioMassWorkspace } from "./AudioMassWorkspace";
 import { VideoWorkspace } from "./VideoWorkspace";
-import { appendLayer, appendRasterGroup, compositeRasterDocument, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, createRasterLayerMaskFromSelection, defaultScene3DGround, isRasterDocumentState, layerDocumentPixels, punchSelectionIntoMask, rasterLayerDescendantIds, rasterLayerRows, renderLayerEffects, setLayerPixels, dropPositionInRow, dropTargetForRow, placeLayer, toggleLayerLink, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerEffects, type RasterLayerMask } from "@vravio/env-raster";
+import { appendLayer, appendRasterGroup, compositeRasterDocument, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, createRasterLayerMaskFromSelection, defaultScene3DGround, isRasterDocumentState, layerDocumentPixels, punchSelectionIntoMask, rasterLayerDescendantIds, rasterLayerRows, renderLayerEffects, setLayerPixels, TileStore, dropPositionInRow, dropTargetForRow, placeLayer, toggleLayerLink, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerEffects, type RasterLayerMask } from "@vravio/env-raster";
 import { kernel } from "./kernel";
 import { EnvironmentIcon } from "./EnvironmentIcon";
 import { localized, text } from "./i18n";
@@ -407,11 +407,11 @@ function LayerMaskThumbnail({ mask, width, height, active, onActivate, onDragSta
     const image = context.createImageData(canvas.width, canvas.height);
     for (let y = 0; y < canvas.height; y += 1) for (let x = 0; x < canvas.width; x += 1) {
       const sourceX = Math.min(width - 1, Math.floor(x * width / canvas.width)), sourceY = Math.min(height - 1, Math.floor(y * height / canvas.height));
-      const value = mask.pixels[sourceY * width + sourceX] ?? 255, offset = (y * canvas.width + x) * 4;
+      const value = mask.tiles.readPixel(sourceX, sourceY)[0] ?? 255, offset = (y * canvas.width + x) * 4;
       image.data[offset] = value; image.data[offset + 1] = value; image.data[offset + 2] = value; image.data[offset + 3] = 255;
     }
     context.putImageData(image, 0, 0);
-  }, [mask.pixels, width, height]);
+  }, [mask.tiles, width, height]);
   return <span className={`layer-mask-thumb${active ? " editing" : ""}`} title="Edit Layer Mask (Редактировать маску слоя)" onClick={(event) => { event.stopPropagation(); onActivate(); }} onPointerDown={onDragStart}><canvas ref={ref} width="28" height="28"/></span>;
 }
 
@@ -634,7 +634,7 @@ function LayersPanel() {
         void changeRasterDocument(documentId, "Clear Mask Selection (Очистить выделение на маске)", (current) => {
           const layer = current.layers.find((item) => item.id === maskLayerId);
           if (!layer || layer.kind === "group" || !layer.mask) return false;
-          layer.mask.pixels = punchSelectionIntoMask(layer.mask.pixels, current.width, current.height, selection);
+          layer.mask.tiles = TileStore.fromPixels(punchSelectionIntoMask(layer.mask.tiles.toPixels(), current.width, current.height, selection), current.width, current.height, 1);
           layer.mask.pixelsRevision += 1;
           return true;
         });
@@ -768,7 +768,7 @@ function LayersPanel() {
         // the group since none of the items above touch a mask or style.
         { label: text(language, "Apply Mask", "Применить маску"), onSelect: () => applyMask(layer), disabled: layer.kind === "group" || !layer.mask, separatorBefore: true },
         { label: text(language, "Copy Mask", "Скопировать маску"), onSelect: () => copyMask(layer), disabled: layer.kind === "group" || !layer.mask },
-        { label: text(language, "Paste Mask", "Вставить маску"), onSelect: () => pasteMask(layer), disabled: layer.kind === "group" || !copiedLayerMask || copiedLayerMask.pixels.length !== state.width * state.height },
+        { label: text(language, "Paste Mask", "Вставить маску"), onSelect: () => pasteMask(layer), disabled: layer.kind === "group" || !copiedLayerMask || copiedLayerMask.tiles.width !== state.width || copiedLayerMask.tiles.height !== state.height },
         { label: text(language, "Copy Layer Style", "Скопировать стиль слоя"), onSelect: () => copyLayerStyle(layer), disabled: layer.kind === "group" },
         { label: text(language, "Paste Layer Style", "Вставить стиль слоя"), onSelect: () => pasteLayerStyle(layer), disabled: layer.kind === "group" || !copiedLayerStyle },
         { label: text(language, "Apply Layer Style", "Применить стиль слоя"), onSelect: () => applyLayerStyle(layer), disabled: layer.kind === "group" || !Object.values(layer.effects ?? {}).some((effect) => effect?.enabled) },
@@ -806,7 +806,7 @@ function LayersPanel() {
       void changeRasterDocument(active.id, "Add Layer Mask (Добавить маску слоя)", (current) => {
         const layer = current.layers.find((item) => item.id === current.activeLayerId);
         if (!layer || layer.kind === "group" || layer.mask) return false;
-        layer.mask = current.selection ? createRasterLayerMaskFromSelection(current.selection) : createRasterLayerMask(current.width, current.height);
+        layer.mask = current.selection ? createRasterLayerMaskFromSelection(current.selection, current.width, current.height) : createRasterLayerMask(current.width, current.height);
         consumedSelection = Boolean(current.selection);
         targetId = layer.id;
         return true;
@@ -839,8 +839,8 @@ function LayersPanel() {
      * removes the mask. Layers are already always RGBA here, unlike
      * Patchy's RGB-by-default model, so there's no separate "promote to
      * RGBA first" step to port. Goes through `layerDocumentPixels` because
-     * `mask.pixels` is document-sized but `layer.pixels` is trimmed to the
-     * layer's own bounds (CLAUDE.md §1) — `setLayerPixels` re-trims the
+     * `mask.tiles` is always document-sized but `layer.pixels` is trimmed to
+     * the layer's own bounds (CLAUDE.md §1) — `setLayerPixels` re-trims the
      * result afterward.
      */
     const applyMask = (layer: RasterLayer) => void changeRasterDocument(active.id, "Apply Layer Mask (Применить маску слоя)", (current) => {
@@ -848,8 +848,9 @@ function LayersPanel() {
       if (!target || target.kind === "group" || !target.mask) return false;
       const mask = target.mask;
       const pixels = layerDocumentPixels(target, current.width, current.height).slice();
-      for (let index = 0; index < mask.pixels.length; index += 1) {
-        const alpha = (mask.pixels[index]! / 255) * mask.density, offset = index * 4 + 3;
+      const maskPixels = mask.tiles.toPixels();
+      for (let index = 0; index < maskPixels.length; index += 1) {
+        const alpha = (maskPixels[index]! / 255) * mask.density, offset = index * 4 + 3;
         pixels[offset] = Math.round(pixels[offset]! * alpha);
       }
       setLayerPixels(target, pixels, current.width, current.height);
@@ -857,13 +858,13 @@ function LayersPanel() {
       if (editingMaskLayerId === target.id) setEditingMask(active.id, null);
       return true;
     });
-    const copyMask = (layer: RasterLayer) => { if (layer.mask) copiedLayerMask = { ...layer.mask, pixels: layer.mask.pixels.slice() }; };
+    const copyMask = (layer: RasterLayer) => { if (layer.mask) copiedLayerMask = { ...layer.mask, tiles: layer.mask.tiles.clone() }; };
     // Only sized masks that actually fit this document paste — a mask
     // copied from a different, differently-sized document has no sensible
     // meaning here, and silently truncating/padding its buffer would just
     // draw garbage. Refuses quietly, the same way `beginMaskDrag` (§1.9
     // item 5) refuses a drop onto a layer that already has a mask.
-    const pasteMask = (layer: RasterLayer) => { const source = copiedLayerMask; if (!source || source.pixels.length !== state.width * state.height) return; void changeRasterDocument(active.id, "Paste Layer Mask (Вставить маску слоя)", (current) => { const target = current.layers.find((item) => item.id === layer.id); if (!target || target.kind === "group") return false; target.mask = { ...source, pixels: source.pixels.slice() }; return true; }); };
+    const pasteMask = (layer: RasterLayer) => { const source = copiedLayerMask; if (!source || source.tiles.width !== state.width || source.tiles.height !== state.height) return; void changeRasterDocument(active.id, "Paste Layer Mask (Вставить маску слоя)", (current) => { const target = current.layers.find((item) => item.id === layer.id); if (!target || target.kind === "group") return false; target.mask = { ...source, tiles: source.tiles.clone() }; return true; }); };
     const copyLayerStyle = (layer: RasterLayer) => { copiedLayerStyle = { ...layer.effects }; };
     const pasteLayerStyle = (layer: RasterLayer) => { const source = copiedLayerStyle; if (!source) return; void changeRasterDocument(active.id, "Paste Layer Style (Вставить стиль слоя)", (current) => { const target = current.layers.find((item) => item.id === layer.id); if (!target || target.kind === "group") return false; target.effects = { ...source }; return true; }); };
     /**

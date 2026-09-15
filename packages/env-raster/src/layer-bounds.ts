@@ -275,7 +275,12 @@ export function layerAlphaAt(layer: RasterLayer, x: number, y: number): number {
 export function visitPixelBuffers(state: { layers: readonly RasterLayer[]; selection?: { mask: Uint8ClampedArray } | null }, visit: (buffer: ArrayBufferView) => void): void {
   for (const layer of state.layers) {
     visit(layer.pixels);
-    if (layer.mask) visit(layer.mask.pixels);
+    // A mask's tiles partition its content with no overlap, so visiting each one individually
+    // still totals the same bytes `visit(mask.pixels)` used to in one call — and now correctly
+    // prices a duplicate mask that shares most of its tiles with its source as mostly-free,
+    // rather than either double-counting or (as the old whole-buffer version did) only getting
+    // that right when the whole buffer happened to be the same shared reference.
+    if (layer.mask) for (const tile of layer.mask.tiles.tileBuffers()) visit(tile);
   }
   if (state.selection) visit(state.selection.mask);
 }

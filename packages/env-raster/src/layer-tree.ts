@@ -88,9 +88,9 @@ export interface PickLayerOptions {
  * opacity — the same formula `pickLayerAt` already used before it also had to ask "but is this
  * layer even showing here, once clipping is accounted for". Factored out so both a clipped
  * layer and the base it clips to are judged by the identical rule. */
-function ownCoverageAt(layer: RasterLayer, layers: RasterLayer[], column: number, row: number, index: number): number {
+function ownCoverageAt(layer: RasterLayer, layers: RasterLayer[], column: number, row: number): number {
   const mask = layer.mask?.enabled ? layer.mask : null;
-  const maskAlpha = mask ? (mask.pixels[index]! / 255) * mask.density : 1;
+  const maskAlpha = mask ? (mask.tiles.readPixel(column, row)[0]! / 255) * mask.density : 1;
   return (layerAlphaAt(layer, column, row) / 255) * maskAlpha * effectiveLayerOpacity(layer, layers) * (layer.fillOpacity ?? 1);
 }
 
@@ -100,7 +100,6 @@ export function pickLayerAt(
   const column = Math.floor(x), row = Math.floor(y);
   if (column < 0 || row < 0 || column >= state.width || row >= state.height) return null;
   const threshold = options.threshold ?? 0.5;
-  const index = row * state.width + column;
   // Bottom-to-top paint order — a clipped layer's base is the nearest earlier (lower) entry
   // here sharing its parent, the same relationship `render.ts`'s own compositor walks to build
   // its `clippingBaseByParent` accumulator; computed once per pick rather than per candidate
@@ -112,7 +111,7 @@ export function pickLayerAt(
     if (layer.kind === "group" || layer.kind === "adjustment" || layer.adjustment) continue;
     if (!isLayerEffectivelyVisible(layer, state.layers)) continue;
 
-    let coverage = ownCoverageAt(layer, state.layers, column, row, index);
+    let coverage = ownCoverageAt(layer, state.layers, column, row);
     // A clipping layer only actually shows where its base is opaque too (`render.ts`'s own
     // `clippingBase`/`baseAlpha` for the real compositor) — a click inside the clipped layer's
     // own bounds/mask, but outside where the base shows through, must fall through to whatever
@@ -129,7 +128,7 @@ export function pickLayerAt(
         base = candidate;
         break;
       }
-      coverage = base ? Math.min(coverage, ownCoverageAt(base, state.layers, column, row, index)) : 0;
+      coverage = base ? Math.min(coverage, ownCoverageAt(base, state.layers, column, row)) : 0;
     }
     if (coverage < threshold) continue;
 

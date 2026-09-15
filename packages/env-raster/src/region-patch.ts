@@ -125,26 +125,31 @@ export function swapLayerRegion(
   return previous;
 }
 
-/** The same exchange for a layer mask, whose buffer is one byte per document pixel. */
+/**
+ * The same exchange for a layer mask, whose store is always exactly document-sized (unlike a
+ * layer's, a mask's own bounds never move — docs/master-plan.md §37.6.3, types.ts's own comment
+ * on `RasterLayerMask.tiles`), so unlike `swapLayerRegion` this never needs `reframe()`'d: every
+ * call is a plain clone-then-write.
+ *
+ * `mask.tiles.clone()` before writing — not written in place — for the identical reason
+ * `swapLayerRegion`'s comment above documents for a layer's buffer: `duplicateLayer` and
+ * `changeRasterDocument` both share a mask's `tiles` object across layers/snapshots without
+ * cloning it, and a `TileStore` instance mutates its own tile map in place on `writeLocalRegion`
+ * (`Map.set`), so writing through the shared instance directly would silently corrupt whichever
+ * of them still holds that reference — the same bug `duplicate-swap-sharing.test.ts` catches for
+ * the flat-buffer version of this exact field. `clone()` is O(tile count), not O(mask area): only
+ * the tiles `region` actually overlaps get rebuilt, which is the real win this migration is for —
+ * the `mask.pixels.slice()` this replaced cost a whole-mask copy on every call, regardless of how
+ * small the edit was (measured at 8.5ms on a 4000×3000 mask, docs/master-plan.md §37.6.2).
+ */
 export function swapMaskRegion(
   mask: RasterLayerMask, rect: RasterRect, patch: Uint8ClampedArray, documentWidth: number, documentHeight: number,
 ): Uint8ClampedArray {
   const region = clampRect(rect, documentWidth, documentHeight);
   if (!region.width || !region.height) return patch;
-  const previous = new Uint8ClampedArray(region.width * region.height);
-  const next = mask.pixels.slice();
-  for (let y = 0; y < region.height; y += 1) {
-    const rowStart = (region.y + y) * documentWidth + region.x;
-    previous.set(mask.pixels.subarray(rowStart, rowStart + region.width), y * region.width);
-    next.set(patch.subarray(y * region.width, y * region.width + region.width), rowStart);
-  }
-  // New buffer, not written in place — see `swapLayerRegion`'s comment above for why phase 3 of
-  // docs/master-plan.md §37.6.2 tried removing this and had to be reverted: `duplicateLayer` and
-  // `changeRasterDocument` both share a mask's `pixels` object across layers/snapshots without
-  // cloning it, and writing through it here would silently corrupt whichever of them still holds
-  // that reference. `mask.pixelsRevision` is bumped alongside regardless, since every reader of
-  // "did the mask change" already reads that instead of identity.
-  mask.pixels = next;
+  const previous = mask.tiles.readLocalRegion(region);
+  mask.tiles = mask.tiles.clone();
+  mask.tiles.writeLocalRegion(region, patch);
   mask.pixelsRevision += 1;
   return previous;
 }

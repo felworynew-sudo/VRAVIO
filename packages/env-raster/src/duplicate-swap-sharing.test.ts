@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createRasterDocument, createRasterLayerMask, duplicateLayer, setLayerPixels } from "./index";
 import { swapLayerRegion, swapMaskRegion } from "./region-patch";
+import { TileStore } from "./tile-store";
 
 /**
  * `layer-ops.ts`'s `duplicateLayer` (docs/master-plan.md §37.5, commit 822e91c) shares a layer's
@@ -51,21 +52,24 @@ describe("swapLayerRegion must not corrupt a buffer duplicateLayer is still shar
   });
 
   it("leaves the duplicate's mask untouched when the source layer's mask region is swapped", () => {
-    // `swapMaskRegion` never had the ordering bug `swapLayerRegion` had — it builds its patched
-    // buffer as a separate copy and only reassigns `mask.pixels` at the end, never writing through
-    // the original — but nothing here had actually said so until this test did.
+    // `swapMaskRegion` never had the ordering bug `swapLayerRegion` had — even before
+    // §37.6.3's TileStore migration, it built its patched buffer as a separate copy and only
+    // reassigned `mask.pixels` at the end, never writing through the original. After the
+    // migration, `mask.tiles.clone()` before `writeLocalRegion` is the same discipline at tile
+    // granularity — but nothing here had actually said so until this test did.
     const state = createRasterDocument(32, 32);
     const source = state.layers[0]!;
     source.mask = createRasterLayerMask(state.width, state.height);
-    source.mask.pixels.fill(128);
+    source.mask.tiles = TileStore.fromPixels(new Uint8ClampedArray(state.width * state.height).fill(128), state.width, state.height, 1);
 
     const copy = duplicateLayer(state, source.id)!;
-    expect(copy.mask!.pixels).toBe(source.mask.pixels);
+    expect(copy.mask!.tiles).toBe(source.mask.tiles);
 
     const rect = { x: 4, y: 4, width: 8, height: 8 };
     const patch = new Uint8ClampedArray(rect.width * rect.height).fill(0);
     swapMaskRegion(source.mask, rect, patch, state.width, state.height);
 
-    for (let i = 0; i < copy.mask!.pixels.length; i += 1) expect(copy.mask!.pixels[i]).toBe(128);
+    const copyPixels = copy.mask!.tiles.toPixels();
+    for (let i = 0; i < copyPixels.length; i += 1) expect(copyPixels[i]).toBe(128);
   });
 });

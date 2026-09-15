@@ -3,6 +3,7 @@ import { createAdjustmentLayer, createRasterDocument, createRasterGroup, createR
 import { setLayerPixels } from "./layer-bounds";
 import { appendLayer } from "./layer-tree";
 import { compositeRasterRegion } from "./render";
+import { TileStore } from "./tile-store";
 import type { RasterBlendMode, RasterDocumentState } from "./types";
 
 const allModes: RasterBlendMode[] = [
@@ -76,7 +77,9 @@ describe("composite output is stable", () => {
 
     digests.mask = digest(compositeRasterRegion(scene((state) => {
       const mask = createRasterLayerMask(size, size);
-      for (let index = 0; index < mask.pixels.length; index += 1) mask.pixels[index] = (index * 7) % 256;
+      const pixels = new Uint8ClampedArray(size * size);
+      for (let index = 0; index < pixels.length; index += 1) pixels[index] = (index * 7) % 256;
+      mask.tiles = TileStore.fromPixels(pixels, size, size, 1);
       mask.density = 0.8;
       state.layers[2]!.mask = mask;
     }), whole));
@@ -89,7 +92,9 @@ describe("composite output is stable", () => {
     // `digests.mask` above, pixel values pre-inverted, expected to differ.
     digests.invertedMask = digest(compositeRasterRegion(scene((state) => {
       const mask = createRasterLayerMask(size, size);
-      for (let index = 0; index < mask.pixels.length; index += 1) mask.pixels[index] = 255 - ((index * 7) % 256);
+      const pixels = new Uint8ClampedArray(size * size);
+      for (let index = 0; index < pixels.length; index += 1) pixels[index] = 255 - ((index * 7) % 256);
+      mask.tiles = TileStore.fromPixels(pixels, size, size, 1);
       state.layers[2]!.mask = mask;
     }), whole));
 
@@ -167,7 +172,7 @@ describe("composite output is stable", () => {
     const top = createRasterLayer(11, 1, "Masked red");
     for (let index = 0; index < top.pixels.length; index += 4) { top.pixels[index] = 255; top.pixels[index + 3] = 255; }
     const mask = createRasterLayerMask(11, 1, false);
-    mask.pixels[5] = 255;
+    mask.tiles.writeLocalRegion({ x: 5, y: 0, width: 1, height: 1 }, new Uint8ClampedArray([255]));
     mask.feather = 2;
     top.mask = mask;
     appendLayer(state, top);
