@@ -131,16 +131,26 @@ function blendNonSeparable(
  * Scanning costs one pass over the buffer, and buffers are replaced rather than
  * written in place, so the answer is cached against the buffer itself and
  * survives for as long as the layer is unedited.
+ *
+ * Most callers pass a freshly materialised, never-mutated buffer, for which
+ * identity alone is a fine cache key. The two callers that pass a persistent
+ * `layer.pixels` buffer instead (this file's own `signatureRegion`, and
+ * `move.tsx`'s read of the pixels a drag started from) also pass that layer's
+ * `pixelsRevision` — the same replacement the other five caches in
+ * docs/master-plan.md §37.6.2 already made — so a future in-place mutation of
+ * that buffer still invalidates the cache. Callers with no revision to offer
+ * pass none, which compares equal to itself and keeps today's identity-only
+ * behaviour.
  */
-const opaqueBounds = new WeakMap<Uint8ClampedArray, { width: number; height: number; bounds: RasterRect | null }>();
+const opaqueBounds = new WeakMap<Uint8ClampedArray, { width: number; height: number; revision: number; bounds: RasterRect | null }>();
 
-export function layerOpaqueBounds(pixels: Uint8ClampedArray, width: number, height: number): RasterRect | null {
+export function layerOpaqueBounds(pixels: Uint8ClampedArray, width: number, height: number, revision = -1): RasterRect | null {
   // The geometry is part of the question, not just the buffer: the same buffer is
   // read at canvas size in one place and at its layer's own trimmed size in
   // another, and a cache keyed on the buffer alone would answer the second call
   // with the first one's rectangle.
   const cached = opaqueBounds.get(pixels);
-  if (cached && cached.width === width && cached.height === height) return cached.bounds;
+  if (cached && cached.width === width && cached.height === height && cached.revision === revision) return cached.bounds;
 
   // Read four bytes at a time: the alpha test is the whole loop, and per-byte
   // indexing over two million pixels is most of its cost.
@@ -164,7 +174,7 @@ export function layerOpaqueBounds(pixels: Uint8ClampedArray, width: number, heig
     if (rowRight + 1 > right) right = rowRight + 1;
   }
   const bounds = right > left && bottom > top ? { x: left, y: top, width: right - left, height: bottom - top } : null;
-  opaqueBounds.set(pixels, { width, height, bounds });
+  opaqueBounds.set(pixels, { width, height, revision, bounds });
   return bounds;
 }
 
@@ -719,7 +729,7 @@ const sameSignature = (a: LayerRenderSignature, b: LayerRenderSignature): boolea
  * tile cache simply stopped paying off for exactly the case it exists for.
  */
 function signatureRegion(signature: LayerRenderSignature): RasterRect | null {
-  const local = layerOpaqueBounds(signature.pixels, signature.bounds.width, signature.bounds.height);
+  const local = layerOpaqueBounds(signature.pixels, signature.bounds.width, signature.bounds.height, signature.pixelsRevision);
   if (!local) return null;
   return { x: local.x + signature.bounds.x, y: local.y + signature.bounds.y, width: local.width, height: local.height };
 }

@@ -512,7 +512,7 @@ function beginMoveDrag(context: ToolContext<MoveState>, pointer: ToolPointer, pe
   // empty layer: retain its own local opaque bounds so the active layer can be
   // dragged back in and its stored pixels never enter a clipping path.
   const storedBounds = !pending && !state.selection && layer.kind !== "text"
-    ? layerOpaqueBounds(layer.pixels, layer.bounds.width, layer.bounds.height)
+    ? layerOpaqueBounds(layer.pixels, layer.bounds.width, layer.bounds.height, layer.pixelsRevision)
     : null;
   const freshOpaqueBounds = visibleBounds ?? (storedBounds
     ? { ...storedBounds, x: layer.bounds.x + storedBounds.x, y: layer.bounds.y + storedBounds.y }
