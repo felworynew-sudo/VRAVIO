@@ -215,6 +215,7 @@ export function setLayerPixels(layer: RasterLayer, pixels: Uint8ClampedArray, do
       layer.width = width;
       layer.height = height;
       layer.pixels = cropToRect(pixels, documentWidth, bounds);
+      layer.pixelsRevision += 1;
       return;
     }
     // The grown rectangle collapsed (documentWidth/Height of 0, or an edit rect entirely
@@ -226,6 +227,7 @@ export function setLayerPixels(layer: RasterLayer, pixels: Uint8ClampedArray, do
   layer.width = bounds.width;
   layer.height = bounds.height;
   layer.pixels = trimmed;
+  layer.pixelsRevision += 1;
 }
 
 /** Assigns an already-local raster surface without materialising document
@@ -238,6 +240,7 @@ export function setLayerLocalPixels(layer: RasterLayer, pixels: Uint8ClampedArra
   layer.width = bounds.width;
   layer.height = bounds.height;
   layer.pixels = pixels;
+  layer.pixelsRevision += 1;
 }
 
 /** Reads one pixel's alpha in document coordinates, without materialising. */

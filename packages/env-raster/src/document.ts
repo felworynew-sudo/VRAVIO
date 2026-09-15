@@ -9,7 +9,7 @@ export function createRasterLayer(width: number, height: number, name = "Layer (
   // Created at canvas size: a tool needs somewhere to paint before it knows
   // where the paint will land. What gets stored is trimmed when the edit is
   // committed, which is where the size actually matters.
-  return { id: crypto.randomUUID(), name, bounds: { x: 0, y: 0, width, height }, width, height, pixels: new Uint8ClampedArray(width * height * 4), visible: true, opacity: 1, fillOpacity: 1, blendMode: "normal", locked: false, kind: "pixel", effects: {}, parentId: null, orderKey: makeLayerOrderKey(0), clipping: false };
+  return { id: crypto.randomUUID(), name, bounds: { x: 0, y: 0, width, height }, width, height, pixels: new Uint8ClampedArray(width * height * 4), pixelsRevision: 0, visible: true, opacity: 1, fillOpacity: 1, blendMode: "normal", locked: false, kind: "pixel", effects: {}, parentId: null, orderKey: makeLayerOrderKey(0), clipping: false };
 }
 
 export function createRasterGroup(width: number, height: number, name = "Group (Группа)"): RasterLayer {
@@ -19,7 +19,7 @@ export function createRasterGroup(width: number, height: number, name = "Group (
 export function createRasterLayerMask(width: number, height: number, reveal = true): RasterLayerMask {
   const pixels = new Uint8ClampedArray(width * height);
   if (reveal) pixels.fill(255);
-  return { pixels, assetId: null, enabled: true, linked: true, density: 1, feather: 0 };
+  return { pixels, pixelsRevision: 0, assetId: null, enabled: true, linked: true, density: 1, feather: 0 };
 }
 
 /**
@@ -32,7 +32,7 @@ export function createRasterLayerMask(width: number, height: number, reveal = tr
  * selection's own buffer once the caller clears `document.selection`.
  */
 export function createRasterLayerMaskFromSelection(selection: PixelSelection): RasterLayerMask {
-  return { pixels: selection.mask.slice(), assetId: null, enabled: true, linked: true, density: 1, feather: 0 };
+  return { pixels: selection.mask.slice(), pixelsRevision: 0, assetId: null, enabled: true, linked: true, density: 1, feather: 0 };
 }
 
 export function defaultAdjustment(kind: RasterAdjustment["kind"]): RasterAdjustment {
@@ -97,6 +97,11 @@ export function migrateRasterDocumentState(state: RasterDocumentState): RasterDo
       layer.width = width;
       layer.height = height;
     }
+    // Older saves predate pixelsRevision (docs/master-plan.md §37.6.2) — 0 is correct
+    // regardless of how many edits actually produced the pixels on disk, since nothing
+    // has read a revision number for this layer yet to compare against.
+    if (typeof layer.pixelsRevision !== "number") layer.pixelsRevision = 0;
+    if (layer.mask && typeof layer.mask.pixelsRevision !== "number") layer.mask.pixelsRevision = 0;
     if (layer.kind === "group") {
       layer.expanded ??= true;
       layer.groupMode ??= "passThrough";

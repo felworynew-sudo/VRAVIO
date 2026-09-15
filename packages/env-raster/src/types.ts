@@ -189,6 +189,8 @@ export interface RasterLayerEffects {
 export interface RasterLayerMask {
   /** Working grayscale mask. Asset-backed persistence can replace this buffer without changing the compositor contract. */
   pixels: Uint8ClampedArray;
+  /** `RasterLayer.pixelsRevision`'s own doc comment explains the contract; this is the same thing for `pixels` above, bumped by `swapMaskRegion` and anything else that writes mask pixels through this package's single door. */
+  pixelsRevision: number;
   assetId: string | null;
   enabled: boolean;
   // No `inverted` flag — deliberately removed (master-plan.md §19.2).
@@ -247,6 +249,25 @@ export interface RasterLayer {
    * are the deliberate exception: their buffer is the unscaled source and
    * `smartTransform` maps it onto the document. */
   pixels: Uint8ClampedArray;
+  /**
+   * Bumped by every function through this package's single door for writing
+   * `pixels` (`setLayerPixels`, `setLayerLocalPixels`, `swapLayerRegion`) —
+   * never read by anything that just wants the current bytes, only by the
+   * handful of caches that need to know *whether* they changed since a
+   * result was last computed from them (docs/master-plan.md §37.6.2).
+   *
+   * `swapLayerRegion`'s GIMP-style undo/redo swap used to manufacture a
+   * fresh buffer object on every call — `original.slice()`, an O(layer
+   * area) copy — purely so five independent `WeakMap`s keyed on `pixels`
+   * identity (rendered effects, Smart Object materialisation, opaque
+   * bounds, feathered masks, mask scratch reuse) and `sameSignature`'s own
+   * `===` would see it as changed. Measured at 8.5ms on a 4000×3000 layer,
+   * felt on every undo/redo of a large background layer. This field lets
+   * `swapLayerRegion` write the already-cheap in-place row copy it was
+   * already doing and stop there, while every consumer that used to
+   * compare `pixels` identity compares this number instead.
+   */
+  pixelsRevision: number;
   visible: boolean;
   opacity: number;
   fillOpacity: number;

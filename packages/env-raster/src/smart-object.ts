@@ -53,7 +53,7 @@ export function transformSmartObject(layer: RasterLayer, source: RasterRect, tar
 export function replaceSmartObjectSourcePixels(layer: RasterLayer, pixels: Uint8ClampedArray, width: number, height: number): boolean {
   const current = smartObjectTransform(layer); if (!current || width < 1 || height < 1 || pixels.length !== width * height * 4) return false;
   const oldWidth = Math.max(1, layer.width), oldHeight = Math.max(1, layer.height);
-  layer.pixels = pixels; layer.width = width; layer.height = height;
+  layer.pixels = pixels; layer.pixelsRevision += 1; layer.width = width; layer.height = height;
   layer.smartTransform = { ...current, a: current.a * oldWidth / width, b: current.b * oldWidth / width, c: current.c * oldHeight / height, d: current.d * oldHeight / height };
   layer.bounds = smartObjectBounds(layer, layer.smartTransform);
   return true;

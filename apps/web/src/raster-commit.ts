@@ -403,7 +403,7 @@ export function useRasterCommit(params: {
       kernel.documents.update<RasterDocumentState>(document.id, (current) => {
         const layer = current.layers.find((item) => item.id === layerId);
         if (!layer) return;
-        if (target === "mask" && layer.mask) { layer.mask.pixels = rgbaToMask(buffer); return; }
+        if (target === "mask" && layer.mask) { layer.mask.pixels = rgbaToMask(buffer); layer.mask.pixelsRevision += 1; return; }
         // Stored at the size of what was painted, not the size of the canvas.
         // The tool worked at canvas size because a stroke can go anywhere; what
         // is kept afterwards is the part that has something in it.

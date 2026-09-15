@@ -13,7 +13,7 @@ describe("canDirectRasterPreviewBlit", () => {
   ])("routes %s through the compositor", (variant) => {
     const state = createRasterDocument(2, 2);
     const layer = state.layers[0]!;
-    if (variant === "mask") layer.mask = { pixels: new Uint8ClampedArray([255, 255, 255, 255]), assetId: null, enabled: true, linked: true, density: 1, feather: 0 };
+    if (variant === "mask") layer.mask = { pixels: new Uint8ClampedArray([255, 255, 255, 255]), pixelsRevision: 0, assetId: null, enabled: true, linked: true, density: 1, feather: 0 };
     if (variant === "fill") layer.fillOpacity = .5;
     if (variant === "clipping") layer.clipping = true;
     if (variant === "effects") layer.effects = { dropShadow: { enabled: true, color: "#000000", opacity: 1, offsetX: 1, offsetY: 1 } };

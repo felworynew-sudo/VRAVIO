@@ -106,13 +106,20 @@ export function swapLayerRegion(
     layer.pixels.set(patch.subarray(y * rowBytes, y * rowBytes + rowBytes), rowStart);
   }
   trimInPlace(layer);
-  // A fresh buffer, always. `layerDocumentPixels` caches its canvas-sized materialisation against
-  // the buffer object, and `layerRenderSignatures` decides whether a layer looks different by
-  // comparing that same object — both on the standing rule that every path which edits pixels
-  // assigns a new one. Writing into the old buffer in place broke both at once: undoing a stroke
-  // changed the picture and the screen was never told, because nothing about the layer had
-  // "changed". Caught live, by comparing the visible canvas against the layer's own pixels.
+  // Two signals during the migration docs/master-plan.md §37.6.2 describes, deliberately kept
+  // both live at once rather than swapped in one step: the identity fallback below is what this
+  // function has always done — `layerDocumentPixels` caches its canvas-sized materialisation
+  // against the buffer object, and `layerRenderSignatures` decides whether a layer looks
+  // different by comparing that same object, both on the standing rule that every path which
+  // edits pixels assigns a new one. Writing into the old buffer in place broke both at once:
+  // undoing a stroke changed the picture and the screen was never told, because nothing about
+  // the layer had "changed". Caught live, by comparing the visible canvas against the layer's
+  // own pixels. `pixelsRevision` is the replacement signal, bumped unconditionally because this
+  // function's whole point is that the content changed — once every consumer of the identity
+  // check reads this instead, the line below can go, saving the full-layer copy it exists only
+  // to manufacture.
   if (layer.pixels === original) layer.pixels = original.slice();
+  layer.pixelsRevision += 1;
   return previous;
 }
 
@@ -130,6 +137,10 @@ export function swapMaskRegion(
     next.set(patch.subarray(y * region.width, y * region.width + region.width), rowStart);
   }
   // New buffer for the same reason as above: a mask's identity is half of the layer's signature.
+  // `mask.pixelsRevision` is the migration's replacement signal (docs/master-plan.md §37.6.2) —
+  // bumped alongside, not instead of, the fresh buffer, until every consumer of the identity
+  // check reads this number instead.
   mask.pixels = next;
+  mask.pixelsRevision += 1;
   return previous;
 }

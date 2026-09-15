@@ -53,6 +53,7 @@ function fill(documentId: string, foreground: boolean, label: string): void {
       const layer = draft.layers.find((item) => item.id === target.layer.id);
       if (!layer?.mask) return false;
       layer.mask.pixels = fillSelectionInMask(layer.mask.pixels, draft.width, draft.height, draft.selection, target.maskColor);
+      layer.mask.pixelsRevision += 1;
       return true;
     }
     const layer = draft.layers.find((item) => item.id === target.layer.id);

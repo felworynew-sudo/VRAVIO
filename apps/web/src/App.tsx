@@ -493,7 +493,7 @@ export function App() {
       if (!target.mask) return;
       const before = maskToRgba(target.mask.pixels), confined = adjustedPixels(before, value, document.state.selection);
       const beforeMask = target.mask.pixels.slice(), afterMask = rgbaToMask(confined);
-      const assignMask = (pixels: Uint8ClampedArray) => { kernel.documents.update<RasterDocumentState>(document.id, (state) => { const layer = state.layers.find((item) => item.id === target.id); if (layer?.mask) layer.mask.pixels = pixels; }); };
+      const assignMask = (pixels: Uint8ClampedArray) => { kernel.documents.update<RasterDocumentState>(document.id, (state) => { const layer = state.layers.find((item) => item.id === target.id); if (layer?.mask) { layer.mask.pixels = pixels; layer.mask.pixelsRevision += 1; } }); };
       if (history) void history.execute({ label: `Mask Adjustment: ${definition?.name.en ?? value.kind}`, memoryEstimate: beforeMask.byteLength + afterMask.byteLength, redo: () => assignMask(afterMask), undo: () => assignMask(beforeMask) }); else assignMask(afterMask);
       previewImageAdjustment(null); setAdjustmentDialog(null);
       return;

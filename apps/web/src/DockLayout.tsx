@@ -635,6 +635,7 @@ function LayersPanel() {
           const layer = current.layers.find((item) => item.id === maskLayerId);
           if (!layer || layer.kind === "group" || !layer.mask) return false;
           layer.mask.pixels = punchSelectionIntoMask(layer.mask.pixels, current.width, current.height, selection);
+          layer.mask.pixelsRevision += 1;
           return true;
         });
         return;

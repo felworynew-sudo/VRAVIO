@@ -87,6 +87,7 @@ const invertCommand: CommandDefinition = {
         const inverted = new Uint8ClampedArray(layer.mask.pixels.length);
         for (let index = 0; index < inverted.length; index += 1) inverted[index] = 255 - layer.mask.pixels[index]!;
         layer.mask.pixels = inverted;
+        layer.mask.pixelsRevision += 1;
         return true;
       });
       return;
