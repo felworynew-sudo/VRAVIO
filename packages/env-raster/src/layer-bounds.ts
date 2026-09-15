@@ -45,40 +45,44 @@ export function unionRect(current: RasterRect | null, x0: number, y0: number, x1
  * The layer's pixels laid out across the whole document.
  *
  * The bridge for everything that still thinks in canvas coordinates — filters,
- * dialogs, exporters, the tools mid-gesture. Cached against the layer's buffer,
- * which is safe because every path that edits pixels assigns a fresh one; a
- * layer read repeatedly without being edited materialises once.
+ * dialogs, exporters, the tools mid-gesture. Cached against the layer itself,
+ * validated by `pixelsRevision` (docs/master-plan.md §37.6.2); a layer read
+ * repeatedly without being edited materialises once.
  */
 interface MaterialisedLayer {
   readonly width: number;
   readonly height: number;
   readonly bounds: RasterRect;
   readonly pixels: Uint8ClampedArray;
+  /** The source layer's `pixelsRevision` at the moment this projection was built (docs/master-plan.md §37.6.2) — every cached projection for a layer goes stale together the instant its source content changes, so this is checked once per lookup rather than tracked per entry differently. */
+  readonly pixelsRevision: number;
 }
 
 /**
- * A source buffer may be placed more than once as independent Smart Object
+ * A source layer may be placed more than once as independent Smart Object
  * instances. Keep a small LRU-like set of projections per source instead of
  * evicting the previous instance on every paint pass. The WeakMap still lets
- * all projections disappear as soon as their immutable source does.
+ * all projections disappear as soon as their source layer does; `pixelsRevision`
+ * is what lets a projection disappear the instant the source's *content*
+ * does, without needing a fresh `layer.pixels` object to key on.
  */
-const materialised = new WeakMap<Uint8ClampedArray, Map<string, MaterialisedLayer>>();
+const materialised = new WeakMap<RasterLayer, Map<string, MaterialisedLayer>>();
 const MAX_MATERIALISED_PROJECTIONS = 4;
 
-function cachedMaterialisation(source: Uint8ClampedArray, key: string): Uint8ClampedArray | null {
-  const entries = materialised.get(source);
+function cachedMaterialisation(layer: RasterLayer, key: string): Uint8ClampedArray | null {
+  const entries = materialised.get(layer);
   const cached = entries?.get(key);
-  if (!cached || cached.width < 1 || cached.height < 1) return null;
+  if (!cached || cached.width < 1 || cached.height < 1 || cached.pixelsRevision !== layer.pixelsRevision) return null;
   // Refresh insertion order so the least recently used projection is removed.
   entries!.delete(key); entries!.set(key, cached);
   return cached.pixels;
 }
 
-function cacheMaterialisation(source: Uint8ClampedArray, key: string, width: number, height: number, bounds: RasterRect, pixels: Uint8ClampedArray): void {
-  const entries = materialised.get(source) ?? new Map<string, MaterialisedLayer>();
-  if (!materialised.has(source)) materialised.set(source, entries);
+function cacheMaterialisation(layer: RasterLayer, key: string, width: number, height: number, bounds: RasterRect, pixels: Uint8ClampedArray): void {
+  const entries = materialised.get(layer) ?? new Map<string, MaterialisedLayer>();
+  if (!materialised.has(layer)) materialised.set(layer, entries);
   while (entries.size >= MAX_MATERIALISED_PROJECTIONS) entries.delete(entries.keys().next().value!);
-  entries.set(key, { width, height, bounds: { ...bounds }, pixels });
+  entries.set(key, { width, height, bounds: { ...bounds }, pixels, pixelsRevision: layer.pixelsRevision });
 }
 
 /** Samples straight-alpha source pixels with bilinear filtering in premultiplied
@@ -112,7 +116,7 @@ export function layerDocumentPixels(layer: RasterLayer, documentWidth: number, d
   if (placement) {
     const placementKey = `${placement.a},${placement.b},${placement.c},${placement.d},${placement.e},${placement.f}`;
     const cacheKey = `smart:${documentWidth}x${documentHeight}:${placementKey}`;
-    const cached = cachedMaterialisation(layer.pixels, cacheKey);
+    const cached = cachedMaterialisation(layer, cacheKey);
     if (cached) return cached;
     const determinant = placement.a * placement.d - placement.b * placement.c;
     const pixels = new Uint8ClampedArray(documentWidth * documentHeight * 4);
@@ -132,13 +136,13 @@ export function layerDocumentPixels(layer: RasterLayer, documentWidth: number, d
         sampleBilinear(layer.pixels, layer.width, layer.height, sourceX, sourceY, pixels, (y * documentWidth + x) * 4);
       }
     }
-    cacheMaterialisation(layer.pixels, cacheKey, documentWidth, documentHeight, bounds, pixels);
+    cacheMaterialisation(layer, cacheKey, documentWidth, documentHeight, bounds, pixels);
     return pixels;
   }
   if (bounds.x === 0 && bounds.y === 0 && bounds.width === documentWidth && bounds.height === documentHeight) return layer.pixels;
 
   const cacheKey = `layer:${documentWidth}x${documentHeight}:${bounds.x},${bounds.y},${bounds.width},${bounds.height}`;
-  const cached = cachedMaterialisation(layer.pixels, cacheKey);
+  const cached = cachedMaterialisation(layer, cacheKey);
   if (cached) return cached;
 
   const pixels = new Uint8ClampedArray(documentWidth * documentHeight * 4);
@@ -156,7 +160,7 @@ export function layerDocumentPixels(layer: RasterLayer, documentWidth: number, d
       pixels.set(layer.pixels.subarray(from, from + rowBytes), (documentY * documentWidth + visibleLeft) * 4);
     }
   }
-  cacheMaterialisation(layer.pixels, cacheKey, documentWidth, documentHeight, bounds, pixels);
+  cacheMaterialisation(layer, cacheKey, documentWidth, documentHeight, bounds, pixels);
   return pixels;
 }
 
