@@ -1,4 +1,4 @@
-import { accumulateUniquePixelBytes, decodeRasterAsset, encodeRasterAsset, isRasterAsset, visitPixelBuffers, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
+import { accumulateUniquePixelBytes, decodeRasterAsset, encodeRasterAsset, isRasterAsset, visitPixelBuffers, type RasterDocumentState, type RasterLayerMask, type RasterRect } from "@vravio/env-raster";
 
 /**
  * Pure pixel-buffer plumbing shared by `RasterWorkspace.tsx`'s render and
@@ -129,13 +129,17 @@ export function rgbaToMask(pixels: Uint8ClampedArray): Uint8ClampedArray {
 }
 
 /**
- * Scratch mask buffers, keyed by the committed mask they were cloned from.
+ * Scratch mask buffers, keyed by the mask object they were cloned from.
  *
- * A stroke keeps writing into the same scratch for as long as the layer's committed mask stays
- * the same object — which is exactly the length of one stroke, because committing replaces it.
- * So the key invalidates itself and there is nothing to remember to clear.
+ * A stroke keeps writing into the same scratch for as long as the layer's committed mask content
+ * stays the same — which is exactly the length of one stroke, because committing bumps
+ * `pixelsRevision` (docs/master-plan.md §37.6.2, the same replacement as this package's other five
+ * identity-keyed caches — `mask.pixels` itself is reassigned to a fresh object on commit today,
+ * which would invalidate an identity-keyed WeakMap just as well, but only as an accident of how
+ * commit happens to be written, not because anything here asked for it). So the key invalidates
+ * itself and there is nothing to remember to clear.
  */
-const maskScratchByCommitted = new WeakMap<Uint8ClampedArray, Uint8ClampedArray>();
+const maskScratchByCommitted = new WeakMap<RasterLayerMask, { pixelsRevision: number; scratch: Uint8ClampedArray }>();
 
 /**
  * The document with a mask stroke's *dirty band* swapped in — the region counterpart of
@@ -153,12 +157,13 @@ const maskScratchByCommitted = new WeakMap<Uint8ClampedArray, Uint8ClampedArray>
 export function withLayerMaskRegion(state: RasterDocumentState, layerId: string, rgba: Uint8ClampedArray, region: RasterRect): RasterDocumentState {
   const layer = state.layers.find((item) => item.id === layerId);
   if (!layer?.mask) return state;
-  const committed = layer.mask.pixels;
-  let scratch = maskScratchByCommitted.get(committed);
-  if (!scratch || scratch.length !== committed.length) {
-    scratch = committed.slice();
-    maskScratchByCommitted.set(committed, scratch);
+  const mask = layer.mask, committed = mask.pixels;
+  let entry = maskScratchByCommitted.get(mask);
+  if (!entry || entry.pixelsRevision !== mask.pixelsRevision || entry.scratch.length !== committed.length) {
+    entry = { pixelsRevision: mask.pixelsRevision, scratch: committed.slice() };
+    maskScratchByCommitted.set(mask, entry);
   }
+  const scratch = entry.scratch;
   const right = Math.min(state.width, region.x + region.width), bottom = Math.min(state.height, region.y + region.height);
   for (let y = Math.max(0, region.y); y < bottom; y += 1) {
     for (let x = Math.max(0, region.x); x < right; x += 1) {
