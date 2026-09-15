@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { WARP_PRESETS, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
+import { WARP_PRESETS, applyRasterFilter, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
 import { maskToRgba, rgbaToMask } from "./raster-pixel-buffers";
 import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
 import { withBusyPainted } from "./busy";
@@ -117,6 +117,19 @@ export function App() {
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
   const [filterGalleryOpen, setFilterGalleryOpen] = useState(false);
+  // Which filter the Gallery should open pre-selected on — set by whichever
+  // Filter-menu item was actually clicked, instead of the dialog's own
+  // hardcoded "gaussian_blur" default (docs/master-plan.md's Filter menu
+  // skeleton: "Гауссово размытие…" must land on Gaussian Blur, not on
+  // whatever the Gallery happened to open on last time).
+  const [filterGallerySelection, setFilterGallerySelection] = useState<string | undefined>(undefined);
+  // The last filter actually applied through the Gallery (id + the exact
+  // settings used), for "Предыдущий фильтр" (Alt+Ctrl+F) to repeat without
+  // reopening the dialog — Photoshop's own Ctrl+F behaviour. Liquify and
+  // Camera Raw Filter do not populate this: they are interactive tools, not
+  // one-shot parametrised filters, and Photoshop's own repeat-last-filter
+  // does not reach them either.
+  const [lastFilter, setLastFilter] = useState<{ id: string; settings: Record<string, number>; label: string } | null>(null);
   const [liquifyOpen, setLiquifyOpen] = useState(false);
   const [cameraRawFilterOpen, setCameraRawFilterOpen] = useState(false);
   const [cameraRawImport, setCameraRawImport] = useState<{ buffer: ArrayBuffer; name: string } | null>(null);
@@ -351,6 +364,23 @@ export function App() {
     const selection=active.state.selection;
     const confined=selection?confineToSelection(before,filtered,selection.mask):filtered;
     const history=kernel.historyByDocument.get(id);if(history)void history.execute({label:`Filter: ${label}`,memoryEstimate:before.byteLength+confined.byteLength,redo:()=>assign(confined),undo:()=>assign(before)}); };
+  // "Предыдущий фильтр" (Alt+Ctrl+F) — re-runs the last Gallery filter with
+  // its exact settings, no dialog. Mirrors `applyFilter`'s own materialise
+  // step (`layerDocumentPixels`) rather than reusing its `before`, since that
+  // is a local inside the closure above, not something this function can see.
+  const repeatLastFilter = () => {
+    if (!lastFilter || !active || !isRasterDocumentState(active.state)) return;
+    const state0 = active.state;
+    const target = state0.layers.find((item) => item.id === state0.activeLayerId);
+    if (!target) return;
+    const source = layerDocumentPixels(target, state0.width, state0.height);
+    const filtered = applyRasterFilter(source, state0.width, state0.height, lastFilter.id, lastFilter.settings);
+    applyFilter(filtered, lastFilter.label);
+  };
+  // A Filter-menu item for an already-implemented catalog filter opens the
+  // Gallery pre-selected on it, instead of whatever the dialog last happened
+  // to show (docs/master-plan.md's Filter menu skeleton).
+  const openFilter = (id: string) => { setFilterGallerySelection(id); setFilterGalleryOpen(true); };
   const openCameraRawReprocess = async () => {
     if (!active) return;
     const source = active.origin?.kind === "asset" ? active.origin : null;
@@ -599,6 +629,8 @@ export function App() {
     const openPrint = () => setPrintOpen(true);
     const openFile = () => openImageRef.current?.click();
     const openLiquify = () => { if (active && isRasterDocumentState(active.state)) setLiquifyOpen(true); };
+    const openCameraRawFilter = () => { if (active && isRasterDocumentState(active.state)) setCameraRawFilterOpen(true); };
+    const repeatFilter = () => repeatLastFilter();
     const openAdjustment = (event: Event) => { const definition = rasterAdjustmentById.get((event as CustomEvent<{ kind: RasterAdjustment["kind"] }>).detail.kind); if (definition) openImageAdjustment(definition); };
     window.addEventListener("vravio-file-save", save);
     window.addEventListener("vravio-file-save-as", saveAs);
@@ -607,6 +639,8 @@ export function App() {
     window.addEventListener("vravio-file-print", openPrint);
     window.addEventListener("vravio-file-open", openFile);
     window.addEventListener("vravio-liquify-open", openLiquify);
+    window.addEventListener("vravio-camera-raw-filter-open", openCameraRawFilter);
+    window.addEventListener("vravio-filter-repeat", repeatFilter);
     window.addEventListener("vravio-adjustment-open", openAdjustment);
     return () => {
       window.removeEventListener("vravio-file-save", save);
@@ -616,6 +650,8 @@ export function App() {
       window.removeEventListener("vravio-file-print", openPrint);
       window.removeEventListener("vravio-file-open", openFile);
       window.removeEventListener("vravio-liquify-open", openLiquify);
+      window.removeEventListener("vravio-camera-raw-filter-open", openCameraRawFilter);
+      window.removeEventListener("vravio-filter-repeat", repeatFilter);
       window.removeEventListener("vravio-adjustment-open", openAdjustment);
     };
   });
@@ -856,7 +892,104 @@ export function App() {
           ["Convert to Shape (Преобразовать в фигуру)", "", () => {}, true],
           ["Create Work Path (Создать рабочий контур)", "", () => {}, true],
         ]}/>}
-        {active?.kind === "raster" && <Menu label="Filter (Фильтр)" language={store.language} open={openMenu === "filter"} onToggle={() => setOpenMenu(openMenu === "filter" ? null : "filter")} items={[["Filter Gallery… (Галерея фильтров…)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Camera Raw Filter… (Фильтр Camera Raw…)", "", () => setCameraRawFilterOpen(true), !active || !isRasterDocumentState(active.state)], ["Reprocess Original RAW… (Переобработать исходный RAW…)", "", () => void openCameraRawReprocess(), !activeRawOrigin], ["Liquify… (Пластика…)", "Ctrl+Shift+X", () => setLiquifyOpen(true), !active || !isRasterDocumentState(active.state)], ["Blur Gallery (Галерея размытия)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Sharpen (Усиление резкости)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Noise (Шум)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"], ["Stylize (Стилизация)", "", () => setFilterGalleryOpen(true), !active || active.kind!=="raster"]]}/>}
+        {active?.kind === "raster" && <Menu label="Filter (Фильтр)" language={store.language} open={openMenu === "filter"} onToggle={() => setOpenMenu(openMenu === "filter" ? null : "filter")} items={[
+          [lastFilter ? `Repeat Filter: ${localized(lastFilter.label, "en")}… (Повторить фильтр: ${localized(lastFilter.label, "ru")}…)` : "Repeat Filter (Предыдущий фильтр)", "Ctrl+Alt+F", repeatLastFilter, !active || active.kind !== "raster" || !lastFilter],
+          ["Filter Gallery… (Галерея фильтров…)", "", () => { setFilterGallerySelection(undefined); setFilterGalleryOpen(true); }, !active || active.kind!=="raster"],
+          ["Lens Correction… (Коррекция линзы…)", "", () => {}, true],
+          ["Camera Raw Filter… (Фильтр Camera Raw…)", "Ctrl+Shift+A", () => setCameraRawFilterOpen(true), !active || !isRasterDocumentState(active.state)],
+          ["Reprocess Original RAW… (Переобработать исходный RAW…)", "", () => void openCameraRawReprocess(), !activeRawOrigin],
+          ["Liquify… (Пластика…)", "Ctrl+Shift+X", () => setLiquifyOpen(true), !active || !isRasterDocumentState(active.state)],
+          ["Vanishing Point… (Vanishing Point…)", "", () => {}, true],
+          { label: "3D (3D)", items: [
+            ["Normal Map… (Карта нормалей…)", "", () => {}, true],
+            ["Texture Dilation… (Texture Dilation…)", "", () => {}, true],
+          ] },
+          { label: "Blur (Размытие)", items: [
+            ["Average (Средний)", "", () => {}, true],
+            ["Blur (Размыть)", "", () => {}, true],
+            ["Blur More (Сильнее размыть)", "", () => {}, true],
+            ["Box Blur… (Коробчатое размытие…)", "", () => openFilter("box_blur"), !active || active.kind!=="raster"],
+            ["Gaussian Blur… (Размытие по Гауссу…)", "", () => openFilter("gaussian_blur"), !active || active.kind!=="raster"],
+            ["Lens Blur… (Размытие объектива…)", "", () => {}, true],
+            ["Motion Blur… (Размытие в движении…)", "", () => {}, true],
+            ["Radial Blur… (Радиальное размытие…)", "", () => {}, true],
+            ["Surface Blur… (Поверхностное размытие…)", "", () => {}, true],
+          ] },
+          { label: "Blur Gallery (Галерея размытия)", items: [
+            ["Field Blur… (Размытие поля…)", "", () => {}, true],
+            ["Iris Blur… (Размытие диафрагмы…)", "", () => {}, true],
+            ["Tilt-Shift… (Наклон-смещение…)", "", () => {}, true],
+            ["Path Blur… (Размытие пути…)", "", () => {}, true],
+            ["Spin Blur… (Размытие вращения…)", "", () => {}, true],
+          ] },
+          { label: "Distort (Искажение)", items: [
+            ["Displace… (Смещение…)", "", () => {}, true],
+            ["Kaleidoscope… (Калейдоскоп…)", "", () => {}, true],
+            ["Pinch… (Щипок…)", "", () => openFilter("pinch_bloat"), !active || active.kind!=="raster"],
+            ["Polar Coordinates… (Полярные координаты…)", "", () => {}, true],
+            ["Ripple… (Рябь…)", "", () => {}, true],
+            ["Shear… (Сдвиг…)", "", () => {}, true],
+            ["Spherize… (Сферизация…)", "", () => {}, true],
+            ["Twirl… (Скрутить…)", "", () => openFilter("twirl"), !active || active.kind!=="raster"],
+            ["Wave… (Волна…)", "", () => openFilter("wave"), !active || active.kind!=="raster"],
+            ["ZigZag… (Зигзаг…)", "", () => {}, true],
+            ["Dents… (Dents…)", "", () => {}, true],
+          ] },
+          { label: "Noise (Шум)", items: [
+            ["Add Noise… (Добавить шум…)", "", () => openFilter("add_noise"), !active || active.kind!=="raster"],
+            ["Despeckle (Подавление шумов)", "", () => {}, true],
+            ["Dust & Scratches… (Пыль и царапины…)", "", () => openFilter("dust_and_scratches"), !active || active.kind!=="raster"],
+            ["Median… (Медиана…)", "", () => openFilter("median"), !active || active.kind!=="raster"],
+            ["Reduce Noise… (Уменьшить шум…)", "", () => {}, true],
+          ] },
+          { label: "Pixelate (Пикселизация)", items: [
+            ["Color Halftone… (Цветной полутон…)", "", () => openFilter("color_halftone"), !active || active.kind!=="raster"],
+            ["Crystallize… (Кристаллизация…)", "", () => {}, true],
+            ["Fragment (Фрагмент)", "", () => {}, true],
+            ["Mezzotint… (Глубокая печать…)", "", () => {}, true],
+            ["Mosaic… (Мозаика…)", "", () => openFilter("pixelate"), !active || active.kind!=="raster"],
+            ["Pointillize… (Пуантилизм…)", "", () => {}, true],
+            ["Shape Mosaic… (Shape Mosaic…)", "", () => {}, true],
+          ] },
+          { label: "Render (Рендер)", items: [
+            ["Flame… (Пламя…)", "", () => {}, true],
+            ["Clouds (Облака)", "", () => openFilter("clouds"), !active || active.kind!=="raster"],
+            ["Difference Clouds (Облака с наложением)", "", () => {}, true],
+            ["Fibers… (Волокна…)", "", () => {}, true],
+            ["Lens Flare… (Блик линзы…)", "", () => {}, true],
+          ] },
+          { label: "Sharpen (Резкость)", items: [
+            ["Sharpen… (Резкость…)", "", () => openFilter("sharpen"), !active || active.kind!=="raster"],
+            ["Sharpen Edges (Повысить резкость краёв)", "", () => {}, true],
+            ["Sharpen More (Усилить резкость)", "", () => {}, true],
+            ["Smart Sharpen… (Умная резкость…)", "", () => {}, true],
+            ["Unsharp Mask… (Нерезкая маска…)", "", () => openFilter("unsharp_mask"), !active || active.kind!=="raster"],
+          ] },
+          { label: "Stylize (Стилизовать)", items: [
+            ["Diffuse… (Диффузия…)", "", () => {}, true],
+            ["Emboss… (Тиснение…)", "", () => openFilter("emboss"), !active || active.kind!=="raster"],
+            ["Find Edges (Найти края)", "", () => openFilter("edge_detect"), !active || active.kind!=="raster"],
+            ["Oil Paint… (Масляная краска…)", "", () => {}, true],
+            ["Solarize (Соляризировать)", "", () => {}, true],
+            ["Trace Contour… (Обвести контур…)", "", () => {}, true],
+            ["Wind… (Ветер…)", "", () => {}, true],
+            ["Glowing Edges… (Светящиеся края…)", "", () => openFilter("glowing_edges"), !active || active.kind!=="raster"],
+            ["Plastic Wrap… (Целлофановая упаковка…)", "", () => openFilter("plastic_wrap"), !active || active.kind!=="raster"],
+            ["CRT Glitch… (Глитч ЭЛТ…)", "", () => openFilter("glitch"), !active || active.kind!=="raster"],
+            ["E-Ink Dither… (Дизеринг E-Ink…)", "", () => openFilter("eink"), !active || active.kind!=="raster"],
+          ] },
+          { label: "Other (Другие)", items: [
+            ["High Pass… (Высокие частоты…)", "", () => {}, true],
+            ["HSB/HSL… (HSB/HSL…)", "", () => {}, true],
+            ["Maximum… (Максимум…)", "", () => {}, true],
+            ["Minimum… (Минимум…)", "", () => {}, true],
+            ["Offset… (Смещение…)", "", () => {}, true],
+          ] },
+          { label: "Fourier (Fourier)", items: [
+            ["Fourier Transform (Fourier Transform)", "", () => {}, true],
+            ["Inverse Fourier Transform (Inverse Fourier Transform)", "", () => {}, true],
+          ] },
+        ]}/>}
         {active?.kind !== "audio" && <Menu label="Plugins (Плагины)" language={store.language} open={openMenu === "plugins"} onToggle={() => setOpenMenu(openMenu === "plugins" ? null : "plugins")} items={[
           // The active environment's plugins, and only those: `pluginsFor`
           // answers from each plugin's own manifest, and returns nothing at all
@@ -973,7 +1106,7 @@ export function App() {
     <BusyCursor />
     <BusyAnnouncement />
     {diagnosticsOpen && <div className="dialog-backdrop" onMouseDown={() => setDiagnosticsOpen(false)}><section className="diagnostics-dialog" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><header><strong>Diagnostics log (Журнал диагностики)</strong><button onClick={() => setDiagnosticsOpen(false)}>×</button></header><div className="diagnostics-list">{diagnostics.length ? [...diagnostics].reverse().map((entry, index) => <article data-level={entry.level} key={`${entry.time}-${index}`}><time>{new Date(entry.time).toLocaleTimeString()}</time><b>{entry.area}</b><span>{entry.message}</span>{entry.detail && <pre>{entry.detail}</pre>}</article>) : <p>No events recorded (Событий пока нет).</p>}</div><footer><button onClick={() => { clearDiagnostics(); setDiagnostics([]); }}>Clear (Очистить)</button><button onClick={() => { const blob = new Blob([JSON.stringify(diagnostics, null, 2)], { type: "application/json" }); download(blob, `vravio-diagnostics-${Date.now()}.json`); }}>Export JSON (Экспорт JSON)</button></footer></section></div>}
-    {filterGalleryOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<FilterGalleryDialog layer={layer} onApply={applyFilter} onClose={()=>setFilterGalleryOpen(false)}/>:null;})()}
+    {filterGalleryOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<FilterGalleryDialog layer={layer} initialFilterId={filterGallerySelection} onApply={(pixels,label,meta)=>{applyFilter(pixels,label);if(meta)setLastFilter({id:meta.filterId,settings:meta.settings,label});}} onClose={()=>setFilterGalleryOpen(false)}/>:null;})()}
     {liquifyOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<LiquifyDialog layer={layer} language={store.language} onApply={applyFilter} onClose={()=>setLiquifyOpen(false)}/>:null;})()}
     {cameraRawFilterOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<CameraRawFilterDialog layer={layer} language={store.language} onApply={applyFilter} onClose={()=>setCameraRawFilterOpen(false)}/>:null;})()}
     {cameraRawImport && <CameraRawDialog

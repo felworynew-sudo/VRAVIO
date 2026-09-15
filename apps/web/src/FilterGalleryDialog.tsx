@@ -30,8 +30,8 @@ function pixelsToDataUrl(pixels: Uint8ClampedArray, width: number, height: numbe
   return canvas.toDataURL();
 }
 
-export function FilterGalleryDialog({ layer, onApply, onClose }: { layer: RasterLayer; onApply(pixels: Uint8ClampedArray, label: string): void; onClose(): void }) {
-  const [filterId,setFilterId]=useState("gaussian_blur"), [settings,setSettings]=useState<Record<string,number>>({});
+export function FilterGalleryDialog({ layer, initialFilterId, onApply, onClose }: { layer: RasterLayer; initialFilterId?: string | undefined; onApply(pixels: Uint8ClampedArray, label: string, meta?: { filterId: string; settings: Record<string, number> }): void; onClose(): void }) {
+  const [filterId,setFilterId]=useState(initialFilterId ?? "gaussian_blur"), [settings,setSettings]=useState<Record<string,number>>({});
   const [rendered, setRendered] = useState<Uint8ClampedArray | null>(null);
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
   const [isRendering, setIsRendering] = useState(true);
@@ -116,5 +116,5 @@ export function FilterGalleryDialog({ layer, onApply, onClose }: { layer: Raster
               // would offer values ("70% gaussian") that mean nothing.
               return parameter.choices
                 ? <label key={parameter.id} className="filter-choice">{parameter.name}<select value={current} onChange={(event)=>setSettings((values)=>({...values,[parameter.id]:Number(event.target.value)}))}>{parameter.choices.map((choice,index)=><option key={choice} value={index}>{choice}</option>)}</select></label>
-                : <label key={parameter.id}>{parameter.name}<input type="range" min={parameter.min} max={parameter.max} step={parameter.step} value={current} onChange={(event)=>setSettings((values)=>({...values,[parameter.id]:event.target.valueAsNumber}))}/><output>{current}</output></label>}):<p>No parameters (Нет параметров)</p>}</aside></div><footer><button onClick={onClose}>Cancel (Отмена)</button><button className="primary" disabled={!rendered||isRendering||Boolean(renderError)} onClick={()=>{if(rendered){onApply(rendered,filter.name);onClose();}}}>OK</button></footer></section></div>;
+                : <label key={parameter.id}>{parameter.name}<input type="range" min={parameter.min} max={parameter.max} step={parameter.step} value={current} onChange={(event)=>setSettings((values)=>({...values,[parameter.id]:event.target.valueAsNumber}))}/><output>{current}</output></label>}):<p>No parameters (Нет параметров)</p>}</aside></div><footer><button onClick={onClose}>Cancel (Отмена)</button><button className="primary" disabled={!rendered||isRendering||Boolean(renderError)} onClick={()=>{if(rendered){onApply(rendered,filter.name,{filterId,settings:effectiveSettings});onClose();}}}>OK</button></footer></section></div>;
 }
