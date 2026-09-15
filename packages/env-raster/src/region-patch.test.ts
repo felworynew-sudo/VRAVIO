@@ -43,20 +43,21 @@ describe("a rectangle of pixels, swapped in and out — GIMP's undo record", () 
     expect(Array.from(layer.pixels)).toEqual(Array.from(edited));
   });
 
-  it("bumps pixelsRevision in place, because that is how the screen now learns anything changed", () => {
-    // `layerRenderSignatures` compares `pixelsRevision`, not `layer.pixels` by identity — the
+  it("hands the layer a new buffer and bumps pixelsRevision, because either could be the only signal a reader still checks", () => {
+    // `layerRenderSignatures` compares `pixelsRevision` now, not `layer.pixels` by identity — the
     // phase 2 migration of docs/master-plan.md §37.6.2 moved every such reader
-    // (`layerDocumentPixels`'s cache, `layerOpaqueBounds`'s cache, and three others) off identity
-    // first. Before that migration, this function had to hand back a fresh buffer on every call
-    // just to make identity comparisons see a change — undoing a stroke without one left the
-    // canvas showing the picture from before the undo, because every reader agreed nothing had
-    // changed. Now that every reader checks the revision instead, phase 3 writes into the same
-    // buffer: bounds unchanged, so `trimInPlace` has no reason to replace it either.
+    // (`layerDocumentPixels`'s cache, `layerOpaqueBounds`'s cache, and three others) off identity.
+    // Phase 3 tried retiring the fresh-buffer fallback on the strength of that migration and had
+    // to be reverted (see this file's `duplicate-swap-sharing.test.ts` sibling): `duplicateLayer`
+    // shares this exact buffer object with a copy without cloning it, safe only as long as nothing
+    // ever writes through the shared reference — which writing in place here would do. The
+    // original identity-based reason for the fresh buffer is gone, but a second, independent
+    // reason (never mutate a possibly-shared buffer) means the fresh buffer stays.
     const layer = createRasterLayer(W, H, "L");
     setLayerPixels(layer, fill(0), W, H);
     const buffer = layer.pixels, revision = layer.pixelsRevision;
     swapLayerRegion(layer, rect, cropRegion(fill(90), W, rect), W, H);
-    expect(layer.pixels).toBe(buffer);
+    expect(layer.pixels).not.toBe(buffer);
     expect(layer.pixelsRevision).toBe(revision + 1);
   });
 
@@ -121,9 +122,13 @@ describe("a rectangle of pixels, swapped in and out — GIMP's undo record", () 
     expect(mask.pixels[(rect.y * W + rect.x)]).toBe(patch[0]);
     // Outside the rectangle the mask is untouched.
     expect(mask.pixels[0]).toBe(255);
-    // Phase 3 of docs/master-plan.md §37.6.2: written into the same buffer, `pixelsRevision` is
-    // the sole change signal now that `featheredMasks` and `maskScratchByCommitted` both read it.
-    expect(mask.pixels).toBe(buffer);
+    // A fresh buffer, not the same one — phase 3 of docs/master-plan.md §37.6.2 tried writing
+    // through the existing buffer here and had to be reverted (see
+    // `duplicate-swap-sharing.test.ts`): `duplicateLayer` and `changeRasterDocument` both share a
+    // mask's `pixels` object without cloning it, so writing through it would corrupt whoever else
+    // still holds that reference. `pixelsRevision` is still the sole *change-detection* signal now
+    // that `featheredMasks` and `maskScratchByCommitted` both read it — this is a separate concern.
+    expect(mask.pixels).not.toBe(buffer);
     expect(mask.pixelsRevision).toBe(1);
 
     swapMaskRegion(mask, rect, redo, W, H);

@@ -94,7 +94,23 @@ export function swapLayerRegion(
 ): Uint8ClampedArray {
   const region = clampRect(rect, documentWidth, documentHeight);
   if (!region.width || !region.height) return patch;
+  const before = layer.pixels;
   growToInclude(layer, region);
+  // Copied *before* the write loop touches a single byte, not after. `layer-ops.ts`'s
+  // `duplicateLayer` shares this exact buffer object with a copy rather than cloning it (§37.5),
+  // safe only because — per its own doc comment — nothing in this package ever writes through a
+  // shared buffer; `changeRasterDocument` in apps/web shares a layer's buffer the same way with
+  // its undo/redo snapshots of every non-pixel command (rename, reorder, opacity, blend mode, …).
+  // A version of this function once copied only *after* the loop below had already written
+  // through whatever `layer.pixels` was at the time — an identity-comparison leftover from before
+  // `pixelsRevision` existed, harmless for that purpose (the fresh object still compared unequal
+  // to the old one) but not for this one: the write already went through the original, possibly
+  // still-shared buffer before the "fresh" one was ever made, so anyone else holding that
+  // reference silently saw the edit too. `duplicate-swap-sharing.test.ts` reproduces it. When
+  // `growToInclude` above already built a fresh buffer (the edit grew the layer), `layer.pixels`
+  // is already private and this is a no-op check; otherwise, copy now, while it is still just a
+  // copy and not a repair.
+  if (layer.pixels === before) layer.pixels = before.slice();
 
   const bounds = layer.bounds;
   const previous = new Uint8ClampedArray(region.width * region.height * 4);
@@ -105,13 +121,6 @@ export function swapLayerRegion(
     layer.pixels.set(patch.subarray(y * rowBytes, y * rowBytes + rowBytes), rowStart);
   }
   trimInPlace(layer);
-  // Phase 3 of the migration docs/master-plan.md §37.6.2 describes: every consumer that used to
-  // tell "layer changed" from a fresh `pixels` object now reads `pixelsRevision` instead
-  // (`layerDocumentPixels`'s materialisation cache, `layerRenderSignatures`'s comparison, and four
-  // others), so the buffer can finally be written in place — `trimInPlace` above still replaces it
-  // when the edit actually shrinks the layer's bounds, but the common case (bounds unchanged) no
-  // longer pays for a whole-layer copy manufactured only to change an object identity nothing
-  // reads anymore.
   layer.pixelsRevision += 1;
   return previous;
 }
@@ -123,17 +132,19 @@ export function swapMaskRegion(
   const region = clampRect(rect, documentWidth, documentHeight);
   if (!region.width || !region.height) return patch;
   const previous = new Uint8ClampedArray(region.width * region.height);
-  const pixels = mask.pixels;
+  const next = mask.pixels.slice();
   for (let y = 0; y < region.height; y += 1) {
     const rowStart = (region.y + y) * documentWidth + region.x;
-    previous.set(pixels.subarray(rowStart, rowStart + region.width), y * region.width);
-    pixels.set(patch.subarray(y * region.width, y * region.width + region.width), rowStart);
+    previous.set(mask.pixels.subarray(rowStart, rowStart + region.width), y * region.width);
+    next.set(patch.subarray(y * region.width, y * region.width + region.width), rowStart);
   }
-  // Written in place, not into a fresh buffer: a mask's identity used to be half of the layer's
-  // signature, which is why this function always allocated a whole-document copy for even a
-  // one-pixel edit — the 8.5ms-on-a-48MB-mask cost docs/master-plan.md §37.6.2 measured. Phase 2
-  // of that migration moved every consumer (five WeakMap caches plus `sameSignature`) onto
-  // `mask.pixelsRevision`, so bumping it below is now the whole signal and the copy is gone.
+  // New buffer, not written in place — see `swapLayerRegion`'s comment above for why phase 3 of
+  // docs/master-plan.md §37.6.2 tried removing this and had to be reverted: `duplicateLayer` and
+  // `changeRasterDocument` both share a mask's `pixels` object across layers/snapshots without
+  // cloning it, and writing through it here would silently corrupt whichever of them still holds
+  // that reference. `mask.pixelsRevision` is bumped alongside regardless, since every reader of
+  // "did the mask change" already reads that instead of identity.
+  mask.pixels = next;
   mask.pixelsRevision += 1;
   return previous;
 }
