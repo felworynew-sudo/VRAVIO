@@ -33,7 +33,7 @@ describe("Filter menu skeleton's newly-implemented filters (docs/master-plan.md 
     "sharpen_more", "sharpen_edges", "smart_sharpen",
     "diffuse", "solarize", "trace_contour", "wind", "oil_paint", "lens_flare",
     "crystallize", "pointillize", "fragment", "mezzotint", "shape_mosaic", "difference_clouds", "fibers",
-    "normal_map", "lens_correction",
+    "normal_map", "lens_correction", "hsb_hsl",
   ];
 
   it("registers every new filter in the catalog exactly once", () => {
@@ -308,5 +308,20 @@ describe("Blur Gallery effects (docs/master-plan.md §51, interactivity level 3)
     const centre = (16 * WIDTH + 16) * 4, corner = 0;
     expect(result[centre]).toBe(200);
     expect(result[corner]!).toBeLessThan(200);
+  });
+
+  it("HSB/HSL puts pure red's hue at the bottom of the R channel's range and full saturation in G", () => {
+    const source = new Uint8ClampedArray([255, 0, 0, 255]);
+    const result = applyRasterFilter(source, 1, 1, "hsb_hsl", { mode: 0 });
+    expect(result[0]).toBe(0);
+    expect(result[1]).toBe(255);
+    expect(result[2]).toBe(255);
+  });
+
+  it("HSB/HSL's two modes disagree on a partially-desaturated colour (HSB's Saturation/Value vs. HSL's Saturation/Lightness are different formulas)", () => {
+    const source = new Uint8ClampedArray([200, 120, 120, 255]);
+    const hsb = applyRasterFilter(source, 1, 1, "hsb_hsl", { mode: 0 });
+    const hsl = applyRasterFilter(source, 1, 1, "hsb_hsl", { mode: 1 });
+    expect([hsb[1], hsb[2]]).not.toEqual([hsl[1], hsl[2]]);
   });
 });

@@ -1002,7 +1002,7 @@ export function App() {
           ] },
           { label: "Other (Другие)", items: [
             ["High Pass… (Высокие частоты…)", "", () => openFilter("high_pass"), !active || active.kind!=="raster"],
-            ["HSB/HSL… (HSB/HSL…)", "", () => {}, true],
+            ["HSB/HSL… (HSB/HSL…)", "", () => openFilter("hsb_hsl"), !active || active.kind!=="raster"],
             ["Maximum… (Максимум…)", "", () => openFilter("maximum"), !active || active.kind!=="raster"],
             ["Minimum… (Минимум…)", "", () => openFilter("minimum"), !active || active.kind!=="raster"],
             ["Offset… (Смещение…)", "", () => openFilter("offset"), !active || active.kind!=="raster"],
