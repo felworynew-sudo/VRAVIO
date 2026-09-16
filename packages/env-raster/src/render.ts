@@ -4,7 +4,7 @@ import { applyAdjustment } from "./adjustments";
 import { applyRasterFilter } from "./filters";
 import { effectiveLayerOpacity, flattenRasterLayers, isLayerEffectivelyVisible, rasterLayerDescendantIds } from "./layer-tree";
 import { layerDocumentPixels, layerPixelsView } from "./layer-bounds";
-import { TileStore } from "./tile-store";
+import { EvictedTileStoreError, TileStore } from "./tile-store";
 
 /**
  * Blend modes as integers.
@@ -923,8 +923,20 @@ export interface LayerRenderSignature {
   readonly kind: RasterLayer["kind"];
   /** `RasterLayer.pixelsRevision` at the moment this signature was taken — `sameSignature` compares this, not `pixels` below, so two signatures pointing at the very same (in-place-mutated) buffer still compare unequal when the content actually changed (docs/master-plan.md §37.6.2). */
   readonly pixelsRevision: number;
-  /** Kept for `signatureRegion`'s one-time read of a *changed* layer's actual opaque bounds — never used for comparison, `pixelsRevision` above owns that. */
-  readonly pixels: Uint8ClampedArray;
+  /**
+   * Kept for `signatureRegion`'s one-time read of a *changed* layer's actual opaque bounds — never
+   * used for comparison, `pixelsRevision` above owns that. A thunk over the `TileStore` reference
+   * captured at signature time (see `signatureOf`'s own comment on why that capture can't be
+   * deferred too), not the materialised buffer itself: a signature is taken for *every* layer on
+   * *every* render (`layerRenderSignatures` below), most of which `sameSignature` will find
+   * unchanged and `signatureRegion` will therefore never call this for — eagerly materialising here
+   * paid for a full `toPixels()` on every single layer every render regardless, and, found live,
+   * crashed outright the moment any layer was evicted (docs/master-plan.md §37.3 item 6): a hidden,
+   * evicted layer's `pixelsRevision` never changes while it stays evicted, so `sameSignature` always
+   * finds it unchanged and this thunk is simply never invoked for it — the fix that makes eviction
+   * invisible to this file at all, not a special-cased check for it.
+   */
+  readonly pixels: () => Uint8ClampedArray;
   /**
    * Where that buffer lives, and the geometry it has to be read with.
    *
@@ -955,11 +967,20 @@ export interface LayerRenderSignature {
  *  the whole document) and `compositeRasterRegionWithCheckpoint` (mapped once over a `layers`
  *  array it already has), so the field list lives in exactly one place. */
 function signatureOf(layer: RasterLayer): LayerRenderSignature {
+  // Captured now, read later: layers are mutated in place (a commit reassigns `layer.tiles` to a
+  // fresh `TileStore` rather than replacing the layer object itself), so a thunk that closed over
+  // `layer` and called `layerPixelsView(layer)` at invocation time would silently read whatever
+  // `layer.tiles` has become by then — the *next* edit's content, not this signature's own moment —
+  // for any layer mutated in place between two signatures being compared. Capturing the `TileStore`
+  // reference itself costs nothing (a `TileStore` clone is O(tile count) at most; this doesn't even
+  // clone), and defers only the genuinely expensive part, `.toPixels()`, to a call that in practice
+  // only ever happens for a layer `sameSignature` already found changed.
+  const tiles = layer.tiles;
   return {
     id: layer.id,
     kind: layer.kind,
     pixelsRevision: layer.pixelsRevision,
-    pixels: layerPixelsView(layer),
+    pixels: () => tiles.toPixels(),
     bounds: layer.bounds,
     maskPixelsRevision: layer.mask?.pixelsRevision ?? null,
     maskEnabled: layer.mask?.enabled ?? false,
@@ -1009,7 +1030,22 @@ const sameSignature = (a: LayerRenderSignature, b: LayerRenderSignature): boolea
  * tile cache simply stopped paying off for exactly the case it exists for.
  */
 function signatureRegion(signature: LayerRenderSignature): RasterRect | null {
-  const local = layerOpaqueBounds(signature.pixels, signature.bounds.width, signature.bounds.height, signature.pixelsRevision);
+  let pixels: Uint8ClampedArray;
+  try {
+    pixels = signature.pixels();
+  } catch (error) {
+    // Found live: a hidden, evicted layer (docs/master-plan.md §37.3 item 6) becoming visible again
+    // is exactly a case `sameSignature` correctly reports as "changed" (`visible` is one of its own
+    // fields) — reaching here to find out *where* it changed. Its "before" signature's `pixels()`
+    // was captured while still evicted, so there is no historical buffer left to compute an exact
+    // opaque sub-region from; that data was never lying around uninspected, it was actually freed.
+    // The layer's own bounds are still a real, correct (if less precise — the full rectangle, not
+    // just its opaque pixels within it) answer, not a reason to fall back to "unknown" and force a
+    // full-document repaint the way `null` would a few lines below.
+    if (error instanceof EvictedTileStoreError) return { ...signature.bounds };
+    throw error;
+  }
+  const local = layerOpaqueBounds(pixels, signature.bounds.width, signature.bounds.height, signature.pixelsRevision);
   if (!local) return null;
   return { x: local.x + signature.bounds.x, y: local.y + signature.bounds.y, width: local.width, height: local.height };
 }

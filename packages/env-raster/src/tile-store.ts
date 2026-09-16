@@ -24,6 +24,26 @@ export const TILE_SIZE = 64;
 
 const key = (col: number, row: number) => col * 0x10000 + row;
 
+/**
+ * Thrown by any `TileStore` method that needs real pixel bytes when called on a store built by
+ * `TileStore.placeholder()` — docs/master-plan.md §37.3 item 6's swap-out marker. A quiet
+ * transparent-pixel fallback here (the same convention out-of-bounds reads already use) would be
+ * the worse choice for this specific case: an out-of-bounds read is a normal, expected shape a
+ * caller already handles, but a read reaching a placeholder means a layer that item 6's swap
+ * manager (`apps/web/src/raster-layer-swap.ts`) decided was safe to evict — hidden, not the active
+ * layer — is being touched by some call site that was not accounted for when that eligibility rule
+ * was written. Failing loudly here turns a missed audit point into an immediate, obvious crash
+ * during testing, instead of a silently blank thumbnail, a silently empty layer in an export, or a
+ * silently corrupted undo step — the exact "quiet wrong" class of bug CLAUDE.md §4 warns about,
+ * just discovered by a stack trace instead of by a user noticing something is missing days later.
+ */
+export class EvictedTileStoreError extends Error {
+  constructor(operation: string) {
+    super(`TileStore.${operation}: this store is evicted (docs/master-plan.md §37.3 item 6) — it must be restored via the layer swap manager before this operation, not read directly`);
+    this.name = "EvictedTileStoreError";
+  }
+}
+
 /** One tile's own rectangle within the store, clamped to the store's bounds — the tiles along
  *  the right/bottom edge are smaller than `TILE_SIZE` rather than padded, the same convention
  *  `tiles.ts`'s `RasterTileCache` already uses for the identical reason (no invented pixels to
@@ -63,12 +83,31 @@ export class TileStore {
   readonly height: number;
   readonly channels: number;
   readonly #tiles: Map<number, Uint8ClampedArray>;
+  readonly #evicted: boolean;
 
-  private constructor(width: number, height: number, channels: number, tiles: Map<number, Uint8ClampedArray>) {
+  private constructor(width: number, height: number, channels: number, tiles: Map<number, Uint8ClampedArray>, evicted = false) {
     this.width = width;
     this.height = height;
     this.channels = channels;
     this.#tiles = tiles;
+    this.#evicted = evicted;
+  }
+
+  /** Whether this store was built by `placeholder()` and holds no real tile bytes right now. */
+  get evicted(): boolean { return this.#evicted; }
+
+  /**
+   * A store shaped like a real `width`×`height`×`channels` `TileStore` but holding zero tiles —
+   * O(1) memory, not O(width×height) the way `empty()` deliberately is. This is the actual point:
+   * `empty()` exists for "a freshly created layer that will be painted on", where allocating real
+   * (zeroed) tiles is correct and unavoidable; `placeholder()` exists for "this layer's real tiles
+   * were just persisted elsewhere and this JS heap allocation is being freed", where allocating
+   * anything at all would defeat the whole purpose. Every method that would need to read or write
+   * real bytes throws `EvictedTileStoreError` instead of fabricating content — see that class's own
+   * doc comment for why silence is the wrong choice here specifically.
+   */
+  static placeholder(width: number, height: number, channels = 4): TileStore {
+    return new TileStore(width, height, channels, new Map(), true);
   }
 
   /** Builds a store from a flat, document/layer-shaped buffer — one crop per tile. */
@@ -99,15 +138,17 @@ export class TileStore {
   }
 
   /** O(tile count): copies the *map*, not the tiles it points to. The two stores diverge only
-   *  where either one is actually written to afterward. */
+   *  where either one is actually written to afterward. An evicted store clones to another
+   *  evicted store — cheap and harmless, since the next real read or write still throws. */
   clone(): TileStore {
-    return new TileStore(this.width, this.height, this.channels, new Map(this.#tiles));
+    return new TileStore(this.width, this.height, this.channels, new Map(this.#tiles), this.#evicted);
   }
 
   /** Rebuilds one flat buffer — the escape hatch every existing consumer that still thinks in
    *  `Uint8ClampedArray` needs, the same role `layerDocumentPixels` already plays for
    *  bounds-cropped layers. */
   toPixels(): Uint8ClampedArray {
+    if (this.#evicted) throw new EvictedTileStoreError("toPixels");
     const pixels = new Uint8ClampedArray(this.width * this.height * this.channels);
     const columns = Math.ceil(this.width / TILE_SIZE), rows = Math.ceil(this.height / TILE_SIZE);
     for (let row = 0; row < rows; row += 1) {
@@ -135,15 +176,29 @@ export class TileStore {
    * that is a `TileStore` needs this method to survive a save/reload — see `fromJSON`, the other
    * half of the round trip, and `document.ts`'s `migrateRasterDocumentState`, the one place that
    * calls it.
+   *
+   * An evicted store (docs/master-plan.md §37.3 item 6) is the one case this does *not* throw
+   * `EvictedTileStoreError` for, unlike every other method that needs real bytes: found live,
+   * autosave calls this on every layer of every open document on its own idle timer, evicted or
+   * not, with no way to ask first — and unlike `toPixels()`, this is not being asked to fabricate
+   * pixels to use, only to describe this store's current state as data, and "currently evicted" is
+   * a real, representable state. The `{ evicted: true }` shape carries no `pixels` field at all, so
+   * `document-snapshot-store.ts`'s replacer (which only intercepts typed-array values) leaves it as
+   * plain JSON — a session reload brings a layer back exactly as evicted as it was, its real bytes
+   * still wherever the layer swap manager's own storage already has them, not duplicated into the
+   * autosave snapshot a second time.
    */
-  toJSON(): { width: number; height: number; channels: number; pixels: Uint8ClampedArray } {
+  toJSON(): { width: number; height: number; channels: number; pixels: Uint8ClampedArray } | { width: number; height: number; channels: number; evicted: true } {
+    if (this.#evicted) return { width: this.width, height: this.height, channels: this.channels, evicted: true };
     return { width: this.width, height: this.height, channels: this.channels, pixels: this.toPixels() };
   }
 
   /** The other half of `toJSON()`'s round trip — rebuilds a real `TileStore` (tiled, with a
-   *  working `#tiles` map) from the plain shape `toJSON()`/`JSON.parse` leave behind. */
-  static fromJSON(value: { width: number; height: number; channels: number; pixels: Uint8ClampedArray }): TileStore {
-    return TileStore.fromPixels(value.pixels, value.width, value.height, value.channels);
+   *  working `#tiles` map) from the plain shape `toJSON()`/`JSON.parse` leave behind, or another
+   *  placeholder from the `{ evicted: true }` shape a store evicted at save time leaves instead. */
+  static fromJSON(value: { width: number; height: number; channels: number; pixels: Uint8ClampedArray } | { width: number; height: number; channels: number; evicted: true }): TileStore {
+    if ("pixels" in value) return TileStore.fromPixels(value.pixels, value.width, value.height, value.channels);
+    return TileStore.placeholder(value.width, value.height, value.channels);
   }
 
   /** One pixel's channel values, without materialising anything — `layerAlphaAt`'s reason to
@@ -151,6 +206,7 @@ export class TileStore {
    *  RGBA, 0 for a mask), the same convention `layerAlphaAt` uses. Always `this.channels` long —
    *  an RGBA store's callers destructure `[r, g, b, a]` exactly as before `channels` existed. */
   readPixel(x: number, y: number): readonly number[] {
+    if (this.#evicted) throw new EvictedTileStoreError("readPixel");
     if (x < 0 || y < 0 || x >= this.width || y >= this.height) return new Array(this.channels).fill(0);
     const col = Math.floor(x / TILE_SIZE), row = Math.floor(y / TILE_SIZE);
     const tile = this.#tiles.get(key(col, row));
@@ -171,6 +227,7 @@ export class TileStore {
    * `readPixel`'s convention for a plain out-of-bounds read.
    */
   readLocalRegion(rect: RasterRect): Uint8ClampedArray {
+    if (this.#evicted) throw new EvictedTileStoreError("readLocalRegion");
     const channels = this.channels;
     const out = new Uint8ClampedArray(rect.width * rect.height * channels);
     for (let y = 0; y < rect.height; y += 1) {
@@ -197,6 +254,7 @@ export class TileStore {
    * step of its own to write first.
    */
   writeRegion(rect: RasterRect, source: Uint8ClampedArray, sourceWidth: number): void {
+    if (this.#evicted) throw new EvictedTileStoreError("writeRegion");
     const left = Math.max(0, rect.x), top = Math.max(0, rect.y);
     const right = Math.min(this.width, rect.x + rect.width), bottom = Math.min(this.height, rect.y + rect.height);
     if (right <= left || bottom <= top) return;
@@ -230,6 +288,7 @@ export class TileStore {
    * allocation on every undo/redo, defeating the point for the sake of reusing one method.
    */
   writeLocalRegion(rect: RasterRect, patch: Uint8ClampedArray): void {
+    if (this.#evicted) throw new EvictedTileStoreError("writeLocalRegion");
     const left = Math.max(0, rect.x), top = Math.max(0, rect.y);
     const right = Math.min(this.width, rect.x + rect.width), bottom = Math.min(this.height, rect.y + rect.height);
     if (right <= left || bottom <= top) return;
@@ -272,6 +331,7 @@ export class TileStore {
    * already covers most of a large canvas is worth fixing.
    */
   reframe(dx: number, dy: number, width: number, height: number): TileStore {
+    if (this.#evicted) throw new EvictedTileStoreError("reframe");
     const channels = this.channels;
     const tiles = new Map<number, Uint8ClampedArray>();
     const columns = Math.ceil(width / TILE_SIZE), rows = Math.ceil(height / TILE_SIZE);

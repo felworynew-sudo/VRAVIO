@@ -464,7 +464,15 @@ export function useRasterCommit(params: {
     if (editRegion && editRegion.width > 0 && editRegion.height > 0 && !followsAsset) {
       const rect = editRegion;
       let patch = target === "mask" ? cropRegionAsMask(before, state.width, rect) : cropRegion(before, state.width, rect);
-      const swap = (): void => {
+      const swap = async (): Promise<void> => {
+        // Undo/redo is the one path proven able to reach a layer that is neither visible nor the
+        // active layer right now (docs/master-plan.md §37.13's own audit) — a stroke made on a
+        // layer that has since been hidden and evicted is still on the undo stack. Read the *live*
+        // document, not the `state` this closure captured when the edit was made — by the time this
+        // replays, more edits may have happened — the same reason the mutator below re-`find`s the
+        // layer instead of closing over it.
+        const liveLayer = target !== "mask" ? (kernel.documents.get<RasterDocumentState>(document.id)?.state.layers.find((item) => item.id === layerId)) : undefined;
+        if (liveLayer?.tiles.evicted) await kernel.layerSwap.restore(document.id, liveLayer);
         kernel.documents.update<RasterDocumentState>(document.id, (current) => {
           const layer = current.layers.find((item) => item.id === layerId);
           if (!layer) return;

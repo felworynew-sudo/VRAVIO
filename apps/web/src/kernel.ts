@@ -5,6 +5,7 @@ import { AudioEnvironment } from "@vravio/env-audio";
 import { VideoEnvironment } from "@vravio/env-video";
 import { createWebPlatform } from "./webPlatform";
 import { VectorEnvironment } from "./vector-environment";
+import { LayerSwapManager } from "./raster-layer-swap";
 
 // Which store actually works is settled by writing a byte and reading it back,
 // not by asking whether the API exists: Safari reports an origin private file
@@ -12,6 +13,7 @@ import { VectorEnvironment } from "./vector-environment";
 // still. See ResilientStorageAdapter.
 const assetStorage = new ResilientStorageAdapter("vravio-assets");
 const sessionStorage = new ResilientStorageAdapter("vravio-session");
+const layerSwapStorage = new ResilientStorageAdapter("vravio-layer-swap");
 const documentsStore = new DocumentStore();
 const assets = new AssetStore(assetStorage);
 // Pixel edits are recorded as asset revisions and released by undo history,
@@ -42,6 +44,12 @@ const models = new ModelStore();
 void openModelCache().then((cache) => models.setCache(cache));
 const platform = createWebPlatform(gpu, models);
 const autosave = new AutosaveManager(documentsStore, new DocumentSnapshotStore(sessionStorage));
+// docs/master-plan.md §37.3 item 6 — hidden, inactive raster pixel layers get their tiles
+// persisted here and freed from the JS heap on an idle sweep; `restore()` brings them back the
+// moment a layer becomes visible, active, or is reached by undo/redo. Never engages at all when
+// `layerSwapStorage.backing` resolves to "memory" — see `LayerSwapManager.#sweep`'s own comment.
+const layerSwap = new LayerSwapManager(documentsStore, layerSwapStorage);
+layerSwap.start();
 // Every vector document this session restores from a previous one needs its
 // shape/artboard id counters raised past whatever that document already
 // contains before this session mints a single new id of its own — see
@@ -65,6 +73,7 @@ export const kernel = {
   models,
   gpuReady: gpu.initialize(),
   autosave,
+  layerSwap,
   sessionReady,
   /** Which store the probe settled on, for the diagnostics panel. */
   storage: assetStorage,

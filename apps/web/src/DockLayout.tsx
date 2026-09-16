@@ -383,6 +383,12 @@ function layerKindIcon(layer: RasterLayer): string | null {
 function LayerThumbnail({ layer, active = false, onActivate }: { layer: RasterLayer; active?: boolean; onActivate?(): void }) {
   const ref = useRef<HTMLCanvasElement>(null);
   useEffect(() => {
+    // docs/master-plan.md §37.3 item 6 — a hidden, evicted layer's thumbnail is left exactly as it
+    // last drew: the `<canvas>` element is reused across renders (React keys this row by
+    // `layer.id`), so simply not touching it here keeps showing the real, last-known thumbnail
+    // instead of either crashing (`layerPixelsView` below throws `EvictedTileStoreError`) or
+    // flashing a blank/placeholder image for a layer that is not being edited right now anyway.
+    if (layer.tiles.evicted) return;
     const canvas = ref.current, context = canvas?.getContext("2d"); if (!canvas || !context) return;
     context.clearRect(0, 0, canvas.width, canvas.height);
     const scale = Math.min(canvas.width / layer.width, canvas.height / layer.height);
@@ -698,7 +704,17 @@ function LayersPanel() {
       await kernel.platform.fs.saveFile({ name, mime: "image/png", data: blob });
     };
     const deleteLayer = () => { let survivorId = "", removedMaskTarget = false; void changeRasterDocument(active.id, "Delete Layer (Удалить слой)", (current) => { const index = current.layers.findIndex((item) => item.id === current.activeLayerId); if (index < 0) return false; const target = current.layers[index]!; const removed = new Set([target.id, ...rasterLayerDescendantIds(current.layers, target.id)]); removedMaskTarget = editingMaskLayerId ? removed.has(editingMaskLayerId) : false; current.layers = current.layers.filter((item) => !removed.has(item.id)); if (!current.layers.some((item) => item.kind !== "group")) appendLayer(current, createRasterLayer(current.width, current.height, "Layer 1 (Слой 1)")); const next = current.layers[Math.min(index, current.layers.length - 1)] ?? current.layers[0]; if (!next) return false; current.activeLayerId = next.id; survivorId = next.id; return true; }); if (removedMaskTarget) setEditingMask(active.id, null); if (survivorId) setSelectedLayers(active.id, [survivorId]); };
-    const selectLayer = (id: string) => kernel.documents.update<RasterDocumentState>(active.id, (current) => { current.activeLayerId = id; });
+    // docs/master-plan.md §37.3 item 6 — a layer §37.13's swap manager evicted (hidden, was not
+    // the active layer) must have its real tiles back *before* it becomes active, or the very next
+    // brush stroke/tool touching it would hit `TileStore`'s `EvictedTileStoreError`. `restore()` is
+    // a no-op when the layer was never evicted, so this never adds a real delay for the ordinary
+    // case — only when there is genuinely something to bring back first.
+    const selectLayer = (id: string) => {
+      const layer = kernel.documents.get<RasterDocumentState>(active.id)?.state.layers.find((item) => item.id === id);
+      const apply = () => kernel.documents.update<RasterDocumentState>(active.id, (current) => { current.activeLayerId = id; });
+      if (layer?.tiles.evicted) { void kernel.layerSwap.restore(active.id, layer).then(apply); return; }
+      apply();
+    };
 
     /**
      * The layer row's right-click menu: the commands that declare the
@@ -787,7 +803,15 @@ function LayersPanel() {
       if (event.metaKey || event.ctrlKey) { setSelectedLayers(active.id, selectedLayerIds.includes(id) ? selectedLayerIds.filter((item) => item !== id) : [...selectedLayerIds, id]); return; }
       setSelectedLayers(active.id, [id]);
     };
-    const toggleVisible = (id: string) => kernel.documents.update<RasterDocumentState>(active.id, (current) => { const layer = current.layers.find((item) => item.id === id); if (layer) layer.visible = !layer.visible; });
+    // Restoring before showing, not after: making a layer visible while its tiles are still an
+    // evicted placeholder would let the very next repaint hit `EvictedTileStoreError` — see
+    // `selectLayer` just above for the identical reasoning and docs/master-plan.md §37.13.
+    const toggleVisible = (id: string) => {
+      const layer = kernel.documents.get<RasterDocumentState>(active.id)?.state.layers.find((item) => item.id === id);
+      const apply = () => kernel.documents.update<RasterDocumentState>(active.id, (current) => { const target = current.layers.find((item) => item.id === id); if (target) target.visible = !target.visible; });
+      if (layer && !layer.visible && layer.tiles.evicted) { void kernel.layerSwap.restore(active.id, layer).then(apply); return; }
+      apply();
+    };
     const toggleExpanded = (id: string) => kernel.documents.update<RasterDocumentState>(active.id, (current) => { const layer = current.layers.find((item) => item.id === id); if (layer?.kind === "group") layer.expanded = layer.expanded === false; });
     // master-plan.md §1.9 item 2: an active pixel selection becomes the new
     // mask's shape (white inside, black outside) instead of just vanishing —

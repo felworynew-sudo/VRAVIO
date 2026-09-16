@@ -500,3 +500,73 @@ describe("TileStore with channels: 1 (a mask-shaped store)", () => {
     }
   });
 });
+
+/**
+ * docs/master-plan.md §37.3 item 6 (tile swap beyond RAM) — `placeholder()` is the marker a
+ * layer's `tiles` field is set to once its real bytes are persisted elsewhere and freed from the
+ * JS heap. Every method that would need real pixel data must fail loudly (`EvictedTileStoreError`)
+ * rather than fabricate content — see that class's own doc comment for why a quiet zero-fill would
+ * be the wrong choice here specifically, unlike an ordinary out-of-bounds read.
+ */
+describe("TileStore.placeholder — the swap-eviction marker", () => {
+  it("reports the right shape without allocating any tile", () => {
+    const store = TileStore.placeholder(500, 400, 4);
+    expect(store.width).toBe(500);
+    expect(store.height).toBe(400);
+    expect(store.channels).toBe(4);
+    expect(store.evicted).toBe(true);
+    expect([...store.tileBuffers()]).toEqual([]);
+    expect(store.uniqueBytes(new Set())).toBe(0);
+  });
+
+  it("a freshly built (non-placeholder) store reports evicted: false", () => {
+    expect(TileStore.fromPixels(new Uint8ClampedArray(4 * 4 * 4), 4, 4).evicted).toBe(false);
+    expect(TileStore.empty(4, 4).evicted).toBe(false);
+  });
+
+  it.each([
+    ["toPixels", (store: TileStore) => store.toPixels()],
+    ["readPixel", (store: TileStore) => store.readPixel(0, 0)],
+    ["readLocalRegion", (store: TileStore) => store.readLocalRegion({ x: 0, y: 0, width: 1, height: 1 })],
+    ["writeRegion", (store: TileStore) => store.writeRegion({ x: 0, y: 0, width: 1, height: 1 }, new Uint8ClampedArray(4), 1)],
+    ["writeLocalRegion", (store: TileStore) => store.writeLocalRegion({ x: 0, y: 0, width: 1, height: 1 }, new Uint8ClampedArray(4))],
+    ["reframe", (store: TileStore) => store.reframe(0, 0, 4, 4)],
+  ] as const)("%s throws EvictedTileStoreError instead of fabricating content", (_name, operate) => {
+    const store = TileStore.placeholder(4, 4, 4);
+    expect(() => operate(store)).toThrow(/evicted/i);
+  });
+
+  it("clone() of a placeholder stays a placeholder, cheaply, rather than throwing", () => {
+    const clone = TileStore.placeholder(8, 8, 4).clone();
+    expect(clone.evicted).toBe(true);
+    expect(() => clone.toPixels()).toThrow(/evicted/i);
+  });
+
+  /**
+   * `toJSON()`/`fromJSON()` are the one pair of methods that do NOT throw for an evicted store —
+   * found live, the hard way: `document-snapshot-store.ts`'s autosave calls `toJSON()` on every
+   * layer of every open document on its own idle timer, with no way to ask "is this evicted" first,
+   * and a thrown `EvictedTileStoreError` there surfaced as an unhandled promise rejection the moment
+   * any layer was evicted. `toJSON()` is describing state, not fabricating pixels to use — "I am
+   * currently evicted" is a real, round-trippable answer.
+   */
+  it("toJSON()/fromJSON() round-trip an evicted store as still evicted, not as a crash", () => {
+    const placeholder = TileStore.placeholder(12, 9, 4);
+    const snapshot = placeholder.toJSON();
+    expect(snapshot).toEqual({ width: 12, height: 9, channels: 4, evicted: true });
+    expect("pixels" in snapshot).toBe(false);
+
+    const restored = TileStore.fromJSON(snapshot);
+    expect(restored.evicted).toBe(true);
+    expect(restored.width).toBe(12);
+    expect(restored.height).toBe(9);
+    expect(restored.channels).toBe(4);
+  });
+
+  it("toJSON() on a real (non-evicted) store is unaffected — still the plain pixels shape", () => {
+    const source = new Uint8ClampedArray([1, 2, 3, 4]);
+    const snapshot = TileStore.fromPixels(source, 1, 1).toJSON();
+    expect("evicted" in snapshot).toBe(false);
+    expect([...(snapshot as { pixels: Uint8ClampedArray }).pixels]).toEqual([1, 2, 3, 4]);
+  });
+});

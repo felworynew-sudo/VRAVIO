@@ -171,4 +171,58 @@ describe("what changed between two renders", () => {
 
     expect(region(state, before)).toBeNull();
   });
+
+  /**
+   * Found live in the browser, not by reasoning about it: `signatureOf` used to call
+   * `layerPixelsView(layer)` eagerly for *every* layer on *every* render (`layerRenderSignatures`
+   * runs unconditionally, not only when something is suspected to have changed), so the very first
+   * render after any layer was evicted (docs/master-plan.md §37.3 item 6) crashed the whole React
+   * tree with an unhandled `EvictedTileStoreError` — even though `sameSignature` never even looks at
+   * `pixels`, only `pixelsRevision`, which eviction never touches. `signature.pixels` is now a thunk
+   * (`() => layerPixelsView(layer)`), only ever called by `signatureRegion` for a layer `sameSignature`
+   * already found changed — this is that fix, proven by taking a signature of a document with an
+   * evicted layer without ever calling `.pixels()` for it.
+   */
+  it("takes a signature of an evicted layer without touching its (placeholder) pixels", () => {
+    const { state, lower, upper } = scene();
+    lower.visible = false;
+    lower.tiles = TileStore.placeholder(lower.tiles.width, lower.tiles.height, lower.tiles.channels);
+
+    const before = layerRenderSignatures(state);
+    expect(() => layerRenderSignatures(state)).not.toThrow();
+
+    // The evicted layer itself reports no change (nothing about it — opacity, blend, bounds,
+    // pixelsRevision — actually changed; eviction is invisible to this comparison by design)...
+    expect(region(state, before)).toEqual({ x: 0, y: 0, width: 0, height: 0 });
+
+    // ...and a real, unrelated change elsewhere is still detected correctly, proving the evicted
+    // layer's signature didn't quietly poison the whole comparison.
+    upper.opacity = 0.4;
+    expect(region(state, before)).toEqual({ x: 40, y: 40, width: 12, height: 12 });
+  });
+
+  /**
+   * The deeper half of the same live find: making the evicted layer above visible again flips its
+   * `visible` field, which `sameSignature` *correctly* reports as changed (that field is one of its
+   * own comparisons) — so `signatureRegion` genuinely does get called for it, unlike the untouched
+   * case just above. It is called on the *before* signature too, whose `pixels()` thunk captured the
+   * `TileStore` reference while it was still the evicted placeholder — that data was not lying
+   * around unread, it had actually been freed, so there is no way to compute its exact opaque
+   * sub-region any more. `signatureRegion` catches exactly `EvictedTileStoreError` and falls back to
+   * the layer's own bounds rather than crashing or giving up onto a full-document repaint.
+   */
+  it("a layer that was evicted while hidden and becomes visible again reports its own bounds, not a crash", () => {
+    const { state, lower } = scene();
+    lower.visible = false;
+    lower.tiles = TileStore.placeholder(lower.tiles.width, lower.tiles.height, lower.tiles.channels);
+    const before = layerRenderSignatures(state);
+
+    // The restore a real `LayerSwapManager.restore()` call would have done first — a fresh,
+    // non-evicted store — then the visibility flip itself.
+    lower.tiles = TileStore.fromPixels(new Uint8ClampedArray(lower.width * lower.height * 4), lower.width, lower.height);
+    lower.visible = true;
+
+    expect(() => region(state, before)).not.toThrow();
+    expect(region(state, before)).toEqual(lower.bounds);
+  });
 });
