@@ -1041,6 +1041,15 @@ export function App() {
             ["Tilt-Shift… (Наклон-смещение…)", "", () => setBlurGalleryType("tiltShift"), !active || active.kind!=="raster"],
             ["Path Blur… (Размытие пути…)", "", () => setBlurGalleryType("path"), !active || active.kind!=="raster"],
             ["Spin Blur… (Размытие вращения…)", "", () => setBlurGalleryType("spin"), !active || active.kind!=="raster"],
+            // Disabled stub, not a dead promise: a real, byte-verified ONNX (NAFNet-GoPro-width32)
+            // exists for this (docs/master-plan.md §52.7), but its only known host
+            // (storage.googleapis.com/ailia-models, no Hugging Face mirror found) sends no CORS
+            // headers at all — confirmed live, `curl -H "Origin: ..."` back gets no
+            // Access-Control-Allow-Origin, unlike every other model this app fetches — so no
+            // browser can ever read its bytes cross-origin, not just this one. Wiring the tool up
+            // anyway would be exactly the "checkbox that does nothing" CLAUDE.md §3 warns against;
+            // this waits for a CORS-enabled mirror the way every other unfound model here does.
+            ["Remove Blur… (Устранить размытие…)", "", () => {}, true],
           ] },
           { label: "Distort (Искажение)", items: [
             ["Displace… (Смещение…)", "", () => setDisplaceOpen(true), !active || active.kind!=="raster"],
