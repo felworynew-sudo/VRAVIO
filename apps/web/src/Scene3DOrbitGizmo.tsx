@@ -113,6 +113,16 @@ export function Scene3DOrbitGizmo({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layer.id, documentId]);
 
+  // `beginLiveScene3D` always renders the object at `centerAndFit`'s own centered pose — see
+  // `renderScene3DLayerPixels`'s own doc comment on `offset` — so a layer already moved off-centre
+  // with the Move tool would otherwise visibly jump back to the middle for the whole time this
+  // gizmo is open, snapping back to its real position only once `onAccept` re-renders. The same
+  // "derive it from the layer's own current bounds" the commit path uses, applied here as a
+  // screen-space CSS shift instead (the live scene itself still renders centered) — puts it back
+  // where it already was for the entire session, matching what the commit is actually going to
+  // produce.
+  const offsetX = (layer.bounds.x + layer.bounds.width / 2 - document.width / 2) * zoom;
+  const offsetY = (layer.bounds.y + layer.bounds.height / 2 - document.height / 2) * zoom;
   return <canvas ref={canvasRef} className="scene3d-live-canvas" width={document.width} height={document.height}
-    style={{ left: documentOriginX, top: documentOriginY, width: document.width * zoom, height: document.height * zoom, pointerEvents: "auto" }} />;
+    style={{ left: documentOriginX, top: documentOriginY, width: document.width * zoom, height: document.height * zoom, pointerEvents: "auto", transform: `translate(${offsetX}px, ${offsetY}px)` }} />;
 }

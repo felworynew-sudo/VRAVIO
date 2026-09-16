@@ -336,12 +336,12 @@ function Scene3DProperties({ documentId, document, layer, language }: { document
         this needed that did not exist anywhere in the app yet (a persistent-session panel
         preview; a generic drag-a-ring-to-set-a-value control, generalizing the brush tip's own
         angle handle rather than becoming a second copy of the same trig). */}
+    {/* The rotation dials that used to live in this panel are gone at the owner's own request
+        (docs/master-plan.md §52.10): rotating from here fought with the on-canvas orbit gizmo
+        (`Scene3DOrbitGizmo.tsx`, "Rotate 3D Object" on the layer's context menu) — the one place
+        rotation now happens — since a re-render triggered from either one always re-centered the
+        layer (fixed in the same section), so the two paths visibly undid each other. */}
     <div className="scene3d-properties-cluster">
-      <div className="scene3d-dial-column">
-        <div className="scene3d-dial-row"><AngleDial value={data.rotationX} min={-180} max={180} onChange={(value) => commit({ rotationX: value })} title={text(language, "Rotate X", "Вращение X")}/><span>X</span><output>{Math.round(data.rotationX)}°</output></div>
-        <div className="scene3d-dial-row"><AngleDial value={data.rotationY} min={-180} max={180} onChange={(value) => commit({ rotationY: value })} title={text(language, "Rotate Y", "Вращение Y")}/><span>Y</span><output>{Math.round(data.rotationY)}°</output></div>
-        <div className="scene3d-dial-row"><AngleDial value={data.rotationZ} min={-180} max={180} onChange={(value) => commit({ rotationZ: value })} title={text(language, "Rotate Z", "Вращение Z")}/><span>Z</span><output>{Math.round(data.rotationZ)}°</output></div>
-      </div>
       <Scene3DMiniPreview document={document} data={data}/>
       <div className="scene3d-dial-column">
         <div className="scene3d-dial-row"><AngleDial value={data.lighting.azimuth} min={-180} max={180} onChange={(value) => commitLighting({ azimuth: value })} title={text(language, "Light Azimuth", "Свет: азимут")}/><span>⟳</span><output>{Math.round(data.lighting.azimuth)}°</output></div>

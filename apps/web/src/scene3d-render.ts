@@ -3,7 +3,7 @@ import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { FontLoader } from "three/addons/loaders/FontLoader.js";
 import { TextGeometry } from "three/addons/geometries/TextGeometry.js";
-import { layerContentBounds, layerDocumentPixels, type RasterDocumentState, type RasterLayer, type Scene3DLayerData } from "@vravio/env-raster";
+import { layerContentBounds, layerDocumentPixels, translateLayerPixels, type RasterDocumentState, type RasterLayer, type Scene3DLayerData } from "@vravio/env-raster";
 import type { AssetId } from "@vravio/kernel";
 import { applyLighting, centerAndFit, createScene3D, readPixelsRgba } from "./three3d";
 import { applyGroundPlane } from "./scene3d-ground";
@@ -142,10 +142,20 @@ export async function buildGeometrySource(data: Scene3DLayerData, document: Rast
   return model.clone();
 }
 
-/** Renders a 3D layer's current data to a document-sized RGBA buffer — the non-destructive
+/**
+ * Renders a 3D layer's current data to a document-sized RGBA buffer — the non-destructive
  * "re-render on every property change" the layer needs to behave like a text layer that happens
- * to be a mesh instead of glyphs. */
-export async function renderScene3DLayerPixels(data: Scene3DLayerData, document: RasterDocumentState): Promise<Uint8ClampedArray> {
+ * to be a mesh instead of glyphs.
+ *
+ * `offset` shifts the result away from `centerAndFit`'s own centered pose, in document pixels.
+ * A 3D layer has no stored position of its own — its `bounds` (`RasterLayer`'s, the same field
+ * every layer's Move-tool drag already writes to) is the one place "where the user last put it"
+ * lives — so `offset` is always *derived* from the layer's own current bounds by the caller that
+ * knows them (`updateScene3DLayer`), not carried in `Scene3DLayerData` itself: a field there could
+ * only ever go stale the moment Move changed `bounds` without knowing to update it too. Omitted
+ * (or `{x:0,y:0}`) reproduces exactly what rendering always did.
+ */
+export async function renderScene3DLayerPixels(data: Scene3DLayerData, document: RasterDocumentState, offset: { x: number; y: number } = { x: 0, y: 0 }): Promise<Uint8ClampedArray> {
   const object = await buildGeometrySource(data, document);
   const scene3d = createScene3D(window.document.createElement("canvas"), document.width, document.height);
   // `dispose()` moved into `finally`: every rotate/shadow edit spins up a fresh WebGLRenderer here
@@ -171,7 +181,12 @@ export async function renderScene3DLayerPixels(data: Scene3DLayerData, document:
     // After centerAndFit, not before: the ground plane sits at the rig's own
     // bounding-box bottom, which centerAndFit is what actually settles.
     applyGroundPlane(scene3d, rig, data.ground);
-    return readPixelsRgba(scene3d.renderer, scene3d.scene, scene3d.camera, document.width, document.height);
+    const rendered = readPixelsRgba(scene3d.renderer, scene3d.scene, scene3d.camera, document.width, document.height);
+    // Applied after the render, on the finished bytes, rather than moving the object or camera
+    // before it: every other step above already assumes "centered" (the ground plane sits under
+    // the centered bounding box, the fit distance is measured from it), and a post-render shift is
+    // the one change that touches none of that.
+    return offset.x || offset.y ? translateLayerPixels(rendered, document.width, document.height, offset.x, offset.y) : rendered;
   } finally {
     scene3d.dispose();
   }

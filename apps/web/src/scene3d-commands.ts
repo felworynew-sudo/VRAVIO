@@ -123,7 +123,16 @@ export async function updateScene3DLayer(documentId: string, layerId: string, pa
   // the restored image on undo: the trimmed bytes got reinterpreted at the wrong stride).
   const before = layer.scene3d, beforePixels = layerDocumentPixels(layer, state.width, state.height);
   const next: Scene3DLayerData = { ...before, ...patch };
-  const nextPixels = await renderScene3DLayerPixels(next, state);
+  // Wherever the layer's own bounds currently sit is wherever the Move tool (or an earlier edit
+  // through this same function) last put it — the only place a 3D layer's position durably lives,
+  // see `renderScene3DLayerPixels`'s own doc comment on why. Re-deriving it here, from the layer
+  // as it stood right before this edit, is what keeps a rotate/colour/depth change from silently
+  // recentring a layer that had been dragged off-centre (docs/master-plan.md §52.10, found live).
+  const offset = {
+    x: layer.bounds.x + layer.bounds.width / 2 - state.width / 2,
+    y: layer.bounds.y + layer.bounds.height / 2 - state.height / 2,
+  };
+  const nextPixels = await renderScene3DLayerPixels(next, state, offset);
   const write = (data: Scene3DLayerData, pixels: Uint8ClampedArray) => kernel.documents.update<RasterDocumentState>(documentId, (current) => {
     const target = current.layers.find((item) => item.id === layerId);
     if (target) { target.scene3d = data; setLayerPixels(target, pixels, current.width, current.height); }
