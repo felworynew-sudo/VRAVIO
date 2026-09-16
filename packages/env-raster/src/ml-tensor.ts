@@ -113,6 +113,48 @@ function channelCount(dims: readonly number[], pixelCount: number): number {
   return Math.max(1, Math.floor(total / pixelCount));
 }
 
+export interface TensorToImageOptions {
+  /** Channels the tensor carries: 3 for plain RGB, 4 if it carries its own alpha. */
+  readonly channels?: 3 | 4;
+  readonly layout?: TensorLayout;
+}
+
+/**
+ * Reads a model's RGB (or RGBA) image output back into RGBA bytes.
+ *
+ * `tensorToMask`'s sibling for models that answer with a picture rather than
+ * a single-channel map — an upscaler or a deblur network, not a segmenter.
+ * Values are clamped to 0..1 and scaled to 0..255; a model that answers
+ * outside that range (tanh's -1..1, say) needs its own conversion before
+ * this, the same way `ml/inpaint/prepare.ts`'s `readInpaintOutput` handles
+ * its models' `OutputRange` — this one assumes the common case, a network
+ * whose own last layer already clips to 0..1 (confirmed for a given model by
+ * reading its graph, not assumed, per `ml/upscale/definitions/*`'s own doc
+ * comments).
+ *
+ * Alpha is left at fully opaque when `channels` is 3, matching every other
+ * model in this codebase: none of them were trained on transparency, so
+ * carrying or resampling the source alpha is the caller's job, not this
+ * function's guess.
+ */
+export function tensorToImage(tensor: MLTensor, width: number, height: number, options: TensorToImageOptions = {}): Uint8ClampedArray {
+  const channels = options.channels ?? 3;
+  const layout = options.layout ?? "nchw";
+  const pixelCount = width * height;
+  if (tensor.data.length < pixelCount * channels) {
+    throw new RangeError(`Tensor holds ${tensor.data.length} values, need ${pixelCount * channels} for ${width}x${height}`);
+  }
+  const out = new Uint8ClampedArray(pixelCount * 4);
+  for (let pixel = 0; pixel < pixelCount; pixel += 1) {
+    for (let channel = 0; channel < channels; channel += 1) {
+      const value = layout === "nchw" ? tensor.data[channel * pixelCount + pixel]! : tensor.data[pixel * channels + channel]!;
+      out[pixel * 4 + channel] = Math.round(Math.max(0, Math.min(1, value)) * 255);
+    }
+    if (channels === 3) out[pixel * 4 + 3] = 255;
+  }
+  return out;
+}
+
 /**
  * Spreads a single-channel mask across RGBA so it can be tiled and blended.
  *

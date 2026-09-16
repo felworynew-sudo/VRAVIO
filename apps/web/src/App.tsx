@@ -27,6 +27,7 @@ import { ModalHost } from "./modals/ModalHost";
 import { errorModal, openModal } from "./modals/runtime";
 import { clearDiagnostics, diagnostic, readDiagnostics, type DiagnosticEntry } from "./diagnostics";
 import { FilterGalleryDialog } from "./FilterGalleryDialog";
+import { GenerativeUpscaleDialog } from "./GenerativeUpscaleDialog";
 import { applyRasterFilterParallel, filterWorkerPool } from "./filter-worker-pool";
 import { LiquifyDialog } from "./LiquifyDialog";
 import { BlurGalleryDialog } from "./BlurGalleryDialog";
@@ -122,6 +123,10 @@ export function App() {
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [diagnostics, setDiagnostics] = useState<DiagnosticEntry[]>([]);
   const [filterGalleryOpen, setFilterGalleryOpen] = useState(false);
+  // Image → Generative Upscale… (docs/master-plan.md §52.3) — a standalone
+  // dialog, not a Filter-Gallery-style entry, matching the owner's own
+  // Photoshop reference ("окошко с выбором нейросетей и их настройками").
+  const [upscaleDialogOpen, setUpscaleDialogOpen] = useState(false);
   // Which filter the Gallery should open pre-selected on — set by whichever
   // Filter-menu item was actually clicked, instead of the dialog's own
   // hardcoded "gaussian_blur" default (docs/master-plan.md's Filter menu
@@ -948,6 +953,7 @@ export function App() {
           // One command with a `ratio` argument, one entry per ratio it offers:
           // adding a fourth used to mean a fourth hand-wired menu line.
           { label: "Smart Crop (Умное кадрирование)", items: Object.keys(smartCropRatios).map((ratio) => [ratio, "", () => { void kernel.commands.execute("image.smartCrop", activeCommandContext(), { ratio }); }, !active || !isRasterDocumentState(active.state)] as MainMenuItem) },
+          ["Generative Upscale… (Генеративное увеличение масштаба…)", "", () => setUpscaleDialogOpen(true), !active || !isRasterDocumentState(active.state)],
           ["Image Size… (Размер изображения…)", "Ctrl+Alt+I", () => {}, true],
           ["Canvas Size… (Размер холста…)", "Ctrl+Alt+C", () => {}, true],
         ]}/>}
@@ -1221,6 +1227,7 @@ export function App() {
     <BusyAnnouncement />
     {diagnosticsOpen && <div className="dialog-backdrop" onMouseDown={() => setDiagnosticsOpen(false)}><section className="diagnostics-dialog" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><header><strong>Diagnostics log (Журнал диагностики)</strong><button onClick={() => setDiagnosticsOpen(false)}>×</button></header><div className="diagnostics-list">{diagnostics.length ? [...diagnostics].reverse().map((entry, index) => <article data-level={entry.level} key={`${entry.time}-${index}`}><time>{new Date(entry.time).toLocaleTimeString()}</time><b>{entry.area}</b><span>{entry.message}</span>{entry.detail && <pre>{entry.detail}</pre>}</article>) : <p>No events recorded (Событий пока нет).</p>}</div><footer><button onClick={() => { clearDiagnostics(); setDiagnostics([]); }}>Clear (Очистить)</button><button onClick={() => { const blob = new Blob([JSON.stringify(diagnostics, null, 2)], { type: "application/json" }); download(blob, `vravio-diagnostics-${Date.now()}.json`); }}>Export JSON (Экспорт JSON)</button></footer></section></div>}
     {filterGalleryOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<FilterGalleryDialog layer={layer} initialFilterId={filterGallerySelection} onApply={(pixels,label,meta)=>{applyFilter(pixels,label);if(meta)setLastFilter({id:meta.filterId,settings:meta.settings,label});}} onClose={()=>setFilterGalleryOpen(false)}/>:null;})()}
+    {upscaleDialogOpen && active && isRasterDocumentState(active.state) && <GenerativeUpscaleDialog documentId={active.id} document={active.state} language={store.language} onClose={() => setUpscaleDialogOpen(false)}/>}
     {filterPanelId && active && isRasterDocumentState(active.state) && (() => {
       const definition = filterPanelDefinitionFor(filterPanelId);
       if (!definition) return null;
