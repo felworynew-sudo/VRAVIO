@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyRasterFilter, rasterFilterCatalog, fieldBlurEffect, irisBlurEffect, tiltShiftBlurEffect, spinBlurEffect, displaceEffect } from "./index";
+import { applyRasterFilter, rasterFilterCatalog, fieldBlurEffect, irisBlurEffect, tiltShiftBlurEffect, spinBlurEffect, displaceEffect, pathBlurEffect } from "./index";
 
 /**
  * docs/master-plan.md §51: the Filter menu skeleton's stub items graduating to real,
@@ -276,6 +276,21 @@ describe("Blur Gallery effects (docs/master-plan.md §51, interactivity level 3)
     // The pixel exactly at the pin has zero radius, so it never moves regardless of amount.
     const atPin = (4 * WIDTH + 4) * 4;
     expect(spinAtCorner[atPin]).toBe(source[atPin]);
+  });
+
+  it("Path Blur is the identity with fewer than two points", () => {
+    const source = checkerboard(WIDTH, HEIGHT);
+    expect([...pathBlurEffect(source, WIDTH, HEIGHT, [], 10, 6)]).toEqual([...source]);
+    expect([...pathBlurEffect(source, WIDTH, HEIGHT, [{ x: 16, y: 16 }], 10, 6)]).toEqual([...source]);
+  });
+
+  it("Path Blur blurs along its own path and leaves pixels far from the path untouched", () => {
+    const source = checkerboard(WIDTH, HEIGHT);
+    const path = [{ x: 4, y: 16 }, { x: 28, y: 16 }];
+    const result = pathBlurEffect(source, WIDTH, HEIGHT, path, 10, 4);
+    const onPath = (16 * WIDTH + 16) * 4, farFromPath = (2 * WIDTH + 16) * 4;
+    expect(result[onPath]).not.toBe(source[onPath]);
+    expect(result[farFromPath]).toBe(source[farFromPath]);
   });
 
   it("Displace does not move a pixel where the map is exactly middle grey", () => {

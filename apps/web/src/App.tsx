@@ -133,7 +133,7 @@ export function App() {
   // does not reach them either.
   const [lastFilter, setLastFilter] = useState<{ id: string; settings: Record<string, number>; label: string } | null>(null);
   const [liquifyOpen, setLiquifyOpen] = useState(false);
-  const [blurGalleryType, setBlurGalleryType] = useState<"field" | "iris" | "tiltShift" | "spin" | null>(null);
+  const [blurGalleryType, setBlurGalleryType] = useState<"field" | "iris" | "tiltShift" | "spin" | "path" | null>(null);
   const [displaceOpen, setDisplaceOpen] = useState(false);
   const [cameraRawFilterOpen, setCameraRawFilterOpen] = useState(false);
   const [cameraRawImport, setCameraRawImport] = useState<{ buffer: ArrayBuffer; name: string } | null>(null);
@@ -941,7 +941,7 @@ export function App() {
             ["Field Blur… (Размытие поля…)", "", () => setBlurGalleryType("field"), !active || active.kind!=="raster"],
             ["Iris Blur… (Размытие диафрагмы…)", "", () => setBlurGalleryType("iris"), !active || active.kind!=="raster"],
             ["Tilt-Shift… (Наклон-смещение…)", "", () => setBlurGalleryType("tiltShift"), !active || active.kind!=="raster"],
-            ["Path Blur… (Размытие пути…)", "", () => {}, true],
+            ["Path Blur… (Размытие пути…)", "", () => setBlurGalleryType("path"), !active || active.kind!=="raster"],
             ["Spin Blur… (Размытие вращения…)", "", () => setBlurGalleryType("spin"), !active || active.kind!=="raster"],
           ] },
           { label: "Distort (Искажение)", items: [

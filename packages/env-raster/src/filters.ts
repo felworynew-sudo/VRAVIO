@@ -1357,6 +1357,57 @@ function textureDilationFilter(source: Uint8ClampedArray, width: number, height:
   return output;
 }
 
+/**
+ * Path Blur — the last Blur Gallery member, added once `BlurGalleryDialog.tsx`
+ * grew a path tool (docs/master-plan.md §51): unlike the fixed-shape masks
+ * Field/Iris/Tilt-Shift use, this one needs the actual path geometry, so it
+ * takes the point list directly rather than a simple centre/radius.
+ *
+ * For each pixel, finds its nearest point on the polyline (checking every
+ * segment — the path is short, a handful of user-placed points, so this
+ * stays cheap) and that segment's own tangent direction, then runs a short
+ * motion-blur along that tangent (the same sampling `motionBlurFilter`
+ * already does, just per-pixel-directed instead of one fixed angle for the
+ * whole image), blended toward the sharp source by a smoothstep of distance
+ * from the path — the same "blur once, mask back toward sharp" trick
+ * Iris/Tilt-Shift use, just with the path's own distance field for a mask
+ * instead of an ellipse or a band.
+ */
+export function pathBlurEffect(source: Uint8ClampedArray, width: number, height: number, path: readonly { x: number; y: number }[], speed: number, blurWidth: number): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(source.length);
+  if (path.length < 2) return source.slice();
+  const segments = path.slice(1).map((point, index) => {
+    const start = path[index]!, dx = point.x - start.x, dy = point.y - start.y, length = Math.hypot(dx, dy) || 1e-6;
+    return { start, end: point, ux: dx / length, uy: dy / length, length };
+  });
+  const nearest = (x: number, y: number) => {
+    let best = { distance: Infinity, ux: 1, uy: 0 };
+    for (const segment of segments) {
+      const relX = x - segment.start.x, relY = y - segment.start.y;
+      const t = Math.max(0, Math.min(segment.length, relX * segment.ux + relY * segment.uy));
+      const closestX = segment.start.x + segment.ux * t, closestY = segment.start.y + segment.uy * t;
+      const distance = Math.hypot(x - closestX, y - closestY);
+      if (distance < best.distance) best = { distance, ux: segment.ux, uy: segment.uy };
+    }
+    return best;
+  };
+  const half = Math.max(1, speed / 2), steps = Math.max(3, Math.ceil(speed) + 1), feather = Math.max(1, blurWidth);
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const { distance, ux, uy } = nearest(x, y);
+    const t = Math.max(0, Math.min(1, distance / feather)), mask = 1 - t * t * (3 - 2 * t);
+    const i = (y * width + x) * 4;
+    if (mask <= 0) { output[i] = source[i]!; output[i + 1] = source[i + 1]!; output[i + 2] = source[i + 2]!; output[i + 3] = source[i + 3]!; continue; }
+    const sum = [0, 0, 0, 0];
+    for (let step = 0; step < steps; step += 1) {
+      const sampleT = (step / (steps - 1) - 0.5) * 2 * half;
+      const [r, g, b, a] = sampleBilinear(source, width, height, x + ux * sampleT, y + uy * sampleT);
+      sum[0] = sum[0]! + r; sum[1] = sum[1]! + g; sum[2] = sum[2]! + b; sum[3] = sum[3]! + a;
+    }
+    for (let c = 0; c < 4; c += 1) { const blurred = sum[c]! / steps; output[i + c] = byte(source[i + c]! + (blurred - source[i + c]!) * mask); }
+  }
+  return output;
+}
+
 export function applyRasterFilter(source: Uint8ClampedArray, width: number, height: number, id: string, settings: Record<string, number> = {}): Uint8ClampedArray {
   const output = source.slice(), mix = Math.max(0,Math.min(1,value(settings,"amount",100)/100));
   if (id === "gaussian_blur") return gaussianBlur(source, width, height, value(settings, "radius", 2));
