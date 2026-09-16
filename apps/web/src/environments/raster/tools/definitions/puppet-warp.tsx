@@ -1,4 +1,4 @@
-import { createPuppetSolverCache, layerOpaqueBounds, nearestVertex, puppetMesh, puppetWarpPixels, setLayerPixels, solvePuppetMesh, type PuppetMesh, type PuppetPin, type PuppetSolverCache, type RasterRect } from "@vravio/env-raster";
+import { cloneRasterState, createPuppetSolverCache, layerOpaqueBounds, nearestVertex, puppetMesh, puppetWarpPixels, setLayerPixels, solvePuppetMesh, unionRect, type PuppetMesh, type PuppetPin, type PuppetSolverCache, type RasterRect } from "@vravio/env-raster";
 import { useEffect } from "react";
 import type { RasterToolDefinition, ToolContext } from "../types";
 
@@ -77,22 +77,61 @@ const solverPins = (pins: readonly Pin[]): PuppetPin[] => pins.map((pin) => ({
   vertex: pin.vertex, at: pin.at, ...(pin.rotation ? { rotation: pin.rotation } : {}),
 }));
 
+/**
+ * Whether `cell` (a document-space rectangle) covers any non-transparent pixel of `pixels` —
+ * `puppetMesh`'s `hasContent` predicate, this tool's own reason for existing per docs/master-plan.md
+ * §52.2: the owner's own comparison against Photoshop, where the mesh follows the shape's alpha,
+ * not the rectangle around it. Rounds outward (`Math.floor`/`Math.ceil`) rather than to the nearest
+ * pixel, so a cell whose edge lands mid-pixel never silently drops the one row/column of opaque
+ * pixels that would have made it "content" — the same direction `clampRegionToDocument` and every
+ * other region-rounding helper in this package already rounds for the identical reason.
+ */
+function cellHasOpaquePixel(pixels: Uint8ClampedArray, documentWidth: number, documentHeight: number, cell: { x: number; y: number; width: number; height: number }): boolean {
+  const left = Math.max(0, Math.floor(cell.x)), top = Math.max(0, Math.floor(cell.y));
+  const right = Math.min(documentWidth, Math.ceil(cell.x + cell.width)), bottom = Math.min(documentHeight, Math.ceil(cell.y + cell.height));
+  for (let y = top; y < bottom; y += 1) {
+    const row = y * documentWidth;
+    for (let x = left; x < right; x += 1) if (pixels[(row + x) * 4 + 3]! > 0) return true;
+  }
+  return false;
+}
+
 function beginSession(context: ToolContext<PuppetWarpState>): PuppetWarpState["session"] {
   const layer = context.activeLayer;
   if (!layer) return null;
   const pixels = context.layerPixels();
   const bounds = layerOpaqueBounds(pixels, context.document.width, context.document.height);
   if (!bounds || bounds.width < 2 || bounds.height < 2) return null;
-  return { layerId: layer.id, mesh: puppetMesh(bounds, 8), basePixels: pixels, bounds, solver: createPuppetSolverCache() };
+  const mesh = puppetMesh(bounds, 8, (cell) => cellHasOpaquePixel(pixels, context.document.width, context.document.height, cell));
+  return { layerId: layer.id, mesh, basePixels: pixels, bounds, solver: createPuppetSolverCache() };
 }
 
-/** Re-solves and previews. Called on every frame of a pin drag. */
+/**
+ * Re-solves and previews. Called on every frame of a pin drag.
+ *
+ * `dirty` — the union of the mesh's own bounds (where the content *was*) and the deformed
+ * vertices' own extent (where it went) — used to cost nothing before docs/master-plan.md §52.2's
+ * live measurement found this tool passing `null` here, forcing `schedulePreview` to recomposite
+ * the *whole document* every single drag frame regardless of how small the actual puppet warp
+ * region is (`move.tsx`'s quad/warp transforms already learned this exact lesson,
+ * docs/master-plan.md §37.3 item 5 — this tool simply never got the same fix, having been written
+ * before it). On a multi-layer document this recomposite can cost far more than the warp itself.
+ */
 function preview(context: ToolContext<PuppetWarpState>, state: PuppetWarpState): readonly { x: number; y: number }[] | null {
   const session = state.session;
   if (!session) return null;
   const deformed = solvePuppetMesh(session.mesh, solverPins(state.pins), session.solver);
   const pixels = puppetWarpPixels(session.basePixels, context.document.width, context.document.height, session.mesh, deformed, null);
-  context.schedulePreview(pixels, "pixels", session.layerId, null);
+  let deformedLeft = Infinity, deformedTop = Infinity, deformedRight = -Infinity, deformedBottom = -Infinity;
+  for (const point of deformed) {
+    deformedLeft = Math.min(deformedLeft, point.x); deformedTop = Math.min(deformedTop, point.y);
+    deformedRight = Math.max(deformedRight, point.x); deformedBottom = Math.max(deformedBottom, point.y);
+  }
+  const dirty = unionRect(
+    { x: session.bounds.x, y: session.bounds.y, width: session.bounds.width, height: session.bounds.height },
+    deformedLeft, deformedTop, deformedRight, deformedBottom, 0,
+  );
+  context.schedulePreview(pixels, "pixels", session.layerId, dirty);
   return deformed;
 }
 
@@ -106,8 +145,20 @@ function commit(context: ToolContext<PuppetWarpState>, state: PuppetWarpState): 
   // `DocumentStore.update()`'s mutator writes through — sharing it here means the step's own
   // `redo()` mutates "before" into "after" the instant it runs, the same bug move.tsx's
   // `commitPending` had (see that fix's own comment for the full mechanism).
-  const before = structuredClone(context.document);
-  const after = structuredClone(before);
+  //
+  // `cloneRasterState`, not `structuredClone` — `structuredClone` cannot carry a class
+  // instance's prototype across the clone, and a layer's `tiles` is a `TileStore` with its
+  // own methods (`tileBuffers()` among them). The clone came back a plain object wearing
+  // `TileStore`'s data but none of its methods, and the very first thing downstream
+  // (`setLayerPixels` → `layer-bounds.ts`'s bounds scan) that called `.tileBuffers()` on it
+  // threw — silently, since `commitDocument` is called with `void` and nothing awaited the
+  // rejection. Found live: Enter/tool-switch visibly cleared the pin overlay (the tool's own
+  // `onDeactivate`/keydown handler had run) but the canvas kept showing the last preview frame
+  // forever after, and `history.canUndo` stayed `false` — the commit had thrown before it ever
+  // reached `commitDocument`'s `history.execute`. `shape.tsx`/`text.tsx` already use
+  // `cloneRasterState` for exactly this pair; this tool just never got the memo.
+  const before = cloneRasterState(context.document);
+  const after = cloneRasterState(context.document);
   const layer = after.layers.find((item) => item.id === session.layerId);
   if (!layer) return;
   // Through `setLayerPixels`, which is the one function that keeps a layer's

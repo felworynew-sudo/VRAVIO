@@ -59,20 +59,60 @@ export interface PuppetPin {
   readonly rotation?: number;
 }
 
-/** A grid of `divisions` cells per side over `bounds`, split into triangles. */
-export function puppetMesh(bounds: RasterRect, divisions = 8): PuppetMesh {
+/**
+ * A grid of `divisions` cells per side over `bounds`, split into triangles.
+ *
+ * `hasContent`, when given, is asked once per cell whether that cell's own rectangle covers any
+ * of the layer's actual opaque pixels — not just whether it falls inside `bounds`. `bounds` is
+ * already the layer's tight opaque *bounding box* (`layerOpaqueBounds`, computed by the caller),
+ * which removes the empty margin around an upright rectangle of content but does nothing for the
+ * empty corners of any bounding box drawn around a shape that is not itself a rectangle — a
+ * silhouette, a diagonal object, a limb reaching out of a torso's own bbox. Photoshop's real
+ * Puppet Warp mesh follows the shape's own alpha, not its bounding rectangle: the grid dots never
+ * appear over dead space, and — found live, measured, not assumed — a bbox that is only half
+ * covered by real content was spending roughly half of every drag frame's cost (159ms measured on
+ * a 900×1200 bbox around a 46%-filled silhouette) warping pixels nobody will ever see, because
+ * `puppetWarpPixels` below only skips a pixel it has no *triangle* covering it, and every cell
+ * used to get one regardless of what was under it. Cells without any opaque pixel are dropped
+ * before their triangles are ever built — the caller pays nothing for them, not even a
+ * transparent warp — and the vertices only cells with content actually reference are the only
+ * ones that survive into the returned mesh, kept dense with `nearestVertex`/the solver in mind
+ * (a sparse vertex list, not a full grid with some entries marked unused).
+ *
+ * Omitting `hasContent` keeps the previous behaviour exactly (every cell kept) — every existing
+ * caller that has no pixel data handy (this file's own tests) is unaffected.
+ */
+export function puppetMesh(bounds: RasterRect, divisions = 8, hasContent?: (cell: RasterRect) => boolean): PuppetMesh {
   const columns = divisions + 1, rows = divisions + 1;
-  const vertices: Point[] = [];
+  const gridVertices: Point[] = [];
   for (let row = 0; row < rows; row += 1) for (let col = 0; col < columns; col += 1) {
-    vertices.push({ x: bounds.x + (col / divisions) * bounds.width, y: bounds.y + (row / divisions) * bounds.height });
+    gridVertices.push({ x: bounds.x + (col / divisions) * bounds.width, y: bounds.y + (row / divisions) * bounds.height });
   }
+  const cellWidth = bounds.width / divisions, cellHeight = bounds.height / divisions;
+  const gridTriangles: number[] = [];
+  for (let row = 0; row < divisions; row += 1) {
+    for (let col = 0; col < divisions; col += 1) {
+      const cell: RasterRect = { x: bounds.x + col * cellWidth, y: bounds.y + row * cellHeight, width: cellWidth, height: cellHeight };
+      if (hasContent && !hasContent(cell)) continue;
+      const topLeft = row * columns + col, topRight = topLeft + 1;
+      const bottomLeft = topLeft + columns, bottomRight = bottomLeft + 1;
+      // Split each cell along the same diagonal, so the mesh has no preferred
+      // direction beyond the one a grid already has.
+      gridTriangles.push(topLeft, topRight, bottomLeft, topRight, bottomRight, bottomLeft);
+    }
+  }
+  if (!hasContent) return { vertices: gridVertices, triangles: gridTriangles, columns, rows, bounds };
+
+  // Re-index to only the vertices a kept triangle actually references, so a caller iterating
+  // `mesh.vertices` (the solver's own unknown count, `nearestVertex`'s search space) never pays
+  // for — or, worse, lets a user drop a pin on — a grid corner floating in transparent space.
+  const remap = new Map<number, number>();
+  const vertices: Point[] = [];
   const triangles: number[] = [];
-  for (let row = 0; row < divisions; row += 1) for (let col = 0; col < divisions; col += 1) {
-    const topLeft = row * columns + col, topRight = topLeft + 1;
-    const bottomLeft = topLeft + columns, bottomRight = bottomLeft + 1;
-    // Split each cell along the same diagonal, so the mesh has no preferred
-    // direction beyond the one a grid already has.
-    triangles.push(topLeft, topRight, bottomLeft, topRight, bottomRight, bottomLeft);
+  for (const original of gridTriangles) {
+    let next = remap.get(original);
+    if (next === undefined) { next = vertices.length; remap.set(original, next); vertices.push(gridVertices[original]!); }
+    triangles.push(next);
   }
   return { vertices, triangles, columns, rows, bounds };
 }
@@ -377,9 +417,24 @@ export function puppetWarpPixels(
   mesh: PuppetMesh, deformed: readonly Point[], selection: PixelSelection | null,
 ): Uint8ClampedArray {
   const output = source.slice();
-  const left = Math.max(0, Math.floor(mesh.bounds.x)), top = Math.max(0, Math.floor(mesh.bounds.y));
-  const right = Math.min(width, Math.ceil(mesh.bounds.x + mesh.bounds.width));
-  const bottom = Math.min(height, Math.ceil(mesh.bounds.y + mesh.bounds.height));
+  // The mesh's own vertex extent, not `mesh.bounds` — a content-aware mesh (docs/master-plan.md
+  // §52.2's `hasContent` culling) keeps only the vertices its surviving triangles reference, which
+  // for a shape that does not fill its bounding box is a real, often much smaller, rectangle.
+  // `mesh.bounds` still names the full original bbox (`puppetMesh`'s own contract, used elsewhere
+  // to place the mesh), but the clearing pass just below — the other O(bbox area) cost this
+  // function has, found live alongside the triangle-count one it shares with `solvePuppetMesh` —
+  // only ever needs to erase pixels a kept triangle could actually have covered. Every vertex is
+  // guaranteed to already sit inside `mesh.bounds` (`puppetMesh` never places one outside it), so
+  // this box is always a subset of the old one, never wider — this shrinks the clear, it cannot
+  // silently leave a stale pixel unclearable.
+  let vertexLeft = Infinity, vertexTop = Infinity, vertexRight = -Infinity, vertexBottom = -Infinity;
+  for (const vertex of mesh.vertices) {
+    vertexLeft = Math.min(vertexLeft, vertex.x); vertexTop = Math.min(vertexTop, vertex.y);
+    vertexRight = Math.max(vertexRight, vertex.x); vertexBottom = Math.max(vertexBottom, vertex.y);
+  }
+  const left = Math.max(0, Math.floor(vertexLeft)), top = Math.max(0, Math.floor(vertexTop));
+  const right = Math.min(width, Math.ceil(vertexRight));
+  const bottom = Math.min(height, Math.ceil(vertexBottom));
   const coverage = (index: number) => selection
     ? selection.mask[index]! / 255
     : (index % width >= left && index % width < right && Math.floor(index / width) >= top && Math.floor(index / width) < bottom ? 1 : 0);

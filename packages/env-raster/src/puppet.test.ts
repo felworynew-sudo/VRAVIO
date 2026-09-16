@@ -265,3 +265,84 @@ describe("the solver cache", () => {
     identical(solvePuppetMesh(mesh, [...pins].reverse(), cache), solvePuppetMesh(mesh, pins));
   });
 });
+
+/**
+ * docs/master-plan.md §52.2 — the owner's own comparison against Photoshop: there, the mesh
+ * follows the shape's alpha, not the rectangle around it. `hasContent` is what makes that true —
+ * these tests check it against the mesh's own structural invariants (every triangle's three
+ * indices point at real, in-range vertices; no vertex is left unreferenced), not just against a
+ * smaller triangle count, since a re-indexing bug would still shrink the count while producing a
+ * mesh that crashes the moment `solvePuppetMesh`/`puppetWarpPixels` actually reads it.
+ */
+describe("puppet mesh's content-aware culling", () => {
+  it("every triangle in the culled mesh points at valid, in-range vertices", () => {
+    const mesh = puppetMesh(BOUNDS, 8, (cell) => cell.x < BOUNDS.x + BOUNDS.width / 2); // keep only the left half
+    expect(mesh.triangles.length).toBeGreaterThan(0);
+    expect(mesh.triangles.length).toBeLessThan(puppetMesh(BOUNDS, 8).triangles.length);
+    for (const index of mesh.triangles) {
+      expect(index).toBeGreaterThanOrEqual(0);
+      expect(index).toBeLessThan(mesh.vertices.length);
+    }
+  });
+
+  it("drops a vertex only when no kept triangle references it", () => {
+    const kept = new Set<number>();
+    const mesh = puppetMesh(BOUNDS, 8, (cell) => {
+      const inLeftHalf = cell.x < BOUNDS.x + BOUNDS.width / 2;
+      return inLeftHalf;
+    });
+    for (const index of mesh.triangles) kept.add(index);
+    // Every returned vertex is referenced by at least one triangle — nothing floating, unused.
+    expect(kept.size).toBe(mesh.vertices.length);
+  });
+
+  it("a predicate that accepts every cell keeps every vertex and triangle (re-indexed, not dropped)", () => {
+    // `hasContent` being present at all takes the re-indexing path even when it accepts
+    // everything, so vertex *order* can differ from the uncalled mesh's row-major order — the
+    // invariant that actually matters is the same set of positions and the same triangle count,
+    // not byte-identical arrays.
+    const full = puppetMesh(BOUNDS, 6);
+    const same = puppetMesh(BOUNDS, 6, () => true);
+    expect(same.vertices).toHaveLength(full.vertices.length);
+    expect(same.triangles).toHaveLength(full.triangles.length);
+    const sortedPositions = (points: readonly { x: number; y: number }[]) => points.map((p) => `${p.x},${p.y}`).sort();
+    expect(sortedPositions(same.vertices)).toEqual(sortedPositions(full.vertices));
+  });
+
+  it("a predicate that rejects every cell leaves an empty (not crashing) mesh", () => {
+    const mesh = puppetMesh(BOUNDS, 8, () => false);
+    expect(mesh.triangles).toEqual([]);
+    expect(mesh.vertices).toEqual([]);
+  });
+
+  it("only cells the predicate accepts contribute triangles — checked geometrically, not just by count", () => {
+    // Keep only cells fully in the bounds' top row.
+    const cellHeight = BOUNDS.height / 8;
+    const mesh = puppetMesh(BOUNDS, 8, (cell) => cell.y < BOUNDS.y + cellHeight);
+    for (let t = 0; t < mesh.triangles.length; t += 3) {
+      const a = mesh.vertices[mesh.triangles[t]!]!, b = mesh.vertices[mesh.triangles[t + 1]!]!, c = mesh.vertices[mesh.triangles[t + 2]!]!;
+      // Every vertex of a kept triangle lies within the top row's own y-range (with a hair of
+      // tolerance for the row's own far edge, which a corner vertex sits exactly on).
+      for (const vertex of [a, b, c]) expect(vertex.y).toBeLessThanOrEqual(BOUNDS.y + cellHeight + 1e-9);
+    }
+  });
+
+  it("solves and warps correctly on a culled mesh (an L-shaped region, not just a rectangle)", () => {
+    // An L-shape: keep the left column and the top row of an 8x8 grid, drop the bottom-right block.
+    const mesh = puppetMesh(BOUNDS, 8, (cell) => cell.x < BOUNDS.x + BOUNDS.width / 8 || cell.y < BOUNDS.y + BOUNDS.height / 8);
+    const corner = nearestVertex(mesh, { x: BOUNDS.x, y: BOUNDS.y });
+    const far = nearestVertex(mesh, { x: BOUNDS.x + BOUNDS.width, y: BOUNDS.y });
+    const solved = solvePuppetMesh(mesh, [
+      { vertex: corner, at: mesh.vertices[corner]! },
+      { vertex: far, at: { x: mesh.vertices[far]!.x + 20, y: mesh.vertices[far]!.y } },
+    ]);
+    expect(solved).toHaveLength(mesh.vertices.length);
+    expect(distance(solved[far]!, { x: mesh.vertices[far]!.x + 20, y: mesh.vertices[far]!.y })).toBeLessThan(0.5);
+
+    const pixels = new Uint8ClampedArray(WIDTH * HEIGHT * 4);
+    for (let y = BOUNDS.y; y < BOUNDS.y + BOUNDS.height; y += 1) for (let x = BOUNDS.x; x < BOUNDS.x + BOUNDS.width; x += 1) {
+      const i = (y * WIDTH + x) * 4; pixels[i] = 200; pixels[i + 1] = 100; pixels[i + 2] = 50; pixels[i + 3] = 255;
+    }
+    expect(() => puppetWarpPixels(pixels, WIDTH, HEIGHT, mesh, solved, null)).not.toThrow();
+  });
+});
