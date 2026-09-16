@@ -65,22 +65,38 @@ describe("Filter menu skeleton's newly-implemented filters (docs/master-plan.md 
       const definition = rasterFilterCatalog.find((filter) => filter.id === id)!;
       if (definition.parameters.length === 0) continue;
       const defaults = Object.fromEntries(definition.parameters.map((parameter) => [parameter.id, parameter.value]));
-      const baseline = applyRasterFilter(source, WIDTH, HEIGHT, id, defaults);
       for (const parameter of definition.parameters) {
+        // Maximum/Minimum's own "shape" changes which single corner cell an extremal search can
+        // reach, but the shared checkerboard fixture only ever has two possible values per channel
+        // repeated everywhere — any kernel radius wide enough to reach a corner at all also already
+        // reaches the same two values through a non-corner cell, so the extremum comes out identical
+        // regardless of shape no matter how the radius is tuned. It gets its own dedicated fixture
+        // and test below instead (same reasoning `texture_dilation` already gets its own skip here).
+        if ((id === "maximum" || id === "minimum") && parameter.id === "shape") continue;
+        // Offset's own "undefinedArea" only has anything to disagree about once a shift actually
+        // pushes some pixel out of bounds — at the default horizontal=0/vertical=0 every source
+        // pixel stays in bounds regardless of which undefined-area mode is selected, which would
+        // make this parameter look dead for a reason that has nothing to do with whether it works.
+        const base = id === "offset" && parameter.id === "undefinedArea" ? { ...defaults, horizontal: WIDTH } : defaults;
+        const baseline = applyRasterFilter(source, WIDTH, HEIGHT, id, base);
         // Toggling to the opposite extreme is the right probe for almost every parameter here,
         // choices included — except motion_blur's own "angle", a blur *direction* rather than a
         // vector, whose 0°/180° extremes are mathematically identical (same line, sampled in
         // reverse) and would falsely look like a dead control (CLAUDE.md §2's blur/dodge/burn
         // "angle" postmortem, same disease here). A quarter-turn instead of a half-turn sidesteps
-        // that symmetry without needing a special case in the filter itself.
-        const isSymmetricAngle = id === "motion_blur" && parameter.id === "angle";
+        // that symmetry without needing a special case in the filter itself. kaleidoscope's own
+        // "angle" has the same disease from a different cause: it rotates the wedge-folding before
+        // sampling, and the default 6 segments give the wedge a 60° period — its ±180° extremes
+        // are exactly three full periods apart, i.e. the same rotation, so the opposite-extreme
+        // probe looks dead for a reason that has nothing to do with the parameter actually working.
+        const isSymmetricAngle = (id === "motion_blur" || id === "kaleidoscope") && parameter.id === "angle";
         // Prefer the minimum: for a threshold/tolerance parameter (surface_blur's own, at least)
         // the default already sits comfortably on one side of every neighbour's actual colour
         // difference in this fixture, so probing the *maximum* can land on a value that behaves
         // identically to the default instead of on the side that changes anything — dropping to
         // the minimum is the direction actually likely to cross that boundary.
         const probeValue = isSymmetricAngle ? parameter.value + (parameter.max - parameter.min) / 4 : (parameter.value === parameter.min ? parameter.max : parameter.min);
-        const probed = applyRasterFilter(source, WIDTH, HEIGHT, id, { ...defaults, [parameter.id]: probeValue });
+        const probed = applyRasterFilter(source, WIDTH, HEIGHT, id, { ...base, [parameter.id]: probeValue });
         expect([...probed], `${id}'s "${parameter.id}" parameter`).not.toEqual([...baseline]);
       }
     }
@@ -101,6 +117,23 @@ describe("Filter menu skeleton's newly-implemented filters (docs/master-plan.md 
     const wrapped = (0 * 4 + 3) * 4;
     expect(result[wrapped]).toBe(255);
     expect(result[wrapped + 3]).toBe(255);
+  });
+
+  it("Maximum's Square kernel reaches a diagonal corner cell that Round/Diamond exclude", () => {
+    // A single bright pixel sits three steps diagonally from the query point. At radius 3, a plain
+    // Square kernel's box covers (3, 3) on both axes; Diamond's taxicab bound (|dx|+|dy| ≤ 3)
+    // excludes it outright (6 > 3) — the diagonal reach a box kernel has and a diamond kernel does
+    // not.
+    const size = 9;
+    const source = new Uint8ClampedArray(size * size * 4);
+    for (let i = 3; i < source.length; i += 4) source[i] = 255;
+    const brightAt = (4 + 3) * size + (4 + 3);
+    source[brightAt * 4] = 255;
+    const query = (4 * size + 4) * 4;
+    const square = applyRasterFilter(source, size, size, "maximum", { radius: 3, shape: 0 });
+    const diamond = applyRasterFilter(source, size, size, "maximum", { radius: 3, shape: 2 });
+    expect(square[query]).toBe(255);
+    expect(diamond[query]).toBe(0);
   });
 
   it("Maximum never darkens and Minimum never brightens a channel", () => {
@@ -315,34 +348,48 @@ describe("Blur Gallery effects (docs/master-plan.md §51, interactivity level 3)
     expect([...withBright]).not.toEqual([...source]);
   });
 
-  it("Lens Correction at all-zero settings is the identity", () => {
+  it("Lens Correction at distortAmount=0, scale=100 is the identity", () => {
     const source = checkerboard(WIDTH, HEIGHT);
-    const result = applyRasterFilter(source, WIDTH, HEIGHT, "lens_correction", { distortAmount: 0, chromaticAberration: 0, vignetteAmount: 0 });
+    const result = applyRasterFilter(source, WIDTH, HEIGHT, "lens_correction", { distortAmount: 0, scale: 100 });
     expect([...result]).toEqual([...source]);
   });
 
-  it("Lens Correction's Vignette darkens the corners without touching the centre", () => {
-    const source = new Uint8ClampedArray(WIDTH * HEIGHT * 4).fill(200);
-    for (let i = 3; i < source.length; i += 4) source[i] = 255;
-    const result = applyRasterFilter(source, WIDTH, HEIGHT, "lens_correction", { distortAmount: 0, chromaticAberration: 0, vignetteAmount: 100 });
-    const centre = (16 * WIDTH + 16) * 4, corner = 0;
-    expect(result[centre]).toBe(200);
-    expect(result[corner]!).toBeLessThan(200);
+  // The reference panel dropped Chromatic Aberration/Vignette entirely — Intensity (distortion)
+  // and Scale (a plain compensating zoom) are its only two sliders (docs/master-plan.md §51). Scale
+  // still does real work even with zero distortion: `lensCorrectionFilter`'s own `rescale` factor
+  // multiplies every sample offset regardless of `mainAmount`, so a non-100 Scale alone resamples
+  // the image — this is that resample, not a vignette darkening test the removed slider used to need.
+  it("Lens Correction's Scale zooms the sampled image even with no distortion", () => {
+    const source = new Uint8ClampedArray(WIDTH * HEIGHT * 4);
+    source[0] = 255; source[3] = 255;
+    const identity = applyRasterFilter(source, WIDTH, HEIGHT, "lens_correction", { distortAmount: 0, scale: 100 });
+    const zoomed = applyRasterFilter(source, WIDTH, HEIGHT, "lens_correction", { distortAmount: 0, scale: 150 });
+    expect([...zoomed]).not.toEqual([...identity]);
   });
 
   it("HSB/HSL puts pure red's hue at the bottom of the R channel's range and full saturation in G", () => {
     const source = new Uint8ClampedArray([255, 0, 0, 255]);
-    const result = applyRasterFilter(source, 1, 1, "hsb_hsl", { mode: 0 });
+    const result = applyRasterFilter(source, 1, 1, "hsb_hsl", { outputMode: 1 });
     expect(result[0]).toBe(0);
     expect(result[1]).toBe(255);
     expect(result[2]).toBe(255);
   });
 
-  it("HSB/HSL's two modes disagree on a partially-desaturated colour (HSB's Saturation/Value vs. HSL's Saturation/Lightness are different formulas)", () => {
+  it("HSB/HSL's two output modes disagree on a partially-desaturated colour (HSB's Saturation/Value vs. HSL's Saturation/Lightness are different formulas)", () => {
     const source = new Uint8ClampedArray([200, 120, 120, 255]);
-    const hsb = applyRasterFilter(source, 1, 1, "hsb_hsl", { mode: 0 });
-    const hsl = applyRasterFilter(source, 1, 1, "hsb_hsl", { mode: 1 });
+    const hsb = applyRasterFilter(source, 1, 1, "hsb_hsl", { outputMode: 1 });
+    const hsl = applyRasterFilter(source, 1, 1, "hsb_hsl", { outputMode: 2 });
     expect([hsb[1], hsb[2]]).not.toEqual([hsl[1], hsl[2]]);
+  });
+
+  it("HSB/HSL's Input mode decodes previously-encoded channels back to real colour before re-encoding", () => {
+    // Encode pure red as HSB, then feed that straight back in with Input=HSB, Output=RGB — the
+    // panel's own documented round trip should recover the original colour.
+    const encoded = applyRasterFilter(new Uint8ClampedArray([255, 0, 0, 255]), 1, 1, "hsb_hsl", { outputMode: 1 });
+    const decoded = applyRasterFilter(encoded, 1, 1, "hsb_hsl", { inputMode: 1, outputMode: 0 });
+    expect(decoded[0]).toBeCloseTo(255, -1);
+    expect(decoded[1]).toBeCloseTo(0, -1);
+    expect(decoded[2]).toBeCloseTo(0, -1);
   });
 
   it("Texture Dilation extends an opaque pixel's colour into its transparent neighbour without touching alpha", () => {

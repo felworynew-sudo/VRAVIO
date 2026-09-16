@@ -44,13 +44,15 @@ export const PARALLEL_SAFE_FILTERS: ReadonlySet<string> = new Set([
  *  `blurred = blur(source, width, height, 2)` for the first group (filters.ts:283), one clamped
  *  neighbour at `(x+1, y+1)` for the second (filters.ts:285).
  *
- *  `high_pass` used to belong to the first group too, back when its Radius slider was a checkbox
- *  that did nothing and the filter always blurred at a hardcoded 2 regardless (CLAUDE.md §3) —
- *  fixed alongside the same bug in `filters.ts`. It now reads its own `radius` setting like
- *  `box_blur`/`gaussian_blur` do, so it falls through to the generic `settings.radius` path below
- *  instead of a fixed entry here. */
+ *  `high_pass` and `unsharp_mask` used to belong to the first group too, back when their Radius
+ *  sliders were checkboxes that did nothing and the filter always blurred at a hardcoded 2
+ *  regardless (CLAUDE.md §3) — fixed alongside the same bug in `filters.ts` (docs/master-plan.md
+ *  §51's Patchy-parity pass gave Unsharp Mask its own real Radius/Threshold, matching donor
+ *  contract `unsharp_mask: amount=150 radius=2 threshold=8`). Both now read their own `radius`
+ *  setting like `box_blur`/`gaussian_blur` do, so they fall through to the generic
+ *  `settings.radius` path below instead of a fixed entry here. */
 const FIXED_PADDING: Partial<Record<string, number>> = {
-  sharpen: 2, unsharp_mask: 2, soft_glow: 2,
+  sharpen: 2, soft_glow: 2,
   edge_detect: 1, emboss: 1, glowing_edges: 1, plastic_wrap: 1,
 };
 

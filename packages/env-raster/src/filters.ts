@@ -34,7 +34,28 @@ const unavailableUntilImplemented = new Set([
 // Photoshop's own Motion/Radial/Surface/Lens Blur parameter sets — each a
 // distinct algorithm (docs/master-plan.md §51), not the box-blur alias they
 // used to share.
-const motionBlurParams = [{ id: "distance", name: "Distance (Дистанция)", min: 1, max: 200, step: 1, value: 20 }, { id: "angle", name: "Angle (Угол)", min: -180, max: 180, step: 1, value: 0 }];
+// Distance default 12 and angle range -180..180 are Patchy's own contract
+// (docs/filters.md: `motion_blur: angle=0 distance=12`) — this project's
+// primary raster donor (CLAUDE.md §1), not a guessed default.
+const motionBlurParams = [{ id: "distance", name: "Distance (Дистанция)", min: 1, max: 200, step: 1, value: 12 }, { id: "angle", name: "Angle (Угол)", min: -180, max: 180, step: 1, value: 0 }];
+// Patchy's own unsharp_mask contract: amount 1..500% (default 150), radius
+// 0.1..1000px (practical to 12, default 2), threshold 0..255 (default 8) —
+// distinct from the single-slider `sharpen`, which Patchy's own catalog
+// also keeps as amount-only (`sharpen: amount=100`, no radius/threshold).
+// Radius capped at 32, not Patchy's own 1000 (practical 12): `blur()` itself clamps to 32
+// internally (its own worker-preview responsiveness limit), and a slider whose upper half
+// silently does nothing is exactly the "checkbox that does nothing" CLAUDE.md §3 warns against.
+const unsharpMaskParams = [{ id: "amount", name: "Amount (Сила)", min: 1, max: 500, step: 1, value: 150 }, { id: "radius", name: "Radius (Радиус)", min: 1, max: 32, step: 1, value: 2 }, { id: "threshold", name: "Threshold (Порог)", min: 0, max: 255, step: 1, value: 8 }];
+// Patchy: `high_pass: radius=10.0` — its own dedicated default, distinct
+// from the shared `radius` object's 2 (box_blur/gaussian_blur's own).
+const highPassParams = [{ id: "radius", name: "Radius (Радиус)", min: 1, max: 32, step: 1, value: 10 }];
+const medianParams = [{ id: "radius", name: "Radius (Радиус)", min: 1, max: 32, step: 1, value: 1 }];
+// Patchy: `dust_and_scratches: radius=1 threshold=0` — a real second
+// parameter, not the median-with-one-knob alias this filter used to be
+// (docs/master-plan.md §51's own "single door" lesson: two filters sharing
+// one code path silently become the same filter under two names).
+const dustAndScratchesParams = [{ id: "radius", name: "Radius (Радиус)", min: 1, max: 32, step: 1, value: 1 }, { id: "threshold", name: "Threshold (Порог)", min: 0, max: 255, step: 1, value: 0 }];
+const boxBlurParams = [{ id: "radius", name: "Radius (Радиус)", min: 1, max: 32, step: 1, value: 1 }];
 const radialBlurParams = [{ id: "amount", name: "Amount (Сила)", min: 1, max: 100, step: 1, value: 10 }, { id: "method", name: "Method (Метод)", min: 0, max: 1, step: 1, value: 0, choices: ["Spin (Вращение)", "Zoom (Приближение)"] }];
 const surfaceBlurParams = [{ id: "radius", name: "Radius (Радиус)", min: 1, max: 50, step: 1, value: 5 }, { id: "threshold", name: "Threshold (Порог)", min: 0, max: 100, step: 1, value: 15 }];
 const lensBlurParams = [{ id: "radius", name: "Radius (Радиус)", min: 1, max: 50, step: 1, value: 8 }];
@@ -42,28 +63,57 @@ const polarCoordinatesParams = [{ id: "direction", name: "Direction (Напра�
 const shearParams = [{ id: "amount", name: "Amount (Сила)", min: -100, max: 100, step: 1, value: 20 }];
 const spherizeParams = [{ id: "amount", name: "Amount (Сила)", min: -100, max: 100, step: 1, value: 50 }];
 const zigzagParams = [{ id: "amount", name: "Amount (Сила)", min: 0, max: 100, step: 1, value: 30 }];
-const kaleidoscopeParams = [{ id: "segments", name: "Segments (Сегменты)", min: 3, max: 16, step: 1, value: 6 }];
-const offsetParams = [{ id: "horizontal", name: "Horizontal (По горизонтали)", min: -500, max: 500, step: 1, value: 0 }, { id: "vertical", name: "Vertical (По вертикали)", min: -500, max: 500, step: 1, value: 0 }];
-const morphologyParams = [{ id: "radius", name: "Radius (Радиус)", min: 1, max: 20, step: 1, value: 1 }];
+const kaleidoscopeParams = [{ id: "segments", name: "Segments (Сегменты)", min: 3, max: 16, step: 1, value: 6 }, { id: "angle", name: "Angle (Угол)", min: -180, max: 180, step: 1, value: 0 }];
+// Owner's own reference panel (docs/master-plan.md §51): three modes, not the always-wrap
+// boolean this used to be — "Обтекание" (wrap), "Повторить пиксели краёв" (repeat edge pixels),
+// "Сделать прозрачным" (set to transparent).
+const offsetParams = [{ id: "horizontal", name: "Horizontal (По горизонтали)", min: -500, max: 500, step: 1, value: 0 }, { id: "vertical", name: "Vertical (По вертикали)", min: -500, max: 500, step: 1, value: 0 }, { id: "undefinedArea", name: "Undefined Area (Неопределенная область)", min: 0, max: 2, step: 1, value: 0, choices: ["Wrap Around (Обтекание)", "Repeat Edge Pixels (Повторить пиксели краёв)", "Transparent (Сделать прозрачным)"] }];
+// The reference panel's own "Фигура:" dropdown — the structuring-element shape, not only its
+// radius: Square is the full box (Photoshop's own default), Round the circular kernel this
+// filter used to be limited to, Diamond the |dx|+|dy| taxicab kernel.
+const morphologyParams = [{ id: "radius", name: "Radius (Радиус)", min: 1, max: 20, step: 1, value: 1 }, { id: "shape", name: "Shape (Фигура)", min: 0, max: 2, step: 1, value: 0, choices: ["Square (Квадрат)", "Round (Круг)", "Diamond (Ромб)"] }];
 const reduceNoiseParams = [{ id: "strength", name: "Strength (Сила)", min: 0, max: 8, step: 1, value: 4 }];
 const smartSharpenParams = [{ id: "amount", name: "Amount (Эффект)", min: 0, max: 500, step: 1, value: 150 }, { id: "radius", name: "Radius (Радиус)", min: 1, max: 32, step: 1, value: 2 }];
-const diffuseParams = [{ id: "amount", name: "Amount (Сила)", min: 1, max: 16, step: 1, value: 4 }];
-const traceContourParams = [{ id: "level", name: "Level (Уровень)", min: 0, max: 255, step: 1, value: 128 }];
-const windParams = [{ id: "strength", name: "Strength (Сила)", min: 1, max: 100, step: 1, value: 20 }, { id: "style", name: "Style (Стиль)", min: 0, max: 1, step: 1, value: 0, choices: ["Wind (Ветер)", "Blast (Порыв)"] }, { id: "direction", name: "Direction (Направление)", min: 0, max: 1, step: 1, value: 0, choices: ["From the Right (Справа)", "From the Left (Слева)"] }];
+// The reference panel drops the Amount slider entirely and offers only a Mode choice — GIMP's own
+// Spread modes (Normal/Darker Only/Lighter Only) plus a fourth, Anisotropic, which is an
+// edge-preserving diffusion rather than a random swap. Radius stays an internal constant (4,
+// this filter's own prior default) since no reference panel exposes one.
+const diffuseParams = [{ id: "mode", name: "Mode (Режим)", min: 0, max: 3, step: 1, value: 0, choices: ["Normal (Обычный)", "Darker Only (Темнее)", "Lighter Only (Светлее)", "Anisotropic (Anisotropic)"] }];
+const traceContourParams = [{ id: "level", name: "Level (Уровень)", min: 0, max: 255, step: 1, value: 128 }, { id: "edge", name: "Edge (Край)", min: 0, max: 1, step: 1, value: 0, choices: ["Lower (Вниз)", "Upper (Вверх)"] }];
+// No Strength slider: the reference panel has none — only Technique (Wind/Blast/Stagger) and
+// Direction. Strength lives as an internal constant instead of a fake slider with no backing.
+const windParams = [{ id: "technique", name: "Technique (Техника)", min: 0, max: 2, step: 1, value: 0, choices: ["Wind (Wind)", "Blast (Blast)", "Stagger (Stagger)"] }, { id: "direction", name: "Direction (Направление)", min: 0, max: 1, step: 1, value: 1, choices: ["From the Right (From the Right)", "From the Left (From the Left)"] }];
 const oilPaintParams = [{ id: "brushSize", name: "Brush size (Размер кисти)", min: 1, max: 8, step: 1, value: 4 }, { id: "stylization", name: "Stylization (Стилизация)", min: 1, max: 20, step: 1, value: 8 }];
-const embossParams = [{ id: "angle", name: "Angle (Угол)", min: 0, max: 360, step: 1, value: 135 }, { id: "height", name: "Height (Высота)", min: 1, max: 100, step: 1, value: 3 }, { id: "amount", name: "Amount (Сила)", min: 0, max: 500, step: 1, value: 100 }];
-const lensFlareParams = [{ id: "brightness", name: "Brightness (Яркость)", min: 10, max: 300, step: 1, value: 100 }, { id: "positionX", name: "Position X (Позиция X)", min: 0, max: 100, step: 1, value: 50 }, { id: "positionY", name: "Position Y (Позиция Y)", min: 0, max: 100, step: 1, value: 50 }];
+// Patchy's own contract for the shared classic-Photoshop set: `emboss: angle=-360..360
+// (practical -180..180) height=1..100 (practical 1..24) amount=1..500 (practical 0..300)`.
+const embossParams = [{ id: "angle", name: "Angle (Угол)", min: -180, max: 180, step: 1, value: 135 }, { id: "height", name: "Height (Высота)", min: 1, max: 100, step: 1, value: 3 }, { id: "amount", name: "Amount (Сила)", min: 1, max: 500, step: 1, value: 100 }];
+// The reference panel's own "Тип: Lens 1/2/3/4" choice — four reflection styles, not the one
+// fixed table this filter used to render regardless of setting.
+const lensFlareParams = [{ id: "brightness", name: "Brightness (Яркость)", min: 10, max: 300, step: 1, value: 100 }, { id: "lensType", name: "Type (Тип)", min: 0, max: 3, step: 1, value: 0, choices: ["Lens 1 (Lens 1)", "Lens 2 (Lens 2)", "Lens 3 (Lens 3)", "Lens 4 (Lens 4)"] }, { id: "positionX", name: "Position X (Позиция X)", min: 0, max: 100, step: 1, value: 50 }, { id: "positionY", name: "Position Y (Позиция Y)", min: 0, max: 100, step: 1, value: 50 }];
 const cellSizeParams = [{ id: "cellSize", name: "Cell size (Размер ячейки)", min: 3, max: 100, step: 1, value: 12 }];
 const fragmentParams = [{ id: "amount", name: "Offset (Смещение)", min: 1, max: 20, step: 1, value: 4 }];
-const mezzotintParams = [{ id: "type", name: "Type (Тип)", min: 0, max: 3, step: 1, value: 0, choices: ["Fine Dots (Мелкие точки)", "Medium Dots (Средние точки)", "Coarse Dots (Крупные точки)", "Lines (Линии)"] }];
-const shapeMosaicParams = [{ id: "cellSize", name: "Cell size (Размер ячейки)", min: 4, max: 100, step: 1, value: 20 }];
+const mezzotintParams = [{ id: "type", name: "Type (Тип)", min: 0, max: 9, step: 1, value: 0, choices: ["Fine Dots (Fine Dots)", "Medium Dots (Medium Dots)", "Grainy Dots (Grainy Dots)", "Coarse Dots (Coarse Dots)", "Short Lines (Short Lines)", "Medium Lines (Medium Lines)", "Long Lines (Long Lines)", "Short Strokes (Short Strokes)", "Medium Strokes (Medium Strokes)", "Long Strokes (Long Strokes)"] }];
+const shapeMosaicParams = [{ id: "cellSize", name: "Cell size (Размер ячейки)", min: 4, max: 100, step: 1, value: 20 }, { id: "shape", name: "Shape (Фигура)", min: 0, max: 2, step: 1, value: 0, choices: ["Square (Квадрат)", "Circle (Круг)", "Star (Звезда)"] }, { id: "monochrome", name: "Monochrome (Однотонный)", min: 0, max: 1, step: 1, value: 0, choices: ["Off", "On"] }, { id: "invert", name: "Invert (Инвертировать)", min: 0, max: 1, step: 1, value: 0, choices: ["Off", "On"] }];
 const fibersParams = [{ id: "variance", name: "Variance (Разброс)", min: 1, max: 100, step: 1, value: 50 }, { id: "strength", name: "Strength (Сила)", min: 1, max: 100, step: 1, value: 50 }];
-const normalMapParams = [{ id: "scale", name: "Scale (Масштаб)", min: 1, max: 100, step: 1, value: 10 }];
-const lensCorrectionParams = [{ id: "distortAmount", name: "Remove Distortion (Удалить искажение)", min: -100, max: 100, step: 1, value: 0 }, { id: "chromaticAberration", name: "Fix Chromatic Aberration (Хроматические аберрации)", min: 0, max: 100, step: 1, value: 0 }, { id: "vignetteAmount", name: "Vignette (Виньетирование)", min: -100, max: 100, step: 1, value: 0 }];
-const hsbHslParams = [{ id: "mode", name: "Mode (Режим)", min: 0, max: 1, step: 1, value: 0, choices: ["HSB (HSB)", "HSL (HSL)"] }];
-const textureDilationParams = [{ id: "distance", name: "Distance (Дистанция)", min: 1, max: 64, step: 1, value: 8 }];
+// The reference panel's own Blur/Scale/Invert/High/Medium/Low — a three-band detail mix, not
+// the single flat Scale this filter used to have.
+const normalMapParams = [{ id: "blur", name: "Blur (Размыть)", min: 0, max: 20, step: 1, value: 0 }, { id: "scale", name: "Scale (Масштаб)", min: 1, max: 100, step: 1, value: 10 }, { id: "invert", name: "Invert (Инвертировать)", min: 0, max: 1, step: 1, value: 0, choices: ["Off", "On"] }, { id: "high", name: "High (High)", min: 0, max: 100, step: 1, value: 100 }, { id: "medium", name: "Medium (Medium)", min: 0, max: 100, step: 1, value: 100 }, { id: "low", name: "Low (Low)", min: 0, max: 100, step: 1, value: 100 }];
+// Simplified to the reference panel's own two sliders (Интенсивность/Масштаб). Chromatic
+// aberration and vignette correction, while real algorithms, are not in any reference panel
+// shown — Lens Correction here is deliberately the plain lens-distortion-plus-compensating-zoom
+// pair, not a superset invented beyond what was asked for.
+const lensCorrectionParams = [{ id: "distortAmount", name: "Intensity (Интенсивность)", min: -100, max: 100, step: 1, value: 0 }, { id: "scale", name: "Scale (Масштаб)", min: 50, max: 150, step: 1, value: 100 }];
+const hsbHslParams = [{ id: "inputMode", name: "Input (Input)", min: 0, max: 2, step: 1, value: 0, choices: ["RGB (RGB)", "HSB (HSB)", "HSL (HSL)"] }, { id: "outputMode", name: "Output (Output)", min: 0, max: 2, step: 1, value: 1, choices: ["RGB (RGB)", "HSB (HSB)", "HSL (HSL)"] }];
+const textureDilationParams = [{ id: "distance", name: "Radius (Радиус)", min: 1, max: 64, step: 1, value: 8 }, { id: "crop", name: "Crop (Обрезать)", min: 0, max: 64, step: 1, value: 0 }];
+// Photoshop's own dialog has no Size choice at all, only Amount — but the reference panel does
+// (Small/Medium/Large), scaling the ripple's period; Amount's own range (999) matches the panel
+// too, distinct from the 0-100 convention every other Amount slider here uses.
+const rippleParams = [{ id: "amount", name: "Amount (Интенсивность)", min: 0, max: 999, step: 1, value: 100 }, { id: "size", name: "Size (Размер)", min: 0, max: 2, step: 1, value: 1, choices: ["Small (Малый)", "Medium (Средний)", "Large (Большой)"] }];
+// Four independent screen angles — one per RGB channel plus a shared row — replacing the single
+// grayscale dot-radius this filter used to render regardless of the angle sliders it displayed.
+const colorHalftoneParams = [{ id: "radius", name: "Radius (Радиус)", min: 2, max: 30, step: 1, value: 8 }, { id: "angle1", name: "Angle 1 (Угол 1)", min: 0, max: 360, step: 1, value: 10 }, { id: "angle2", name: "Angle 2 (Угол 2)", min: 0, max: 360, step: 1, value: 40 }, { id: "angle3", name: "Angle 3 (Угол 3)", min: 0, max: 360, step: 1, value: 70 }];
 export const rasterFilterCatalog: RasterFilterDefinition[] = ([
-  ["invert","Invert (Инверсия)","Basics",none], ["brightness_contrast","Brightness/Contrast (Яркость/Контраст)","Basics",[{id:"brightness",name:"Brightness (Яркость)",min:-100,max:100,step:1,value:0},{id:"contrast",name:"Contrast (Контраст)",min:-100,max:100,step:1,value:20}]], ["grayscale","Grayscale (Оттенки серого)","Basics",none], ["desaturate","Desaturate (Обесцветить)","Basics",none], ["auto_tone","Auto Tone (Автотон)","Photo",none], ["auto_contrast","Auto Contrast (Автоконтраст)","Photo",none], ["auto_color","Auto Color (Автоцвет)","Photo",none], ["soft_glow","Soft Glow (Мягкое свечение)","Photo",amount], ["punchy_color","Punchy Color (Сочный цвет)","Photo",amount], ["noir","Noir (Нуар)","Photo",amount], ["cinematic_matte","Cinematic Matte (Кинематографический матовый)","Photo",amount], ["vintage_fade","Vintage Fade (Винтажное выцветание)","Photo",amount], ["sepia","Vintage Sepia (Винтажная сепия)","Photo",amount], ["threshold","Threshold (Порог)","Basics",[{id:"threshold",name:"Threshold (Порог)",min:0,max:255,step:1,value:128}]], ["posterize","Posterize (Постеризация)","Basics",[{id:"levels",name:"Levels (Уровни)",min:2,max:32,step:1,value:4}]], ["box_blur","Box Blur (Прямоугольное размытие)","Blur",radius], ["sharpen","Sharpen (Резкость)","Sharpen",amount], ["unsharp_mask","Unsharp Mask (Контурная резкость)","Sharpen",amount], ["gaussian_blur","Gaussian Blur (Размытие по Гауссу)","Blur",radius], ["motion_blur","Motion Blur (Размытие в движении)","Blur",motionBlurParams], ["radial_blur","Radial Blur (Радиальное размытие)","Blur",radialBlurParams], ["edge_detect","Edge Detect (Выделение краёв)","Stylize",none], ["emboss","Emboss (Тиснение)","Stylize",embossParams], ["glowing_edges","Glowing Edges (Светящиеся края)","Stylize",amount], ["twirl","Twirl (Скручивание)","Distort",amount], ["wave","Wave (Волна)","Distort",amount], ["pinch_bloat","Pinch/Bloat (Сжатие/Вздутие)","Distort",[{id:"amount",name:"Amount (Сила)",min:-100,max:100,step:1,value:25}]], ["clouds","Clouds (Облака)","Render",amount], ["pixelate","Pixel Mosaic (Мозаика)","Stylize",[{id:"size",name:"Cell size (Размер ячейки)",min:2,max:64,step:1,value:8}]], ["color_halftone","Color Halftone (Цветные полутона)","Stylize",radius], ["film_grain","Analog Grain (Аналоговое зерно)","Noise",[noiseAmount]], ["add_noise","Add Noise (Добавить шум)","Noise",addNoiseParameters], ["vignette","Lens Vignette (Виньетка)","Photo",amount], ["high_pass","High Pass (Цветовой контраст)","Sharpen",radius], ["median","Median (Медиана)","Noise",radius], ["dust_and_scratches","Dust & Scratches (Пыль и царапины)","Noise",radius], ["surface_blur","Surface Blur (Размытие по поверхности)","Blur",surfaceBlurParams], ["lens_blur","Lens Blur (Размытие объектива)","Blur",lensBlurParams], ["iris_blur","Iris Blur (Размытие диафрагмы)","Blur",radius], ["tilt_shift_blur","Tilt-Shift Blur (Наклон-сдвиг)","Blur",radius], ["plastic_wrap","Plastic Wrap (Целлофановая упаковка)","Stylize",amount],
+  ["invert","Invert (Инверсия)","Basics",none], ["brightness_contrast","Brightness/Contrast (Яркость/Контраст)","Basics",[{id:"brightness",name:"Brightness (Яркость)",min:-100,max:100,step:1,value:0},{id:"contrast",name:"Contrast (Контраст)",min:-100,max:100,step:1,value:20}]], ["grayscale","Grayscale (Оттенки серого)","Basics",none], ["desaturate","Desaturate (Обесцветить)","Basics",none], ["auto_tone","Auto Tone (Автотон)","Photo",none], ["auto_contrast","Auto Contrast (Автоконтраст)","Photo",none], ["auto_color","Auto Color (Автоцвет)","Photo",none], ["soft_glow","Soft Glow (Мягкое свечение)","Photo",amount], ["punchy_color","Punchy Color (Сочный цвет)","Photo",amount], ["noir","Noir (Нуар)","Photo",amount], ["cinematic_matte","Cinematic Matte (Кинематографический матовый)","Photo",amount], ["vintage_fade","Vintage Fade (Винтажное выцветание)","Photo",amount], ["sepia","Vintage Sepia (Винтажная сепия)","Photo",amount], ["threshold","Threshold (Порог)","Basics",[{id:"threshold",name:"Threshold (Порог)",min:0,max:255,step:1,value:128}]], ["posterize","Posterize (Постеризация)","Basics",[{id:"levels",name:"Levels (Уровни)",min:2,max:32,step:1,value:4}]], ["box_blur","Box Blur (Прямоугольное размытие)","Blur",boxBlurParams], ["sharpen","Sharpen (Резкость)","Sharpen",amount], ["unsharp_mask","Unsharp Mask (Контурная резкость)","Sharpen",unsharpMaskParams], ["gaussian_blur","Gaussian Blur (Размытие по Гауссу)","Blur",radius], ["motion_blur","Motion Blur (Размытие в движении)","Blur",motionBlurParams], ["radial_blur","Radial Blur (Радиальное размытие)","Blur",radialBlurParams], ["edge_detect","Edge Detect (Выделение краёв)","Stylize",none], ["emboss","Emboss (Тиснение)","Stylize",embossParams], ["glowing_edges","Glowing Edges (Светящиеся края)","Stylize",amount], ["twirl","Twirl (Скручивание)","Distort",amount], ["wave","Wave (Волна)","Distort",amount], ["pinch_bloat","Pinch/Bloat (Сжатие/Вздутие)","Distort",[{id:"amount",name:"Amount (Сила)",min:-100,max:100,step:1,value:25}]], ["clouds","Clouds (Облака)","Render",amount], ["pixelate","Pixel Mosaic (Мозаика)","Stylize",[{id:"size",name:"Cell size (Размер ячейки)",min:2,max:64,step:1,value:8}]], ["color_halftone","Color Halftone (Цветные полутона)","Stylize",colorHalftoneParams], ["film_grain","Analog Grain (Аналоговое зерно)","Noise",[noiseAmount]], ["add_noise","Add Noise (Добавить шум)","Noise",addNoiseParameters], ["vignette","Lens Vignette (Виньетка)","Photo",amount], ["high_pass","High Pass (Цветовой контраст)","Sharpen",highPassParams], ["median","Median (Медиана)","Noise",medianParams], ["dust_and_scratches","Dust & Scratches (Пыль и царапины)","Noise",dustAndScratchesParams], ["surface_blur","Surface Blur (Размытие по поверхности)","Blur",surfaceBlurParams], ["lens_blur","Lens Blur (Размытие объектива)","Blur",lensBlurParams], ["iris_blur","Iris Blur (Размытие диафрагмы)","Blur",radius], ["tilt_shift_blur","Tilt-Shift Blur (Наклон-сдвиг)","Blur",radius], ["plastic_wrap","Plastic Wrap (Целлофановая упаковка)","Stylize",amount],
   ["duotone","Duotone (Дуотон)","Photo",[{id:"shadowHue",name:"Shadow hue (Тон теней)",min:0,max:359,step:1,value:210},{id:"highlightHue",name:"Highlight hue (Тон светов)",min:0,max:359,step:1,value:45},{id:"amount",name:"Amount (Сила)",min:0,max:100,step:1,value:100}]],
   ["glitch","CRT Glitch (Глитч ЭЛТ)","Stylize",[{id:"shift",name:"Channel shift (Сдвиг каналов)",min:0,max:40,step:1,value:8},{id:"scanline",name:"Scanlines (Строки)",min:0,max:100,step:1,value:45},{id:"amount",name:"Amount (Сила)",min:0,max:100,step:1,value:100}]],
   ["eink","E-Ink Dither (Дизеринг E-Ink)","Stylize",[{id:"levels",name:"Levels (Уровни)",min:2,max:8,step:1,value:2},{id:"amount",name:"Amount (Сила)",min:0,max:100,step:1,value:100}]],
@@ -74,7 +124,7 @@ export const rasterFilterCatalog: RasterFilterDefinition[] = ([
   ["shear","Shear (Сдвиг)","Distort",shearParams],
   ["spherize","Spherize (Сферизация)","Distort",spherizeParams],
   ["zigzag","ZigZag (Зигзаг)","Distort",zigzagParams],
-  ["ripple","Ripple (Рябь)","Distort",zigzagParams],
+  ["ripple","Ripple (Рябь)","Distort",rippleParams],
   ["kaleidoscope","Kaleidoscope (Калейдоскоп)","Distort",kaleidoscopeParams],
   ["offset","Offset (Смещение)","Other",offsetParams],
   ["maximum","Maximum (Максимум)","Other",morphologyParams],
@@ -207,6 +257,29 @@ function medianBlur(source: Uint8ClampedArray, width: number, height: number, ra
   return output;
 }
 
+/**
+ * Dust & Scratches — Patchy's own calibration note (docs/filters.md):
+ * "replaces the whole RGB triplet only when its maximum channel difference
+ * from the source is strictly greater than Threshold." Median with no
+ * threshold logic at all used to stand in for this filter under a second
+ * name — the "single door, not a lookalike" mistake CLAUDE.md §4 calls
+ * out, since a real Threshold of 0 (Dust & Scratches' own default) already
+ * reproduces plain Median exactly, while any positive threshold is a
+ * genuinely different, edge-preserving result Median alone cannot give.
+ */
+function dustAndScratchesFilter(source: Uint8ClampedArray, width: number, height: number, radius: number, threshold: number): Uint8ClampedArray {
+  const median = medianBlur(source, width, height, radius);
+  if (threshold <= 0) return median;
+  const output = new Uint8ClampedArray(source.length);
+  for (let i = 0; i < source.length; i += 4) {
+    const diff = Math.max(Math.abs(source[i]! - median[i]!), Math.abs(source[i + 1]! - median[i + 1]!), Math.abs(source[i + 2]! - median[i + 2]!));
+    const useMedian = diff > threshold;
+    output[i] = useMedian ? median[i]! : source[i]!; output[i + 1] = useMedian ? median[i + 1]! : source[i + 1]!; output[i + 2] = useMedian ? median[i + 2]! : source[i + 2]!;
+    output[i + 3] = source[i + 3]!;
+  }
+  return output;
+}
+
 function sampleBilinear(source: Uint8ClampedArray, width: number, height: number, x: number, y: number): [number, number, number, number] {
   const cx = Math.max(0, Math.min(width - 1.001, x)), cy = Math.max(0, Math.min(height - 1.001, y));
   const x0 = Math.floor(cx), y0 = Math.floor(cy), x1 = Math.min(width - 1, x0 + 1), y1 = Math.min(height - 1, y0 + 1), fx = cx - x0, fy = cy - y0;
@@ -316,17 +389,37 @@ function cloudsFilter(source: Uint8ClampedArray, width: number, height: number, 
   return output;
 }
 
-function colorHalftoneFilter(source: Uint8ClampedArray, width: number, height: number, cellSize: number): Uint8ClampedArray {
-  const output = new Uint8ClampedArray(source.length), size = Math.max(2, Math.round(cellSize));
-  for (let cellY = 0; cellY < height; cellY += size) for (let cellX = 0; cellX < width; cellX += size) {
-    const right = Math.min(width, cellX + size), bottom = Math.min(height, cellY + size);
-    let sum = 0, alphaSum = 0, count = 0;
-    for (let y = cellY; y < bottom; y += 1) for (let x = cellX; x < right; x += 1) { const i = (y * width + x) * 4; sum += source[i]! * .3 + source[i + 1]! * .59 + source[i + 2]! * .11; alphaSum += source[i + 3]!; count += 1; }
-    const averageLuminance = count ? sum / count / 255 : 1, averageAlpha = count ? alphaSum / count : 0, centerX = cellX + (right - cellX) / 2, centerY = cellY + (bottom - cellY) / 2, radius = (1 - averageLuminance) * size / 2 * 1.2;
-    for (let y = cellY; y < bottom; y += 1) for (let x = cellX; x < right; x += 1) {
-      const inDot = Math.hypot(x - centerX + .5, y - centerY + .5) <= radius, shade = inDot ? 0 : 255, i = (y * width + x) * 4;
-      output[i] = shade; output[i + 1] = shade; output[i + 2] = shade; output[i + 3] = byte(averageAlpha);
-    }
+/**
+ * Color Halftone — an independent rotated dot screen per RGB channel, one
+ * angle each (the reference panel's own Angle 1/2/3), replacing the single
+ * grayscale dot-radius this filter used to render regardless of the angle
+ * sliders it displayed (a real "checkbox that does nothing", CLAUDE.md §3):
+ * dot size for a channel grows with that channel's own brightness at the
+ * cell (more of that primary present → a bigger dot of it), each channel's
+ * dot grid independently rotated by its own angle — the standard technique
+ * every open "RGB halftone" implementation uses in place of Photoshop's own
+ * CMYK conversion, which this engine's plain-RGB pipeline has no channel
+ * space for.
+ */
+function colorHalftoneFilter(source: Uint8ClampedArray, width: number, height: number, radius: number, angle1: number, angle2: number, angle3: number): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(source.length), cellSize = Math.max(2, radius * 2), centerX = width / 2, centerY = height / 2;
+  const angles = [angle1, angle2, angle3].map((degrees) => degrees * Math.PI / 180);
+  const clampX = (x: number) => Math.max(0, Math.min(width - 1, x)), clampY = (y: number) => Math.max(0, Math.min(height - 1, y));
+  const channelDot = (channel: number, angleRad: number, x: number, y: number): number => {
+    const cos = Math.cos(angleRad), sin = Math.sin(angleRad);
+    const rx = x * cos + y * sin, ry = -x * sin + y * cos;
+    const cellX = Math.floor(rx / cellSize) * cellSize + cellSize / 2, cellY = Math.floor(ry / cellSize) * cellSize + cellSize / 2;
+    const originX = cellX * cos - cellY * sin + centerX, originY = cellX * sin + cellY * cos + centerY;
+    const sampleIndex = (clampY(Math.round(originY)) * width + clampX(Math.round(originX))) * 4 + channel;
+    const channelValue = source[sampleIndex]!, dotRadius = (channelValue / 255) * (cellSize / 2) * 1.2;
+    return Math.hypot(rx - cellX, ry - cellY) <= dotRadius ? channelValue : 0;
+  };
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const i = (y * width + x) * 4, dx = x - centerX, dy = y - centerY;
+    output[i] = byte(channelDot(0, angles[0]!, dx, dy));
+    output[i + 1] = byte(channelDot(1, angles[1]!, dx, dy));
+    output[i + 2] = byte(channelDot(2, angles[2]!, dx, dy));
+    output[i + 3] = source[i + 3]!;
   }
   return output;
 }
@@ -599,9 +692,12 @@ function spherizeFilter(source: Uint8ClampedArray, width: number, height: number
  * own `angle = 0` default: a sine-wave vertical displacement whose phase
  * varies with x, i.e. Photoshop's own Amount/Size ripple with no angle
  * control exposed. */
-function rippleFilter(source: Uint8ClampedArray, width: number, height: number, amountPercent: number): Uint8ClampedArray {
+function rippleFilter(source: Uint8ClampedArray, width: number, height: number, amountPercent: number, size: number): Uint8ClampedArray {
   const output = new Uint8ClampedArray(source.length);
-  const amplitude = Math.max(0, amountPercent) / 100 * Math.min(width, height) * 0.04, period = Math.max(4, Math.min(width, height) / 10);
+  // Size (Small/Medium/Large) scales the ripple's period — a shorter period packs more, tighter
+  // ripples into the same distance, exactly what "smaller" ripples means visually.
+  const sizeDivisor = [20, 10, 5][Math.round(size)] ?? 10;
+  const amplitude = Math.max(0, amountPercent) / 999 * Math.min(width, height) * 0.08, period = Math.max(2, Math.min(width, height) / sizeDivisor);
   for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
     const shift = amplitude * Math.sin((2 * Math.PI * x) / period);
     const [r, g, b, a] = sampleBilinear(source, width, height, x, y + shift), i = (y * width + x) * 4;
@@ -629,11 +725,11 @@ function zigzagFilter(source: Uint8ClampedArray, width: number, height: number, 
  * wedges before sampling — the standard angular-mirror technique (not a
  * native Photoshop filter; kept here as the same kind of bonus addition as
  * Glowing Edges/Plastic Wrap, docs/master-plan.md §51). */
-function kaleidoscopeFilter(source: Uint8ClampedArray, width: number, height: number, segments: number): Uint8ClampedArray {
-  const output = new Uint8ClampedArray(source.length), cx = width / 2, cy = height / 2, n = Math.max(3, Math.round(segments)), wedge = Math.PI * 2 / n;
+function kaleidoscopeFilter(source: Uint8ClampedArray, width: number, height: number, segments: number, rotationDeg: number): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(source.length), cx = width / 2, cy = height / 2, n = Math.max(3, Math.round(segments)), wedge = Math.PI * 2 / n, rotation = rotationDeg * Math.PI / 180;
   for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
     const dx = x - cx, dy = y - cy, r = Math.hypot(dx, dy);
-    let angle = Math.atan2(dy, dx) % wedge;
+    let angle = (Math.atan2(dy, dx) + rotation) % wedge;
     if (angle < 0) angle += wedge;
     if (angle > wedge / 2) angle = wedge - angle;
     const [sr, sg, sb, sa] = sampleBilinear(source, width, height, cx + r * Math.cos(angle), cy + r * Math.sin(angle)), i = (y * width + x) * 4;
@@ -646,11 +742,18 @@ function kaleidoscopeFilter(source: Uint8ClampedArray, width: number, height: nu
  * "Other > Offset" in Photoshop): rows/columns that leave one edge
  * reappear at the opposite one, exactly like the real dialog's default
  * "Wrap Around" undefined-area behaviour. */
-function offsetFilter(source: Uint8ClampedArray, width: number, height: number, dx: number, dy: number): Uint8ClampedArray {
+function offsetFilter(source: Uint8ClampedArray, width: number, height: number, dx: number, dy: number, undefinedArea: number): Uint8ClampedArray {
   const output = new Uint8ClampedArray(source.length), ox = Math.round(dx), oy = Math.round(dy);
   const wrap = (value: number, size: number) => ((value % size) + size) % size;
+  const clampX = (x: number) => Math.max(0, Math.min(width - 1, x)), clampY = (y: number) => Math.max(0, Math.min(height - 1, y));
   for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
-    const sourceIndex = (wrap(y - oy, height) * width + wrap(x - ox, width)) * 4, i = (y * width + x) * 4;
+    const i = (y * width + x) * 4;
+    const sourceX = x - ox, sourceY = y - oy;
+    const outOfBounds = sourceX < 0 || sourceX >= width || sourceY < 0 || sourceY >= height;
+    if (outOfBounds && undefinedArea === 2) { output[i] = 0; output[i + 1] = 0; output[i + 2] = 0; output[i + 3] = 0; continue; }
+    const sourceIndex = undefinedArea === 1
+      ? (clampY(sourceY) * width + clampX(sourceX)) * 4
+      : (wrap(sourceY, height) * width + wrap(sourceX, width)) * 4;
     output[i] = source[sourceIndex]!; output[i + 1] = source[sourceIndex + 1]!; output[i + 2] = source[sourceIndex + 2]!; output[i + 3] = source[sourceIndex + 3]!;
   }
   return output;
@@ -659,13 +762,16 @@ function offsetFilter(source: Uint8ClampedArray, width: number, height: number, 
 /** Maximum/Minimum — the standard morphological dilate/erode: each channel
  * becomes the max (or min) found within `radius`, independently per channel,
  * matching Photoshop's own "Other > Maximum/Minimum". */
-function morphologyFilter(source: Uint8ClampedArray, width: number, height: number, radius: number, dilate: boolean): Uint8ClampedArray {
+// shape: 0 = Square (the full box — Photoshop's own default structuring element), 1 = Round
+// (the circular kernel this filter used to be limited to), 2 = Diamond (taxicab distance).
+function morphologyFilter(source: Uint8ClampedArray, width: number, height: number, radius: number, dilate: boolean, shape: number): Uint8ClampedArray {
   const output = new Uint8ClampedArray(source.length), r = Math.max(1, Math.min(20, Math.round(radius)));
   const clampX = (x: number) => Math.max(0, Math.min(width - 1, x)), clampY = (y: number) => Math.max(0, Math.min(height - 1, y));
+  const inKernel = (dx: number, dy: number) => shape === 1 ? dx * dx + dy * dy <= r * r : shape === 2 ? Math.abs(dx) + Math.abs(dy) <= r : true;
   for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
     const best = [dilate ? 0 : 255, dilate ? 0 : 255, dilate ? 0 : 255, dilate ? 0 : 255];
     for (let dy = -r; dy <= r; dy += 1) for (let dx = -r; dx <= r; dx += 1) {
-      if (dx * dx + dy * dy > r * r) continue;
+      if (!inKernel(dx, dy)) continue;
       const index = (clampY(y + dy) * width + clampX(x + dx)) * 4;
       for (let c = 0; c < 4; c += 1) best[c] = dilate ? Math.max(best[c]!, source[index + c]!) : Math.min(best[c]!, source[index + c]!);
     }
@@ -727,10 +833,20 @@ function noiseReductionFilter(source: Uint8ClampedArray, width: number, height: 
  * the one-click Photoshop preset, and an exposed radius for the tunable
  * dialog — the two are the same operation at different fixed points, not
  * two different algorithms. */
-function unsharpFilter(source: Uint8ClampedArray, width: number, height: number, blurRadius: number, strength: number): Uint8ClampedArray {
+// Threshold defaults to 0 (every detail passes) so Sharpen More/Smart Sharpen's own calls, which
+// never pass one, keep their exact prior output — this is Unsharp Mask's own extra knob, not a
+// change to what those two already did.
+function unsharpFilter(source: Uint8ClampedArray, width: number, height: number, blurRadius: number, strength: number, threshold = 0): Uint8ClampedArray {
   const output = new Uint8ClampedArray(source.length), blurred = blur(source, width, height, blurRadius);
   for (let i = 0; i < source.length; i += 4) {
-    for (let c = 0; c < 3; c += 1) output[i + c] = byte(source[i + c]! + (source[i + c]! - blurred[i + c]!) * strength);
+    for (let c = 0; c < 3; c += 1) {
+      // Patchy's own calibration note (docs/filters.md): the signed detail is scaled first, and
+      // Threshold is then subtracted from its *magnitude* — a flat area under threshold stays
+      // untouched instead of picking up a scaled-down nudge in the same direction.
+      const detail = (source[i + c]! - blurred[i + c]!) * strength, magnitude = Math.abs(detail);
+      const clipped = magnitude <= threshold ? 0 : (magnitude - threshold) * Math.sign(detail);
+      output[i + c] = byte(source[i + c]! + clipped);
+    }
     output[i + 3] = source[i + 3]!;
   }
   return output;
@@ -756,14 +872,28 @@ function sharpenEdgesFilter(source: Uint8ClampedArray, width: number, height: nu
  * within `amount` pixels — the classic GIMP "Spread" noise-dither, ported
  * to this project's own position hash (`addNoiseHash`) rather than a new
  * PRNG, so it stays reproducible the same way Add Noise is. */
-function diffuseFilter(source: Uint8ClampedArray, width: number, height: number, amount: number): Uint8ClampedArray {
-  const output = new Uint8ClampedArray(source.length), r = Math.max(1, Math.round(amount));
+/**
+ * Diffuse — Photoshop's own four modes, not a bare Amount slider (the
+ * reference panel has no Amount at all): Normal swaps each pixel with a
+ * deterministically-hashed neighbour (GIMP's own Spread); Darker/Lighter
+ * Only swap only when that neighbour is darker/lighter by luminance, which
+ * is what keeps Lighter Only from ever muddying a bright area with a dark
+ * neighbour and vice versa; Anisotropic reuses `noiseReductionFilter`'s own
+ * single-pass edge-preserving diffusion outright — the same operation
+ * Photoshop's own "Anisotropic" mode names.
+ */
+function diffuseFilter(source: Uint8ClampedArray, width: number, height: number, mode: number): Uint8ClampedArray {
+  if (mode === 3) return noiseReductionFilter(source, width, height, 1);
+  const output = new Uint8ClampedArray(source.length), r = 4;
   const clampX = (x: number) => Math.max(0, Math.min(width - 1, x)), clampY = (y: number) => Math.max(0, Math.min(height - 1, y));
+  const luma = (i: number) => source[i]! * 30 + source[i + 1]! * 59 + source[i + 2]! * 11;
   for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
     const hashX = addNoiseHash(x, y, 101), hashY = addNoiseHash(x, y, 202);
     const dx = Math.round(unitFromHash(hashX) * r), dy = Math.round(unitFromHash(hashY) * r);
     const sourceIndex = (clampY(y + dy) * width + clampX(x + dx)) * 4, i = (y * width + x) * 4;
-    output[i] = source[sourceIndex]!; output[i + 1] = source[sourceIndex + 1]!; output[i + 2] = source[sourceIndex + 2]!; output[i + 3] = source[sourceIndex + 3]!;
+    const useNeighbor = mode === 0 || (mode === 1 && luma(sourceIndex) < luma(i)) || (mode === 2 && luma(sourceIndex) > luma(i));
+    const pick = useNeighbor ? sourceIndex : i;
+    output[i] = source[pick]!; output[i + 1] = source[pick + 1]!; output[i + 2] = source[pick + 2]!; output[i + 3] = source[pick + 3]!;
   }
   return output;
 }
@@ -773,14 +903,18 @@ function diffuseFilter(source: Uint8ClampedArray, width: number, height: number,
  * else — Photoshop's own single-level contour band (its Upper/Lower pair
  * is two bands; this engine exposes one, per the plain-slider convention
  * every other single-level filter here already uses). */
-function traceContourFilter(source: Uint8ClampedArray, width: number, height: number, level: number): Uint8ClampedArray {
+// edge 0 (Lower) marks a crossing only where the centre sits on the darker side of the level;
+// edge 1 (Upper) only on the lighter side — Photoshop's own pair of contour bands, not a single
+// symmetric crossing test that ignores which side the reference panel's own Edge choice picks.
+function traceContourFilter(source: Uint8ClampedArray, width: number, height: number, level: number, edge: number): Uint8ClampedArray {
   const output = new Uint8ClampedArray(source.length);
   const luma = (i: number) => (source[i]! * 30 + source[i + 1]! * 59 + source[i + 2]! * 11) / 100;
   for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
     const i = (y * width + x) * 4, center = luma(i);
     const right = x + 1 < width ? luma(i + 4) : center, down = y + 1 < height ? luma(i + width * 4) : center;
     const crosses = (center - level) * (right - level) < 0 || (center - level) * (down - level) < 0;
-    const shade = crosses ? 255 : 0;
+    const onEdgeSide = edge === 0 ? center <= level : center >= level;
+    const shade = crosses && onEdgeSide ? 255 : 0;
     output[i] = shade; output[i + 1] = shade; output[i + 2] = shade; output[i + 3] = source[i + 3]!;
   }
   return output;
@@ -794,10 +928,15 @@ function traceContourFilter(source: Uint8ClampedArray, width: number, height: nu
  * flat solid run (Blast) — the donor's own two styles, without its
  * per-pixel randomness (a deterministic hash keeps this reproducible).
  */
-function windFilter(source: Uint8ClampedArray, width: number, height: number, strength: number, style: number, direction: number): Uint8ClampedArray {
-  const output = source.slice(), fromLeft = direction >= 1, blast = style >= 1;
+// No Strength parameter — the reference panel has none, only Technique/Direction — so the streak
+// length is this filter's own fixed internal constant rather than a slider with nothing behind
+// it. Stagger runs the same Wind streak but only on every other row, the classic "broken" look
+// that distinguishes it from Wind's continuous one.
+function windFilter(source: Uint8ClampedArray, width: number, height: number, technique: number, direction: number): Uint8ClampedArray {
+  const output = source.slice(), fromLeft = direction >= 1, blast = technique === 1, stagger = technique === 2, strength = 20;
   const luma = (i: number) => (output[i]! * 30 + output[i + 1]! * 59 + output[i + 2]! * 11) / 100;
   for (let y = 0; y < height; y += 1) {
+    if (stagger && y % 2 === 1) continue;
     let x = fromLeft ? width - 2 : 1;
     const step = fromLeft ? -1 : 1;
     while (fromLeft ? x >= 0 : x < width - 1) {
@@ -896,12 +1035,27 @@ function embossFilter(source: Uint8ClampedArray, width: number, height: number, 
  * the light source plus 19 fixed secondary reflections along the line
  * through the image centre, each with the donor's own exact size/colour
  * table. `positionX`/`positionY` are this filter's canvas-click parameters
- * (docs/master-plan.md §51's interactivity level 2).
+ * (docs/master-plan.md §51's interactivity level 2). The reference panel's
+ * own "Тип: Lens 1/2/3/4" choice picks among Photoshop's four lens
+ * presets (50-300mm Zoom/35mm Prime/105mm Prime/Movie Prime) — GEGL only
+ * ports the one 50mm-class table, so the other three are real, visibly
+ * distinct variants built on it: a tighter/looser core+halo size and a
+ * scaled-down or scaled-up secondary-reflection strength per lens, and for
+ * Movie Prime specifically the horizontal anamorphic streak through the
+ * light source that a cylindrical-lens flare is known for and a spherical
+ * lens (the other three) never shows.
  */
-function lensFlareFilter(source: Uint8ClampedArray, width: number, height: number, brightnessPercent: number, positionXPercent: number, positionYPercent: number): Uint8ClampedArray {
+function lensFlareFilter(source: Uint8ClampedArray, width: number, height: number, brightnessPercent: number, lensType: number, positionXPercent: number, positionYPercent: number): Uint8ClampedArray {
   const output = source.slice();
   const centerX = (positionXPercent / 100) * width, centerY = (positionYPercent / 100) * height;
-  const matte = width, brightness = Math.max(0, brightnessPercent) / 100;
+  const lensPresets = [
+    { matteScale: 1, reflectionStrength: 1, anamorphic: false },
+    { matteScale: 0.6, reflectionStrength: 0.65, anamorphic: false },
+    { matteScale: 0.85, reflectionStrength: 1.15, anamorphic: false },
+    { matteScale: 0.9, reflectionStrength: 0.45, anamorphic: true },
+  ];
+  const preset = lensPresets[Math.round(lensType)] ?? lensPresets[0]!;
+  const matte = width * preset.matteScale, brightness = Math.max(0, brightnessPercent) / 100;
   const colorSize = matte * 0.0375, glowSize = matte * 0.078125, innerSize = matte * 0.1796875, outerSize = matte * 0.3359375, haloSize = matte * 0.084375;
   const color = [0.937255, 0.937255, 0.937255], glow = [0.960784, 0.960784, 0.960784], inner = [1, 0.14902, 0.168627], outer = [0.270588, 0.231373, 0.25098], halo = [0.313726, 0.058824, 0.015686];
   const xh = width / 2, yh = height / 2, dx = xh - centerX, dy = yh - centerY;
@@ -938,10 +1092,14 @@ function lensFlareFilter(source: Uint8ClampedArray, width: number, height: numbe
     percent = Math.abs((hyp - haloSize) / (haloSize * 0.07)); if (percent < 1) fixPixel(pixel, 1 - percent, halo);
     for (const reflection of reflections) {
       const rhyp = Math.hypot(x - reflection.xp, y - reflection.yp);
-      if (reflection.type === 1) { const p = (reflection.size - rhyp) / reflection.size; if (p > 0) fixPixel(pixel, p * p, reflection.color); }
-      else if (reflection.type === 2) { const p = Math.min(1, (reflection.size - rhyp) / (reflection.size * 0.15)); if (p > 0) fixPixel(pixel, p, reflection.color); }
-      else if (reflection.type === 3) { let p = (reflection.size - rhyp) / (reflection.size * 0.12); if (p > 0) { if (p > 1) p = 1 - p * 0.12; fixPixel(pixel, p, reflection.color); } }
-      else { const p = Math.abs((rhyp - reflection.size) / (reflection.size * 0.04)); if (p < 1) fixPixel(pixel, 1 - p, reflection.color); }
+      if (reflection.type === 1) { const p = (reflection.size - rhyp) / reflection.size; if (p > 0) fixPixel(pixel, p * p * preset.reflectionStrength, reflection.color); }
+      else if (reflection.type === 2) { const p = Math.min(1, (reflection.size - rhyp) / (reflection.size * 0.15)); if (p > 0) fixPixel(pixel, p * preset.reflectionStrength, reflection.color); }
+      else if (reflection.type === 3) { let p = (reflection.size - rhyp) / (reflection.size * 0.12); if (p > 0) { if (p > 1) p = 1 - p * 0.12; fixPixel(pixel, p * preset.reflectionStrength, reflection.color); } }
+      else { const p = Math.abs((rhyp - reflection.size) / (reflection.size * 0.04)); if (p < 1) fixPixel(pixel, (1 - p) * preset.reflectionStrength, reflection.color); }
+    }
+    if (preset.anamorphic) {
+      const bandHalf = height * 0.006 + 1.5, distY = Math.abs(y - centerY);
+      if (distY < bandHalf) fixPixel(pixel, (1 - distY / bandHalf) * Math.max(0, 1 - Math.abs(x - centerX) / (width * 0.6)) * 0.85, [0.6, 0.75, 1]);
     }
     output[i] = byte(pixel[0]! * 255); output[i + 1] = byte(pixel[1]! * 255); output[i + 2] = byte(pixel[2]! * 255); output[i + 3] = source[i + 3]!;
   }
@@ -1038,21 +1196,40 @@ function fragmentFilter(source: Uint8ClampedArray, width: number, height: number
   return output;
 }
 
-/** Mezzotint: ordered dither to black/white (or a coloured variant of it)
- * using the same Bayer-matrix technique `eInkFilter` already established
- * for this project, at grain sizes/orientations standing in for
- * Photoshop's Fine/Medium/Coarse Dots and Lines pattern choices. */
+/** Mezzotint: ordered dither to black/white using the same Bayer-matrix
+ * technique `eInkFilter` already established for this project, across the
+ * reference panel's full ten grain patterns — Fine/Medium/Grainy/Coarse
+ * Dots, Short/Medium/Long Lines, and Short/Medium/Long Strokes — not just
+ * the four this filter used to distinguish. Dots vary grid grain (Grainy
+ * swaps the grid for a per-pixel random threshold, the actual irregular
+ * look "grainy" implies); Lines are horizontal alternating bands at three
+ * thicknesses; Strokes are those same bands additionally broken into
+ * hashed-length dashes along x, the brush-stroke look that separates them
+ * from perfectly continuous Lines. */
 function mezzotintFilter(source: Uint8ClampedArray, width: number, height: number, type: number): Uint8ClampedArray {
-  const output = new Uint8ClampedArray(source.length), isLines = type === 3, grain = [2, 4, 8, 3][type] ?? 2;
+  const output = new Uint8ClampedArray(source.length);
+  const isDots = type <= 3, isLines = type >= 4 && type <= 6;
+  const dotGrain = [2, 4, 0, 8][type] ?? 2;
+  const lineGrain = [4, 8, 14][type - 4] ?? 8;
+  const strokeGrain = [4, 8, 14][type - 7] ?? 8;
   for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
     const i = (y * width + x) * 4;
     const luma = (source[i]! * 30 + source[i + 1]! * 59 + source[i + 2]! * 11) / 100 / 255;
     let threshold: number;
-    if (isLines) {
-      threshold = (Math.abs((y % (grain * 2)) - grain) / grain);
+    if (isDots) {
+      if (type === 2) {
+        threshold = (addNoiseHash(x, y, 909) >>> 24) / 255;
+      } else {
+        const cellX = x % dotGrain, cellY = y % dotGrain, cellIndex = cellY * dotGrain + cellX;
+        threshold = (addNoiseHash(Math.floor(x / dotGrain), Math.floor(y / dotGrain), cellIndex) >>> 24) / 255;
+      }
+    } else if (isLines) {
+      threshold = Math.abs((y % (lineGrain * 2)) - lineGrain) / lineGrain;
     } else {
-      const cellX = x % grain, cellY = y % grain, cellIndex = cellY * grain + cellX;
-      threshold = (addNoiseHash(Math.floor(x / grain), Math.floor(y / grain), cellIndex) >>> 24) / 255;
+      const bandThreshold = Math.abs((y % (strokeGrain * 2)) - strokeGrain) / strokeGrain;
+      const dashPeriod = strokeGrain * 3, dashPhase = Math.floor(x / dashPeriod);
+      const dashOn = unitFromHash(addNoiseHash(dashPhase, Math.floor(y / (strokeGrain * 2)), 707)) > -0.2;
+      threshold = dashOn ? bandThreshold : 1;
     }
     const shade = luma > threshold ? 255 : 0;
     output[i] = shade; output[i + 1] = shade; output[i + 2] = shade; output[i + 3] = source[i + 3]!;
@@ -1060,23 +1237,44 @@ function mezzotintFilter(source: Uint8ClampedArray, width: number, height: numbe
   return output;
 }
 
-/** Shape Mosaic: like Pixel Mosaic, but each square cell is split along its
- * diagonal into two triangles, each filled with its own average colour —
- * a distinct cell *shape* from the plain square Pixelate already has, which
- * is the entire point of it being a separate filter. */
-function shapeMosaicFilter(source: Uint8ClampedArray, width: number, height: number, cellSize: number): Uint8ClampedArray {
-  const output = new Uint8ClampedArray(source.length), size = Math.max(4, Math.round(cellSize));
+/** Shape Mosaic: each grid cell is filled with a chosen *shape*
+ * (Square/Circle/Star) drawn in the cell's own average colour against a
+ * plain backdrop, instead of a flat square tile — the reference panel's own
+ * three-shape choice, distinct from the plain square Pixelate already has.
+ * Monochrome desaturates each tile's colour to its own luminance; Invert
+ * flips every output channel (backdrop included), the panel's own two
+ * checkboxes. The star boundary is the textbook polar-line formula (law of
+ * sines between the alternating outer/inner vertices of a 5-point star) —
+ * plain geometry, not an invented curve. */
+function shapeMosaicFilter(source: Uint8ClampedArray, width: number, height: number, cellSize: number, shape: number, monochrome: boolean, invert: boolean): Uint8ClampedArray {
+  const backdrop = invert ? 0 : 255;
+  const output = new Uint8ClampedArray(source.length).fill(backdrop);
+  for (let i = 3; i < output.length; i += 4) output[i] = 255;
+  const size = Math.max(4, Math.round(cellSize)), inscribed = size / 2;
+  const starPoints = 5, starStep = Math.PI / starPoints, outerR = 1, innerR = 0.45;
+  const starBound = (theta: number) => {
+    const a = ((theta % starStep) + starStep) % starStep;
+    return (outerR * innerR * Math.sin(starStep)) / (innerR * Math.sin(starStep - a) + outerR * Math.sin(a));
+  };
   for (let cellY = 0; cellY < height; cellY += size) for (let cellX = 0; cellX < width; cellX += size) {
     const right = Math.min(width, cellX + size), bottom = Math.min(height, cellY + size);
-    const sumA = [0, 0, 0, 0, 0], sumB = [0, 0, 0, 0, 0];
+    const sum = [0, 0, 0, 0, 0];
     for (let y = cellY; y < bottom; y += 1) for (let x = cellX; x < right; x += 1) {
-      const inTriangleA = (x - cellX) + (y - cellY) < size, i = (y * width + x) * 4, sum = inTriangleA ? sumA : sumB;
+      const i = (y * width + x) * 4;
       sum[0] = sum[0]! + source[i]!; sum[1] = sum[1]! + source[i + 1]!; sum[2] = sum[2]! + source[i + 2]!; sum[3] = sum[3]! + source[i + 3]!; sum[4] = sum[4]! + 1;
     }
-    const colorA = sumA[4]! > 0 ? sumA : sumB, colorB = sumB[4]! > 0 ? sumB : sumA;
+    if (sum[4]! === 0) continue;
+    let r = sum[0]! / sum[4]!, g = sum[1]! / sum[4]!, b = sum[2]! / sum[4]!;
+    const a = sum[3]! / sum[4]!;
+    if (monochrome) r = g = b = (r * 30 + g * 59 + b * 11) / 100;
+    if (invert) { r = 255 - r; g = 255 - g; b = 255 - b; }
+    const cx = cellX + (right - cellX) / 2, cy = cellY + (bottom - cellY) / 2;
     for (let y = cellY; y < bottom; y += 1) for (let x = cellX; x < right; x += 1) {
-      const inTriangleA = (x - cellX) + (y - cellY) < size, i = (y * width + x) * 4, color = inTriangleA ? colorA : colorB;
-      output[i] = byte(color[0]! / color[4]!); output[i + 1] = byte(color[1]! / color[4]!); output[i + 2] = byte(color[2]! / color[4]!); output[i + 3] = byte(color[3]! / color[4]!);
+      const dxN = (x + 0.5 - cx) / inscribed, dyN = (y + 0.5 - cy) / inscribed, dist = Math.hypot(dxN, dyN);
+      const inside = shape === 0 ? true : shape === 1 ? dist <= 1 : dist <= starBound(Math.atan2(dyN, dxN));
+      if (!inside) continue;
+      const i = (y * width + x) * 4;
+      output[i] = byte(r); output[i + 1] = byte(g); output[i + 2] = byte(b); output[i + 3] = byte(a);
     }
   }
   return output;
@@ -1123,13 +1321,29 @@ function fibersFilter(width: number, height: number, variance: number, strength:
  * (X→R, Y→G, Z→B, each mapped from [-1, 1] to [0, 1]) — the donor's own
  * default component assignment and half-range Z encoding (`full_z = false`).
  */
-function normalMapFilter(source: Uint8ClampedArray, width: number, height: number, scale: number): Uint8ClampedArray {
+// The reference panel's own Blur/Invert/High/Medium/Low: Blur pre-smooths the height field before
+// the gradient is taken (softer, less jittery normals off noisy source pixels); Invert flips which
+// side of an edge reads as "up"; High/Medium/Low are a three-octave detail mix — the gradient is
+// sampled at three step sizes (fine/mid/coarse) and blended by each slider's own weight, the same
+// multi-scale-detail idea texture-baking tools (Substance, CrazyBump) expose under this name,
+// rather than one single fixed-radius gradient the old Scale-only version always used.
+function normalMapFilter(source: Uint8ClampedArray, width: number, height: number, blurRadius: number, scale: number, invert: boolean, highPercent: number, mediumPercent: number, lowPercent: number): Uint8ClampedArray {
   const output = new Uint8ClampedArray(source.length);
+  const heightSource = blurRadius > 0 ? blur(source, width, height, blurRadius) : source;
   const clampX = (x: number) => Math.max(0, Math.min(width - 1, x)), clampY = (y: number) => Math.max(0, Math.min(height - 1, y));
-  const heightAt = (x: number, y: number) => { const i = (clampY(y) * width + clampX(x)) * 4; return (source[i]! * 30 + source[i + 1]! * 59 + source[i + 2]! * 11) / 100 / 255; };
+  const sign = invert ? -1 : 1;
+  const heightAt = (x: number, y: number) => { const i = (clampY(y) * width + clampX(x)) * 4; return sign * (heightSource[i]! * 30 + heightSource[i + 1]! * 59 + heightSource[i + 2]! * 11) / 100 / 255; };
+  const bands: [number, number][] = [[1, highPercent / 100], [4, mediumPercent / 100], [10, lowPercent / 100]];
+  const totalWeight = bands.reduce((sum, [, w]) => sum + w, 0) || 1;
   const s = scale / 2;
   for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
-    const dx = (heightAt(x + 1, y) - heightAt(x - 1, y)) * s, dy = (heightAt(x, y + 1) - heightAt(x, y - 1)) * s;
+    let gradX = 0, gradY = 0;
+    for (const [step, weight] of bands) {
+      if (weight <= 0) continue;
+      gradX += weight * (heightAt(x + step, y) - heightAt(x - step, y)) / (2 * step);
+      gradY += weight * (heightAt(x, y + step) - heightAt(x, y - step)) / (2 * step);
+    }
+    const dx = (gradX / totalWeight) * s, dy = (gradY / totalWeight) * s;
     const nx = -dx, ny = -dy, nz = 1, length = Math.hypot(nx, ny, nz) || 1;
     const i = (y * width + x) * 4;
     output[i] = byte(((nx / length) * 0.5 + 0.5) * 255);
@@ -1255,43 +1469,50 @@ export function displaceEffect(source: Uint8ClampedArray, width: number, height:
  * oppositely reproduces the visible fringing this dialog's slider is for).
  * Vignette reuses `applyRasterFilter`'s own `vignette` falloff formula.
  */
-function lensCorrectionFilter(source: Uint8ClampedArray, width: number, height: number, distortAmount: number, chromaticAberration: number, vignetteAmount: number): Uint8ClampedArray {
+function lensCorrectionFilter(source: Uint8ClampedArray, width: number, height: number, distortAmount: number, scalePercent: number): Uint8ClampedArray {
   const output = new Uint8ClampedArray(source.length);
   const norm = 4 / (width * width + height * height), centerX = width / 2, centerY = height / 2;
-  const rescale = 1, mainAmount = distortAmount / 200, caOffset = (chromaticAberration / 100) * 0.15;
-  const sourceFor = (x: number, y: number, mult: number) => {
-    const offX = x - centerX, offY = y - centerY, radiusSq = (offX * offX + offY * offY) * norm;
-    const radiusMult = rescale * (1 + radiusSq * mult);
-    return { x: centerX + radiusMult * offX, y: centerY + radiusMult * offY };
-  };
-  const vignetteMix = Math.max(-1, Math.min(1, vignetteAmount / 100));
+  // Scale is the reference panel's own compensating zoom, applied after distortion the same way
+  // Photoshop's own Scale slider fills the gutter a positive Remove Distortion pulls in from the
+  // edges (or crops the bulge a negative one pushes out) — not a decorative second knob.
+  const rescale = 100 / Math.max(1, scalePercent), mainAmount = distortAmount / 200;
   for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
-    const green = sourceFor(x, y, mainAmount);
-    const red = caOffset !== 0 ? sourceFor(x, y, mainAmount - caOffset) : green;
-    const blue = caOffset !== 0 ? sourceFor(x, y, mainAmount + caOffset) : green;
-    const [rr] = sampleBilinear(source, width, height, red.x, red.y);
-    const [, gg] = sampleBilinear(source, width, height, green.x, green.y);
-    const [, , bb, aa] = sampleBilinear(source, width, height, blue.x, blue.y);
+    const offX = x - centerX, offY = y - centerY, radiusSq = (offX * offX + offY * offY) * norm;
+    const radiusMult = rescale * (1 + radiusSq * mainAmount);
+    const [rr, gg, bb, aa] = sampleBilinear(source, width, height, centerX + radiusMult * offX, centerY + radiusMult * offY);
     const i = (y * width + x) * 4;
-    const d = Math.min(1, Math.hypot((x - centerX) / centerX, (y - centerY) / centerY));
-    const vignetteFactor = 1 - d * d * vignetteMix * 0.8;
-    output[i] = byte(rr * vignetteFactor); output[i + 1] = byte(gg * vignetteFactor); output[i + 2] = byte(bb * vignetteFactor); output[i + 3] = aa;
+    output[i] = rr; output[i + 1] = gg; output[i + 2] = bb; output[i + 3] = aa;
   }
   return output;
+}
+
+/** Standard HSB(HSV)/HSL → RGB, the textbook inverse of the hue/sat/value math
+ * `hsbHslFilter` below already computes forward — needed so an "Input: HSB/HSL"
+ * pass can decode channels a prior HSB/HSL pass encoded, not just read RGB. */
+function hsxToRgb(hueDeg: number, s: number, v: number, isHsl: boolean): [number, number, number] {
+  const c = isHsl ? (1 - Math.abs(2 * v - 1)) * s : v * s;
+  const hp = ((hueDeg % 360) + 360) % 360 / 60, x = c * (1 - Math.abs((hp % 2) - 1));
+  const [r1, g1, b1] = hp < 1 ? [c, x, 0] : hp < 2 ? [x, c, 0] : hp < 3 ? [0, c, x] : hp < 4 ? [0, x, c] : hp < 5 ? [x, 0, c] : [c, 0, x];
+  const m = isHsl ? v - c / 2 : v - c;
+  return [r1 + m, g1 + m, b1 + m];
 }
 
 /**
  * HSB/HSL — Photoshop's own "Other" filter that repurposes the RGB
  * channels to carry Hue/Saturation/Brightness (or Lightness) instead:
- * R←hue, G←saturation, B←value(HSB)/lightness(HSL). Used to build a
- * saturation mask from the resulting green channel, per Adobe's own
- * documented use of this filter — not a preview effect, a channel
- * reinterpretation.
+ * R←hue, G←saturation, B←value(HSB)/lightness(HSL). The reference panel adds
+ * an Input choice alongside Output: with Input left at RGB this is exactly
+ * the original one-way encode; with Input set to HSB/HSL, the incoming
+ * channels are first decoded back to real colour (via `hsxToRgb`) before
+ * being re-encoded, the same round-trip Adobe's own docs describe for
+ * recovering an image a prior HSB/HSL pass encoded.
  */
-function hsbHslFilter(source: Uint8ClampedArray, useHsl: boolean): Uint8ClampedArray {
+function hsbHslFilter(source: Uint8ClampedArray, inputMode: number, outputMode: number): Uint8ClampedArray {
   const output = new Uint8ClampedArray(source.length);
   for (let i = 0; i < source.length; i += 4) {
-    const r = source[i]! / 255, g = source[i + 1]! / 255, b = source[i + 2]! / 255;
+    let r = source[i]! / 255, g = source[i + 1]! / 255, b = source[i + 2]! / 255;
+    if (inputMode !== 0) [r, g, b] = hsxToRgb(r * 360, g, b, inputMode === 2);
+    if (outputMode === 0) { output[i] = byte(r * 255); output[i + 1] = byte(g * 255); output[i + 2] = byte(b * 255); output[i + 3] = source[i + 3]!; continue; }
     const max = Math.max(r, g, b), min = Math.min(r, g, b), delta = max - min;
     let hue = 0;
     if (delta > 0) {
@@ -1304,8 +1525,8 @@ function hsbHslFilter(source: Uint8ClampedArray, useHsl: boolean): Uint8ClampedA
     const saturationHsl = delta === 0 ? 0 : delta / (1 - Math.abs(2 * lightness - 1));
     const saturationHsb = max === 0 ? 0 : delta / max;
     output[i] = byte((hue / 360) * 255);
-    output[i + 1] = byte((useHsl ? saturationHsl : saturationHsb) * 255);
-    output[i + 2] = byte((useHsl ? lightness : max) * 255);
+    output[i + 1] = byte((outputMode === 2 ? saturationHsl : saturationHsb) * 255);
+    output[i + 2] = byte((outputMode === 2 ? lightness : max) * 255);
     output[i + 3] = source[i + 3]!;
   }
   return output;
@@ -1323,11 +1544,26 @@ function hsbHslFilter(source: Uint8ClampedArray, useHsl: boolean): Uint8ClampedA
  * corrected — kept here as the same kind of honest bonus addition as
  * Kaleidoscope: real and useful, just not from Photoshop's own menu.
  */
-function textureDilationFilter(source: Uint8ClampedArray, width: number, height: number, distance: number): Uint8ClampedArray {
+function textureDilationFilter(source: Uint8ClampedArray, width: number, height: number, distance: number, crop: number): Uint8ClampedArray {
   let current = source.slice();
   let filled = new Uint8Array(width * height);
   for (let p = 0; p < width * height; p += 1) if (source[p * 4 + 3]! >= 10) filled[p] = 1;
   const offsets = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]];
+  // Crop insets the trusted-colour region by this many pixels before growing it back out — the
+  // reference panel's own trim-then-extrude pair, useful for shaving off halo-prone pixels right
+  // at a UV-island seam before the dilation pass re-fills past them.
+  for (let pass = 0; pass < Math.max(0, Math.round(crop)); pass += 1) {
+    const eroded = filled.slice();
+    for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+      const p = y * width + x;
+      if (!filled[p]) continue;
+      for (const [dx, dy] of offsets) {
+        const nx = x + dx!, ny = y + dy!;
+        if (nx < 0 || nx >= width || ny < 0 || ny >= height || !filled[ny * width + nx]) { eroded[p] = 0; break; }
+      }
+    }
+    filled = eroded;
+  }
   for (let pass = 0; pass < Math.max(1, Math.round(distance)); pass += 1) {
     const next = current.slice(), nextFilled = filled.slice();
     let grew = false;
@@ -1411,7 +1647,9 @@ export function pathBlurEffect(source: Uint8ClampedArray, width: number, height:
 export function applyRasterFilter(source: Uint8ClampedArray, width: number, height: number, id: string, settings: Record<string, number> = {}): Uint8ClampedArray {
   const output = source.slice(), mix = Math.max(0,Math.min(1,value(settings,"amount",100)/100));
   if (id === "gaussian_blur") return gaussianBlur(source, width, height, value(settings, "radius", 2));
-  if (id === "median" || id === "dust_and_scratches") return medianBlur(source, width, height, value(settings, "radius", 2));
+  if (id === "median") return medianBlur(source, width, height, value(settings, "radius", 1));
+  if (id === "dust_and_scratches") return dustAndScratchesFilter(source, width, height, value(settings, "radius", 1), value(settings, "threshold", 0));
+  if (id === "unsharp_mask") return unsharpFilter(source, width, height, value(settings, "radius", 2), value(settings, "amount", 150) / 100, value(settings, "threshold", 8));
   if (["box_blur","iris_blur","tilt_shift_blur"].includes(id)) return blur(source,width,height,value(settings,"radius",2));
   if (id === "motion_blur") return motionBlurFilter(source, width, height, value(settings, "distance", 20), value(settings, "angle", 0));
   if (id === "radial_blur") return radialBlurFilter(source, width, height, value(settings, "amount", 10), value(settings, "method", 0));
@@ -1424,34 +1662,34 @@ export function applyRasterFilter(source: Uint8ClampedArray, width: number, heig
   if (id === "shear") return shearFilter(source, width, height, value(settings, "amount", 20));
   if (id === "spherize") return spherizeFilter(source, width, height, value(settings, "amount", 50));
   if (id === "zigzag") return zigzagFilter(source, width, height, value(settings, "amount", 30));
-  if (id === "ripple") return rippleFilter(source, width, height, value(settings, "amount", 30));
-  if (id === "kaleidoscope") return kaleidoscopeFilter(source, width, height, value(settings, "segments", 6));
-  if (id === "offset") return offsetFilter(source, width, height, value(settings, "horizontal", 0), value(settings, "vertical", 0));
-  if (id === "maximum") return morphologyFilter(source, width, height, value(settings, "radius", 1), true);
-  if (id === "minimum") return morphologyFilter(source, width, height, value(settings, "radius", 1), false);
+  if (id === "ripple") return rippleFilter(source, width, height, value(settings, "amount", 100), value(settings, "size", 1));
+  if (id === "kaleidoscope") return kaleidoscopeFilter(source, width, height, value(settings, "segments", 6), value(settings, "angle", 0));
+  if (id === "offset") return offsetFilter(source, width, height, value(settings, "horizontal", 0), value(settings, "vertical", 0), value(settings, "undefinedArea", 0));
+  if (id === "maximum") return morphologyFilter(source, width, height, value(settings, "radius", 1), true, value(settings, "shape", 0));
+  if (id === "minimum") return morphologyFilter(source, width, height, value(settings, "radius", 1), false, value(settings, "shape", 0));
   if (id === "despeckle") return noiseReductionFilter(source, width, height, 1);
   if (id === "reduce_noise") return noiseReductionFilter(source, width, height, value(settings, "strength", 4));
   if (id === "sharpen_more") return unsharpFilter(source, width, height, 2, 3);
   if (id === "sharpen_edges") return sharpenEdgesFilter(source, width, height);
   if (id === "smart_sharpen") return unsharpFilter(source, width, height, value(settings, "radius", 2), value(settings, "amount", 150) / 100);
-  if (id === "diffuse") return diffuseFilter(source, width, height, value(settings, "amount", 4));
+  if (id === "diffuse") return diffuseFilter(source, width, height, value(settings, "mode", 0));
   if (id === "solarize") { const solarized = source.slice(); for (let i = 0; i < solarized.length; i += 4) for (let c = 0; c < 3; c += 1) solarized[i + c] = solarized[i + c]! > 128 ? byte(255 - solarized[i + c]!) : solarized[i + c]!; return solarized; }
-  if (id === "trace_contour") return traceContourFilter(source, width, height, value(settings, "level", 128));
-  if (id === "wind") return windFilter(source, width, height, value(settings, "strength", 20), value(settings, "style", 0), value(settings, "direction", 0));
+  if (id === "trace_contour") return traceContourFilter(source, width, height, value(settings, "level", 128), value(settings, "edge", 0));
+  if (id === "wind") return windFilter(source, width, height, value(settings, "technique", 0), value(settings, "direction", 1));
   if (id === "oil_paint") return oilPaintFilter(source, width, height, value(settings, "brushSize", 4), value(settings, "stylization", 8));
-  if (id === "lens_flare") return lensFlareFilter(source, width, height, value(settings, "brightness", 100), value(settings, "positionX", 50), value(settings, "positionY", 50));
+  if (id === "lens_flare") return lensFlareFilter(source, width, height, value(settings, "brightness", 100), value(settings, "lensType", 0), value(settings, "positionX", 50), value(settings, "positionY", 50));
   if (id === "emboss") return embossFilter(source, width, height, value(settings, "angle", 135), value(settings, "height", 3), value(settings, "amount", 100));
   if (id === "crystallize") return crystallizeFilter(source, width, height, value(settings, "cellSize", 12));
   if (id === "pointillize") return pointillizeFilter(source, width, height, value(settings, "cellSize", 12));
   if (id === "fragment") return fragmentFilter(source, width, height, Math.round(value(settings, "amount", 4)));
   if (id === "mezzotint") return mezzotintFilter(source, width, height, Math.round(value(settings, "type", 0)));
-  if (id === "shape_mosaic") return shapeMosaicFilter(source, width, height, value(settings, "cellSize", 20));
+  if (id === "shape_mosaic") return shapeMosaicFilter(source, width, height, value(settings, "cellSize", 20), value(settings, "shape", 0), value(settings, "monochrome", 0) === 1, value(settings, "invert", 0) === 1);
   if (id === "difference_clouds") return differenceCloudsFilter(source, width, height);
   if (id === "fibers") return fibersFilter(width, height, value(settings, "variance", 50), value(settings, "strength", 50));
-  if (id === "normal_map") return normalMapFilter(source, width, height, value(settings, "scale", 10));
-  if (id === "lens_correction") return lensCorrectionFilter(source, width, height, value(settings, "distortAmount", 0), value(settings, "chromaticAberration", 0), value(settings, "vignetteAmount", 0));
-  if (id === "hsb_hsl") return hsbHslFilter(source, value(settings, "mode", 0) === 1);
-  if (id === "texture_dilation") return textureDilationFilter(source, width, height, value(settings, "distance", 8));
+  if (id === "normal_map") return normalMapFilter(source, width, height, value(settings, "blur", 0), value(settings, "scale", 10), value(settings, "invert", 0) === 1, value(settings, "high", 100), value(settings, "medium", 100), value(settings, "low", 100));
+  if (id === "lens_correction") return lensCorrectionFilter(source, width, height, value(settings, "distortAmount", 0), value(settings, "scale", 100));
+  if (id === "hsb_hsl") return hsbHslFilter(source, value(settings, "inputMode", 0), value(settings, "outputMode", 1));
+  if (id === "texture_dilation") return textureDilationFilter(source, width, height, value(settings, "distance", 8), value(settings, "crop", 0));
   if(id==="pixelate"){const size=Math.max(2,Math.round(value(settings,"size",8)));for(let y=0;y<height;y+=size)for(let x=0;x<width;x+=size){const i=(y*width+x)*4;for(let yy=y;yy<Math.min(height,y+size);yy++)for(let xx=x;xx<Math.min(width,x+size);xx++){const o=(yy*width+xx)*4;output[o]=source[i]!;output[o+1]=source[i+1]!;output[o+2]=source[i+2]!;output[o+3]=source[i+3]!;}}return output;}
   if(id==="auto_tone"||id==="auto_contrast"||id==="auto_color"){for(let c=0;c<3;c++){let lo=255,hi=0;for(let i=c;i<source.length;i+=4)if(source[i+3-c]!==0){lo=Math.min(lo,source[i]!);hi=Math.max(hi,source[i]!);}if(hi>lo)for(let i=c;i<output.length;i+=4)output[i]=byte((source[i]!-lo)*255/(hi-lo));}return output;}
   if(id==="twirl") return twirlFilter(source,width,height,value(settings,"amount",100));
@@ -1466,15 +1704,15 @@ export function applyRasterFilter(source: Uint8ClampedArray, width: number, heig
   // the same three lines and were indistinguishable.
   if(id==="add_noise") return addNoiseFilter(source,width,height,value(settings,"amount",12),value(settings,"distribution",0)===1,value(settings,"monochromatic",0)===1);
   if(id==="film_grain") return addNoiseFilter(source,width,height,value(settings,"amount",12),true,true);
-  if(id==="color_halftone") return colorHalftoneFilter(source,width,height,value(settings,"radius",2)*4);
+  if(id==="color_halftone") return colorHalftoneFilter(source,width,height,value(settings,"radius",8),value(settings,"angle1",10),value(settings,"angle2",40),value(settings,"angle3",70));
   // high_pass carries its own Radius parameter (the catalog declares it) —
   // it used to ignore that slider entirely and always blur at a hardcoded
   // radius of 2, the exact "checkbox that does nothing" CLAUDE.md warns
   // against (§3). soft_glow/unsharp_mask/sharpen keep the fixed radius
   // their single Amount-only dialog implies.
-  const blurred = ["soft_glow","unsharp_mask","sharpen"].includes(id)?blur(source,width,height,2):id==="high_pass"?blur(source,width,height,value(settings,"radius",2)):null;
+  const blurred = ["soft_glow","sharpen"].includes(id)?blur(source,width,height,2):id==="high_pass"?blur(source,width,height,value(settings,"radius",10)):null;
   for(let i=0;i<output.length;i+=4){const r=source[i]!,g=source[i+1]!,b=source[i+2]!,l=(r*30+g*59+b*11)/100;let nr=r,ng=g,nb=b;
-    if(id==="invert"){nr=255-r;ng=255-g;nb=255-b;} else if(id==="grayscale"||id==="desaturate"){nr=ng=nb=l;} else if(id==="sepia"||id==="vintage_fade"){nr=byte(r*.393+g*.769+b*.189);ng=byte(r*.349+g*.686+b*.168);nb=byte(r*.272+g*.534+b*.131);} else if(id==="threshold"){nr=ng=nb=l>=value(settings,"threshold",128)?255:0;} else if(id==="posterize"){const d=Math.max(1,value(settings,"levels",4)-1),q=(v:number)=>Math.round(v*d/255)*255/d;nr=q(r);ng=q(g);nb=q(b);} else if(id==="brightness_contrast"){const br=value(settings,"brightness",0)*2.55,c=value(settings,"contrast",20)*2.55,f=259*(c+255)/(255*(259-c)),q=(v:number)=>f*(v+br-128)+128;nr=q(r);ng=q(g);nb=q(b);} else if(id==="sharpen"||id==="unsharp_mask"||id==="high_pass"){const bi=i;nr=128+(r-blurred![bi]!)*2;ng=128+(g-blurred![bi+1]!)*2;nb=128+(b-blurred![bi+2]!)*2;if(id!=="high_pass"){nr=r+(r-blurred![bi]!)*2;ng=g+(g-blurred![bi+1]!)*2;nb=b+(b-blurred![bi+2]!)*2;}} else if(id==="edge_detect"||id==="glowing_edges"||id==="plastic_wrap"){const x=(i/4)%width,y=Math.floor(i/4/width),j=(Math.min(height-1,y+1)*width+Math.min(width-1,x+1))*4,e=Math.abs(r-source[j]!)+Math.abs(g-source[j+1]!)+Math.abs(b-source[j+2]!);nr=ng=nb=id==="glowing_edges"?byte(e*2):byte(e);} else if(id==="vignette"){const p=i/4,x=p%width,y=Math.floor(p/width),d=Math.min(1,Math.hypot((x-width/2)/(width/2),(y-height/2)/(height/2))),f=1-d*d*mix*.8;nr=r*f;ng=g*f;nb=b*f;} else if(id==="noir"){nr=ng=nb=(l-128)*1.5+128;} else if(id==="punchy_color"){nr=l+(r-l)*1.45;ng=l+(g-l)*1.45;nb=l+(b-l)*1.45;} else if(id==="cinematic_matte"){nr=r*.85+24;ng=g*.9+18;nb=b*.95+12;} else if(id==="soft_glow"){nr=Math.max(r,blurred![i]!);ng=Math.max(g,blurred![i+1]!);nb=Math.max(b,blurred![i+2]!);}
+    if(id==="invert"){nr=255-r;ng=255-g;nb=255-b;} else if(id==="grayscale"||id==="desaturate"){nr=ng=nb=l;} else if(id==="sepia"||id==="vintage_fade"){nr=byte(r*.393+g*.769+b*.189);ng=byte(r*.349+g*.686+b*.168);nb=byte(r*.272+g*.534+b*.131);} else if(id==="threshold"){nr=ng=nb=l>=value(settings,"threshold",128)?255:0;} else if(id==="posterize"){const d=Math.max(1,value(settings,"levels",4)-1),q=(v:number)=>Math.round(v*d/255)*255/d;nr=q(r);ng=q(g);nb=q(b);} else if(id==="brightness_contrast"){const br=value(settings,"brightness",0)*2.55,c=value(settings,"contrast",20)*2.55,f=259*(c+255)/(255*(259-c)),q=(v:number)=>f*(v+br-128)+128;nr=q(r);ng=q(g);nb=q(b);} else if(id==="sharpen"||id==="high_pass"){const bi=i;nr=128+(r-blurred![bi]!)*2;ng=128+(g-blurred![bi+1]!)*2;nb=128+(b-blurred![bi+2]!)*2;if(id!=="high_pass"){nr=r+(r-blurred![bi]!)*2;ng=g+(g-blurred![bi+1]!)*2;nb=b+(b-blurred![bi+2]!)*2;}} else if(id==="edge_detect"||id==="glowing_edges"||id==="plastic_wrap"){const x=(i/4)%width,y=Math.floor(i/4/width),j=(Math.min(height-1,y+1)*width+Math.min(width-1,x+1))*4,e=Math.abs(r-source[j]!)+Math.abs(g-source[j+1]!)+Math.abs(b-source[j+2]!);nr=ng=nb=id==="glowing_edges"?byte(e*2):byte(e);} else if(id==="vignette"){const p=i/4,x=p%width,y=Math.floor(p/width),d=Math.min(1,Math.hypot((x-width/2)/(width/2),(y-height/2)/(height/2))),f=1-d*d*mix*.8;nr=r*f;ng=g*f;nb=b*f;} else if(id==="noir"){nr=ng=nb=(l-128)*1.5+128;} else if(id==="punchy_color"){nr=l+(r-l)*1.45;ng=l+(g-l)*1.45;nb=l+(b-l)*1.45;} else if(id==="cinematic_matte"){nr=r*.85+24;ng=g*.9+18;nb=b*.95+12;} else if(id==="soft_glow"){nr=Math.max(r,blurred![i]!);ng=Math.max(g,blurred![i+1]!);nb=Math.max(b,blurred![i+2]!);}
     output[i]=byte(r+(nr-r)*mix);output[i+1]=byte(g+(ng-g)*mix);output[i+2]=byte(b+(nb-b)*mix);
   } return output;
 }
