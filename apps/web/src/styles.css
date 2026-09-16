@@ -323,6 +323,27 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .upscale-dialog-header{display:flex;align-items:center;justify-content:space-between}.upscale-dialog-header>button{width:26px;height:26px;border:0;background:transparent;color:var(--muted);font-size:18px;cursor:pointer}.upscale-body{display:grid;gap:10px}.upscale-body>label{display:grid;gap:4px}
 .select-object-controls{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible}
 .select-object-box{fill:none;stroke:#fff;stroke-dasharray:6 4}
+.neural-filters-dialog{width:min(920px,94vw);height:min(640px,88vh);display:grid;grid-template-rows:auto minmax(0,1fr) auto;border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--surface2);box-shadow:0 30px 100px #000b;overflow:hidden}
+.neural-filters-dialog>header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border)}
+.neural-filters-dialog>header>button{width:30px;height:30px;border:0;background:transparent;color:var(--muted);font-size:22px;cursor:pointer}
+.neural-filters-body{display:grid;grid-template-columns:200px minmax(0,1fr) 220px;min-height:0}
+.neural-filters-list{overflow-y:auto;border-right:1px solid var(--border);padding:8px}
+.neural-filters-list summary{padding:6px 4px;color:var(--muted);cursor:pointer}
+.neural-filter-row{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;padding:8px 10px;border:0;border-radius:var(--radius-sm);background:transparent;color:var(--text);text-align:left;cursor:pointer}
+.neural-filter-row:hover{background:var(--surface3)}
+.neural-filter-row.selected{background:var(--focus);color:var(--accent-ink)}
+.neural-filter-badge{font-size:11px;color:var(--muted);white-space:nowrap}
+.neural-filter-row.selected .neural-filter-badge{color:var(--accent-ink);opacity:.8}
+.neural-filters-preview{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:16px;overflow:auto;background:var(--surface)}
+.neural-filters-preview canvas{max-width:100%;max-height:100%;object-fit:contain;background-color:#8a8a8a;background-image:linear-gradient(45deg,#6f6f6f 25%,transparent 25%),linear-gradient(-45deg,#6f6f6f 25%,transparent 25%),linear-gradient(45deg,transparent 75%,#6f6f6f 75%),linear-gradient(-45deg,transparent 75%,#6f6f6f 75%);background-size:16px 16px;background-position:0 0,0 8px,8px -8px,-8px 0}
+.neural-filters-toggle{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:12px}
+.neural-filters-settings{padding:12px;border-left:1px solid var(--border);display:grid;gap:10px;align-content:start}
+.neural-filters-settings button.primary{padding:8px 12px;border:1px solid var(--focus);border-radius:var(--radius-sm);background:var(--focus);color:var(--accent-ink);cursor:pointer}
+.neural-filters-settings button.primary:disabled{opacity:.5;cursor:not-allowed}
+.neural-filters-dialog>footer{display:flex;justify-content:flex-end;gap:8px;padding:12px 16px;border-top:1px solid var(--border)}
+.neural-filters-dialog>footer button{min-width:90px;padding:8px 12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface3);color:var(--text);cursor:pointer}
+.neural-filters-dialog>footer button.primary{border-color:var(--focus);background:var(--focus);color:var(--accent-ink);font-weight:700}
+.neural-filters-dialog>footer button.primary:disabled{opacity:.45;cursor:not-allowed}
 .select-object-point{stroke:#0a0e14}.select-object-point.positive{fill:#2fd66b}.select-object-point.negative{fill:#ff4d4f}
 .selection-overlay ellipse,.selection-overlay polyline{fill:none}.selection-overlay polyline{fill:none}
 /* Marching ants — Patchy's two passes (see marching-ants.tsx). Widths and dash
