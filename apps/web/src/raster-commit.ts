@@ -11,6 +11,7 @@ import { kernel } from "./kernel";
 import { diagnostic } from "./diagnostics";
 import { applyRasterRules } from "./environments/raster/rules/registry";
 import { visibleRasterDocumentRect } from "./raster-coordinates";
+import { updateTilesParallel } from "./raster-bulk-composite";
 import { cropPixels, fromBytes, putPixels, putRegionPixels, rgbaToMask, stateDeltaBytes, toBytes, withActiveLayerPixels, withLayerMaskPixels, withLayerMaskRegion, withLayersPixels } from "./raster-pixel-buffers";
 import type { DocumentViewport } from "./store";
 
@@ -160,8 +161,9 @@ export function useRasterCommit(params: {
      * turns of the event loop instead of holding the pointer.
      */
     let next: ReturnType<typeof setTimeout> | undefined;
+    let cancelled = false;
+    const visible = visibleRasterDocumentRect(workspaceSize, viewport, state.width, state.height);
     const drain = (budgetMs: number) => {
-      const visible = visibleRasterDocumentRect(workspaceSize, viewport, state.width, state.height);
       const update = tiles.current.update(state, visible, { mip, budgetMs });
       // Returning to an earlier zoom often finds a valid high-resolution mip
       // in the cache. It is absent from `repainted`, yet the canvas still
@@ -174,8 +176,26 @@ export function useRasterCommit(params: {
       // canvas against the layer's own pixels, which is the check CLAUDE.md §2 exists for.
       if (update.pending) next = setTimeout(() => drain(budgetMs), 0);
     };
-    drain(TILE_BUDGET_MS);
-    return () => clearTimeout(next);
+    // A freshly mounted canvas (opening a document, switching tabs) has nothing cached at all —
+    // every visible tile needs a full, uncached composite at once, measured at ~105 ms for a
+    // 60-layer document (docs/master-plan.md §37.9). This is the one case §37.3 item 4's parallel
+    // tile scheduler targets: dispatched across Worker cores instead of one thread's budget-sliced
+    // loop. It is never used for the interactive stroke-repaint path below (`canvasChanged` is
+    // false for every ordinary edit), and it declines outright — falling back to the exact
+    // synchronous `drain()` this effect already ran unconditionally before this existed — for any
+    // layer stack `isSimpleLayerStack` does not clear (masks, clipping, effects, groups,
+    // adjustments) or a zoomed-out mip (no subsampling support in the fast path yet).
+    if (canvasChanged) {
+      void updateTilesParallel(tiles.current, state, visible, mip).then((ran) => {
+        if (cancelled) return;
+        if (!ran) { drain(TILE_BUDGET_MS); return; }
+        const update = tiles.current.update(state, visible, { mip, budgetMs: Infinity });
+        for (const tile of tilesForCanvasPresentation(update, mipChanged)) putRegionPixels(canvas, tile.pixels, tile.rect, tile.step);
+      });
+    } else {
+      drain(TILE_BUDGET_MS);
+    }
+    return () => { cancelled = true; clearTimeout(next); };
   }, [document.revision, state, viewport, workspaceSize.width, workspaceSize.height]);
 
   // Destructive adjustment dialogs render a transient composite here. The

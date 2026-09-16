@@ -58,6 +58,12 @@ export interface RasterTile {
   readonly step: number;
 }
 
+export interface PendingTile {
+  readonly col: number;
+  readonly row: number;
+  readonly rect: RasterRect;
+}
+
 export interface TileCacheOptions {
   readonly tileSize?: number;
   readonly budgetBytes?: number;
@@ -220,6 +226,63 @@ export class RasterTileCache {
     }
     this.#evict(new Set(visible.map((tile) => key(tile.col, tile.row, mip))));
     return { visible, repainted, pending };
+  }
+
+  /**
+   * The planning half of `update()`, split out for docs/master-plan.md §37.3 item 4: which tiles
+   * covering `viewport` at `mip` are missing or invalidated, without compositing any of them.
+   * `update()` itself must stay synchronous and main-thread (the interactive repaint path this
+   * class exists for cannot afford a Worker round trip per frame) — this exists so a caller in
+   * `apps/web` that DOES want to composite many tiles off-thread (a freshly mounted canvas with
+   * nothing cached yet, `update()`'s own `canvasChanged`/`invalidateAll()` case, not the ordinary
+   * small-stroke-repaint case) can compute their pixels itself, in parallel, and hand them back via
+   * `applyComposited` — this package still never imports a Worker or touches the DOM to do it.
+   */
+  pendingTiles(state: RasterDocumentState, viewport: RasterRect, mip = 0): PendingTile[] {
+    if (state.width !== this.#documentWidth || state.height !== this.#documentHeight) {
+      this.reset();
+      this.#documentWidth = state.width;
+      this.#documentHeight = state.height;
+    }
+    const pending: PendingTile[] = [];
+    for (const { col, row } of this.#coveringTiles(clampRegionToDocument(state, viewport))) {
+      const cacheKey = key(col, row, mip);
+      const cached = this.#tiles.get(cacheKey);
+      if (cached && !this.#invalid.has(cacheKey)) continue;
+      const rect = clampRegionToDocument(state, { x: col * this.tileSize, y: row * this.tileSize, width: this.tileSize, height: this.tileSize });
+      if (!rect.width || !rect.height) continue;
+      pending.push({ col, row, rect });
+    }
+    return pending;
+  }
+
+  /**
+   * Inserts externally-composited tiles (from `pendingTiles`) — the same cache-entry bookkeeping
+   * `update()`'s own insertion does (LRU ordering, byte accounting, the coordinate→keys index,
+   * clearing invalidation), minus the checkpoint: a checkpoint only exists for a composite this
+   * class ran itself through `compositeRasterRegionWithCheckpoint`, so a tile supplied here starts
+   * without one. That is correct, not a regression — its *next* `update()` simply recomposites
+   * from scratch instead of resuming, exactly as if its checkpoint had been evicted.
+   */
+  applyComposited(entries: readonly { col: number; row: number; rect: RasterRect; pixels: Uint8ClampedArray; step: number }[], mip = 0): void {
+    for (const entry of entries) {
+      const cacheKey = key(entry.col, entry.row, mip);
+      const tile: RasterTile = { col: entry.col, row: entry.row, rect: entry.rect, pixels: entry.pixels, step: entry.step };
+      const replaced = this.#tiles.get(cacheKey);
+      this.#tiles.delete(cacheKey);
+      this.#tiles.set(cacheKey, tile);
+      this.#checkpoints.delete(cacheKey);
+      this.#bytes += tile.pixels.byteLength - (replaced?.pixels.byteLength ?? 0);
+      const coordinate = coordinateKey(entry.col, entry.row);
+      let coordinateKeys = this.#keysByCoordinate.get(coordinate);
+      if (!coordinateKeys) { coordinateKeys = new Set(); this.#keysByCoordinate.set(coordinate, coordinateKeys); }
+      coordinateKeys.add(cacheKey);
+      this.#invalid.delete(cacheKey);
+    }
+    // Eviction is intentionally left to the next `update()` call: that is the one place that
+    // already knows the true current viewport's protected set, and calling it is not optional for
+    // this class's own interactive path (every revision runs it), so there is no risk of the
+    // budget growing unchecked between an `applyComposited` call and the next `update()`.
   }
 
   *#coveringTiles(rect: RasterRect): Generator<{ col: number; row: number }> {

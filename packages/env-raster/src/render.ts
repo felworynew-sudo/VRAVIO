@@ -370,6 +370,92 @@ function applyGlassBackdrop(
 const subdivideAbove = 512 * 512;
 const subdivisionSize = 256;
 
+/**
+ * Whether every layer `flattenRasterLayers(state.layers)` produces is safe for the narrow,
+ * Worker-portable blend fast path (`blendSimpleLayerStack` below, docs/master-plan.md §37.3 item
+ * 4): an ordinary, plain `"pixel"` layer, no mask, no clipping, no effects. One layer failing this
+ * test is enough to require the full `compositeRasterRegionWithCheckpoint` for the whole stack —
+ * this function does not try to blend the simple layers on the fast path and the complex ones on
+ * the slow path and merge the two, which would just be `compositeRasterRegionWithCheckpoint`
+ * again with extra steps. Groups, adjustment layers and Smart Objects are excluded outright rather
+ * than analysed further: each has its own materialisation path (recursive composite, whole-canvas
+ * read-back, transform resampling) this fast path does not attempt to replicate.
+ */
+export function isSimpleLayerStack(state: RasterDocumentState): boolean {
+  for (const layer of flattenRasterLayers(state.layers)) {
+    if (layer.kind !== "pixel") return false;
+    if (!isLayerEffectivelyVisible(layer, state.layers) || effectiveLayerOpacity(layer, state.layers) <= 0) continue;
+    if (layer.clipping) return false;
+    if (layer.mask?.enabled) return false;
+    if (hasEnabledEffect(layer)) return false;
+  }
+  return true;
+}
+
+/** One already-materialised, document-space, ROI-cropped layer for `blendSimpleLayerStack` — the
+ *  exact shape a caller gets from `layerDocumentPixels(layer, state.width, state.height, area)`
+ *  plus the two scalars the blend loop needs read off the layer itself. */
+export interface SimpleBlendLayer {
+  readonly pixels: Uint8ClampedArray;
+  /** Effective opacity × fill opacity, already resolved — this function does no layer-tree lookups. */
+  readonly opacity: number;
+  readonly blendMode: string;
+}
+
+/**
+ * The narrow, Worker-portable half of `compositeRasterRegionWithCheckpoint`'s own per-pixel blend
+ * loop, for exactly the case `isSimpleLayerStack` confirms — reusing the same `blendChannel`/
+ * `blendNonSeparable`/`dissolveNoise`/`blendCode` helpers this file already defines, not a second
+ * copy of the blend math. What it deliberately leaves out (masks, clipping, glass, adjustments,
+ * groups) is exactly what `isSimpleLayerStack` already ruled out for any caller of this function.
+ * `documentX`/`documentY` are `area`'s own top-left in document space — the only thing every layer
+ * here still needs from outside its own already-cropped buffer, for `dissolveNoise`'s coordinate
+ * hash to match what the full compositor would have produced for the same pixels.
+ */
+export function blendSimpleLayerStack(width: number, height: number, layers: readonly SimpleBlendLayer[], documentX: number, documentY: number): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(width * height * 4);
+  const blendScratch = new Float64Array(3), sourceHsl = new Float64Array(3), destinationHsl = new Float64Array(3);
+  layers.forEach((layer, layerIndex) => {
+    const code = blendCode(layer.blendMode), nonSeparable = isNonSeparable(code);
+    const opaqueNormal = code === NORMAL || code === DISSOLVE;
+    for (let row = 0; row < height; row += 1) {
+      const rowOffset = row * width;
+      for (let column = 0; column < width; column += 1) {
+        const index = (rowOffset + column) * 4;
+        const rawAlpha = layer.pixels[index + 3]! / 255;
+        let sourceAlpha = rawAlpha * layer.opacity;
+        if (code === DISSOLVE) sourceAlpha = dissolveNoise(documentX + column, documentY + row, layerIndex + 1) < sourceAlpha ? 1 : 0;
+        if (sourceAlpha <= 0) continue;
+        const sourceRed = layer.pixels[index]!, sourceGreen = layer.pixels[index + 1]!, sourceBlue = layer.pixels[index + 2]!;
+        if (opaqueNormal && sourceAlpha >= 1) {
+          output[index] = sourceRed; output[index + 1] = sourceGreen; output[index + 2] = sourceBlue; output[index + 3] = 255;
+          continue;
+        }
+        const destinationRed = output[index]!, destinationGreen = output[index + 1]!, destinationBlue = output[index + 2]!;
+        let blendedRed: number, blendedGreen: number, blendedBlue: number;
+        if (code === NORMAL || code === DISSOLVE) {
+          blendedRed = sourceRed; blendedGreen = sourceGreen; blendedBlue = sourceBlue;
+        } else if (nonSeparable) {
+          blendNonSeparable(code, sourceRed, sourceGreen, sourceBlue, destinationRed, destinationGreen, destinationBlue, blendScratch, sourceHsl, destinationHsl);
+          blendedRed = blendScratch[0]!; blendedGreen = blendScratch[1]!; blendedBlue = blendScratch[2]!;
+        } else {
+          blendedRed = blendChannel(code, sourceRed, destinationRed);
+          blendedGreen = blendChannel(code, sourceGreen, destinationGreen);
+          blendedBlue = blendChannel(code, sourceBlue, destinationBlue);
+        }
+        const destinationAlpha = output[index + 3]! / 255;
+        const carry = destinationAlpha * (1 - sourceAlpha);
+        const alpha = sourceAlpha + carry;
+        output[index] = Math.round((blendedRed * sourceAlpha + destinationRed * carry) / alpha);
+        output[index + 1] = Math.round((blendedGreen * sourceAlpha + destinationGreen * carry) / alpha);
+        output[index + 2] = Math.round((blendedBlue * sourceAlpha + destinationBlue * carry) / alpha);
+        output[index + 3] = Math.round(alpha * 255);
+      }
+    }
+  });
+  return output;
+}
+
 export function compositeRasterRegion(state: RasterDocumentState, region: RasterRect, options: CompositeOptions = {}): Uint8ClampedArray {
   return compositeRasterRegionWithCheckpoint(state, region, null, options).pixels;
 }
