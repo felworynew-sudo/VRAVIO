@@ -33,7 +33,7 @@ describe("Filter menu skeleton's newly-implemented filters (docs/master-plan.md 
     "sharpen_more", "sharpen_edges", "smart_sharpen",
     "diffuse", "solarize", "trace_contour", "wind", "oil_paint", "lens_flare",
     "crystallize", "pointillize", "fragment", "mezzotint", "shape_mosaic", "difference_clouds", "fibers",
-    "normal_map",
+    "normal_map", "lens_correction",
   ];
 
   it("registers every new filter in the catalog exactly once", () => {
@@ -293,5 +293,20 @@ describe("Blur Gallery effects (docs/master-plan.md §51, interactivity level 3)
     // shift in opposite directions on a periodic checkerboard cannot land on the same result.
     expect([...withBright]).not.toEqual([...withDark]);
     expect([...withBright]).not.toEqual([...source]);
+  });
+
+  it("Lens Correction at all-zero settings is the identity", () => {
+    const source = checkerboard(WIDTH, HEIGHT);
+    const result = applyRasterFilter(source, WIDTH, HEIGHT, "lens_correction", { distortAmount: 0, chromaticAberration: 0, vignetteAmount: 0 });
+    expect([...result]).toEqual([...source]);
+  });
+
+  it("Lens Correction's Vignette darkens the corners without touching the centre", () => {
+    const source = new Uint8ClampedArray(WIDTH * HEIGHT * 4).fill(200);
+    for (let i = 3; i < source.length; i += 4) source[i] = 255;
+    const result = applyRasterFilter(source, WIDTH, HEIGHT, "lens_correction", { distortAmount: 0, chromaticAberration: 0, vignetteAmount: 100 });
+    const centre = (16 * WIDTH + 16) * 4, corner = 0;
+    expect(result[centre]).toBe(200);
+    expect(result[corner]!).toBeLessThan(200);
   });
 });

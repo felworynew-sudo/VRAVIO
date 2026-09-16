@@ -59,6 +59,7 @@ const mezzotintParams = [{ id: "type", name: "Type (Тип)", min: 0, max: 3, st
 const shapeMosaicParams = [{ id: "cellSize", name: "Cell size (Размер ячейки)", min: 4, max: 100, step: 1, value: 20 }];
 const fibersParams = [{ id: "variance", name: "Variance (Разброс)", min: 1, max: 100, step: 1, value: 50 }, { id: "strength", name: "Strength (Сила)", min: 1, max: 100, step: 1, value: 50 }];
 const normalMapParams = [{ id: "scale", name: "Scale (Масштаб)", min: 1, max: 100, step: 1, value: 10 }];
+const lensCorrectionParams = [{ id: "distortAmount", name: "Remove Distortion (Удалить искажение)", min: -100, max: 100, step: 1, value: 0 }, { id: "chromaticAberration", name: "Fix Chromatic Aberration (Хроматические аберрации)", min: 0, max: 100, step: 1, value: 0 }, { id: "vignetteAmount", name: "Vignette (Виньетирование)", min: -100, max: 100, step: 1, value: 0 }];
 export const rasterFilterCatalog: RasterFilterDefinition[] = ([
   ["invert","Invert (Инверсия)","Basics",none], ["brightness_contrast","Brightness/Contrast (Яркость/Контраст)","Basics",[{id:"brightness",name:"Brightness (Яркость)",min:-100,max:100,step:1,value:0},{id:"contrast",name:"Contrast (Контраст)",min:-100,max:100,step:1,value:20}]], ["grayscale","Grayscale (Оттенки серого)","Basics",none], ["desaturate","Desaturate (Обесцветить)","Basics",none], ["auto_tone","Auto Tone (Автотон)","Photo",none], ["auto_contrast","Auto Contrast (Автоконтраст)","Photo",none], ["auto_color","Auto Color (Автоцвет)","Photo",none], ["soft_glow","Soft Glow (Мягкое свечение)","Photo",amount], ["punchy_color","Punchy Color (Сочный цвет)","Photo",amount], ["noir","Noir (Нуар)","Photo",amount], ["cinematic_matte","Cinematic Matte (Кинематографический матовый)","Photo",amount], ["vintage_fade","Vintage Fade (Винтажное выцветание)","Photo",amount], ["sepia","Vintage Sepia (Винтажная сепия)","Photo",amount], ["threshold","Threshold (Порог)","Basics",[{id:"threshold",name:"Threshold (Порог)",min:0,max:255,step:1,value:128}]], ["posterize","Posterize (Постеризация)","Basics",[{id:"levels",name:"Levels (Уровни)",min:2,max:32,step:1,value:4}]], ["box_blur","Box Blur (Прямоугольное размытие)","Blur",radius], ["sharpen","Sharpen (Резкость)","Sharpen",amount], ["unsharp_mask","Unsharp Mask (Контурная резкость)","Sharpen",amount], ["gaussian_blur","Gaussian Blur (Размытие по Гауссу)","Blur",radius], ["motion_blur","Motion Blur (Размытие в движении)","Blur",motionBlurParams], ["radial_blur","Radial Blur (Радиальное размытие)","Blur",radialBlurParams], ["edge_detect","Edge Detect (Выделение краёв)","Stylize",none], ["emboss","Emboss (Тиснение)","Stylize",embossParams], ["glowing_edges","Glowing Edges (Светящиеся края)","Stylize",amount], ["twirl","Twirl (Скручивание)","Distort",amount], ["wave","Wave (Волна)","Distort",amount], ["pinch_bloat","Pinch/Bloat (Сжатие/Вздутие)","Distort",[{id:"amount",name:"Amount (Сила)",min:-100,max:100,step:1,value:25}]], ["clouds","Clouds (Облака)","Render",amount], ["pixelate","Pixel Mosaic (Мозаика)","Stylize",[{id:"size",name:"Cell size (Размер ячейки)",min:2,max:64,step:1,value:8}]], ["color_halftone","Color Halftone (Цветные полутона)","Stylize",radius], ["film_grain","Analog Grain (Аналоговое зерно)","Noise",[noiseAmount]], ["add_noise","Add Noise (Добавить шум)","Noise",addNoiseParameters], ["vignette","Lens Vignette (Виньетка)","Photo",amount], ["high_pass","High Pass (Цветовой контраст)","Sharpen",radius], ["median","Median (Медиана)","Noise",radius], ["dust_and_scratches","Dust & Scratches (Пыль и царапины)","Noise",radius], ["surface_blur","Surface Blur (Размытие по поверхности)","Blur",surfaceBlurParams], ["lens_blur","Lens Blur (Размытие объектива)","Blur",lensBlurParams], ["iris_blur","Iris Blur (Размытие диафрагмы)","Blur",radius], ["tilt_shift_blur","Tilt-Shift Blur (Наклон-сдвиг)","Blur",radius], ["plastic_wrap","Plastic Wrap (Целлофановая упаковка)","Stylize",amount],
   ["duotone","Duotone (Дуотон)","Photo",[{id:"shadowHue",name:"Shadow hue (Тон теней)",min:0,max:359,step:1,value:210},{id:"highlightHue",name:"Highlight hue (Тон светов)",min:0,max:359,step:1,value:45},{id:"amount",name:"Amount (Сила)",min:0,max:100,step:1,value:100}]],
@@ -95,6 +96,7 @@ export const rasterFilterCatalog: RasterFilterDefinition[] = ([
   ["difference_clouds","Difference Clouds (Облака с наложением)","Render",none],
   ["fibers","Fibers (Волокна)","Render",fibersParams],
   ["normal_map","Normal Map (Карта нормалей)","Other",normalMapParams],
+  ["lens_correction","Lens Correction (Коррекция линзы)","Distort",lensCorrectionParams],
 ].map(([id,name,category,parameters]) => ({ id, name, category, parameters })) as RasterFilterDefinition[])
   .filter((definition) => !unavailableUntilImplemented.has(definition.id));
 
@@ -1237,6 +1239,43 @@ export function displaceEffect(source: Uint8ClampedArray, width: number, height:
   return output;
 }
 
+/**
+ * Lens Correction (Custom tab only — see docs/master-plan.md §51 for why):
+ * the geometric warp is GIMP/GEGL's own Lens Distortion plugin
+ * (`operations/common-gpl3+/lens-distortion.c`, `main`/`zoom` properties,
+ * `edge`/shift left at their defaults), the exact donor Photoshop's own
+ * "Remove Distortion" slider traces back to. Chromatic aberration samples
+ * the red and blue channels through the same warp at a slightly different
+ * `main` each (the classic simulated-CA technique: real axial CA is a lens
+ * property, not a single extra parameter, but scaling the red/blue radius
+ * oppositely reproduces the visible fringing this dialog's slider is for).
+ * Vignette reuses `applyRasterFilter`'s own `vignette` falloff formula.
+ */
+function lensCorrectionFilter(source: Uint8ClampedArray, width: number, height: number, distortAmount: number, chromaticAberration: number, vignetteAmount: number): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(source.length);
+  const norm = 4 / (width * width + height * height), centerX = width / 2, centerY = height / 2;
+  const rescale = 1, mainAmount = distortAmount / 200, caOffset = (chromaticAberration / 100) * 0.15;
+  const sourceFor = (x: number, y: number, mult: number) => {
+    const offX = x - centerX, offY = y - centerY, radiusSq = (offX * offX + offY * offY) * norm;
+    const radiusMult = rescale * (1 + radiusSq * mult);
+    return { x: centerX + radiusMult * offX, y: centerY + radiusMult * offY };
+  };
+  const vignetteMix = Math.max(-1, Math.min(1, vignetteAmount / 100));
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const green = sourceFor(x, y, mainAmount);
+    const red = caOffset !== 0 ? sourceFor(x, y, mainAmount - caOffset) : green;
+    const blue = caOffset !== 0 ? sourceFor(x, y, mainAmount + caOffset) : green;
+    const [rr] = sampleBilinear(source, width, height, red.x, red.y);
+    const [, gg] = sampleBilinear(source, width, height, green.x, green.y);
+    const [, , bb, aa] = sampleBilinear(source, width, height, blue.x, blue.y);
+    const i = (y * width + x) * 4;
+    const d = Math.min(1, Math.hypot((x - centerX) / centerX, (y - centerY) / centerY));
+    const vignetteFactor = 1 - d * d * vignetteMix * 0.8;
+    output[i] = byte(rr * vignetteFactor); output[i + 1] = byte(gg * vignetteFactor); output[i + 2] = byte(bb * vignetteFactor); output[i + 3] = aa;
+  }
+  return output;
+}
+
 export function applyRasterFilter(source: Uint8ClampedArray, width: number, height: number, id: string, settings: Record<string, number> = {}): Uint8ClampedArray {
   const output = source.slice(), mix = Math.max(0,Math.min(1,value(settings,"amount",100)/100));
   if (id === "gaussian_blur") return gaussianBlur(source, width, height, value(settings, "radius", 2));
@@ -1278,6 +1317,7 @@ export function applyRasterFilter(source: Uint8ClampedArray, width: number, heig
   if (id === "difference_clouds") return differenceCloudsFilter(source, width, height);
   if (id === "fibers") return fibersFilter(width, height, value(settings, "variance", 50), value(settings, "strength", 50));
   if (id === "normal_map") return normalMapFilter(source, width, height, value(settings, "scale", 10));
+  if (id === "lens_correction") return lensCorrectionFilter(source, width, height, value(settings, "distortAmount", 0), value(settings, "chromaticAberration", 0), value(settings, "vignetteAmount", 0));
   if(id==="pixelate"){const size=Math.max(2,Math.round(value(settings,"size",8)));for(let y=0;y<height;y+=size)for(let x=0;x<width;x+=size){const i=(y*width+x)*4;for(let yy=y;yy<Math.min(height,y+size);yy++)for(let xx=x;xx<Math.min(width,x+size);xx++){const o=(yy*width+xx)*4;output[o]=source[i]!;output[o+1]=source[i+1]!;output[o+2]=source[i+2]!;output[o+3]=source[i+3]!;}}return output;}
   if(id==="auto_tone"||id==="auto_contrast"||id==="auto_color"){for(let c=0;c<3;c++){let lo=255,hi=0;for(let i=c;i<source.length;i+=4)if(source[i+3-c]!==0){lo=Math.min(lo,source[i]!);hi=Math.max(hi,source[i]!);}if(hi>lo)for(let i=c;i<output.length;i+=4)output[i]=byte((source[i]!-lo)*255/(hi-lo));}return output;}
   if(id==="twirl") return twirlFilter(source,width,height,value(settings,"amount",100));

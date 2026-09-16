@@ -917,7 +917,7 @@ export function App() {
         {active?.kind === "raster" && <Menu label="Filter (Фильтр)" language={store.language} open={openMenu === "filter"} onToggle={() => setOpenMenu(openMenu === "filter" ? null : "filter")} items={[
           [lastFilter ? `Repeat Filter: ${localized(lastFilter.label, "en")}… (Повторить фильтр: ${localized(lastFilter.label, "ru")}…)` : "Repeat Filter (Предыдущий фильтр)", "Ctrl+Alt+F", repeatLastFilter, !active || active.kind !== "raster" || !lastFilter],
           ["Filter Gallery… (Галерея фильтров…)", "", () => { setFilterGallerySelection(undefined); setFilterGalleryOpen(true); }, !active || active.kind!=="raster"],
-          ["Lens Correction… (Коррекция линзы…)", "", () => {}, true],
+          ["Lens Correction… (Коррекция линзы…)", "", () => openFilter("lens_correction"), !active || active.kind!=="raster"],
           ["Camera Raw Filter… (Фильтр Camera Raw…)", "Ctrl+Shift+A", () => setCameraRawFilterOpen(true), !active || !isRasterDocumentState(active.state)],
           ["Reprocess Original RAW… (Переобработать исходный RAW…)", "", () => void openCameraRawReprocess(), !activeRawOrigin],
           ["Liquify… (Пластика…)", "Ctrl+Shift+X", () => setLiquifyOpen(true), !active || !isRasterDocumentState(active.state)],
