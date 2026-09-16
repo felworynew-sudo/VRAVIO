@@ -82,4 +82,45 @@ describe("pendingTiles + applyComposited reproduce update()'s own result", () =>
     cache.invalidate({ x: 0, y: 0, width: 1, height: 1 });
     expect(() => cache.update(state, viewport, 0)).not.toThrow();
   });
+
+  /**
+   * `apps/web/src/raster-bulk-composite.ts`'s `updateTilesParallel` reads `cache.generation`
+   * before starting its (slow, off-thread) work and hands it back to `applyComposited` as
+   * `expectedGeneration` once the work finishes — this is the actual fix for the race a live
+   * migration-review pass on §37.3 flagged: two overlapping bulk-composite requests against the
+   * same cache instance (two canvas remounts close together) can resolve out of order, and the
+   * older one's write must not be allowed to overwrite the newer one's already-current tiles.
+   */
+  describe("applyComposited's generation guard rejects a stale write", () => {
+    it("applies when the passed generation still matches the cache's current one", () => {
+      const state = scene();
+      const cache = new RasterTileCache({ tileSize: 32 });
+      const pending = cache.pendingTiles(state, viewport, 0);
+      const generation = cache.generation;
+      const entries = pending.map((tile) => ({ ...tile, pixels: compositeRasterRegion(state, tile.rect), step: 1 }));
+      expect(cache.applyComposited(entries, 0, generation)).toBe(true);
+      expect(cache.pendingTiles(state, viewport, 0)).toEqual([]);
+    });
+
+    it("is a no-op once invalidateAll() has moved the cache to a newer generation", () => {
+      const state = scene();
+      const cache = new RasterTileCache({ tileSize: 32 });
+      // Simulate the first (stale) request: capture its epoch, then something else invalidates
+      // everything — a second canvas remount — before this request's off-thread work resolves.
+      const pending = cache.pendingTiles(state, viewport, 0);
+      const staleGeneration = cache.generation;
+      const staleEntries = pending.map((tile) => ({ ...tile, pixels: compositeRasterRegion(state, tile.rect), step: 1 }));
+
+      cache.invalidateAll(); // the second, newer request's own remount handling
+      // The newer request finishes first and writes fresh tiles at the new generation.
+      const freshGeneration = cache.generation;
+      const freshEntries = cache.pendingTiles(state, viewport, 0).map((tile) => ({ ...tile, pixels: compositeRasterRegion(state, tile.rect), step: 1 }));
+      expect(cache.applyComposited(freshEntries, 0, freshGeneration)).toBe(true);
+
+      // The stale (first) request's write finally resolves — it must be rejected, not silently
+      // resurrect the tiles the fresh request just wrote and mark them valid again.
+      expect(cache.applyComposited(staleEntries, 0, staleGeneration)).toBe(false);
+      expect(cache.pendingTiles(state, viewport, 0)).toEqual([]); // still fully covered by the fresh write, untouched by the stale one
+    });
+  });
 });

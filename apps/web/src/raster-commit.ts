@@ -227,8 +227,8 @@ export function useRasterCommit(params: {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const updates = new Map(layers.map((entry) => [entry.layerId, entry.pixels] as const));
-    const preview = withLayersPixels(state, updates);
     const region = dirty ? clampRegionToDocument(state, dirty) : null;
+    const preview = withLayersPixels(state, updates, region);
     if (region?.width && region.height) {
       putRegionPixels(canvas, compositeRasterRegion(preview, region), region);
       return;
@@ -254,7 +254,7 @@ export function useRasterCommit(params: {
     }
     const layer = activeRasterLayer(state);
     const direct = canDirectRasterPreviewBlit(state, layer);
-    putRegionPixels(canvas, direct ? cropPixels(pixels, state.width, region) : compositeRasterRegion(withActiveLayerPixels(state, pixels), region), region);
+    putRegionPixels(canvas, direct ? cropPixels(pixels, state.width, region) : compositeRasterRegion(withActiveLayerPixels(state, pixels, region), region), region);
   };
 
   /**
@@ -282,7 +282,7 @@ export function useRasterCommit(params: {
     const pixels = canvasPixels(activeRasterLayer(state));
     const layer = activeRasterLayer(state);
     const direct = canDirectRasterPreviewBlit(state, layer);
-    const composited = direct ? cropPixels(pixels, state.width, region) : compositeRasterRegion(withActiveLayerPixels(state, pixels), region);
+    const composited = direct ? cropPixels(pixels, state.width, region) : compositeRasterRegion(withActiveLayerPixels(state, pixels, region), region);
 
     for (let y = 0; y < region.height; y += 1) {
       for (let x = 0; x < region.width; x += 1) {
@@ -332,7 +332,7 @@ export function useRasterCommit(params: {
     const pixels = canvasPixels(activeRasterLayer(state));
     const layer = activeRasterLayer(state);
     const direct = canDirectRasterPreviewBlit(state, layer);
-    const composited = direct ? cropPixels(pixels, state.width, region) : compositeRasterRegion(withActiveLayerPixels(state, pixels), region);
+    const composited = direct ? cropPixels(pixels, state.width, region) : compositeRasterRegion(withActiveLayerPixels(state, pixels, region), region);
 
     for (let y = 0; y < region.height; y += 1) {
       for (let x = 0; x < region.width; x += 1) {

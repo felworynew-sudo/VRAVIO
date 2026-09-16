@@ -3,7 +3,7 @@ import { compositeRasterDocument, compositeRasterRegion } from "./render";
 import { renderLayerEffects } from "./effects";
 import { createRasterDocument, createRasterLayer } from "./document";
 import { appendLayer } from "./layer-tree";
-import { translateLayerPixels, translateSelection } from "./transform";
+import { meshLayerPixels, quadLayerPixels, regularMesh, translateLayerPixels, translateSelection, WARP_GRID } from "./transform";
 import { combineSelections, createEllipseSelection } from "./selection";
 import { accumulateUniquePixelBytes, layerDocumentPixels, layerPixelsView, setLayerPixels } from "./layer-bounds";
 import { duplicateLayer } from "./layer-ops";
@@ -537,5 +537,123 @@ describe("performance floor (stage 0 of the catalogue migration)", () => {
     // tuned later.
     const fullCanvasCost = state.layers.length * state.width * state.height * 4;
     expect(bytes).toBeLessThan(fullCanvasCost * 0.3);
+  });
+
+  /**
+   * docs/master-plan.md §37.3 item 5 (Instant Preview/LoD) — baseline measurement before deciding
+   * whether resolution reduction is actually needed, or whether the real cost is something a
+   * cheaper fix already addresses. `quadLayerPixels`/`meshLayerPixels` are called once per drag
+   * frame from `move.tsx`'s `applyDragFrame` for Skew/Distort/Perspective/Warp — unlike
+   * Move/Scale/Rotate, which describe the drag instead of resampling it every frame (move.tsx's
+   * own `PendingTransform.live`), these two still resample on every pointermove.
+   *
+   * A large document (4000x3000, the size this whole master-plan section already uses as its own
+   * "large canvas" reference) with a *moderate* transformed selection (~400x400 — a realistic
+   * crop/photo-element size, not the whole canvas) isolates the actual question: does the cost
+   * scale with the *document* (bad — `quadLayerPixels`'s own `pixels.slice()` clones the full
+   * document-sized buffer every frame regardless of transform size) or with the *transformed
+   * content* (fine — no LoD needed, the existing per-content-bounds loop already handles it)?
+   */
+  function largeDocumentWithMovableRegion(): { state: RasterDocumentState; layer: RasterLayer; bounds: { x: number; y: number; width: number; height: number } } {
+    const state = createRasterDocument(4000, 3000);
+    const layer = createRasterLayer(state.width, state.height, "Photo element");
+    const bounds = { x: 1800, y: 1300, width: 400, height: 400 };
+    const painted = new Uint8ClampedArray(layer.width * layer.height * 4);
+    for (let y = bounds.y; y < bounds.y + bounds.height; y += 1) for (let x = bounds.x; x < bounds.x + bounds.width; x += 1) {
+      const index = (y * state.width + x) * 4;
+      painted[index] = (x * 3) % 255; painted[index + 1] = (y * 5) % 255; painted[index + 2] = ((x + y) * 7) % 255; painted[index + 3] = 255;
+    }
+    setLayerPixels(layer, painted, state.width, state.height);
+    appendLayer(state, layer);
+    return { state, layer, bounds };
+  }
+
+  it("records per-frame cost of a quad (Skew/Distort/Perspective) drag on a large document — no cache", () => {
+    const { state, layer, bounds } = largeDocumentWithMovableRegion();
+    const documentPixels = layerDocumentPixels(layer, state.width, state.height);
+    let sample = 0;
+    const latency = latencyPercentiles(() => {
+      const shift = ++sample % 30;
+      // A mild skew of the selection's own corners — the shape one drag frame of Skew produces,
+      // not a degenerate/self-intersecting quad.
+      const corners: [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }, { x: number; y: number }] = [
+        { x: bounds.x + shift, y: bounds.y },
+        { x: bounds.x + bounds.width, y: bounds.y },
+        { x: bounds.x + bounds.width - shift, y: bounds.y + bounds.height },
+        { x: bounds.x, y: bounds.y + bounds.height },
+      ];
+      quadLayerPixels(documentPixels, state.width, state.height, bounds, corners, null);
+    });
+    // Measured on this fixture: p50 ~32ms, p95 ~55ms — most of it `quadLayerPixels`'s own
+    // `pixels.slice()`, a full 4000x3000x4 (48MB) clone every frame regardless of the 400x400
+    // transformed region's own size (docs/master-plan.md §37.3 item 5). This is the "no cache"
+    // baseline the `cache`-bearing benchmark right below exists to improve on — kept as its own
+    // test, not deleted, so a future change to the uncached path (still the one every non-drag
+    // caller uses) is still guarded.
+    expect(latency.p50).toBeLessThan(32 * THRESHOLD_MULTIPLIER);
+    expect(latency.p95).toBeLessThan(55 * THRESHOLD_MULTIPLIER);
+  });
+
+  it("records per-frame cost of a quad drag — with the drag cache a real session keeps across frames", () => {
+    const { state, layer, bounds } = largeDocumentWithMovableRegion();
+    const documentPixels = layerDocumentPixels(layer, state.width, state.height);
+    // One cache object, reused across every sampled call — exactly how `move.tsx`'s own
+    // `quadOrigin.cache` persists for the life of one Skew/Distort/Perspective session, not
+    // recreated per frame the way a fresh clone would be.
+    const cache = { working: documentPixels.slice(), dirtyRect: null as { x: number; y: number; width: number; height: number } | null };
+    let sample = 0;
+    const latency = latencyPercentiles(() => {
+      const shift = ++sample % 30;
+      const corners: [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }, { x: number; y: number }] = [
+        { x: bounds.x + shift, y: bounds.y },
+        { x: bounds.x + bounds.width, y: bounds.y },
+        { x: bounds.x + bounds.width - shift, y: bounds.y + bounds.height },
+        { x: bounds.x, y: bounds.y + bounds.height },
+      ];
+      quadLayerPixels(documentPixels, state.width, state.height, bounds, corners, null, cache);
+    });
+    // Measured on this fixture: p50 ~21ms, p95 ~31ms — down from ~32ms/~55ms uncached, matching
+    // this file's own isolated finding that the ~48MB `pixels.slice()` clone cost ~7-11ms of the
+    // uncached total. The *resample loop* itself is untouched by this cache (still real,
+    // content-size-bound bilinear work, not reduced) — closing that further would need actual
+    // resolution reduction (Krita's own literal LoD), not attempted this session; see
+    // docs/master-plan.md §37.3 item 5's own honest account of what is and is not fixed here. A
+    // tight-ish ceiling here is deliberate: this benchmark exists specifically to catch a
+    // regression that silently reintroduces the full clone (e.g. a code path that stops passing
+    // `cache` through).
+    expect(latency.p50).toBeLessThan(50);
+    expect(latency.p95).toBeLessThan(80);
+  });
+
+  it("records per-frame cost of a warp (mesh) drag on a large document — no cache", () => {
+    const { state, layer, bounds } = largeDocumentWithMovableRegion();
+    const documentPixels = layerDocumentPixels(layer, state.width, state.height);
+    const baseMesh = regularMesh(bounds, WARP_GRID);
+    let sample = 0;
+    const latency = latencyPercentiles(() => {
+      const shift = (++sample % 20) - 10;
+      const mesh = baseMesh.map((point, index) => index === 5 ? { x: point.x + shift, y: point.y + shift } : point);
+      meshLayerPixels(documentPixels, state.width, state.height, bounds, mesh, null);
+    });
+    // Measured on this fixture: p50 ~35ms, p95 ~71ms — same full-document-clone cost as quad,
+    // plus warp's own 24x24-cell subdivision loop on top.
+    expect(latency.p50).toBeLessThan(35 * THRESHOLD_MULTIPLIER);
+    expect(latency.p95).toBeLessThan(71 * THRESHOLD_MULTIPLIER);
+  });
+
+  it("records per-frame cost of a warp drag — with the drag cache a real session keeps across frames", () => {
+    const { state, layer, bounds } = largeDocumentWithMovableRegion();
+    const documentPixels = layerDocumentPixels(layer, state.width, state.height);
+    const baseMesh = regularMesh(bounds, WARP_GRID);
+    const cache = { working: documentPixels.slice(), dirtyRect: null as { x: number; y: number; width: number; height: number } | null };
+    let sample = 0;
+    const latency = latencyPercentiles(() => {
+      const shift = (++sample % 20) - 10;
+      const mesh = baseMesh.map((point, index) => index === 5 ? { x: point.x + shift, y: point.y + shift } : point);
+      meshLayerPixels(documentPixels, state.width, state.height, bounds, mesh, null, cache);
+    });
+    // Measured on this fixture: p50 ~20ms, p95 ~33ms — same clone-cost removal as quad above.
+    expect(latency.p50).toBeLessThan(50);
+    expect(latency.p95).toBeLessThan(80);
   });
 });

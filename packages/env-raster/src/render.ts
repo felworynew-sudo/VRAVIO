@@ -1,5 +1,5 @@
 import type { RasterDocumentState, RasterLayer, RasterLayerMask, RasterRect, RgbaColor } from "./types";
-import { renderLayerEffects } from "./effects";
+import { renderLayerEffects, requiredSourceRegion } from "./effects";
 import { applyAdjustment } from "./adjustments";
 import { applyRasterFilter } from "./filters";
 import { effectiveLayerOpacity, flattenRasterLayers, isLayerEffectivelyVisible, rasterLayerDescendantIds } from "./layer-tree";
@@ -626,23 +626,57 @@ export function compositeRasterRegionWithCheckpoint(
         layers: state.layers.filter((candidate) => inside.has(candidate.id)).map((candidate) =>
           candidate.parentId === layer.id ? { ...candidate, parentId: null } : candidate),
       };
-      const groupResult = compositeRasterRegionWithCheckpoint(groupState, area, groupCheckpoints.get(layer.id) ?? null, options);
-      if (groupResult.checkpoint) groupCheckpoints.set(layer.id, groupResult.checkpoint); else groupCheckpoints.delete(layer.id);
+      // A group effect (Drop Shadow, Outer/Inner Glow, Bevel) needs to read past this tile's own
+      // edge exactly the way an ordinary layer's does (`requiredSourceRegion`'s own doc comment) —
+      // but unlike an ordinary layer, a group has no persistent document-sized buffer to read a
+      // halo from at all: its "pixels" only exist as far as they were just composited, right here.
+      // Compositing the descendants for `area` alone and only *afterward* asking whether the group
+      // effect needed more than that (the bug: `renderLayerEffects` was called with no `region`, so
+      // its own halo logic never even ran) leaves genuine transparent black past the tile boundary
+      // — a real edge, not a sampled one — which an Outer Glow/Drop Shadow near a tile seam then
+      // renders as a visible seam or hard clip exactly at that boundary. The fix is the same shape
+      // as `glassPadding`'s own expand-then-crop a few dozen lines up in this same function, scoped
+      // to just this one group instead of the whole composite: ask `requiredSourceRegion` (the exact
+      // function an ordinary layer's own effects already use) how far the group's *own* effects
+      // reach, composite the descendants over that wider area, and let `renderLayerEffects`'s
+      // `region` argument crop the result back down to this tile once the effect has real neighbour
+      // pixels to read. Only pays for the wider composite when this specific group actually has an
+      // enabled effect — the overwhelmingly common case (no group-level style at all) is untouched.
+      const groupNeedsEffectHalo = hasRenderableEffect(layer);
+      const groupSourceArea = groupNeedsEffectHalo ? requiredSourceRegion(layer, area, state.width, state.height) : area;
+      const groupResult = compositeRasterRegionWithCheckpoint(groupState, groupSourceArea, groupNeedsEffectHalo ? null : (groupCheckpoints.get(layer.id) ?? null), options);
+      // A checkpoint is keyed to `area`'s own boundary; once padded to `groupSourceArea` it would
+      // resume into the wrong rectangle on the next call, so a haloed group simply does not use
+      // one (`null` above) or save one (skipped below) — correctness over the checkpoint's own
+      // resume optimisation for the one case (a group with an enabled effect) that needs the halo.
+      if (!groupNeedsEffectHalo) { if (groupResult.checkpoint) groupCheckpoints.set(layer.id, groupResult.checkpoint); else groupCheckpoints.delete(layer.id); }
       const rawGroupPixels = groupResult.pixels;
+      const groupSourceWidth = Math.ceil(groupSourceArea.width / step), groupSourceHeight = Math.ceil(groupSourceArea.height / step);
       // Reuse the layer-style renderer on the subtree's already-composited
       // surface. A group effect belongs outside its children, unlike effects
       // on each child, so this is intentionally after the recursive pass.
-      // `TileStore.fromPixels`/its later `.toPixels()` round-trip is pure overhead here —
-      // `rawGroupPixels` is already exactly the flat buffer `renderLayerEffects` will read back
-      // out — but this synthetic wrapper is a fresh object every call regardless (no caching ever
-      // applied to it, tiled or flat), and an isolated group with its own enabled layer style is
-      // rare enough that a real API change to let `renderLayerEffects` take a bare buffer directly
-      // isn't worth it for this one call site.
-      const groupSurfaceLayer: RasterLayer = {
-        ...layer, kind: "pixel", parentId: null, tiles: TileStore.fromPixels(rawGroupPixels, outWidth, outHeight),
-        bounds: { x: 0, y: 0, width: outWidth, height: outHeight }, width: outWidth, height: outHeight,
-      };
-      const groupPixels = hasRenderableEffect(layer) ? renderLayerEffects(groupSurfaceLayer, outWidth, outHeight) : rawGroupPixels;
+      // Skipped entirely when the group has no effect of its own (by far the common case): the
+      // `TileStore.fromPixels`/its later `.toPixels()` round-trip is pure overhead when nothing is
+      // about to read the wrapper back out through `renderLayerEffects` in the first place.
+      let groupPixels = rawGroupPixels;
+      if (groupNeedsEffectHalo) {
+        // `TileStore.fromPixels`/its later `.toPixels()` round-trip is pure overhead here —
+        // `rawGroupPixels` is already exactly the flat buffer `renderLayerEffects` will read back
+        // out — but this synthetic wrapper is a fresh object every call regardless (no caching ever
+        // applied to it, tiled or flat), and an isolated group with its own enabled layer style is
+        // rare enough that a real API change to let `renderLayerEffects` take a bare buffer directly
+        // isn't worth it for this one call site.
+        const groupSurfaceLayer: RasterLayer = {
+          ...layer, kind: "pixel", parentId: null, tiles: TileStore.fromPixels(rawGroupPixels, groupSourceWidth, groupSourceHeight),
+          bounds: { x: 0, y: 0, width: groupSourceWidth, height: groupSourceHeight }, width: groupSourceWidth, height: groupSourceHeight,
+        };
+        // Where this tile's own `outWidth`×`outHeight` output actually sits inside the wider
+        // `groupSourceArea` surface just built.
+        const groupOutputRegion: RasterRect = {
+          x: Math.round((area.x - groupSourceArea.x) / step), y: Math.round((area.y - groupSourceArea.y) / step), width: outWidth, height: outHeight,
+        };
+        groupPixels = renderLayerEffects(groupSurfaceLayer, groupSourceWidth, groupSourceHeight, groupOutputRegion);
+      }
       const groupMask = layer.mask?.enabled ? featherMask(layer.mask, state.width, state.height, layer.mask.feather) : undefined;
       const groupCode = blendCode(layer.blendMode), groupNonSeparable = isNonSeparable(groupCode);
       const groupClippingBase = layer.clipping ? clippingBaseByParent.get(parentKey) : undefined;

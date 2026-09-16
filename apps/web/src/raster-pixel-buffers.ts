@@ -1,4 +1,4 @@
-import { accumulateUniquePixelBytes, decodeRasterAsset, encodeRasterAsset, isRasterAsset, TileStore, visitPixelBuffers, type RasterDocumentState, type RasterLayerMask, type RasterRect } from "@vravio/env-raster";
+import { accumulateUniquePixelBytes, decodeRasterAsset, encodeRasterAsset, isRasterAsset, TileStore, visitPixelBuffers, type RasterDocumentState, type RasterLayer, type RasterLayerMask, type RasterRect } from "@vravio/env-raster";
 
 /**
  * Pure pixel-buffer plumbing shared by `RasterWorkspace.tsx`'s render and
@@ -95,10 +95,65 @@ export function cropPixels(pixels: Uint8ClampedArray, width: number, region: Ras
  * content and read with its own stride, so handing it a canvas-sized buffer
  * while leaving the old rectangle in place makes every row read from the wrong
  * offset — the picture comes out as diagonal streaks.
+ *
+ * `tiles`, not a `pixels` field: `RasterLayer` stopped having a `pixels` field at all once it
+ * moved to `TileStore` (docs/master-plan.md §37.6.3) — every real reader (`layerDocumentPixels`/
+ * `layerPixelsView`, and through them the whole compositor) reads `layer.tiles` exclusively. A
+ * layer object built with `{ ...layer, pixels }` was invisible to all of them: `canDirectRasterPreviewBlit`'s
+ * single-layer, no-effects, normal-blend, opacity-1 fast path never calls this function at all (it
+ * blits the raw buffer straight to canvas), which is exactly why this only ever showed up on a
+ * multi-layer document, or any blend mode/opacity/mask/effect off its narrow allow-list — the
+ * *ordinary* editing case, not the fresh-empty-single-layer one a quick smoke test reaches for
+ * first. Below that fast path, every preview frame silently composited the layer's last *committed*
+ * tiles instead of the in-progress buffer this function was asked to show: a live brush stroke
+ * invisible until release, and a live Skew/Distort/Warp frame reading whatever stale tiles the
+ * compositor's own bounds math happened to land on — the exact "diagonal streaks" this comment's
+ * own next paragraph already named, just from a different cause than the one it was written for.
  */
-export function withActiveLayerPixels(state: RasterDocumentState, pixels: Uint8ClampedArray): RasterDocumentState {
+/**
+ * Per-layer cache backing `withActiveLayerPixels`/`withLayersPixels`'s optional `region` argument
+ * — same self-invalidating-by-identity trick `maskScratchByCommitted` below already uses for masks,
+ * keyed by the layer object a drag's every frame shares (nothing commits mid-drag, so the layer
+ * object and its `pixelsRevision` stay put until release) and re-seeded whenever either changes.
+ *
+ * Without this, a canvas-sized `TileStore.fromPixels(pixels, ...)` — the correct fix for the
+ * phantom-`pixels`-field migration bug this file's own history describes — would run on *every*
+ * `pointermove` of *every* brush stroke, quad/warp drag frame, transform, etc.: an O(width×height)
+ * full-document re-tile per frame, reintroducing at the tiles step the exact "whole-buffer cost
+ * every frame" this package has spent §37.3 removing everywhere else. `TileStore.clone()` is
+ * O(tile count) (it copies the map, not the tiles) and `writeRegion()` is O(tiles touched) — so once
+ * one frame has paid for the canvas-sized materialisation, every later frame in the same drag pays
+ * only for the small rectangle it actually changed.
+ */
+const activeLayerPreviewCache = new WeakMap<RasterLayer, { pixelsRevision: number; tiles: TileStore }>();
+
+/**
+ * `pixels`, materialised into `TileStore`-shaped tiles for one layer — the shared half of
+ * `withActiveLayerPixels`/`withLayersPixels`. `region`, when given, names the only rectangle this
+ * particular call actually changed relative to the layer's last cached preview frame (or its last
+ * *committed* tiles, on the first frame of a drag): everything outside it is reused via `clone()`
+ * rather than reconverted. Passing no `region` (or a stale/dimension-mismatched cache) always
+ * rebuilds the whole store from `pixels`, which is correct for any caller — `region` is purely a
+ * fast path, never a source of different pixels than the no-region call would produce, and the
+ * `transform-drag-cache`-style tests alongside this file's own tests hold both paths to the same
+ * byte-for-byte result.
+ */
+function previewTilesForLayer(state: RasterDocumentState, layer: RasterLayer, pixels: Uint8ClampedArray, region: RasterRect | null | undefined): TileStore {
+  const cached = activeLayerPreviewCache.get(layer);
+  if (region && cached && cached.pixelsRevision === layer.pixelsRevision && cached.tiles.width === state.width && cached.tiles.height === state.height) {
+    const tiles = cached.tiles.clone();
+    tiles.writeRegion(region, pixels, state.width);
+    activeLayerPreviewCache.set(layer, { pixelsRevision: layer.pixelsRevision, tiles });
+    return tiles;
+  }
+  const tiles = TileStore.fromPixels(pixels, state.width, state.height);
+  activeLayerPreviewCache.set(layer, { pixelsRevision: layer.pixelsRevision, tiles });
+  return tiles;
+}
+
+export function withActiveLayerPixels(state: RasterDocumentState, pixels: Uint8ClampedArray, region?: RasterRect | null): RasterDocumentState {
   const bounds = { x: 0, y: 0, width: state.width, height: state.height };
-  return { ...state, layers: state.layers.map((layer) => layer.id === state.activeLayerId ? { ...layer, pixels, bounds, width: state.width, height: state.height } : layer) };
+  return { ...state, layers: state.layers.map((layer) => layer.id === state.activeLayerId ? { ...layer, tiles: previewTilesForLayer(state, layer, pixels, region), bounds, width: state.width, height: state.height } : layer) };
 }
 
 /**
@@ -106,13 +161,15 @@ export function withActiveLayerPixels(state: RasterDocumentState, pixels: Uint8C
  * buffer — the multi-layer counterpart of {@link withActiveLayerPixels},
  * for a linked-layer group drag where every dragged layer needs its own
  * in-progress buffer swapped in for one composite, not just the active one.
+ * Same `tiles`, not `pixels`, fix as {@link withActiveLayerPixels} — see its own doc comment,
+ * including the optional `region` fast path.
  */
-export function withLayersPixels(state: RasterDocumentState, updates: ReadonlyMap<string, Uint8ClampedArray>): RasterDocumentState {
+export function withLayersPixels(state: RasterDocumentState, updates: ReadonlyMap<string, Uint8ClampedArray>, region?: RasterRect | null): RasterDocumentState {
   if (updates.size === 0) return state;
   const bounds = { x: 0, y: 0, width: state.width, height: state.height };
   return { ...state, layers: state.layers.map((layer) => {
     const pixels = updates.get(layer.id);
-    return pixels ? { ...layer, pixels, bounds, width: state.width, height: state.height } : layer;
+    return pixels ? { ...layer, tiles: previewTilesForLayer(state, layer, pixels, region), bounds, width: state.width, height: state.height } : layer;
   }) };
 }
 

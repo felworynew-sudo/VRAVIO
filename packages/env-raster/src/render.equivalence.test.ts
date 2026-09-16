@@ -327,6 +327,64 @@ describe("compositing a large region in pieces", () => {
   });
 });
 
+describe("an isolated group's own effect reaches across a tile boundary", () => {
+  /**
+   * Same donor pattern as "compositing a large region in pieces" just above (tile-by-tile against
+   * the whole), aimed at a bug a live migration-review pass on §37.3 flagged: `render.ts`'s isolated
+   * group branch used to composite its descendants for exactly the requested tile and nothing wider,
+   * then run the group's own effect (Outer Glow, Drop Shadow, …) on that already-cropped surface —
+   * so a shape that straddles a 256px tile boundary got a real, opaque black edge at x=256 instead
+   * of its neighbour's pixels, and an Outer Glow near that edge either stopped dead or bled into
+   * fabricated transparency. `requiredSourceRegion`-driven padding (this file's own §37.3 item 2
+   * fix for ordinary layer effects) fixes the same class of bug here, scoped to just the group.
+   */
+  function crossingBoundaryScene(width: number, height: number): RasterDocumentState {
+    const state = createRasterDocument(width, height);
+    state.layers = [];
+    const group = createRasterGroup(width, height, "Glow group");
+    group.groupMode = "isolated";
+    group.effects = { outerGlow: { enabled: true, color: "#ffffff", opacity: 1, radius: 20 } };
+    appendLayer(state, group);
+    const child = createRasterLayer(width, height, "Child");
+    child.parentId = group.id;
+    // A solid rectangle straddling x=256 — the exact tile seam a 256px `RasterTileCache` produces.
+    const pixels = new Uint8ClampedArray(width * height * 4);
+    for (let y = 0; y < height; y += 1) for (let x = 240; x < Math.min(width, 280); x += 1) {
+      const at = (y * width + x) * 4;
+      pixels[at] = 200; pixels[at + 1] = 50; pixels[at + 2] = 50; pixels[at + 3] = 255;
+    }
+    setLayerPixels(child, pixels, width, height);
+    state.layers.push(child);
+    return state;
+  }
+
+  it("a tile-by-tile composite matches the whole-document composite across the boundary", () => {
+    const WIDTH = 320, HEIGHT = 32;
+    const state = crossingBoundaryScene(WIDTH, HEIGHT);
+    const whole = compositeRasterRegion(state, { x: 0, y: 0, width: WIDTH, height: HEIGHT });
+
+    for (let left = 0; left < WIDTH; left += 256) {
+      const width = Math.min(256, WIDTH - left);
+      const tile = compositeRasterRegion(state, { x: left, y: 0, width, height: HEIGHT });
+      for (let row = 0; row < HEIGHT; row += 1) {
+        const from = (row * WIDTH + left) * 4;
+        expect([...tile.slice(row * width * 4, (row + 1) * width * 4)], `row ${row}`).toEqual([...whole.slice(from, from + width * 4)]);
+      }
+    }
+  });
+
+  it("a tile with none of the shape's own pixels still shows the glow bleeding in from its neighbour", () => {
+    // A tile entirely to the right of the child's own footprint (child: x in [240,280)) but still
+    // within the glow's 20px reach (x in [280,300)) has nothing of its own to composite there — any
+    // glow it shows can only have come from reading the child across the tile boundary at x=256.
+    const WIDTH = 320, HEIGHT = 4;
+    const state = crossingBoundaryScene(WIDTH, HEIGHT);
+    const farRightTile = compositeRasterRegion(state, { x: 288, y: 0, width: 32, height: HEIGHT });
+    const localX = 290 - 288; // document x=290: 10px right of the child's edge at x=280, inside the 20px glow.
+    expect(farRightTile[localX * 4 + 3]).toBeGreaterThan(0);
+  });
+});
+
 describe("a layer is read with its own stride", () => {
   it("draws the same picture whether a layer is trimmed or canvas-sized", () => {
     const trimmed = createRasterDocument(48, 48);

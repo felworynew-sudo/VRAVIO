@@ -142,6 +142,21 @@ export class RasterTileCache {
   #bytes = 0;
   #documentWidth = 0;
   #documentHeight = 0;
+  /**
+   * Bumped by `invalidateAll()`/`reset()` — the two calls that mark "the world moved on, whatever
+   * `pendingTiles()` handed out before this point belongs to a stale epoch". `applyComposited`'s
+   * optional `expectedGeneration` is compared against this at write time, not at `pendingTiles()`
+   * time, so a caller that captured the generation before starting off-thread work (a Worker round
+   * trip: `apps/web`'s `updateTilesParallel`) can detect "the cache moved past me" and skip its own
+   * write instead of resurrecting a superseded composite as if it were current. Without this, two
+   * overlapping bulk-composite requests against the same cache instance (the same `RasterTileCache`
+   * ref outlives a remounted canvas) can finish out of order: the older request's `applyComposited`
+   * lands after the newer one's, silently overwriting fresh tiles with stale ones and marking them
+   * valid (`#invalid.delete`) so nothing ever recomposites them again — exactly the "a piece of the
+   * image reverts and stays reverted" class of bug a plain `cancelled` flag on the *caller's* side
+   * cannot catch, because the caller only guards the canvas *blit*, not this cache's own mutation.
+   */
+  #generation = 0;
 
   constructor(options: TileCacheOptions = {}) {
     this.tileSize = Math.max(16, Math.floor(options.tileSize ?? 256));
@@ -151,8 +166,11 @@ export class RasterTileCache {
   get size(): number { return this.#tiles.size; }
   /** Exact aggregate of actual mip buffers; updated at cache ownership changes. */
   get bytes(): number { return this.#bytes; }
+  /** The cache's current epoch — see `#generation`'s own doc comment. */
+  get generation(): number { return this.#generation; }
 
   invalidateAll(): void {
+    this.#generation += 1;
     for (const cacheKey of this.#tiles.keys()) this.#invalid.add(cacheKey);
   }
 
@@ -169,6 +187,7 @@ export class RasterTileCache {
 
   /** Drops everything; used when the document itself is resized or replaced. */
   reset(): void {
+    this.#generation += 1;
     this.#tiles.clear();
     this.#checkpoints.clear();
     this.#keysByCoordinate.clear();
@@ -263,8 +282,15 @@ export class RasterTileCache {
    * class ran itself through `compositeRasterRegionWithCheckpoint`, so a tile supplied here starts
    * without one. That is correct, not a regression — its *next* `update()` simply recomposites
    * from scratch instead of resuming, exactly as if its checkpoint had been evicted.
+   *
+   * `expectedGeneration`, when passed, must match `this.generation` (as read by the caller at the
+   * same moment it called `pendingTiles()`, before starting the off-thread work `entries` is the
+   * result of) or the whole call is a no-op that returns `false` — see `#generation`'s doc comment
+   * for the stale-overwrite race this guards against. Omitting it keeps the old unconditional
+   * behaviour, for callers (tests, anything single-flight) that have no epoch to compare.
    */
-  applyComposited(entries: readonly { col: number; row: number; rect: RasterRect; pixels: Uint8ClampedArray; step: number }[], mip = 0): void {
+  applyComposited(entries: readonly { col: number; row: number; rect: RasterRect; pixels: Uint8ClampedArray; step: number }[], mip = 0, expectedGeneration?: number): boolean {
+    if (expectedGeneration !== undefined && expectedGeneration !== this.#generation) return false;
     for (const entry of entries) {
       const cacheKey = key(entry.col, entry.row, mip);
       const tile: RasterTile = { col: entry.col, row: entry.row, rect: entry.rect, pixels: entry.pixels, step: entry.step };
@@ -283,6 +309,7 @@ export class RasterTileCache {
     // already knows the true current viewport's protected set, and calling it is not optional for
     // this class's own interactive path (every revision runs it), so there is no risk of the
     // budget growing unchecked between an `applyComposited` call and the next `update()`.
+    return true;
   }
 
   *#coveringTiles(rect: RasterRect): Generator<{ col: number; row: number }> {

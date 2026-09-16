@@ -36,6 +36,14 @@ export async function updateTilesParallel(
   if (!isSimpleLayerStack(state)) return false;
   const pending = tiles.pendingTiles(state, viewport, mip);
   if (pending.length < MIN_TILES_FOR_PARALLEL_COMPOSITE) return false;
+  // Captured *before* the Worker round trip below, which is the only slow step here: a second,
+  // overlapping call against this same `tiles` instance (two canvas remounts close enough together
+  // that the first's dispatch is still in flight when the second starts) bumps the cache's
+  // generation via its own `invalidateAll()`. `applyComposited`'s `expectedGeneration` check then
+  // refuses this call's write once it finally resolves, instead of overwriting the second call's
+  // already-composited, already-current tiles with this stale run's — see `RasterTileCache`'s own
+  // `#generation` doc comment for the corruption this prevents.
+  const generation = tiles.generation;
 
   const visibleLayers = flattenRasterLayers(state.layers).filter(
     (layer) => isLayerEffectivelyVisible(layer, state.layers) && effectiveLayerOpacity(layer, state.layers) > 0,
@@ -58,6 +66,5 @@ export async function updateTilesParallel(
   }));
   const results = await dispatchTileBlendJobs(pool, scheduler, jobs);
   const step = 1 << mip;
-  tiles.applyComposited(pending.map((tile, index) => ({ ...tile, pixels: results[index]!, step })), mip);
-  return true;
+  return tiles.applyComposited(pending.map((tile, index) => ({ ...tile, pixels: results[index]!, step })), mip, generation);
 }

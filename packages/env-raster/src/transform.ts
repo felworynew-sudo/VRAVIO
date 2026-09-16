@@ -1,4 +1,4 @@
-import { layerDocumentPixels } from "./layer-bounds";
+import { layerDocumentPixels, unionRect } from "./layer-bounds";
 import { bilinearSample, sampleBilinearInto, type BilinearSample } from "./sampling";
 import { selectionBounds } from "./selection";
 import { TileStore } from "./tile-store";
@@ -54,11 +54,39 @@ function inverseUnitSquare(mapping: ReturnType<typeof quadMapping>, x: number, y
  * axis-aligned rectangle — the shared engine behind Skew (a parallelogram), Distort (a free
  * quad) and Perspective (a quad the caller keeps trapezoidal by mirroring corner drags), which
  * differ only in how their on-canvas handles are allowed to move, not in how pixels are sampled. */
-export function quadLayerPixels(pixels: Uint8ClampedArray, width: number, height: number, sourceBounds: RasterRect, corners: readonly [Point, Point, Point, Point], selection: PixelSelection | null = null): Uint8ClampedArray {
-  // One clone: `output` is the only buffer written, so the caller's own array is already
-  // the pristine source. Cloning it a second time cost a full document copy per frame of a drag.
-  const output = pixels.slice(), source = pixels;
+/**
+ * Per-drag scratch state an interactive Skew/Distort/Perspective/Warp session can hand
+ * `quadLayerPixels`/`meshLayerPixels` back on every frame, instead of paying a fresh
+ * document-sized clone each time (docs/master-plan.md §37.3 item 5 — "Instant Preview" for heavy
+ * transforms). `working` must start as a clone of the session's own pristine source pixels
+ * (`quadOrigin.pixels.slice()`/`meshOrigin.pixels.slice()`) and `dirtyRect` as `null`; both fields
+ * are then owned by the transform functions below, which read and update them every call — the
+ * caller's only job is to keep passing the same object back.
+ */
+export interface TransformDragCache { working: Uint8ClampedArray; dirtyRect: RasterRect | null }
+
+export function quadLayerPixels(pixels: Uint8ClampedArray, width: number, height: number, sourceBounds: RasterRect, corners: readonly [Point, Point, Point, Point], selection: PixelSelection | null = null, cache?: TransformDragCache): Uint8ClampedArray {
+  // Without a cache: one clone, same as ever — `output` is the only buffer written, so the
+  // caller's own array is already the pristine source. With one: `cache.working` is reused across
+  // every frame of the same drag, and only the *previous* frame's own touched region (never the
+  // whole document) is restored from the pristine `pixels` before this frame draws over it — the
+  // fix for what used to be a full document copy per frame of a drag (measured, not estimated: a
+  // 400x400 selection on a 4000x3000 document cost ~32ms/frame, most of it this one clone, per
+  // `performance.bench.test.ts`'s own recorded numbers). `source` always reads from the pristine
+  // `pixels`, never from `output`/`cache.working` — resampling a buffer that already carries a
+  // previous frame's own warp would apply that warp twice, the exact bug `quadOrigin`'s own doc
+  // comment already warns about for the no-cache path.
+  const output = cache ? cache.working : pixels.slice(), source = pixels;
   const sample: BilinearSample = bilinearSample();
+  if (cache && cache.dirtyRect) {
+    const rect = cache.dirtyRect;
+    const restoreLeft = Math.max(0, Math.floor(rect.x)), restoreTop = Math.max(0, Math.floor(rect.y));
+    const restoreRight = Math.min(width, Math.ceil(rect.x + rect.width)), restoreBottom = Math.min(height, Math.ceil(rect.y + rect.height));
+    for (let y = restoreTop; y < restoreBottom; y += 1) {
+      const rowStart = (y * width + restoreLeft) * 4, rowLength = (restoreRight - restoreLeft) * 4;
+      if (rowLength > 0) output.set(source.subarray(rowStart, rowStart + rowLength), rowStart);
+    }
+  }
   const left = Math.max(0, Math.floor(sourceBounds.x)), top = Math.max(0, Math.floor(sourceBounds.y));
   const right = Math.min(width, Math.ceil(sourceBounds.x + sourceBounds.width)), bottom = Math.min(height, Math.ceil(sourceBounds.y + sourceBounds.height));
   const selectedAlpha = (index: number) => selection ? selection.mask[index]! / 255 : (index % width >= left && index % width < right && Math.floor(index / width) >= top && Math.floor(index / width) < bottom ? 1 : 0);
@@ -92,6 +120,7 @@ export function quadLayerPixels(pixels: Uint8ClampedArray, width: number, height
     output[to + 2] = Math.round((sample.b * sourceAlpha + output[to + 2]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
     output[to + 3] = Math.round(alpha * 255);
   }
+  if (cache) cache.dirtyRect = unionRect({ x: left, y: top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) }, targetLeft, targetTop, targetRight, targetBottom, 0);
   return output;
 }
 
@@ -747,16 +776,29 @@ function warpPatch(mesh: readonly Point[], bounds: RasterRect, column: number, r
  * (see `evaluateWarpMesh`), diced into small quads that are flat enough to fill
  * by the same projective inverse a single quad transform uses.
  */
-export function meshLayerPixels(basePixels: Uint8ClampedArray, width: number, height: number, baseBounds: RasterRect, mesh: readonly Point[], selection: PixelSelection | null): Uint8ClampedArray {
+export function meshLayerPixels(basePixels: Uint8ClampedArray, width: number, height: number, baseBounds: RasterRect, mesh: readonly Point[], selection: PixelSelection | null, cache?: TransformDragCache): Uint8ClampedArray {
   const source = basePixels;
   const sample: BilinearSample = bilinearSample();
-  const output = basePixels.slice();
+  // See `quadLayerPixels`'s own doc comment for the cache contract — same reasoning, same fix for
+  // the same per-frame full-document clone (Warp calls this exactly like Skew/Distort/Perspective
+  // call `quadLayerPixels`, once per pointermove, from the same `applyDragFrame`).
+  const output = cache ? cache.working : basePixels.slice();
   const left = Math.max(0, Math.floor(baseBounds.x)), top = Math.max(0, Math.floor(baseBounds.y));
   const right = Math.min(width, Math.ceil(baseBounds.x + baseBounds.width));
   const bottom = Math.min(height, Math.ceil(baseBounds.y + baseBounds.height));
   const selectedAlpha = (index: number) => selection
     ? selection.mask[index]! / 255
     : (index % width >= left && index % width < right && Math.floor(index / width) >= top && Math.floor(index / width) < bottom ? 1 : 0);
+
+  if (cache && cache.dirtyRect) {
+    const rect = cache.dirtyRect;
+    const restoreLeft = Math.max(0, Math.floor(rect.x)), restoreTop = Math.max(0, Math.floor(rect.y));
+    const restoreRight = Math.min(width, Math.ceil(rect.x + rect.width)), restoreBottom = Math.min(height, Math.ceil(rect.y + rect.height));
+    for (let y = restoreTop; y < restoreBottom; y += 1) {
+      const rowStart = (y * width + restoreLeft) * 4, rowLength = (restoreRight - restoreLeft) * 4;
+      if (rowLength > 0) output.set(source.subarray(rowStart, rowStart + rowLength), rowStart);
+    }
+  }
 
   // The warped area is vacated once, before anything is drawn — the same
   // cut-one-hole rule `liftSelection` follows, and the reason pieces can no
@@ -771,12 +813,17 @@ export function meshLayerPixels(basePixels: Uint8ClampedArray, width: number, he
     output[pixel + 3] = Math.round(output[pixel + 3]! * remaining);
   }
 
+  let meshLeft = Infinity, meshTop = Infinity, meshRight = -Infinity, meshBottom = -Infinity;
   for (let row = 0; row < WARP_SUBDIVISIONS; row += 1) for (let column = 0; column < WARP_SUBDIVISIONS; column += 1) {
     const { corners, source: cellSource } = warpPatch(mesh, baseBounds, column, row);
     const mapping = quadMapping(corners);
     const xs = corners.map((point) => point.x), ys = corners.map((point) => point.y);
     const cellLeft = Math.max(0, Math.floor(Math.min(...xs))), cellTop = Math.max(0, Math.floor(Math.min(...ys)));
     const cellRight = Math.min(width, Math.ceil(Math.max(...xs)) + 1), cellBottom = Math.min(height, Math.ceil(Math.max(...ys)) + 1);
+    if (cellRight > cellLeft && cellBottom > cellTop) {
+      meshLeft = Math.min(meshLeft, cellLeft); meshTop = Math.min(meshTop, cellTop);
+      meshRight = Math.max(meshRight, cellRight); meshBottom = Math.max(meshBottom, cellBottom);
+    }
     for (let y = cellTop; y < cellBottom; y += 1) for (let x = cellLeft; x < cellRight; x += 1) {
       const { u, v } = inverseUnitSquare(mapping, x + 0.5, y + 0.5);
       // A hair of tolerance, so the seam between two pieces is covered by one of
@@ -801,6 +848,14 @@ export function meshLayerPixels(basePixels: Uint8ClampedArray, width: number, he
       output[to + 2] = Math.round((sample.b * sourceAlpha + output[to + 2]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
       output[to + 3] = Math.round(alpha * 255);
     }
+  }
+  if (cache) {
+    cache.dirtyRect = unionRect(
+      { x: left, y: top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) },
+      meshRight > meshLeft ? meshLeft : left, meshRight > meshLeft ? meshTop : top,
+      meshRight > meshLeft ? meshRight : right, meshRight > meshLeft ? meshBottom : bottom,
+      0,
+    );
   }
   return output;
 }

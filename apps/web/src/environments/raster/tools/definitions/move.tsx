@@ -4,7 +4,7 @@ import {
   pickLayerAt, quadLayerPixels, quadSelection, regularMesh, restrictSelectionToContent, rotateLayerPixels, rotateSelection,
   rotatedDestinationBounds, scaleLayerPixels, scaleSelection, setLayerPixels, stampFloating, transformLayerPixels, transformSmartObject, translateLayerPixels, translateSelection, translateSmartObject, unionRect, WARP_GRID, warpPresetMesh,
   type WarpPresetId,
-  type FloatingPixels, type PixelSelection, type Point, type RasterDocumentState, type RasterLayer, type RasterRect, type RasterTextData,
+  type FloatingPixels, type PixelSelection, type Point, type RasterDocumentState, type RasterLayer, type RasterRect, type RasterTextData, type TransformDragCache,
 } from "@vravio/env-raster";
 import { diagnostic } from "../../../../diagnostics";
 import { identityTextTransform, multiplyTextTransform, renderTextLayerPixels, textBoundsTransform } from "../../../../textRender";
@@ -103,12 +103,12 @@ export interface PendingTransform {
    * same reason. Resampling the previous drag's output through corners that already encode that
    * drag applies the warp a second time, which is what made a second handle drag scramble the
    * content and cross the frame over itself. */
-  readonly quadOrigin?: { readonly pixels: Uint8ClampedArray; readonly bounds: RasterRect; readonly selection: PixelSelection | null };
+  readonly quadOrigin?: { readonly pixels: Uint8ClampedArray; readonly bounds: RasterRect; readonly selection: PixelSelection | null; readonly cache: TransformDragCache };
   /** Present once Warp has been entered: the current 4x4 anchor grid. `meshOrigin` is the fixed
    * pristine pixels+bounds every resample reads from, regardless of how many separate point-drags
    * this Warp session sees — never a previous drag's already-warped result. */
   readonly mesh?: readonly Point[];
-  readonly meshOrigin?: { readonly pixels: Uint8ClampedArray; readonly bounds: RasterRect; readonly selection: PixelSelection | null };
+  readonly meshOrigin?: { readonly pixels: Uint8ClampedArray; readonly bounds: RasterRect; readonly selection: PixelSelection | null; readonly cache: TransformDragCache };
   /** Other layers in `layerId`'s link group, each carrying the same translate this drag applies
    * to the primary layer — Photoshop moves a whole linked group together, not just the layer the
    * pointer grabbed. Plain-translate only: entering Scale/Rotate/Skew/Warp on a linked layer
@@ -128,8 +128,8 @@ type MoveDrag =
   | { kind: "move"; pointerId: number; from: Point; current: Point; previous?: Point; before: RasterDocumentState; startDx: number; startDy: number; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; rotation: number; text?: PendingTextTransform; createdTextTransform?: boolean; fromOrigin?: boolean; float?: FloatingPixels; linkedBase?: readonly { layerId: string; basePixels: Uint8ClampedArray; baseBounds: RasterRect | null }[]; baseLive?: PendingTransform["live"]; sourceBounds?: RasterRect; livePixels?: Uint8ClampedArray }
   | { kind: "scale"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; session: TransformSession; handleX: -1 | 0 | 1; handleY: -1 | 0 | 1; dx: number; dy: number; shiftKey: boolean; text?: PendingTextTransform }
   | { kind: "rotate"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; basePixels: Uint8ClampedArray; baseSelection: PixelSelection | null; sourceBounds: RasterRect; session: TransformSession; center: Point; startAngle: number; baseRotation: number; dx: number; dy: number; handleX: -1 | 1; handleY: -1 | 1; shiftKey: boolean; text?: PendingTextTransform }
-  | { kind: "quad"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; quadOrigin: { pixels: Uint8ClampedArray; bounds: RasterRect; selection: PixelSelection | null }; baseCorners: readonly [Point, Point, Point, Point]; handleIndex: number; mode: QuadTransformMode }
-  | { kind: "warp"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; meshOrigin: { pixels: Uint8ClampedArray; bounds: RasterRect; selection: PixelSelection | null }; baseSelection: PixelSelection | null; baseMesh: readonly Point[]; pointIndex: number };
+  | { kind: "quad"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; quadOrigin: { pixels: Uint8ClampedArray; bounds: RasterRect; selection: PixelSelection | null; cache: TransformDragCache }; baseCorners: readonly [Point, Point, Point, Point]; handleIndex: number; mode: QuadTransformMode }
+  | { kind: "warp"; pointerId: number; from: Point; current: Point; before: RasterDocumentState; meshOrigin: { pixels: Uint8ClampedArray; bounds: RasterRect; selection: PixelSelection | null; cache: TransformDragCache }; baseSelection: PixelSelection | null; baseMesh: readonly Point[]; pointIndex: number };
 
 export interface MoveState {
   readonly pending: PendingTransform | null;
@@ -257,13 +257,15 @@ export function pendingBounds(pending: PendingTransform, width: number, height: 
 export function enterQuadTransformMode(pending: PendingTransform, bounds: RasterRect): PendingTransform {
   if (pending.corners) return pending;
   const corners: readonly [Point, Point, Point, Point] = [{ x: bounds.x, y: bounds.y }, { x: bounds.x + bounds.width, y: bounds.y }, { x: bounds.x + bounds.width, y: bounds.y + bounds.height }, { x: bounds.x, y: bounds.y + bounds.height }];
-  return { ...pending, corners, quadOrigin: { pixels: pending.pixels.slice(), bounds: { ...bounds }, selection: cloneSelection(pending.selection) } };
+  const originPixels = pending.pixels.slice();
+  return { ...pending, corners, quadOrigin: { pixels: originPixels, bounds: { ...bounds }, selection: cloneSelection(pending.selection), cache: { working: originPixels.slice(), dirtyRect: null } } };
 }
 
 /** Enters Warp — the mesh counterpart of {@link enterQuadTransformMode}, same reasoning. */
 export function enterWarpTransformMode(pending: PendingTransform, bounds: RasterRect): PendingTransform {
   if (pending.mesh) return pending;
-  return { ...pending, mesh: regularMesh(bounds, WARP_GRID), meshOrigin: { pixels: pending.pixels.slice(), bounds: { ...bounds }, selection: cloneSelection(pending.selection) } };
+  const originPixels = pending.pixels.slice();
+  return { ...pending, mesh: regularMesh(bounds, WARP_GRID), meshOrigin: { pixels: originPixels, bounds: { ...bounds }, selection: cloneSelection(pending.selection), cache: { working: originPixels.slice(), dirtyRect: null } } };
 }
 
 /**
@@ -279,7 +281,7 @@ export function applyWarpPreset(pending: PendingTransform, bounds: RasterRect, w
   const entered = enterWarpTransformMode(pending, bounds);
   const origin = entered.meshOrigin!;
   const mesh = preset === "custom" ? regularMesh(origin.bounds, WARP_GRID) : warpPresetMesh(preset, bend, origin.bounds, vertical);
-  const pixels = meshLayerPixels(origin.pixels, width, height, origin.bounds, mesh, origin.selection);
+  const pixels = meshLayerPixels(origin.pixels, width, height, origin.bounds, mesh, origin.selection, origin.cache);
   const selection = meshSelection(origin.selection, width, height, origin.bounds, mesh);
   return { ...entered, dx: 0, dy: 0, rotation: 0, pixels, selection, mesh, meshOrigin: origin };
 }
@@ -630,19 +632,33 @@ function applyDragFrame(context: ToolContext<MoveState>, drag: MoveDrag, interpo
   if (drag.kind === "quad") {
     const dx = point.x - drag.from.x, dy = point.y - drag.from.y;
     const corners = applyQuadHandleDelta(drag.baseCorners, drag.handleIndex, drag.mode, dx, dy);
-    const pixels = quadLayerPixels(drag.quadOrigin.pixels, state.width, state.height, drag.quadOrigin.bounds, corners, drag.quadOrigin.selection);
+    // The previous frame's own touched region, before this call overwrites `cache.dirtyRect` with
+    // the new one — the repaint below has to cover *both*: the buffer itself is fully correct
+    // either way (the cache's own restore step already reset the old region's pixels), but a
+    // fast-moving handle drag leaves the old region's *screen* content stale unless the canvas is
+    // told to redraw it too, the same "was ∪ now" reasoning the plain-move path above already
+    // applies to its own `touched` union.
+    const previousDirty = drag.quadOrigin.cache.dirtyRect;
+    const pixels = quadLayerPixels(drag.quadOrigin.pixels, state.width, state.height, drag.quadOrigin.bounds, corners, drag.quadOrigin.selection, drag.quadOrigin.cache);
     const selection = quadSelection(drag.quadOrigin.selection, state.width, state.height, drag.quadOrigin.bounds, corners);
     const pending: PendingTransform = { before: drag.before, layerId: drag.before.activeLayerId, dx: 0, dy: 0, pixels, selection, rotation: 0, corners, quadOrigin: drag.quadOrigin };
-    context.schedulePreview(pixels, "pixels", pending.layerId);
+    const dirty = drag.quadOrigin.cache.dirtyRect
+      ? (previousDirty ? unionRect(previousDirty, drag.quadOrigin.cache.dirtyRect.x, drag.quadOrigin.cache.dirtyRect.y, drag.quadOrigin.cache.dirtyRect.x + drag.quadOrigin.cache.dirtyRect.width, drag.quadOrigin.cache.dirtyRect.y + drag.quadOrigin.cache.dirtyRect.height, 1) : drag.quadOrigin.cache.dirtyRect)
+      : previousDirty;
+    context.schedulePreview(pixels, "pixels", pending.layerId, dirty ?? undefined);
     return pending;
   }
   if (drag.kind === "warp") {
     const dx = point.x - drag.from.x, dy = point.y - drag.from.y;
     const mesh = drag.baseMesh.map((anchor, index) => index === drag.pointIndex ? { x: anchor.x + dx, y: anchor.y + dy } : anchor);
-    const pixels = meshLayerPixels(drag.meshOrigin.pixels, state.width, state.height, drag.meshOrigin.bounds, mesh, drag.baseSelection);
+    const previousDirty = drag.meshOrigin.cache.dirtyRect;
+    const pixels = meshLayerPixels(drag.meshOrigin.pixels, state.width, state.height, drag.meshOrigin.bounds, mesh, drag.baseSelection, drag.meshOrigin.cache);
     const selection = meshSelection(drag.baseSelection, state.width, state.height, drag.meshOrigin.bounds, mesh);
     const pending: PendingTransform = { before: drag.before, layerId: drag.before.activeLayerId, dx: 0, dy: 0, pixels, selection, rotation: 0, mesh, meshOrigin: drag.meshOrigin };
-    context.schedulePreview(pixels, "pixels", pending.layerId);
+    const dirty = drag.meshOrigin.cache.dirtyRect
+      ? (previousDirty ? unionRect(previousDirty, drag.meshOrigin.cache.dirtyRect.x, drag.meshOrigin.cache.dirtyRect.y, drag.meshOrigin.cache.dirtyRect.x + drag.meshOrigin.cache.dirtyRect.width, drag.meshOrigin.cache.dirtyRect.y + drag.meshOrigin.cache.dirtyRect.height, 1) : drag.meshOrigin.cache.dirtyRect)
+      : previousDirty;
+    context.schedulePreview(pixels, "pixels", pending.layerId, dirty ?? undefined);
     return pending;
   }
   // "move"
