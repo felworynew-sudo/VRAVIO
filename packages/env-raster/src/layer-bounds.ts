@@ -107,6 +107,32 @@ export function layerPixelsView(layer: RasterLayer): Uint8ClampedArray {
   return pixels;
 }
 
+/**
+ * The one door for code that needs `layer.tiles` itself — not a materialised copy of it — to read
+ * or write raw tile bytes directly (`readLocalRegion`/`writeLocalRegion`/`reframe`, the operations
+ * `layerPixelsView` above deliberately doesn't cover, since they mutate or address the store below
+ * the whole-buffer level). Synchronous passthrough today, same as `layerPixelsView`: every
+ * `TileStore` this package builds is fully resident in memory, always.
+ *
+ * It exists anyway — before docs/master-plan.md §37.3 item 6 (tile swap beyond RAM) needs it, not
+ * after — because that item's whole difficulty is that a `RasterLayer`'s tiles are touched from
+ * many, mostly-unrelated call sites across this package and `apps/web`, and almost all of them go
+ * through `layerPixelsView`/`layerDocumentPixels` already or never touch pixel bytes at all
+ * (`{ ...layer, tiles: layer.tiles }`-style structural copies, `clone()`, which only copies the
+ * tile *map* and needs no byte resident either way). Auditing the whole codebase found exactly two
+ * genuine raw-byte touches outside that whole-buffer door: `region-patch.ts`'s `swapLayerRegion`
+ * (undo/redo's GIMP-style rectangle exchange, `readLocalRegion`/`writeLocalRegion`) and its own
+ * `trimInPlace` (`toPixels()`, deliberately bypassing `layerPixelsView`'s cache for a reason its own
+ * comment explains). Both now go through this function instead of `layer.tiles` directly — not
+ * because it does anything different today, but so a future eviction check has exactly one place to
+ * land, instead of a second audit of the same ground. Undo/redo in particular can target *any*
+ * previously-edited layer, not just the active one, which is exactly the case a hidden+inactive
+ * layer's eviction has to plan for.
+ */
+export function residentLayerTiles(layer: RasterLayer): TileStore {
+  return layer.tiles;
+}
+
 /** Samples straight-alpha source pixels with bilinear filtering in premultiplied
  * space, avoiding both jagged transformed objects and dark transparent fringes. */
 function sampleBilinear(source: Uint8ClampedArray, width: number, height: number, x: number, y: number, target: Uint8ClampedArray, targetOffset: number): void {

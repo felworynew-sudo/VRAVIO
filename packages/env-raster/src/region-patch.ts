@@ -1,4 +1,4 @@
-import { opaqueBoundsOf } from "./layer-bounds";
+import { opaqueBoundsOf, residentLayerTiles } from "./layer-bounds";
 import type { RasterLayer, RasterLayerMask, RasterRect } from "./types";
 
 /**
@@ -59,7 +59,7 @@ function growToInclude(layer: RasterLayer, rect: RasterRect): void {
   // directly: a layer's tiles live in bounds-local coordinates, not document ones (unlike a
   // mask's, which are already document-aligned — see `transform.ts`'s `cropRasterDocument` for
   // the case where `reframe`'s arguments really are the absolute rect).
-  layer.tiles = layer.tiles.reframe(left - bounds.x, top - bounds.y, width, height);
+  layer.tiles = residentLayerTiles(layer).reframe(left - bounds.x, top - bounds.y, width, height);
   layer.bounds = { x: left, y: top, width, height };
   layer.width = width;
   layer.height = height;
@@ -71,10 +71,10 @@ function trimInPlace(layer: RasterLayer): void {
   // between the write that just happened and the `pixelsRevision` bump at the end of
   // `swapLayerRegion`, so the cache (keyed on that same revision) would still be holding the
   // pre-write materialisation and hand back stale content to scan.
-  const local = opaqueBoundsOf(layer.tiles.toPixels(), layer.bounds.width, layer.bounds.height);
+  const local = opaqueBoundsOf(residentLayerTiles(layer).toPixels(), layer.bounds.width, layer.bounds.height);
   const inner = local ?? { x: 0, y: 0, width: 1, height: 1 };
   if (inner.x === 0 && inner.y === 0 && inner.width === layer.bounds.width && inner.height === layer.bounds.height) return;
-  layer.tiles = layer.tiles.reframe(inner.x, inner.y, inner.width, inner.height);
+  layer.tiles = residentLayerTiles(layer).reframe(inner.x, inner.y, inner.width, inner.height);
   layer.bounds = { x: layer.bounds.x + inner.x, y: layer.bounds.y + inner.y, width: inner.width, height: inner.height };
   layer.width = inner.width;
   layer.height = inner.height;
@@ -105,14 +105,14 @@ export function swapLayerRegion(
 ): Uint8ClampedArray {
   const region = clampRect(rect, documentWidth, documentHeight);
   if (!region.width || !region.height) return patch;
-  const before = layer.tiles;
+  const before = residentLayerTiles(layer);
   growToInclude(layer, region);
   if (layer.tiles === before) layer.tiles = before.clone();
 
   const bounds = layer.bounds;
   const localRect = { x: region.x - bounds.x, y: region.y - bounds.y, width: region.width, height: region.height };
-  const previous = layer.tiles.readLocalRegion(localRect);
-  layer.tiles.writeLocalRegion(localRect, patch);
+  const previous = residentLayerTiles(layer).readLocalRegion(localRect);
+  residentLayerTiles(layer).writeLocalRegion(localRect, patch);
   trimInPlace(layer);
   layer.pixelsRevision += 1;
   return previous;
