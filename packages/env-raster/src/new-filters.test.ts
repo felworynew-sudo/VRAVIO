@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyRasterFilter, rasterFilterCatalog, fieldBlurEffect, irisBlurEffect, tiltShiftBlurEffect, spinBlurEffect } from "./index";
+import { applyRasterFilter, rasterFilterCatalog, fieldBlurEffect, irisBlurEffect, tiltShiftBlurEffect, spinBlurEffect, displaceEffect } from "./index";
 
 /**
  * docs/master-plan.md §51: the Filter menu skeleton's stub items graduating to real,
@@ -271,5 +271,27 @@ describe("Blur Gallery effects (docs/master-plan.md §51, interactivity level 3)
     // The pixel exactly at the pin has zero radius, so it never moves regardless of amount.
     const atPin = (4 * WIDTH + 4) * 4;
     expect(spinAtCorner[atPin]).toBe(source[atPin]);
+  });
+
+  it("Displace does not move a pixel where the map is exactly middle grey", () => {
+    const source = checkerboard(WIDTH, HEIGHT);
+    const map = new Uint8ClampedArray(WIDTH * HEIGHT * 4).fill(128);
+    for (let i = 3; i < map.length; i += 4) map[i] = 255;
+    const result = displaceEffect(source, WIDTH, HEIGHT, map, 20, 20, true);
+    expect([...result]).toEqual([...source]);
+  });
+
+  it("Displace pushes pixels toward the source in the direction the map's luminance encodes", () => {
+    const source = checkerboard(WIDTH, HEIGHT);
+    const brightMap = new Uint8ClampedArray(WIDTH * HEIGHT * 4).fill(255);
+    for (let i = 3; i < brightMap.length; i += 4) brightMap[i] = 255;
+    const darkMap = new Uint8ClampedArray(WIDTH * HEIGHT * 4).fill(0);
+    for (let i = 3; i < darkMap.length; i += 4) darkMap[i] = 255;
+    const withBright = displaceEffect(source, WIDTH, HEIGHT, brightMap, 10, 10, true);
+    const withDark = displaceEffect(source, WIDTH, HEIGHT, darkMap, 10, 10, true);
+    // White (255) and black (0) displace in opposite directions by construction — a uniform
+    // shift in opposite directions on a periodic checkerboard cannot land on the same result.
+    expect([...withBright]).not.toEqual([...withDark]);
+    expect([...withBright]).not.toEqual([...source]);
   });
 });

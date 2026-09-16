@@ -29,6 +29,7 @@ import { clearDiagnostics, diagnostic, readDiagnostics, type DiagnosticEntry } f
 import { FilterGalleryDialog } from "./FilterGalleryDialog";
 import { LiquifyDialog } from "./LiquifyDialog";
 import { BlurGalleryDialog } from "./BlurGalleryDialog";
+import { DisplaceDialog } from "./DisplaceDialog";
 import { rawExtensionOf, rawFileExtensions, type DecodedRaw } from "./rawDecode";
 import { CameraRawDialog } from "./CameraRawDialog";
 import { CameraRawFilterDialog } from "./CameraRawFilterDialog";
@@ -133,6 +134,7 @@ export function App() {
   const [lastFilter, setLastFilter] = useState<{ id: string; settings: Record<string, number>; label: string } | null>(null);
   const [liquifyOpen, setLiquifyOpen] = useState(false);
   const [blurGalleryType, setBlurGalleryType] = useState<"field" | "iris" | "tiltShift" | "spin" | null>(null);
+  const [displaceOpen, setDisplaceOpen] = useState(false);
   const [cameraRawFilterOpen, setCameraRawFilterOpen] = useState(false);
   const [cameraRawImport, setCameraRawImport] = useState<{ buffer: ArrayBuffer; name: string } | null>(null);
   const [cameraRawReopen, setCameraRawReopen] = useState<{ buffer: ArrayBuffer; name: string } | null>(null);
@@ -943,7 +945,7 @@ export function App() {
             ["Spin Blur… (Размытие вращения…)", "", () => setBlurGalleryType("spin"), !active || active.kind!=="raster"],
           ] },
           { label: "Distort (Искажение)", items: [
-            ["Displace… (Смещение…)", "", () => {}, true],
+            ["Displace… (Смещение…)", "", () => setDisplaceOpen(true), !active || active.kind!=="raster"],
             ["Kaleidoscope… (Калейдоскоп…)", "", () => openFilter("kaleidoscope"), !active || active.kind!=="raster"],
             ["Pinch… (Щипок…)", "", () => openFilter("pinch_bloat"), !active || active.kind!=="raster"],
             ["Polar Coordinates… (Полярные координаты…)", "", () => openFilter("polar_coordinates"), !active || active.kind!=="raster"],
@@ -1129,6 +1131,7 @@ export function App() {
     {filterGalleryOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<FilterGalleryDialog layer={layer} initialFilterId={filterGallerySelection} onApply={(pixels,label,meta)=>{applyFilter(pixels,label);if(meta)setLastFilter({id:meta.filterId,settings:meta.settings,label});}} onClose={()=>setFilterGalleryOpen(false)}/>:null;})()}
     {liquifyOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<LiquifyDialog layer={layer} language={store.language} onApply={applyFilter} onClose={()=>setLiquifyOpen(false)}/>:null;})()}
     {blurGalleryType && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<BlurGalleryDialog key={blurGalleryType} layer={layer} initialType={blurGalleryType} language={store.language} onApply={applyFilter} onClose={()=>setBlurGalleryType(null)}/>:null;})()}
+    {displaceOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<DisplaceDialog layer={layer} language={store.language} onApply={applyFilter} onClose={()=>setDisplaceOpen(false)}/>:null;})()}
     {cameraRawFilterOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<CameraRawFilterDialog layer={layer} language={store.language} onApply={applyFilter} onClose={()=>setCameraRawFilterOpen(false)}/>:null;})()}
     {cameraRawImport && <CameraRawDialog
       buffer={cameraRawImport.buffer}

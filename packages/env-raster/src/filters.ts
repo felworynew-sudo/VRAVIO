@@ -1207,6 +1207,36 @@ export function spinBlurEffect(source: Uint8ClampedArray, width: number, height:
   return output;
 }
 
+/**
+ * Displace — Photoshop's own classic algorithm: a second image's luminance
+ * drives per-pixel offset, `(luminance - 128) / 128 * scale` on each axis
+ * independently (middle grey is zero displacement, white/black push to
+ * either extreme of `scale`), sampled bilinearly. `displacementMap` must
+ * already be the same size as `source` — resizing or tiling a differently-
+ * sized map to fit is `DisplaceDialog.tsx`'s job (the dialog's own
+ * Stretch/Tile choice), not this function's, the same separation
+ * `BlurGalleryDialog.tsx` keeps between its own canvas math and the
+ * exported effect functions it calls. Like those, this is not routed
+ * through `applyRasterFilter`: a second full-resolution image cannot be a
+ * plain settings-object value.
+ */
+export function displaceEffect(source: Uint8ClampedArray, width: number, height: number, displacementMap: Uint8ClampedArray, horizontalScale: number, verticalScale: number, wrap: boolean): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(source.length);
+  const wrapCoord = (value: number, size: number) => ((value % size) + size) % size;
+  const clampCoord = (value: number, size: number) => Math.max(0, Math.min(size - 1, value));
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const mapIndex = (y * width + x) * 4;
+    const luminance = (displacementMap[mapIndex]! * 30 + displacementMap[mapIndex + 1]! * 59 + displacementMap[mapIndex + 2]! * 11) / 100;
+    const dx = ((luminance - 128) / 128) * horizontalScale, dy = ((luminance - 128) / 128) * verticalScale;
+    let srcX = x + dx, srcY = y + dy;
+    srcX = wrap ? wrapCoord(srcX, width) : clampCoord(srcX, width);
+    srcY = wrap ? wrapCoord(srcY, height) : clampCoord(srcY, height);
+    const [r, g, b, a] = sampleBilinear(source, width, height, srcX, srcY), i = (y * width + x) * 4;
+    output[i] = r; output[i + 1] = g; output[i + 2] = b; output[i + 3] = a;
+  }
+  return output;
+}
+
 export function applyRasterFilter(source: Uint8ClampedArray, width: number, height: number, id: string, settings: Record<string, number> = {}): Uint8ClampedArray {
   const output = source.slice(), mix = Math.max(0,Math.min(1,value(settings,"amount",100)/100));
   if (id === "gaussian_blur") return gaussianBlur(source, width, height, value(settings, "radius", 2));
