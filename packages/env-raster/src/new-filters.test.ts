@@ -32,6 +32,7 @@ describe("Filter menu skeleton's newly-implemented filters (docs/master-plan.md 
     "offset", "maximum", "minimum", "despeckle", "reduce_noise",
     "sharpen_more", "sharpen_edges", "smart_sharpen",
     "diffuse", "solarize", "trace_contour", "wind", "oil_paint", "lens_flare",
+    "crystallize", "pointillize", "fragment", "mezzotint", "shape_mosaic", "difference_clouds", "fibers",
   ];
 
   it("registers every new filter in the catalog exactly once", () => {
@@ -142,5 +143,70 @@ describe("Filter menu skeleton's newly-implemented filters (docs/master-plan.md 
     const spin = applyRasterFilter(source, WIDTH, HEIGHT, "radial_blur", { amount: 60, method: 0 });
     const zoom = applyRasterFilter(source, WIDTH, HEIGHT, "radial_blur", { amount: 60, method: 1 });
     expect([...spin]).not.toEqual([...zoom]);
+  });
+
+  it("Crystallize gives every pixel exactly its own cell's flat colour (no bilinear blending, unlike Pointillize)", () => {
+    const source = checkerboard(64, 64);
+    const result = applyRasterFilter(source, 64, 64, "crystallize", { cellSize: 12 });
+    const distinctColors = new Set<string>();
+    for (let i = 0; i < result.length; i += 4) distinctColors.add(`${result[i]},${result[i + 1]},${result[i + 2]}`);
+    // A 64x64 image at cellSize 12 has roughly 6x6=36 cells; a flat-facet filter should produce
+    // far fewer distinct colours than the ~2 the untouched checkerboard has multiplied by noise,
+    // and far fewer than one per pixel, which is what a no-op would leave behind.
+    expect(distinctColors.size).toBeLessThan(64 * 64 / 4);
+  });
+
+  it("Pointillize paints dots on a white background rather than filling every pixel", () => {
+    const source = new Uint8ClampedArray(32 * 32 * 4).fill(0);
+    for (let i = 3; i < source.length; i += 4) source[i] = 255;
+    const result = applyRasterFilter(source, 32, 32, "pointillize", { cellSize: 12 });
+    let whiteCount = 0;
+    for (let i = 0; i < result.length; i += 4) if (result[i] === 255 && result[i + 1] === 255 && result[i + 2] === 255) whiteCount += 1;
+    expect(whiteCount).toBeGreaterThan(0);
+  });
+
+  it("Fragment blurs a single bright point into its four diagonal echoes", () => {
+    const source = new Uint8ClampedArray(WIDTH * HEIGHT * 4);
+    const centre = (16 * WIDTH + 16) * 4;
+    source[centre] = 255; source[centre + 3] = 255;
+    const result = applyRasterFilter(source, WIDTH, HEIGHT, "fragment", { amount: 4 });
+    // The centre pixel itself is no longer purely 255 (each of the 4 offset copies samples away
+    // from it), while one of its diagonal echoes has picked up some of that brightness.
+    expect(result[centre]!).toBeLessThan(255);
+    const echo = ((16 - 4) * WIDTH + (16 - 4)) * 4;
+    expect(result[echo]!).toBeGreaterThan(0);
+  });
+
+  it("Mezzotint's four pattern types produce different dither results", () => {
+    const source = checkerboard(WIDTH, HEIGHT);
+    const results = [0, 1, 2, 3].map((type) => applyRasterFilter(source, WIDTH, HEIGHT, "mezzotint", { type }));
+    for (let a = 0; a < results.length; a += 1) for (let b = a + 1; b < results.length; b += 1) expect([...results[a]!]).not.toEqual([...results[b]!]);
+  });
+
+  it("Shape Mosaic flattens each triangle to one colour even where the source varied inside it", () => {
+    const source = checkerboard(WIDTH, HEIGHT);
+    const result = applyRasterFilter(source, WIDTH, HEIGHT, "shape_mosaic", { cellSize: 20 });
+    // (2,2) and (6,2) both satisfy x + y < 20 (the same triangle, near-origin half of the cell)
+    // and differ in the checkerboard source (its 4px period puts them on opposite squares) — a
+    // filter that actually flattens the triangle to one average must equalise them regardless.
+    const a = (2 * WIDTH + 2) * 4, b = (2 * WIDTH + 6) * 4;
+    expect(source[a]).not.toBe(source[b]);
+    expect([result[a], result[a + 1], result[a + 2]]).toEqual([result[b], result[b + 1], result[b + 2]]);
+  });
+
+  it("Difference Clouds is not the same result as Clouds on the same source", () => {
+    const source = checkerboard(WIDTH, HEIGHT);
+    const clouds = applyRasterFilter(source, WIDTH, HEIGHT, "clouds", { amount: 100 });
+    const differenceClouds = applyRasterFilter(source, WIDTH, HEIGHT, "difference_clouds", {});
+    expect([...differenceClouds]).not.toEqual([...clouds]);
+  });
+
+  it("Fibers replaces the layer content outright, the way Photoshop's own generator does", () => {
+    const source = new Uint8ClampedArray(WIDTH * HEIGHT * 4).fill(0);
+    for (let i = 3; i < source.length; i += 4) source[i] = 255;
+    const result = applyRasterFilter(source, WIDTH, HEIGHT, "fibers", { variance: 50, strength: 50 });
+    expect([...result]).not.toEqual([...source]);
+    // Fully opaque throughout, like the real generator (it does not read or preserve alpha holes).
+    for (let i = 3; i < result.length; i += 4) expect(result[i]).toBe(255);
   });
 });

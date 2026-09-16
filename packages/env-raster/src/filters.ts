@@ -53,6 +53,11 @@ const windParams = [{ id: "strength", name: "Strength (Сила)", min: 1, max: 
 const oilPaintParams = [{ id: "brushSize", name: "Brush size (Размер кисти)", min: 1, max: 8, step: 1, value: 4 }, { id: "stylization", name: "Stylization (Стилизация)", min: 1, max: 20, step: 1, value: 8 }];
 const embossParams = [{ id: "angle", name: "Angle (Угол)", min: 0, max: 360, step: 1, value: 135 }, { id: "height", name: "Height (Высота)", min: 1, max: 100, step: 1, value: 3 }, { id: "amount", name: "Amount (Сила)", min: 0, max: 500, step: 1, value: 100 }];
 const lensFlareParams = [{ id: "brightness", name: "Brightness (Яркость)", min: 10, max: 300, step: 1, value: 100 }, { id: "positionX", name: "Position X (Позиция X)", min: 0, max: 100, step: 1, value: 50 }, { id: "positionY", name: "Position Y (Позиция Y)", min: 0, max: 100, step: 1, value: 50 }];
+const cellSizeParams = [{ id: "cellSize", name: "Cell size (Размер ячейки)", min: 3, max: 100, step: 1, value: 12 }];
+const fragmentParams = [{ id: "amount", name: "Offset (Смещение)", min: 1, max: 20, step: 1, value: 4 }];
+const mezzotintParams = [{ id: "type", name: "Type (Тип)", min: 0, max: 3, step: 1, value: 0, choices: ["Fine Dots (Мелкие точки)", "Medium Dots (Средние точки)", "Coarse Dots (Крупные точки)", "Lines (Линии)"] }];
+const shapeMosaicParams = [{ id: "cellSize", name: "Cell size (Размер ячейки)", min: 4, max: 100, step: 1, value: 20 }];
+const fibersParams = [{ id: "variance", name: "Variance (Разброс)", min: 1, max: 100, step: 1, value: 50 }, { id: "strength", name: "Strength (Сила)", min: 1, max: 100, step: 1, value: 50 }];
 export const rasterFilterCatalog: RasterFilterDefinition[] = ([
   ["invert","Invert (Инверсия)","Basics",none], ["brightness_contrast","Brightness/Contrast (Яркость/Контраст)","Basics",[{id:"brightness",name:"Brightness (Яркость)",min:-100,max:100,step:1,value:0},{id:"contrast",name:"Contrast (Контраст)",min:-100,max:100,step:1,value:20}]], ["grayscale","Grayscale (Оттенки серого)","Basics",none], ["desaturate","Desaturate (Обесцветить)","Basics",none], ["auto_tone","Auto Tone (Автотон)","Photo",none], ["auto_contrast","Auto Contrast (Автоконтраст)","Photo",none], ["auto_color","Auto Color (Автоцвет)","Photo",none], ["soft_glow","Soft Glow (Мягкое свечение)","Photo",amount], ["punchy_color","Punchy Color (Сочный цвет)","Photo",amount], ["noir","Noir (Нуар)","Photo",amount], ["cinematic_matte","Cinematic Matte (Кинематографический матовый)","Photo",amount], ["vintage_fade","Vintage Fade (Винтажное выцветание)","Photo",amount], ["sepia","Vintage Sepia (Винтажная сепия)","Photo",amount], ["threshold","Threshold (Порог)","Basics",[{id:"threshold",name:"Threshold (Порог)",min:0,max:255,step:1,value:128}]], ["posterize","Posterize (Постеризация)","Basics",[{id:"levels",name:"Levels (Уровни)",min:2,max:32,step:1,value:4}]], ["box_blur","Box Blur (Прямоугольное размытие)","Blur",radius], ["sharpen","Sharpen (Резкость)","Sharpen",amount], ["unsharp_mask","Unsharp Mask (Контурная резкость)","Sharpen",amount], ["gaussian_blur","Gaussian Blur (Размытие по Гауссу)","Blur",radius], ["motion_blur","Motion Blur (Размытие в движении)","Blur",motionBlurParams], ["radial_blur","Radial Blur (Радиальное размытие)","Blur",radialBlurParams], ["edge_detect","Edge Detect (Выделение краёв)","Stylize",none], ["emboss","Emboss (Тиснение)","Stylize",embossParams], ["glowing_edges","Glowing Edges (Светящиеся края)","Stylize",amount], ["twirl","Twirl (Скручивание)","Distort",amount], ["wave","Wave (Волна)","Distort",amount], ["pinch_bloat","Pinch/Bloat (Сжатие/Вздутие)","Distort",[{id:"amount",name:"Amount (Сила)",min:-100,max:100,step:1,value:25}]], ["clouds","Clouds (Облака)","Render",amount], ["pixelate","Pixel Mosaic (Мозаика)","Stylize",[{id:"size",name:"Cell size (Размер ячейки)",min:2,max:64,step:1,value:8}]], ["color_halftone","Color Halftone (Цветные полутона)","Stylize",radius], ["film_grain","Analog Grain (Аналоговое зерно)","Noise",[noiseAmount]], ["add_noise","Add Noise (Добавить шум)","Noise",addNoiseParameters], ["vignette","Lens Vignette (Виньетка)","Photo",amount], ["high_pass","High Pass (Цветовой контраст)","Sharpen",radius], ["median","Median (Медиана)","Noise",radius], ["dust_and_scratches","Dust & Scratches (Пыль и царапины)","Noise",radius], ["surface_blur","Surface Blur (Размытие по поверхности)","Blur",surfaceBlurParams], ["lens_blur","Lens Blur (Размытие объектива)","Blur",lensBlurParams], ["iris_blur","Iris Blur (Размытие диафрагмы)","Blur",radius], ["tilt_shift_blur","Tilt-Shift Blur (Наклон-сдвиг)","Blur",radius], ["plastic_wrap","Plastic Wrap (Целлофановая упаковка)","Stylize",amount],
   ["duotone","Duotone (Дуотон)","Photo",[{id:"shadowHue",name:"Shadow hue (Тон теней)",min:0,max:359,step:1,value:210},{id:"highlightHue",name:"Highlight hue (Тон светов)",min:0,max:359,step:1,value:45},{id:"amount",name:"Amount (Сила)",min:0,max:100,step:1,value:100}]],
@@ -81,6 +86,13 @@ export const rasterFilterCatalog: RasterFilterDefinition[] = ([
   ["wind","Wind (Ветер)","Stylize",windParams],
   ["oil_paint","Oil Paint (Масляная краска)","Stylize",oilPaintParams],
   ["lens_flare","Lens Flare (Блик линзы)","Render",lensFlareParams],
+  ["crystallize","Crystallize (Кристаллизация)","Stylize",cellSizeParams],
+  ["pointillize","Pointillize (Пуантилизм)","Stylize",cellSizeParams],
+  ["fragment","Fragment (Фрагмент)","Stylize",fragmentParams],
+  ["mezzotint","Mezzotint (Глубокая печать)","Stylize",mezzotintParams],
+  ["shape_mosaic","Shape Mosaic (Shape Mosaic)","Stylize",shapeMosaicParams],
+  ["difference_clouds","Difference Clouds (Облака с наложением)","Render",none],
+  ["fibers","Fibers (Волокна)","Render",fibersParams],
 ].map(([id,name,category,parameters]) => ({ id, name, category, parameters })) as RasterFilterDefinition[])
   .filter((definition) => !unavailableUntilImplemented.has(definition.id));
 
@@ -928,6 +940,173 @@ function lensFlareFilter(source: Uint8ClampedArray, width: number, height: numbe
   return output;
 }
 
+/**
+ * Shared cellular tessellation for Crystallize and Pointillize: a jittered
+ * grid — one feature point per `cellSize`×`cellSize` cell, displaced within
+ * it by `addNoiseHash` — is the standard simplified form of the Worley/
+ * cellular noise GEGL's own `noise-cell.c` cites (Worley, SIGGRAPH '96;
+ * that donor varies point *count* per cell via a Poisson table this port
+ * skips for one point per cell, still the same nearest-feature-point
+ * technique). Each source pixel is assigned to its nearest feature point by
+ * scanning the 3×3 neighbourhood of grid cells around it — enough since no
+ * jitter ever pushes a point out of its own cell — and each point's pixels
+ * are averaged into one cell colour.
+ */
+function cellularTessellation(source: Uint8ClampedArray, width: number, height: number, cellSize: number): { cellOf: Int32Array; cellColor: number[][]; points: { x: number; y: number }[] } {
+  const size = Math.max(3, Math.round(cellSize)), cols = Math.ceil(width / size), rows = Math.ceil(height / size);
+  const points: { x: number; y: number }[] = [];
+  for (let row = 0; row < rows; row += 1) for (let col = 0; col < cols; col += 1) {
+    const jitterX = (unitFromHash(addNoiseHash(col, row, 11)) * 0.5 + 0.5) * size, jitterY = (unitFromHash(addNoiseHash(col, row, 17)) * 0.5 + 0.5) * size;
+    points.push({ x: col * size + jitterX, y: row * size + jitterY });
+  }
+  const cellOf = new Int32Array(width * height), sums: number[][] = points.map(() => [0, 0, 0, 0, 0]);
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const col = Math.floor(x / size), row = Math.floor(y / size);
+    let best = -1, bestDistance = Infinity;
+    for (let dr = -1; dr <= 1; dr += 1) for (let dc = -1; dc <= 1; dc += 1) {
+      const c = col + dc, r = row + dr;
+      if (c < 0 || c >= cols || r < 0 || r >= rows) continue;
+      const index = r * cols + c, point = points[index]!, distance = (point.x - x) ** 2 + (point.y - y) ** 2;
+      if (distance < bestDistance) { bestDistance = distance; best = index; }
+    }
+    const pixelIndex = (y * width + x) * 4;
+    cellOf[y * width + x] = best;
+    const sum = sums[best]!;
+    sum[0] = sum[0]! + source[pixelIndex]!; sum[1] = sum[1]! + source[pixelIndex + 1]!; sum[2] = sum[2]! + source[pixelIndex + 2]!; sum[3] = sum[3]! + source[pixelIndex + 3]!; sum[4] = sum[4]! + 1;
+  }
+  const cellColor = sums.map((sum) => sum[4]! > 0 ? [sum[0]! / sum[4]!, sum[1]! / sum[4]!, sum[2]! / sum[4]!, sum[3]! / sum[4]!] : [0, 0, 0, 0]);
+  return { cellOf, cellColor, points };
+}
+
+/** Crystallize: every pixel takes its own cell's average colour — flat
+ * polygonal facets, Voronoi-style. */
+function crystallizeFilter(source: Uint8ClampedArray, width: number, height: number, cellSize: number): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(source.length), { cellOf, cellColor } = cellularTessellation(source, width, height, cellSize);
+  for (let p = 0; p < width * height; p += 1) {
+    const color = cellColor[cellOf[p]!]!, i = p * 4;
+    output[i] = byte(color[0]!); output[i + 1] = byte(color[1]!); output[i + 2] = byte(color[2]!); output[i + 3] = byte(color[3]!);
+  }
+  return output;
+}
+
+/** Pointillize: the same tessellation, but each cell draws only a colour
+ * dot at its own feature point (radius proportional to the cell), on the
+ * canvas's own background colour rather than filling the whole facet —
+ * Photoshop's own look (dots of paint on canvas), distinct from
+ * Crystallize's solid facets even though both share one nearest-point
+ * search. */
+function pointillizeFilter(source: Uint8ClampedArray, width: number, height: number, cellSize: number): Uint8ClampedArray {
+  const size = Math.max(3, Math.round(cellSize)), { cellColor, points } = cellularTessellation(source, width, height, cellSize);
+  const output = new Uint8ClampedArray(source.length).fill(255);
+  for (let i = 3; i < output.length; i += 4) output[i] = 255;
+  const dotRadius = size * 0.42;
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const i = (y * width + x) * 4;
+    let best = -1, bestDistance = dotRadius * dotRadius;
+    for (let index = 0; index < points.length; index += 1) {
+      const point = points[index]!, distance = (point.x - x) ** 2 + (point.y - y) ** 2;
+      if (distance < bestDistance) { bestDistance = distance; best = index; }
+    }
+    if (best >= 0) { const color = cellColor[best]!; output[i] = byte(color[0]!); output[i + 1] = byte(color[1]!); output[i + 2] = byte(color[2]!); output[i + 3] = byte(color[3]!); }
+  }
+  return output;
+}
+
+/** Fragment: Photoshop's own classic one-click effect — four copies of the
+ * image, offset diagonally by `amount` in each direction, averaged
+ * together. */
+function fragmentFilter(source: Uint8ClampedArray, width: number, height: number, amount: number): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(source.length), offsets = [[-amount, -amount], [amount, -amount], [-amount, amount], [amount, amount]];
+  const clampX = (x: number) => Math.max(0, Math.min(width - 1, x)), clampY = (y: number) => Math.max(0, Math.min(height - 1, y));
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const sum = [0, 0, 0, 0];
+    for (const [dx, dy] of offsets) {
+      const index = (clampY(y + dy!) * width + clampX(x + dx!)) * 4;
+      for (let c = 0; c < 4; c += 1) sum[c] = sum[c]! + source[index + c]!;
+    }
+    const i = (y * width + x) * 4;
+    for (let c = 0; c < 4; c += 1) output[i + c] = byte(sum[c]! / offsets.length);
+  }
+  return output;
+}
+
+/** Mezzotint: ordered dither to black/white (or a coloured variant of it)
+ * using the same Bayer-matrix technique `eInkFilter` already established
+ * for this project, at grain sizes/orientations standing in for
+ * Photoshop's Fine/Medium/Coarse Dots and Lines pattern choices. */
+function mezzotintFilter(source: Uint8ClampedArray, width: number, height: number, type: number): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(source.length), isLines = type === 3, grain = [2, 4, 8, 3][type] ?? 2;
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const i = (y * width + x) * 4;
+    const luma = (source[i]! * 30 + source[i + 1]! * 59 + source[i + 2]! * 11) / 100 / 255;
+    let threshold: number;
+    if (isLines) {
+      threshold = (Math.abs((y % (grain * 2)) - grain) / grain);
+    } else {
+      const cellX = x % grain, cellY = y % grain, cellIndex = cellY * grain + cellX;
+      threshold = (addNoiseHash(Math.floor(x / grain), Math.floor(y / grain), cellIndex) >>> 24) / 255;
+    }
+    const shade = luma > threshold ? 255 : 0;
+    output[i] = shade; output[i + 1] = shade; output[i + 2] = shade; output[i + 3] = source[i + 3]!;
+  }
+  return output;
+}
+
+/** Shape Mosaic: like Pixel Mosaic, but each square cell is split along its
+ * diagonal into two triangles, each filled with its own average colour —
+ * a distinct cell *shape* from the plain square Pixelate already has, which
+ * is the entire point of it being a separate filter. */
+function shapeMosaicFilter(source: Uint8ClampedArray, width: number, height: number, cellSize: number): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(source.length), size = Math.max(4, Math.round(cellSize));
+  for (let cellY = 0; cellY < height; cellY += size) for (let cellX = 0; cellX < width; cellX += size) {
+    const right = Math.min(width, cellX + size), bottom = Math.min(height, cellY + size);
+    const sumA = [0, 0, 0, 0, 0], sumB = [0, 0, 0, 0, 0];
+    for (let y = cellY; y < bottom; y += 1) for (let x = cellX; x < right; x += 1) {
+      const inTriangleA = (x - cellX) + (y - cellY) < size, i = (y * width + x) * 4, sum = inTriangleA ? sumA : sumB;
+      sum[0] = sum[0]! + source[i]!; sum[1] = sum[1]! + source[i + 1]!; sum[2] = sum[2]! + source[i + 2]!; sum[3] = sum[3]! + source[i + 3]!; sum[4] = sum[4]! + 1;
+    }
+    const colorA = sumA[4]! > 0 ? sumA : sumB, colorB = sumB[4]! > 0 ? sumB : sumA;
+    for (let y = cellY; y < bottom; y += 1) for (let x = cellX; x < right; x += 1) {
+      const inTriangleA = (x - cellX) + (y - cellY) < size, i = (y * width + x) * 4, color = inTriangleA ? colorA : colorB;
+      output[i] = byte(color[0]! / color[4]!); output[i + 1] = byte(color[1]! / color[4]!); output[i + 2] = byte(color[2]! / color[4]!); output[i + 3] = byte(color[3]! / color[4]!);
+    }
+  }
+  return output;
+}
+
+/** Difference Clouds: the same procedural cloud noise `cloudsFilter`
+ * already renders, composited with Photoshop's own Difference blend
+ * (`|source - cloud|`) instead of a plain mix — a genuinely different
+ * result from Clouds, not the same generator applied twice. */
+function differenceCloudsFilter(source: Uint8ClampedArray, width: number, height: number): Uint8ClampedArray {
+  const clouded = cloudsFilter(source, width, height, 1), output = new Uint8ClampedArray(source.length);
+  for (let i = 0; i < source.length; i += 4) {
+    output[i] = byte(Math.abs(source[i]! - clouded[i]!)); output[i + 1] = byte(Math.abs(source[i + 1]! - clouded[i + 1]!)); output[i + 2] = byte(Math.abs(source[i + 2]! - clouded[i + 2]!));
+    output[i + 3] = source[i + 3]!;
+  }
+  return output;
+}
+
+/** Fibers: vertically-stretched value noise (the same octave-summed sine
+ * lattice `cloudsFilter` uses, stretched along one axis) shaded between the
+ * document's own current foreground/background-like extremes — this
+ * engine has no live foreground/background colour input into the filter
+ * pipeline, so it renders in greyscale, the same simplification `clouds`
+ * already makes for colour. `variance` controls the noise frequency,
+ * `strength` its contrast. */
+function fibersFilter(width: number, height: number, variance: number, strength: number): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(width * height * 4);
+  const freq = 0.02 + (variance / 100) * 0.2, contrast = strength / 100;
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    let sum = 0, amp = 1, total = 0, fx = freq;
+    for (let o = 0; o < 4; o += 1) { sum += amp * Math.sin(x * fx + Math.sin(y * 0.05 + o) * 3); total += amp; amp *= 0.5; fx *= 2; }
+    const value = (sum / total + 1) / 2, shaded = byte(128 + (value - 0.5) * 255 * (0.4 + contrast * 0.6));
+    const i = (y * width + x) * 4;
+    output[i] = shaded; output[i + 1] = shaded; output[i + 2] = shaded; output[i + 3] = 255;
+  }
+  return output;
+}
+
 export function applyRasterFilter(source: Uint8ClampedArray, width: number, height: number, id: string, settings: Record<string, number> = {}): Uint8ClampedArray {
   const output = source.slice(), mix = Math.max(0,Math.min(1,value(settings,"amount",100)/100));
   if (id === "gaussian_blur") return gaussianBlur(source, width, height, value(settings, "radius", 2));
@@ -961,6 +1140,13 @@ export function applyRasterFilter(source: Uint8ClampedArray, width: number, heig
   if (id === "oil_paint") return oilPaintFilter(source, width, height, value(settings, "brushSize", 4), value(settings, "stylization", 8));
   if (id === "lens_flare") return lensFlareFilter(source, width, height, value(settings, "brightness", 100), value(settings, "positionX", 50), value(settings, "positionY", 50));
   if (id === "emboss") return embossFilter(source, width, height, value(settings, "angle", 135), value(settings, "height", 3), value(settings, "amount", 100));
+  if (id === "crystallize") return crystallizeFilter(source, width, height, value(settings, "cellSize", 12));
+  if (id === "pointillize") return pointillizeFilter(source, width, height, value(settings, "cellSize", 12));
+  if (id === "fragment") return fragmentFilter(source, width, height, Math.round(value(settings, "amount", 4)));
+  if (id === "mezzotint") return mezzotintFilter(source, width, height, Math.round(value(settings, "type", 0)));
+  if (id === "shape_mosaic") return shapeMosaicFilter(source, width, height, value(settings, "cellSize", 20));
+  if (id === "difference_clouds") return differenceCloudsFilter(source, width, height);
+  if (id === "fibers") return fibersFilter(width, height, value(settings, "variance", 50), value(settings, "strength", 50));
   if(id==="pixelate"){const size=Math.max(2,Math.round(value(settings,"size",8)));for(let y=0;y<height;y+=size)for(let x=0;x<width;x+=size){const i=(y*width+x)*4;for(let yy=y;yy<Math.min(height,y+size);yy++)for(let xx=x;xx<Math.min(width,x+size);xx++){const o=(yy*width+xx)*4;output[o]=source[i]!;output[o+1]=source[i+1]!;output[o+2]=source[i+2]!;output[o+3]=source[i+3]!;}}return output;}
   if(id==="auto_tone"||id==="auto_contrast"||id==="auto_color"){for(let c=0;c<3;c++){let lo=255,hi=0;for(let i=c;i<source.length;i+=4)if(source[i+3-c]!==0){lo=Math.min(lo,source[i]!);hi=Math.max(hi,source[i]!);}if(hi>lo)for(let i=c;i<output.length;i+=4)output[i]=byte((source[i]!-lo)*255/(hi-lo));}return output;}
   if(id==="twirl") return twirlFilter(source,width,height,value(settings,"amount",100));
