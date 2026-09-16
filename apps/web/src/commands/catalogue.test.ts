@@ -124,6 +124,9 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   // flyout: searching the palette for "марионеточная" found nothing at all.
   "tool.raster.puppetWarp|||Tools",
   "tool.raster.r|R|raster|Tools",
+  // Object Selection (MobileSAM) has no shortcut letter either — same reasoning as Puppet Warp's
+  // own entry above, and same fix: without this, the palette could not find it by name at all.
+  "tool.raster.selectObject|||Tools",
   "tool.raster.s|S|raster|Tools",
   "tool.raster.t|T|raster|Tools",
   "tool.raster.u|U|raster|Tools",

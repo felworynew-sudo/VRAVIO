@@ -72,6 +72,15 @@ export const tools: readonly ToolDefinition[] = [
   { id: "raster.lasso", kind: "raster", icon: "⌁", iconFile: "ЛАССО.svg", label: { en: "Lasso Tool", ru: "Лассо" }, shortcut: "L", options: [{ id: "mode", label: { en: "Mode", ru: "Режим" }, type: "select", defaultValue: "replace", values: [{ value: "replace", label: { en: "Replace", ru: "Заменить" } }, { value: "add", label: { en: "Add", ru: "Добавить" } }, { value: "subtract", label: { en: "Subtract", ru: "Вычесть" } }, { value: "intersect", label: { en: "Intersect", ru: "Пересечь" } }] }, { id: "feather", label: { en: "Feather", ru: "Растушёвка" }, type: "number", min: 0, max: 500, step: 1, defaultValue: 0, unit: "px" }] },
   { id: "raster.selectionBrush", kind: "raster", icon: "◉", label: { en: "Selection Brush Tool", ru: "Кисть выделения" }, shortcut: "L", options: [...brushTipOptions.filter((option) => option.id !== "angle"), { ...opacity, defaultValue: 50, label: { en: "Overlay opacity", ru: "Непрозрачность заливки" } }] },
   { id: "raster.magicWand", kind: "raster", icon: "✦", iconFile: "ВОЛШЕБНАЯ ПАЛОЧКА.svg", label: { en: "Magic Wand Tool", ru: "Волшебная палочка" }, shortcut: "W", options: [{ id: "tolerance", label: { en: "Tolerance", ru: "Допуск" }, type: "number", min: 0, max: 255, step: 1, defaultValue: 32 }, { id: "allLayers", label: { en: "Sample all layers", ru: "Все слои" }, type: "boolean", defaultValue: true }] },
+  {
+    id: "raster.selectObject", kind: "raster", icon: "◎", iconFile: "ВЫДЕЛЕНИЕ ОБЪЕКТА ИИ.svg",
+    label: { en: "Object Selection Tool", ru: "Выделение объекта" }, shortcut: "",
+    // Values come from `ml/interactive-select/definitions/` — the same "this file is the registry
+    // entry" pattern `raster.inpaint`'s own model picker above already uses.
+    options: [{ id: "model", label: { en: "Model", ru: "Модель" }, type: "select", defaultValue: "mobile-sam", values: [
+      { value: "mobile-sam", label: { en: "MobileSAM", ru: "MobileSAM" } },
+    ] }],
+  },
   { id: "raster.brush", kind: "raster", icon: "●", iconFile: "КИСТЬ.svg", label: { en: "Brush Tool", ru: "Кисть" }, shortcut: "B", options: [...brushTipOptions, ...brushDynamicsOptions, opacity, color, { id: "flow", label: { en: "Flow", ru: "Подача" }, type: "number", min: 1, max: 100, step: 1, defaultValue: 100, unit: "%" }, { id: "pressureSize", label: { en: "Pen pressure: size", ru: "Нажим: размер" }, type: "boolean", defaultValue: true }, { id: "pressureOpacity", label: { en: "Pen pressure: opacity", ru: "Нажим: непрозрачность" }, type: "boolean", defaultValue: false }] },
   { id: "raster.pencil", kind: "raster", icon: "✎", iconFile: "КАРАНДАШ.svg", label: { en: "Pencil Tool", ru: "Карандаш" }, shortcut: "B", options: [size, opacity, color] },
   { id: "raster.highlighter", kind: "raster", icon: "▰", iconFile: "ВЫДЕЛИТЕЛЬ.svg", label: { en: "Highlighter Tool", ru: "Выделитель" }, shortcut: "B", options: [size, { ...opacity, defaultValue: 35 }, color] },
@@ -157,7 +166,7 @@ export const tools: readonly ToolDefinition[] = [
 
 export const rasterToolGroups: readonly (readonly string[])[] = [
   ["raster.move"],
-  ["raster.marquee", "raster.ellipseMarquee", "raster.lasso", "raster.selectionBrush", "raster.magicWand"],
+  ["raster.marquee", "raster.ellipseMarquee", "raster.lasso", "raster.selectionBrush", "raster.magicWand", "raster.selectObject"],
   ["raster.brush", "raster.pencil", "raster.highlighter"],
   ["raster.eraser"],
   ["raster.blur", "raster.smudge"],

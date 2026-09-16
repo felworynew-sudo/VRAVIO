@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="_Слой_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 249.8 248.9">
+  <!-- MobileSAM "Object Selection" tool (docs/master-plan.md §52.5) — a dashed marching-ants
+       outline (this project's own selection convention, see ВЫДЕЛЕН.svg) traced around an
+       organic blob instead of a rectangle, with a solid click-point at its centre: click an
+       object, get a selection around it. Drawn for this project, not borrowed. Named distinctly
+       from the pre-existing, unrelated "ВЫДЕЛЕНИЕ ОБЪЕКТА.svg" (a crosshair/sunburst icon, already
+       tracked in the repo's baseline commit and not referenced by anything) — that file is left
+       untouched. -->
+  <defs>
+    <style>
+      .sam-outline {
+        fill: none;
+        stroke: #fff;
+        stroke-dasharray: 11.9 11.9;
+        stroke-miterlimit: 10;
+        stroke-width: 14px;
+      }
+      .sam-point {
+        fill: #fff;
+      }
+    </style>
+  </defs>
+  <path class="sam-outline" d="M124.9,26.5c40,0,58,20,76,40s28,38,28,58-14,54-34,68-46,26-70,26-56-8-76-28-24-44-24-68,10-56,30-72,30-24,70-24Z"/>
+  <circle class="sam-point" cx="124.9" cy="124.9" r="17"/>
+</svg>
