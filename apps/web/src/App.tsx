@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { WARP_PRESETS, applyRasterFilter, rasterFilterCatalog, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
 import { maskToRgba, rgbaToMask } from "./raster-pixel-buffers";
@@ -27,6 +27,7 @@ import { ModalHost } from "./modals/ModalHost";
 import { errorModal, openModal } from "./modals/runtime";
 import { clearDiagnostics, diagnostic, readDiagnostics, type DiagnosticEntry } from "./diagnostics";
 import { FilterGalleryDialog } from "./FilterGalleryDialog";
+import { applyRasterFilterParallel, filterWorkerPool } from "./filter-worker-pool";
 import { LiquifyDialog } from "./LiquifyDialog";
 import { BlurGalleryDialog } from "./BlurGalleryDialog";
 import { DisplaceDialog } from "./DisplaceDialog";
@@ -392,28 +393,63 @@ export function App() {
   // A Filter-menu item for an already-implemented catalog filter opens that
   // filter's own small standalone panel (docs/master-plan.md §51), not the Gallery.
   const openFilter = (id: string) => setFilterPanelId(id);
-  // The panel's own live preview, mirroring `runImageAdjustmentPreview`/`previewImageAdjustment`
-  // exactly (RAF-coalesced so a dragged slider cannot fire this once per pointermove): compute the
-  // filter over the active pixel layer's own buffer, confine to the selection the same way
-  // `applyFilter` itself does, and push the composited result onto the real canvas via the same
-  // `vravio-raster-preview` event the adjustment dialogs already use — no second preview mechanism.
+  // The panel's own live preview, mirroring `runImageAdjustmentPreview`/`previewImageAdjustment`'s
+  // RAF-coalescing (a dragged slider cannot fire this once per pointermove) but not its synchronous
+  // compute: docs/master-plan.md §52 — "многие фильтры... тупит" (many filters lag) turned out to be
+  // this exact function running the filter synchronously, on the main thread, at full document
+  // resolution, on every settled frame while dragging. An adjustment (Levels/Curves/Hue-Saturation)
+  // is a cheap per-pixel lookup and stays fast enough at full size regardless; a spatial filter
+  // (blur, median, most of Noise/Sharpen/Distort) reads a whole neighbourhood per output pixel and
+  // does not. Routed through the same `filterWorkerPool()`/`applyRasterFilterParallel` this file's
+  // own Filter Gallery already uses (docs/master-plan.md §37.3 item 4) instead of the synchronous
+  // `applyRasterFilter`, so a slow filter blocks a worker thread, never the tab.
+  //
+  // `previewFilterPanel` (passed as `onPreview`) is wrapped in `useCallback`, deliberately keyed on
+  // primitives (`filterPanelId`, `active?.id`), not on `active` itself. Found live, the hard way:
+  // `FilterPanelDialog`'s own `useEffect(() => { onPreview(...) }, [settings, preview, onPreview])`
+  // re-fires whenever `onPreview`'s *identity* changes — and an un-memoized `previewFilterPanel`
+  // (a fresh closure every `App` render) changes identity on *every* App re-render, not only a real
+  // settings change. That was harmless while the compute was synchronous (the effect's cleanup
+  // (`onPreview(null)`, clearing the preview) and its body (`onPreview(settings)`, redrawing it) both
+  // ran to completion inside the same tick, faster than another render could land in between). Once
+  // the compute moved to a Worker — a real gap of hundreds of milliseconds to seconds — that ceased
+  // to be true: an unrelated App re-render during the gap re-ran the effect, whose cleanup dispatched
+  // a real "clear the preview" event synchronously, immediately "winning" the race against the
+  // already-in-flight (or even already-finished) real result, because nothing was stopping the *next*
+  // incidental re-render's cleanup from doing the same thing again a moment later. A document this
+  // size re-renders far more often than once per multi-second Worker round trip, so the filtered
+  // preview was being cleared back to the original, unfiltered picture faster than it could ever be
+  // seen — not a livelock in the sense of no work happening, but the exact same *symptom* the owner
+  // reported: the dialog looked exactly as unresponsive as the version that blocked the main thread
+  // outright. A stable callback identity stops the effect from re-firing except when `settings`
+  // itself actually changes, which is the only time clearing-then-redrawing was ever supposed to
+  // happen.
   const filterPanelPreviewFrameRef = useRef<{ frame: number; settings: Record<string, number> | null } | null>(null);
-  const runFilterPanelPreview = (settings: Record<string, number> | null) => {
+  const filterPanelPreviewKeyRef = useRef<string | null>(null);
+  const activeDocumentId = active?.id ?? null;
+  const runFilterPanelPreview = useCallback((settings: Record<string, number> | null) => {
     if (!filterPanelId) return;
-    const document = active && kernel.documents.get<RasterDocumentState>(active.id);
+    const document = activeDocumentId ? kernel.documents.get<RasterDocumentState>(activeDocumentId) : null;
     if (!document || !isRasterDocumentState(document.state)) return;
-    if (!settings) { window.dispatchEvent(new CustomEvent("vravio-raster-preview", { detail: { documentId: document.id, pixels: null } })); return; }
+    if (!settings) { filterPanelPreviewKeyRef.current = null; window.dispatchEvent(new CustomEvent("vravio-raster-preview", { detail: { documentId: document.id, pixels: null } })); return; }
     const target = document.state.layers.find((layer) => layer.id === document.state.activeLayerId);
     if (!target || target.kind !== "pixel") return;
+    const key = JSON.stringify([document.id, target.id, target.pixelsRevision, filterPanelId, settings]);
+    if (filterPanelPreviewKeyRef.current === key) return; // an incidental re-render, not a real change — the request this already started (or already finished) still answers it
+    filterPanelPreviewKeyRef.current = key;
     const before = layerDocumentPixels(target, document.state.width, document.state.height);
-    const filtered = applyRasterFilter(before, document.state.width, document.state.height, filterPanelId, settings);
-    const selection = document.state.selection, confined = selection ? confineToSelection(before, filtered, selection.mask) : filtered;
-    const layers = document.state.layers.map((layer) => layer.id === target.id ? { ...layer, effects: structuredClone(layer.effects) } : layer);
-    const previewState = { ...document.state, layers }; const previewLayer = layers.find((layer) => layer.id === target.id)!;
-    setLayerPixels(previewLayer, confined, previewState.width, previewState.height);
-    window.dispatchEvent(new CustomEvent("vravio-raster-preview", { detail: { documentId: document.id, pixels: compositeRasterDocument(previewState) } }));
-  };
-  const previewFilterPanel = (settings: Record<string, number> | null) => {
+    void applyRasterFilterParallel(filterWorkerPool(), before, document.state.width, document.state.height, filterPanelId, settings)
+      .then((filtered) => {
+        if (filterPanelPreviewKeyRef.current !== key) return; // superseded by a real, later settings change
+        const selection = document.state.selection, confined = selection ? confineToSelection(before, filtered, selection.mask) : filtered;
+        const layers = document.state.layers.map((layer) => layer.id === target.id ? { ...layer, effects: structuredClone(layer.effects) } : layer);
+        const previewState = { ...document.state, layers }; const previewLayer = layers.find((layer) => layer.id === target.id)!;
+        setLayerPixels(previewLayer, confined, previewState.width, previewState.height);
+        window.dispatchEvent(new CustomEvent("vravio-raster-preview", { detail: { documentId: document.id, pixels: compositeRasterDocument(previewState) } }));
+      })
+      .catch((error: unknown) => diagnostic("warn", "filter-panel.preview-failed", "Live filter preview failed", { filterId: filterPanelId, error: error instanceof Error ? error.message : String(error) }));
+  }, [filterPanelId, activeDocumentId]);
+  const previewFilterPanel = useCallback((settings: Record<string, number> | null) => {
     if (!settings) {
       if (filterPanelPreviewFrameRef.current) { cancelAnimationFrame(filterPanelPreviewFrameRef.current.frame); filterPanelPreviewFrameRef.current = null; }
       runFilterPanelPreview(null);
@@ -424,7 +460,7 @@ export function App() {
     const entry = { frame: 0, settings };
     filterPanelPreviewFrameRef.current = entry;
     entry.frame = requestAnimationFrame(() => { filterPanelPreviewFrameRef.current = null; runFilterPanelPreview(entry.settings); });
-  };
+  }, [runFilterPanelPreview]);
   const applyFilterPanel = (settings: Record<string, number>) => {
     if (!filterPanelId || !active || !isRasterDocumentState(active.state)) return;
     const definition = rasterFilterCatalog.find((item) => item.id === filterPanelId);

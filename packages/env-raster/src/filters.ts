@@ -279,27 +279,72 @@ function gaussianBlur(source: Uint8ClampedArray, width: number, height: number, 
   return output;
 }
 
-/** Edge-preserving order-statistic blur used by Median and Dust & Scratches.
+/**
+ * Edge-preserving order-statistic blur used by Median and Dust & Scratches.
  *
  * Radius is deliberately capped lower than convolution blurs: a median needs
  * to inspect every value in its neighbourhood and must stay responsive in the
  * worker preview. Unlike Box Blur, isolated dust pixels disappear without
- * smearing their colour over their neighbours. */
+ * smearing their colour over their neighbours.
+ *
+ * A sliding 256-bin histogram per row, not a fresh sort of every window — Huang's 1981 running-
+ * median algorithm (the same one GIMP's `median-blur.c` and OpenCV's `medianBlur` use), found only
+ * after this file's first version (collect the window into an array, `Array.prototype.sort` it,
+ * take the middle) turned out to be the reason `apps/web/src/App.tsx`'s standalone Median dialog
+ * hung well past 45 seconds on a 4000×3000 document at radius 8 — docs/master-plan.md §52's
+ * "многие фильтры... тупит" complaint traced back to an O((2r+1)²·log(2r+1)²) per pixel per
+ * channel algorithm with a full array allocation on top, not merely to the preview architecture
+ * that called it (also fixed, separately, in the same section). Sliding the window one column at a
+ * time instead of rebuilding it from scratch drops the per-pixel cost to O(radius) for the
+ * histogram update plus a 256-bin scan for the median itself — the window size `(2r+1)²` is always
+ * odd, so there is never an even-length tie to average, exactly like the original's
+ * `samples[samples.length >> 1]` picked the same single element without needing to. Verified
+ * byte-for-byte against the original naive implementation across several radii and random fixtures
+ * (`filters-median-perf.test.ts`), not just spot-checked against a couple of hand-picked pixels.
+ */
 function medianBlur(source: Uint8ClampedArray, width: number, height: number, radius: number): Uint8ClampedArray {
   const r = Math.max(1, Math.min(8, Math.round(radius)));
   const output = new Uint8ClampedArray(source.length);
-  const samples: number[] = [];
   const clampX = (x: number) => Math.max(0, Math.min(width - 1, x));
   const clampY = (y: number) => Math.max(0, Math.min(height - 1, y));
-  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
-    const outputIndex = (y * width + x) * 4;
+  const windowSize = (2 * r + 1) * (2 * r + 1);
+  const target = windowSize >> 1; // 0-indexed rank of the median in a sorted, always-odd-length window
+  const histogram = new Int32Array(256);
+  for (let y = 0; y < height; y += 1) {
     for (let channel = 0; channel < 4; channel += 1) {
-      samples.length = 0;
-      for (let dy = -r; dy <= r; dy += 1) for (let dx = -r; dx <= r; dx += 1) {
-        samples.push(source[(clampY(y + dy) * width + clampX(x + dx)) * 4 + channel]!);
+      histogram.fill(0);
+      // Seed the histogram for this row's x=0 window (logical columns -r..r; clamped at the read).
+      for (let dx = -r; dx <= r; dx += 1) {
+        const column = clampX(dx);
+        for (let dy = -r; dy <= r; dy += 1) {
+          const bin = source[(clampY(y + dy) * width + column) * 4 + channel]!;
+          histogram[bin] = (histogram[bin] ?? 0) + 1;
+        }
       }
-      samples.sort((left, right) => left - right);
-      output[outputIndex + channel] = samples[samples.length >> 1]!;
+      for (let x = 0; x < width; x += 1) {
+        if (x > 0) {
+          // Slide right: drop the column that just left the window, add the one that just entered.
+          // Both are logical positions, clamped independently — near an edge they can clamp to the
+          // *same* physical column, in which case the net histogram change is correctly zero (the
+          // `!==` check below only skips the redundant pair of writes, it does not change the result).
+          const outColumn = clampX(x - 1 - r), inColumn = clampX(x + r);
+          if (outColumn !== inColumn) {
+            for (let dy = -r; dy <= r; dy += 1) {
+              const row = clampY(y + dy);
+              const outBin = source[(row * width + outColumn) * 4 + channel]!;
+              const inBin = source[(row * width + inColumn) * 4 + channel]!;
+              histogram[outBin] = (histogram[outBin] ?? 0) - 1;
+              histogram[inBin] = (histogram[inBin] ?? 0) + 1;
+            }
+          }
+        }
+        let cumulative = 0, median = 0;
+        for (let value = 0; value < 256; value += 1) {
+          cumulative += histogram[value] ?? 0;
+          if (cumulative > target) { median = value; break; }
+        }
+        output[(y * width + x) * 4 + channel] = median;
+      }
     }
   }
   return output;

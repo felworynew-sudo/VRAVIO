@@ -3,6 +3,21 @@ import { layerPixelsView, rasterFilterCatalog, type RasterFilterDefinition, type
 import { filterSpecById, hasGpuFilter } from "@vravio/env-raster";
 import { sharedGlFilterBackend } from "./glFilterBackend";
 import { applyRasterFilterParallel, filterWorkerPool } from "./filter-worker-pool";
+import { downsampleForPreview } from "./CameraRawPanels";
+
+/**
+ * Cap for the *live* preview while a slider is actively moving — `CameraRawFilterDialog`'s own,
+ * already-shipping fix for the identical problem (docs/master-plan.md §52): compute the expensive
+ * pass on a downsampled buffer for instant feedback, and only the settled result (`FULL_RES_DELAY_MS`
+ * after the last change) pays for the real, full-resolution filter. Before this, every filter here
+ * ran at full layer resolution on every slider tick regardless of how expensive it was — fine for a
+ * cheap filter, but "многие фильтры... тупит" (many filters lag) for anything O(radius²) or larger
+ * (median, most of the noise/blur family) on a large document, because the *architecture* already
+ * had a GPU path and a Worker-parallel path, but neither changes with how many pixels the filter
+ * actually has to touch.
+ */
+const LIVE_PREVIEW_EDGE = 640;
+const FULL_RES_DELAY_MS = 260;
 
 const THUMBNAIL_EDGE = 48;
 
@@ -33,8 +48,18 @@ function pixelsToDataUrl(pixels: Uint8ClampedArray, width: number, height: numbe
 export function FilterGalleryDialog({ layer, initialFilterId, onApply, onClose }: { layer: RasterLayer; initialFilterId?: string | undefined; onApply(pixels: Uint8ClampedArray, label: string, meta?: { filterId: string; settings: Record<string, number> }): void; onClose(): void }) {
   const [filterId,setFilterId]=useState(initialFilterId ?? "gaussian_blur"), [settings,setSettings]=useState<Record<string,number>>({});
   const [rendered, setRendered] = useState<Uint8ClampedArray | null>(null);
+  // Which (filterId, settings) `rendered` actually answers — compared against `currentKey` below to
+  // tell a fresh full-resolution result from one still catching up to the slider. Doing this as a
+  // derived comparison, not a separate `isRendering` flag toggled by hand, means the OK button stays
+  // correctly disabled through the whole `FULL_RES_DELAY_MS` debounce gap too, not just while the
+  // worker call itself is in flight — the gap where a hand-toggled flag would have said "ready"
+  // while `rendered` was still yesterday's picture.
+  const [renderedKey, setRenderedKey] = useState<string | null>(null);
+  // The fast, downsampled stand-in shown while `rendered` is catching up — see this file's own
+  // `LIVE_PREVIEW_EDGE` comment. Never what Apply uses; purely so dragging a slider shows something
+  // moving immediately instead of a frozen (or, before this, agonisingly slow) full-res redraw.
+  const [livePreview, setLivePreview] = useState<{ pixels: Uint8ClampedArray; width: number; height: number } | null>(null);
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
-  const [isRendering, setIsRendering] = useState(true);
   const [renderError, setRenderError] = useState<string | null>(null);
   const requestIdRef = useRef(0);
   const canvasRef=useRef<HTMLCanvasElement>(null), filter=rasterFilterCatalog.find((item)=>item.id===filterId)!;
@@ -43,6 +68,9 @@ export function FilterGalleryDialog({ layer, initialFilterId, onApply, onClose }
     () => Object.fromEntries(filter.parameters.map((parameter) => [parameter.id, settings[parameter.id] ?? parameter.value])),
     [filter, settings],
   );
+  const currentKey = useMemo(() => JSON.stringify([layer.id, layer.pixelsRevision, filterId, effectiveSettings]), [layer.id, layer.pixelsRevision, filterId, effectiveSettings]);
+  const isRendering = renderedKey !== currentKey;
+  const previewSample = useMemo(() => downsampleForPreview(layerPixelsView(layer), layer.width, layer.height, LIVE_PREVIEW_EDGE), [layer, layer.pixelsRevision, layer.width, layer.height]);
   // The source texture is cached per layer, so dragging a slider re-runs the shader without
   // re-uploading the image. It has to be dropped as soon as the layer's pixels change.
   useEffect(() => {
@@ -54,12 +82,13 @@ export function FilterGalleryDialog({ layer, initialFilterId, onApply, onClose }
     const spec = filterSpecById.get(filterId);
     const backend = hasGpuFilter(filterId) ? sharedGlFilterBackend() : null;
     if (backend && spec) {
-      // A single shader pass beats posting megabytes to a worker, so the GPU path runs inline
-      // and only falls through to the worker if the driver refuses it.
+      // A single shader pass beats posting megabytes to a worker, so the GPU path runs inline,
+      // already at full resolution, on every tick — no low-res stand-in needed, and none of the
+      // rest of this effect (the CPU/Worker path below) runs for a GPU-backed filter at all.
       const gpuResult = backend.apply(spec, layerPixelsView(layer), layer.width, layer.height, effectiveSettings, layer.id);
       if (gpuResult) {
         setRendered(gpuResult);
-        setIsRendering(false);
+        setRenderedKey(currentKey);
         setRenderError(null);
         return;
       }
@@ -68,11 +97,24 @@ export function FilterGalleryDialog({ layer, initialFilterId, onApply, onClose }
     // filter render, row-banded across it when the filter is one filter-tiling.ts has verified
     // splits safely — a drop-in replacement for the old one-worker-per-request call below, not a
     // separate path this component needs to choose between.
-    const controller = new AbortController();
-    const timer = window.setTimeout(() => {
-      setIsRendering(true);
+    //
+    // Two requests, not one: a short debounce against `previewSample` (downsampled, §52's fix for
+    // "многие фильтры... тупит" — dragging a slider used to run every filter at full layer
+    // resolution on every tick) lands almost immediately regardless of the filter's own cost, and a
+    // longer one against the real, full-resolution buffer only fires once the slider has actually
+    // settled. `renderedKey` (not a hand-toggled flag) is what tells the canvas and the OK button
+    // whether `rendered` is this settle pass's answer yet, or still the previous settings'.
+    const liveController = new AbortController();
+    const liveTimer = window.setTimeout(() => {
+      applyRasterFilterParallel(filterWorkerPool(), previewSample.pixels, previewSample.width, previewSample.height, filterId, effectiveSettings, liveController.signal)
+        .then((pixels) => { if (!liveController.signal.aborted) setLivePreview({ pixels, width: previewSample.width, height: previewSample.height }); })
+        .catch(() => { /* the settle pass below reports the real error; a dropped live preview just keeps showing the last one */ });
+    }, 40);
+
+    const settleController = new AbortController();
+    const settleTimer = window.setTimeout(() => {
       setRenderError(null);
-      applyRasterFilterParallel(filterWorkerPool(), layerPixelsView(layer), layer.width, layer.height, filterId, effectiveSettings, controller.signal)
+      applyRasterFilterParallel(filterWorkerPool(), layerPixelsView(layer), layer.width, layer.height, filterId, effectiveSettings, settleController.signal)
         .then((pixels) => {
           // Gate on this exact invocation's own signal, not a shared counter compared against
           // `requestIdRef.current`: that comparison raced with `applyRasterFilterParallel`
@@ -84,19 +126,39 @@ export function FilterGalleryDialog({ layer, initialFilterId, onApply, onClose }
           // true in exactly that same case, because this effect's own cleanup is what calls
           // `controller.abort()` — so it says the right thing regardless of which of the two
           // ever won that race, without needing the two to agree on ordering at all.
-          if (controller.signal.aborted) return;
+          if (settleController.signal.aborted) return;
           setRendered(pixels);
-          setIsRendering(false);
+          setRenderedKey(currentKey);
         })
         .catch((error: unknown) => {
-          if (controller.signal.aborted) return;
+          if (settleController.signal.aborted) return;
           setRenderError(error instanceof Error ? error.message : "Filter calculation failed");
-          setIsRendering(false);
         });
-    }, 70);
-    return () => { window.clearTimeout(timer); controller.abort(); };
-  }, [layer, layer.id, layer.pixelsRevision, layer.width, layer.height, filterId, effectiveSettings]);
-  useEffect(()=>{const canvas=canvasRef.current,context=canvas?.getContext("2d");if(canvas&&context&&rendered)context.putImageData(new ImageData(rendered as Uint8ClampedArray<ArrayBuffer>,layer.width,layer.height),0,0);},[rendered,layer.width,layer.height]);
+    }, FULL_RES_DELAY_MS);
+    return () => { window.clearTimeout(liveTimer); liveController.abort(); window.clearTimeout(settleTimer); settleController.abort(); };
+  }, [layer, layer.id, layer.pixelsRevision, layer.width, layer.height, filterId, effectiveSettings, previewSample, currentKey]);
+  // Whichever is actually current wins: a settled full-resolution `rendered` when `renderedKey`
+  // matches, the fast downsampled `livePreview` otherwise (a slider mid-drag, or the brief window
+  // before the very first result of either kind has landed shows neither — the "Rendering…" badge
+  // covers that, `isRendering` is true from the very first render regardless of `renderedKey`'s
+  // initial `null`).
+  useEffect(() => {
+    const canvas = canvasRef.current, context = canvas?.getContext("2d"); if (!canvas || !context) return;
+    // Setting `canvas.width`/`.height` here (not just via the JSX attributes below, which cover the
+    // very first paint) resizes the element's intrinsic pixel buffer without touching its on-screen
+    // size — `.filter-preview canvas` is CSS-scaled (`max-width/height: 100%`), so a low-res
+    // `livePreview` still fills the same box, just softer, exactly like Photoshop's own filter
+    // preview while a slider is moving fast. React never fights this: it only re-applies the JSX
+    // `width`/`height` attributes when `layer.width`/`layer.height` themselves change, not on every
+    // render, so they and this effect only ever collide when the layer's real size actually did.
+    if (rendered && renderedKey === currentKey) {
+      canvas.width = layer.width; canvas.height = layer.height;
+      context.putImageData(new ImageData(rendered as Uint8ClampedArray<ArrayBuffer>, layer.width, layer.height), 0, 0);
+    } else if (livePreview) {
+      canvas.width = livePreview.width; canvas.height = livePreview.height;
+      context.putImageData(new ImageData(livePreview.pixels as Uint8ClampedArray<ArrayBuffer>, livePreview.width, livePreview.height), 0, 0);
+    }
+  }, [rendered, renderedKey, currentKey, livePreview, layer.width, layer.height]);
   const select=(next:RasterFilterDefinition)=>{setFilterId(next.id);setSettings(Object.fromEntries(next.parameters.map((parameter)=>[parameter.id,parameter.value])));};
   // docs/master-plan.md §51's interactivity level 2: a filter whose parameters include a
   // positionX/positionY pair (Lens Flare today, any future filter with a spatial parameter
