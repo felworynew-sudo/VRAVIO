@@ -646,9 +646,12 @@ describe("filter specs", () => {
   });
 
   it("does not advertise placeholder blur variants as distinct filters", () => {
+    // docs/master-plan.md §51: Motion/Radial/Surface/Lens Blur graduated to real, distinct
+    // algorithms and left this list; Iris/Tilt-Shift stay out until the Blur Gallery's own
+    // editor (level 3 interactivity) exists to drive their on-canvas ellipse control.
     const ids = new Set(rasterFilterCatalog.map((filter) => filter.id));
-    for (const id of ["motion_blur", "radial_blur", "surface_blur", "lens_blur", "iris_blur", "tilt_shift_blur"]) expect(ids.has(id)).toBe(false);
-    for (const id of ["box_blur", "gaussian_blur", "median", "dust_and_scratches"]) expect(ids.has(id)).toBe(true);
+    for (const id of ["iris_blur", "tilt_shift_blur"]) expect(ids.has(id)).toBe(false);
+    for (const id of ["box_blur", "gaussian_blur", "median", "dust_and_scratches", "motion_blur", "radial_blur", "surface_blur", "lens_blur"]) expect(ids.has(id)).toBe(true);
   });
 
   it("produces the same pixels through the CPU path as the existing catalog", () => {

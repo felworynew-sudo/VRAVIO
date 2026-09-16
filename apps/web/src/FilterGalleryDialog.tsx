@@ -98,6 +98,18 @@ export function FilterGalleryDialog({ layer, initialFilterId, onApply, onClose }
   }, [layer, layer.id, layer.pixelsRevision, layer.width, layer.height, filterId, effectiveSettings]);
   useEffect(()=>{const canvas=canvasRef.current,context=canvas?.getContext("2d");if(canvas&&context&&rendered)context.putImageData(new ImageData(rendered as Uint8ClampedArray<ArrayBuffer>,layer.width,layer.height),0,0);},[rendered,layer.width,layer.height]);
   const select=(next:RasterFilterDefinition)=>{setFilterId(next.id);setSettings(Object.fromEntries(next.parameters.map((parameter)=>[parameter.id,parameter.value])));};
+  // docs/master-plan.md §51's interactivity level 2: a filter whose parameters include a
+  // positionX/positionY pair (Lens Flare today, any future filter with a spatial parameter
+  // tomorrow) can be aimed by clicking the preview directly, not only by dragging its sliders —
+  // Photoshop's own Lens Flare dialog works the same way. Keyed off the parameter ids the filter
+  // declares, not the filter's name, so this stays a general mechanism rather than a special case.
+  const supportsCanvasPosition = filter.parameters.some((parameter) => parameter.id === "positionX") && filter.parameters.some((parameter) => parameter.id === "positionY");
+  const positionFromClick = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = Math.max(0, Math.min(100, ((event.clientX - rect.left) / rect.width) * 100));
+    const y = Math.max(0, Math.min(100, ((event.clientY - rect.top) / rect.height) * 100));
+    setSettings((values) => ({ ...values, positionX: Math.round(x), positionY: Math.round(y) }));
+  };
   const sample = useMemo(() => downsampleThumbnail(layerPixelsView(layer), layer.width, layer.height, THUMBNAIL_EDGE), [layer, layer.pixelsRevision, layer.width, layer.height]);
   useEffect(() => {
     const requestId = ++requestIdRef.current;
@@ -110,7 +122,7 @@ export function FilterGalleryDialog({ layer, initialFilterId, onApply, onClose }
     };
     return () => worker.terminate();
   }, [sample]);
-  return <div className="dialog-backdrop filter-gallery-backdrop" onMouseDown={onClose}><section className="filter-gallery-dialog" role="dialog" aria-modal="true" aria-label="Filter Gallery (Галерея фильтров)" onMouseDown={(event)=>event.stopPropagation()}><header><strong>Filter Gallery (Галерея фильтров)</strong><button onClick={onClose}>×</button></header><div className="filter-gallery-body"><aside className="filter-browser">{categories.map((category)=><section key={category}><h3>{category}</h3>{rasterFilterCatalog.filter((item)=>item.category===category).map((item)=><button className={item.id===filterId?"active":""} key={item.id} onClick={()=>select(item)}><span className="filter-tile-preview">{thumbnails[item.id]?<img src={thumbnails[item.id]} alt="" width={30} height={24}/>:<span aria-hidden="true">…</span>}</span><span>{item.name}</span></button>)}</section>)}</aside><main className="filter-preview"><div className={isRendering?"is-rendering":""}><canvas ref={canvasRef} width={layer.width} height={layer.height}/>{isRendering&&<span className="filter-rendering-status">Rendering… (Расчёт…)</span>}{renderError&&<span className="filter-render-error">{renderError}</span>}</div><small>100% · {layer.width} × {layer.height}</small></main><aside className="filter-settings"><h2>{filter.name}</h2>{filter.parameters.length?filter.parameters.map((parameter)=>{const current=settings[parameter.id]??parameter.value;
+  return <div className="dialog-backdrop filter-gallery-backdrop" onMouseDown={onClose}><section className="filter-gallery-dialog" role="dialog" aria-modal="true" aria-label="Filter Gallery (Галерея фильтров)" onMouseDown={(event)=>event.stopPropagation()}><header><strong>Filter Gallery (Галерея фильтров)</strong><button onClick={onClose}>×</button></header><div className="filter-gallery-body"><aside className="filter-browser">{categories.map((category)=><section key={category}><h3>{category}</h3>{rasterFilterCatalog.filter((item)=>item.category===category).map((item)=><button className={item.id===filterId?"active":""} key={item.id} onClick={()=>select(item)}><span className="filter-tile-preview">{thumbnails[item.id]?<img src={thumbnails[item.id]} alt="" width={30} height={24}/>:<span aria-hidden="true">…</span>}</span><span>{item.name}</span></button>)}</section>)}</aside><main className="filter-preview"><div className={isRendering?"is-rendering":""}><canvas ref={canvasRef} width={layer.width} height={layer.height} onClick={supportsCanvasPosition?positionFromClick:undefined} style={supportsCanvasPosition?{cursor:"crosshair"}:undefined} title={supportsCanvasPosition?"Click to set position (Клик задаёт позицию)":undefined}/>{isRendering&&<span className="filter-rendering-status">Rendering… (Расчёт…)</span>}{renderError&&<span className="filter-render-error">{renderError}</span>}</div><small>100% · {layer.width} × {layer.height}</small></main><aside className="filter-settings"><h2>{filter.name}</h2>{filter.parameters.length?filter.parameters.map((parameter)=>{const current=settings[parameter.id]??parameter.value;
               // A parameter with `choices` is an either/or, not a magnitude —
               // Add Noise's Distribution and Monochromatic. A slider for those
               // would offer values ("70% gaussian") that mean nothing.

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { WARP_PRESETS, applyRasterFilter, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
+import { WARP_PRESETS, applyRasterFilter, rasterFilterCatalog, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
 import { maskToRgba, rgbaToMask } from "./raster-pixel-buffers";
 import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
 import { withBusyPainted } from "./busy";
@@ -381,6 +381,24 @@ export function App() {
   // Gallery pre-selected on it, instead of whatever the dialog last happened
   // to show (docs/master-plan.md's Filter menu skeleton).
   const openFilter = (id: string) => { setFilterGallerySelection(id); setFilterGalleryOpen(true); };
+  // One-click Photoshop presets (Average, Blur, Sharpen More, Solarize, Despeckle…) apply the
+  // catalog's own default settings immediately, the same way `repeatLastFilter` reapplies a
+  // remembered one — no dialog to open, because there is nothing in it for a filter with no
+  // parameters to show. Still records `lastFilter` so "Repeat Filter" picks it up afterwards,
+  // matching Photoshop's own one-click filters feeding the same Repeat slot as a dialog-driven one.
+  const applyOneShotFilter = (id: string) => {
+    if (!active || !isRasterDocumentState(active.state)) return;
+    const definition = rasterFilterCatalog.find((item) => item.id === id);
+    if (!definition) return;
+    const state0 = active.state;
+    const target = state0.layers.find((item) => item.id === state0.activeLayerId);
+    if (!target) return;
+    const settings = Object.fromEntries(definition.parameters.map((parameter) => [parameter.id, parameter.value]));
+    const source = layerDocumentPixels(target, state0.width, state0.height);
+    const filtered = applyRasterFilter(source, state0.width, state0.height, id, settings);
+    applyFilter(filtered, definition.name);
+    setLastFilter({ id, settings, label: definition.name });
+  };
   const openCameraRawReprocess = async () => {
     if (!active) return;
     const source = active.origin?.kind === "asset" ? active.origin : null;
@@ -905,15 +923,15 @@ export function App() {
             ["Texture Dilation… (Texture Dilation…)", "", () => {}, true],
           ] },
           { label: "Blur (Размытие)", items: [
-            ["Average (Средний)", "", () => {}, true],
-            ["Blur (Размыть)", "", () => {}, true],
-            ["Blur More (Сильнее размыть)", "", () => {}, true],
+            ["Average (Средний)", "", () => applyOneShotFilter("average"), !active || active.kind!=="raster"],
+            ["Blur (Размыть)", "", () => applyOneShotFilter("blur"), !active || active.kind!=="raster"],
+            ["Blur More (Сильнее размыть)", "", () => applyOneShotFilter("blur_more"), !active || active.kind!=="raster"],
             ["Box Blur… (Коробчатое размытие…)", "", () => openFilter("box_blur"), !active || active.kind!=="raster"],
             ["Gaussian Blur… (Размытие по Гауссу…)", "", () => openFilter("gaussian_blur"), !active || active.kind!=="raster"],
-            ["Lens Blur… (Размытие объектива…)", "", () => {}, true],
-            ["Motion Blur… (Размытие в движении…)", "", () => {}, true],
-            ["Radial Blur… (Радиальное размытие…)", "", () => {}, true],
-            ["Surface Blur… (Поверхностное размытие…)", "", () => {}, true],
+            ["Lens Blur… (Размытие объектива…)", "", () => openFilter("lens_blur"), !active || active.kind!=="raster"],
+            ["Motion Blur… (Размытие в движении…)", "", () => openFilter("motion_blur"), !active || active.kind!=="raster"],
+            ["Radial Blur… (Радиальное размытие…)", "", () => openFilter("radial_blur"), !active || active.kind!=="raster"],
+            ["Surface Blur… (Поверхностное размытие…)", "", () => openFilter("surface_blur"), !active || active.kind!=="raster"],
           ] },
           { label: "Blur Gallery (Галерея размытия)", items: [
             ["Field Blur… (Размытие поля…)", "", () => {}, true],
@@ -924,23 +942,23 @@ export function App() {
           ] },
           { label: "Distort (Искажение)", items: [
             ["Displace… (Смещение…)", "", () => {}, true],
-            ["Kaleidoscope… (Калейдоскоп…)", "", () => {}, true],
+            ["Kaleidoscope… (Калейдоскоп…)", "", () => openFilter("kaleidoscope"), !active || active.kind!=="raster"],
             ["Pinch… (Щипок…)", "", () => openFilter("pinch_bloat"), !active || active.kind!=="raster"],
-            ["Polar Coordinates… (Полярные координаты…)", "", () => {}, true],
-            ["Ripple… (Рябь…)", "", () => {}, true],
-            ["Shear… (Сдвиг…)", "", () => {}, true],
-            ["Spherize… (Сферизация…)", "", () => {}, true],
+            ["Polar Coordinates… (Полярные координаты…)", "", () => openFilter("polar_coordinates"), !active || active.kind!=="raster"],
+            ["Ripple… (Рябь…)", "", () => openFilter("ripple"), !active || active.kind!=="raster"],
+            ["Shear… (Сдвиг…)", "", () => openFilter("shear"), !active || active.kind!=="raster"],
+            ["Spherize… (Сферизация…)", "", () => openFilter("spherize"), !active || active.kind!=="raster"],
             ["Twirl… (Скрутить…)", "", () => openFilter("twirl"), !active || active.kind!=="raster"],
             ["Wave… (Волна…)", "", () => openFilter("wave"), !active || active.kind!=="raster"],
-            ["ZigZag… (Зигзаг…)", "", () => {}, true],
+            ["ZigZag… (Зигзаг…)", "", () => openFilter("zigzag"), !active || active.kind!=="raster"],
             ["Dents… (Dents…)", "", () => {}, true],
           ] },
           { label: "Noise (Шум)", items: [
             ["Add Noise… (Добавить шум…)", "", () => openFilter("add_noise"), !active || active.kind!=="raster"],
-            ["Despeckle (Подавление шумов)", "", () => {}, true],
+            ["Despeckle (Подавление шумов)", "", () => applyOneShotFilter("despeckle"), !active || active.kind!=="raster"],
             ["Dust & Scratches… (Пыль и царапины…)", "", () => openFilter("dust_and_scratches"), !active || active.kind!=="raster"],
             ["Median… (Медиана…)", "", () => openFilter("median"), !active || active.kind!=="raster"],
-            ["Reduce Noise… (Уменьшить шум…)", "", () => {}, true],
+            ["Reduce Noise… (Уменьшить шум…)", "", () => openFilter("reduce_noise"), !active || active.kind!=="raster"],
           ] },
           { label: "Pixelate (Пикселизация)", items: [
             ["Color Halftone… (Цветной полутон…)", "", () => openFilter("color_halftone"), !active || active.kind!=="raster"],
@@ -956,34 +974,34 @@ export function App() {
             ["Clouds (Облака)", "", () => openFilter("clouds"), !active || active.kind!=="raster"],
             ["Difference Clouds (Облака с наложением)", "", () => {}, true],
             ["Fibers… (Волокна…)", "", () => {}, true],
-            ["Lens Flare… (Блик линзы…)", "", () => {}, true],
+            ["Lens Flare… (Блик линзы…)", "", () => openFilter("lens_flare"), !active || active.kind!=="raster"],
           ] },
           { label: "Sharpen (Резкость)", items: [
             ["Sharpen… (Резкость…)", "", () => openFilter("sharpen"), !active || active.kind!=="raster"],
-            ["Sharpen Edges (Повысить резкость краёв)", "", () => {}, true],
-            ["Sharpen More (Усилить резкость)", "", () => {}, true],
-            ["Smart Sharpen… (Умная резкость…)", "", () => {}, true],
+            ["Sharpen Edges (Повысить резкость краёв)", "", () => applyOneShotFilter("sharpen_edges"), !active || active.kind!=="raster"],
+            ["Sharpen More (Усилить резкость)", "", () => applyOneShotFilter("sharpen_more"), !active || active.kind!=="raster"],
+            ["Smart Sharpen… (Умная резкость…)", "", () => openFilter("smart_sharpen"), !active || active.kind!=="raster"],
             ["Unsharp Mask… (Нерезкая маска…)", "", () => openFilter("unsharp_mask"), !active || active.kind!=="raster"],
           ] },
           { label: "Stylize (Стилизовать)", items: [
-            ["Diffuse… (Диффузия…)", "", () => {}, true],
+            ["Diffuse… (Диффузия…)", "", () => openFilter("diffuse"), !active || active.kind!=="raster"],
             ["Emboss… (Тиснение…)", "", () => openFilter("emboss"), !active || active.kind!=="raster"],
             ["Find Edges (Найти края)", "", () => openFilter("edge_detect"), !active || active.kind!=="raster"],
-            ["Oil Paint… (Масляная краска…)", "", () => {}, true],
-            ["Solarize (Соляризировать)", "", () => {}, true],
-            ["Trace Contour… (Обвести контур…)", "", () => {}, true],
-            ["Wind… (Ветер…)", "", () => {}, true],
+            ["Oil Paint… (Масляная краска…)", "", () => openFilter("oil_paint"), !active || active.kind!=="raster"],
+            ["Solarize (Соляризировать)", "", () => applyOneShotFilter("solarize"), !active || active.kind!=="raster"],
+            ["Trace Contour… (Обвести контур…)", "", () => openFilter("trace_contour"), !active || active.kind!=="raster"],
+            ["Wind… (Ветер…)", "", () => openFilter("wind"), !active || active.kind!=="raster"],
             ["Glowing Edges… (Светящиеся края…)", "", () => openFilter("glowing_edges"), !active || active.kind!=="raster"],
             ["Plastic Wrap… (Целлофановая упаковка…)", "", () => openFilter("plastic_wrap"), !active || active.kind!=="raster"],
             ["CRT Glitch… (Глитч ЭЛТ…)", "", () => openFilter("glitch"), !active || active.kind!=="raster"],
             ["E-Ink Dither… (Дизеринг E-Ink…)", "", () => openFilter("eink"), !active || active.kind!=="raster"],
           ] },
           { label: "Other (Другие)", items: [
-            ["High Pass… (Высокие частоты…)", "", () => {}, true],
+            ["High Pass… (Высокие частоты…)", "", () => openFilter("high_pass"), !active || active.kind!=="raster"],
             ["HSB/HSL… (HSB/HSL…)", "", () => {}, true],
-            ["Maximum… (Максимум…)", "", () => {}, true],
-            ["Minimum… (Минимум…)", "", () => {}, true],
-            ["Offset… (Смещение…)", "", () => {}, true],
+            ["Maximum… (Максимум…)", "", () => openFilter("maximum"), !active || active.kind!=="raster"],
+            ["Minimum… (Минимум…)", "", () => openFilter("minimum"), !active || active.kind!=="raster"],
+            ["Offset… (Смещение…)", "", () => openFilter("offset"), !active || active.kind!=="raster"],
           ] },
           { label: "Fourier (Fourier)", items: [
             ["Fourier Transform (Fourier Transform)", "", () => {}, true],

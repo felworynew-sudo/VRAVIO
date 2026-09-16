@@ -25,19 +25,32 @@
  * phase, a visible seam at every band boundary), and `add_noise`/`film_grain` (seeded by
  * absolute `(x, y)` — same seam risk). Padding cannot make any of those tile-safe; they keep
  * running as one single-region request.
+ *
+ * `radial_blur` joined that list once it became a real Spin/Zoom blur (docs/master-plan.md §51):
+ * same disease as `twirl` — every pixel's read radius depends on its distance from the whole
+ * canvas's centre, not a fixed padding. `motion_blur` joined it too: its own real algorithm reads
+ * along `distance`/`angle`, a setting pair `paddingForFilter` below has no case for, so the
+ * generic `settings.radius` fallback would silently under-pad it. `surface_blur`/`lens_blur` kept
+ * their `radius` setting through the same rewrite and stay safe.
  */
 export const PARALLEL_SAFE_FILTERS: ReadonlySet<string> = new Set([
   "box_blur", "gaussian_blur", "surface_blur", "median", "dust_and_scratches",
-  "motion_blur", "radial_blur", "lens_blur", "iris_blur", "tilt_shift_blur",
+  "lens_blur", "iris_blur", "tilt_shift_blur",
   "sharpen", "unsharp_mask", "high_pass", "soft_glow",
   "edge_detect", "emboss", "glowing_edges", "plastic_wrap",
 ]);
 
 /** Filters whose read radius is fixed by `filters.ts` itself rather than a user setting —
  *  `blurred = blur(source, width, height, 2)` for the first group (filters.ts:283), one clamped
- *  neighbour at `(x+1, y+1)` for the second (filters.ts:285). */
+ *  neighbour at `(x+1, y+1)` for the second (filters.ts:285).
+ *
+ *  `high_pass` used to belong to the first group too, back when its Radius slider was a checkbox
+ *  that did nothing and the filter always blurred at a hardcoded 2 regardless (CLAUDE.md §3) —
+ *  fixed alongside the same bug in `filters.ts`. It now reads its own `radius` setting like
+ *  `box_blur`/`gaussian_blur` do, so it falls through to the generic `settings.radius` path below
+ *  instead of a fixed entry here. */
 const FIXED_PADDING: Partial<Record<string, number>> = {
-  sharpen: 2, unsharp_mask: 2, high_pass: 2, soft_glow: 2,
+  sharpen: 2, unsharp_mask: 2, soft_glow: 2,
   edge_detect: 1, emboss: 1, glowing_edges: 1, plastic_wrap: 1,
 };
 
