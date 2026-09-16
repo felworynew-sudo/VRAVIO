@@ -34,6 +34,7 @@ describe("Filter menu skeleton's newly-implemented filters (docs/master-plan.md 
     "diffuse", "solarize", "trace_contour", "wind", "oil_paint", "lens_flare",
     "crystallize", "pointillize", "fragment", "mezzotint", "shape_mosaic", "difference_clouds", "fibers",
     "normal_map", "lens_correction", "hsb_hsl", "texture_dilation",
+    "particles", "repeat", "color_to_transparency", "discretization",
   ];
 
   it("registers every new filter in the catalog exactly once", () => {
@@ -73,11 +74,22 @@ describe("Filter menu skeleton's newly-implemented filters (docs/master-plan.md 
         // regardless of shape no matter how the radius is tuned. It gets its own dedicated fixture
         // and test below instead (same reasoning `texture_dilation` already gets its own skip here).
         if ((id === "maximum" || id === "minimum") && parameter.id === "shape") continue;
+        // Repeat's own "rowShift" shifts sampling within a tile whose own size (25% of this
+        // fixture's 32px = 8px) happens to exactly match the checkerboard's own repeat period —
+        // downsampling the checkerboard into an 8px tile reproduces the same alternating pattern
+        // at every row regardless of horizontal phase, so no shift amount on this specific fixture
+        // ever looks different. Gets its own dedicated fixture and test below instead.
+        if (id === "repeat" && parameter.id === "rowShift") continue;
         // Offset's own "undefinedArea" only has anything to disagree about once a shift actually
         // pushes some pixel out of bounds — at the default horizontal=0/vertical=0 every source
         // pixel stays in bounds regardless of which undefined-area mode is selected, which would
         // make this parameter look dead for a reason that has nothing to do with whether it works.
-        const base = id === "offset" && parameter.id === "undefinedArea" ? { ...defaults, horizontal: WIDTH } : defaults;
+        // Particles' own "fall" scales a drift that is itself multiplied by "time" — at the
+        // default time=0 the drift term is zero regardless of Fall, the same "probed parameter is
+        // gated by another parameter's default" shape as offset's undefinedArea above.
+        const base = id === "offset" && parameter.id === "undefinedArea" ? { ...defaults, horizontal: WIDTH }
+          : id === "particles" && parameter.id === "fall" ? { ...defaults, time: 500 }
+          : defaults;
         const baseline = applyRasterFilter(source, WIDTH, HEIGHT, id, base);
         // Toggling to the opposite extreme is the right probe for almost every parameter here,
         // choices included — except motion_blur's own "angle", a blur *direction* rather than a
@@ -117,6 +129,24 @@ describe("Filter menu skeleton's newly-implemented filters (docs/master-plan.md 
     const wrapped = (0 * 4 + 3) * 4;
     expect(result[wrapped]).toBe(255);
     expect(result[wrapped + 3]).toBe(255);
+  });
+
+  it("Repeat's rowShift moves the sampled window per tile row, not just tiling it flat", () => {
+    // The shared checkerboard fixture can't show this: at 25% scale its own 8px tile happens to
+    // exactly match the checkerboard's own repeat period, so any horizontal phase reproduces the
+    // same pattern regardless of shift. A single marker pixel has no such accidental symmetry.
+    const size = 40;
+    const source = new Uint8ClampedArray(size * size * 4);
+    for (let i = 3; i < source.length; i += 4) source[i] = 255;
+    source[(8 * size + 8) * 4] = 255;
+    const unshifted = applyRasterFilter(source, size, size, "repeat", { scale: 25, rowShift: 0 });
+    const shifted = applyRasterFilter(source, size, size, "repeat", { scale: 25, rowShift: 50 });
+    const rowY = 12;
+    const findMarkerX = (result: Uint8ClampedArray) => { for (let x = 0; x < size; x += 1) if (result[(rowY * size + x) * 4]! > 128) return x; return -1; };
+    const unshiftedX = findMarkerX(unshifted), shiftedX = findMarkerX(shifted);
+    expect(unshiftedX).toBeGreaterThanOrEqual(0);
+    expect(shiftedX).toBeGreaterThanOrEqual(0);
+    expect(shiftedX).not.toBe(unshiftedX);
   });
 
   it("Maximum's Square kernel reaches a diagonal corner cell that Round/Diamond exclude", () => {

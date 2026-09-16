@@ -1024,6 +1024,7 @@ export function App() {
             ["Mosaic… (Мозаика…)", "", () => openFilter("pixelate"), !active || active.kind!=="raster"],
             ["Pointillize… (Пуантилизм…)", "", () => openFilter("pointillize"), !active || active.kind!=="raster"],
             ["Shape Mosaic… (Shape Mosaic…)", "", () => openFilter("shape_mosaic"), !active || active.kind!=="raster"],
+            ["Discretization… (Дискретизация…)", "", () => openFilter("discretization"), !active || active.kind!=="raster"],
           ] },
           { label: "Render (Рендер)", items: [
             ["Flame… (Пламя…)", "", () => {}, true],
@@ -1031,6 +1032,7 @@ export function App() {
             ["Difference Clouds (Облака с наложением)", "", () => applyOneShotFilter("difference_clouds"), !active || active.kind!=="raster"],
             ["Fibers… (Волокна…)", "", () => openFilter("fibers"), !active || active.kind!=="raster"],
             ["Lens Flare… (Блик линзы…)", "", () => openFilter("lens_flare"), !active || active.kind!=="raster"],
+            ["Particles… (Частицы…)", "", () => openFilter("particles"), !active || active.kind!=="raster"],
           ] },
           { label: "Sharpen (Резкость)", items: [
             ["Sharpen… (Резкость…)", "", () => openFilter("sharpen"), !active || active.kind!=="raster"],
@@ -1058,6 +1060,8 @@ export function App() {
             ["Maximum… (Максимум…)", "", () => openFilter("maximum"), !active || active.kind!=="raster"],
             ["Minimum… (Минимум…)", "", () => openFilter("minimum"), !active || active.kind!=="raster"],
             ["Offset… (Смещение…)", "", () => openFilter("offset"), !active || active.kind!=="raster"],
+            ["Repeat… (Повторить…)", "", () => openFilter("repeat"), !active || active.kind!=="raster"],
+            ["Color to Transparency… (Цвет в прозрачность…)", "", () => openFilter("color_to_transparency"), !active || active.kind!=="raster"],
           ] },
           { label: "Fourier (Fourier)", items: [
             ["Fourier Transform (Fourier Transform)", "", () => {}, true],

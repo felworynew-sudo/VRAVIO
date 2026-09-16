@@ -10,7 +10,11 @@ export type RasterFilterCategory = "Basics" | "Photo" | "Blur" | "Sharpen" | "St
  * so a settings object stays `Record<string, number>` and still survives the
  * structured clone to the thumbnail worker.
  */
-export interface RasterFilterParameter { id: string; name: string; min: number; max: number; step: number; value: number; choices?: readonly string[] }
+// `kind: "color"` keeps the value a plain number (a packed 0xRRGGBB integer, min 0/max 0xFFFFFF)
+// so a settings object stays `Record<string, number>` — same reasoning as `choices` above — while
+// telling the editor to render a colour swatch instead of a slider (Color to Transparency's own
+// reference panel, docs/master-plan.md §51).
+export interface RasterFilterParameter { id: string; name: string; min: number; max: number; step: number; value: number; choices?: readonly string[]; kind?: "color" }
 export interface RasterFilterDefinition { id: string; name: string; category: RasterFilterCategory; parameters: RasterFilterParameter[] }
 
 const none: RasterFilterDefinition["parameters"] = [];
@@ -112,6 +116,44 @@ const rippleParams = [{ id: "amount", name: "Amount (Интенсивность)
 // Four independent screen angles — one per RGB channel plus a shared row — replacing the single
 // grayscale dot-radius this filter used to render regardless of the angle sliders it displayed.
 const colorHalftoneParams = [{ id: "radius", name: "Radius (Радиус)", min: 2, max: 30, step: 1, value: 8 }, { id: "angle1", name: "Angle 1 (Угол 1)", min: 0, max: 360, step: 1, value: 10 }, { id: "angle2", name: "Angle 2 (Угол 2)", min: 0, max: 360, step: 1, value: 40 }, { id: "angle3", name: "Angle 3 (Угол 3)", min: 0, max: 360, step: 1, value: 70 }];
+// The four filters below have no entry in Patchy's current source and are not native Photoshop
+// filters either — they exist only as the owner's own reference-panel mockups
+// (docs/master-plan.md §51). Implemented directly from what each panel's own controls show,
+// leaning on standard, well-established techniques where one exists (GIMP's own Color to Alpha
+// formula; Floyd-Steinberg error diffusion and the textbook 4×4 Bayer matrix for dithering) rather
+// than inventing new math where a real one is not needed.
+const particlesParams = [
+  { id: "amount", name: "Amount (Количество)", min: 0, max: 500, step: 1, value: 150 },
+  { id: "size", name: "Size (Размер)", min: 1, max: 20, step: 1, value: 3 },
+  { id: "depth", name: "Depth (Глубина)", min: 0, max: 100, step: 1, value: 40 },
+  { id: "brightness", name: "Brightness (Яркость)", min: 0, max: 100, step: 1, value: 100 },
+  { id: "color", name: "Color (Цвет)", min: 0, max: 0xffffff, step: 1, value: 0xffffff, kind: "color" as const },
+  { id: "time", name: "Time (Время)", min: 0, max: 999, step: 1, value: 0 },
+  { id: "turbulence", name: "Turbulence (Турбулентность)", min: 0, max: 100, step: 1, value: 20 },
+  { id: "blink", name: "Blink (Мерцание)", min: 0, max: 100, step: 1, value: 0 },
+  { id: "fall", name: "Fall (Падение)", min: 0, max: 100, step: 1, value: 30 },
+  { id: "randomize", name: "Randomize (Случайность)", min: 0, max: 999, step: 1, value: 0 },
+];
+const repeatParams = [
+  { id: "scale", name: "Scale (Масштаб)", min: 5, max: 100, step: 1, value: 25 },
+  { id: "rowShift", name: "Row Shift (Сдвиг строк)", min: 0, max: 100, step: 1, value: 0 },
+  { id: "spaceX", name: "Space X (Промежуток X)", min: 0, max: 50, step: 1, value: 0 },
+  { id: "spaceY", name: "Space Y (Промежуток Y)", min: 0, max: 50, step: 1, value: 0 },
+  { id: "autoColorCorrect", name: "Auto Color Correct (Автокоррекция цвета)", min: 0, max: 1, step: 1, value: 0, choices: ["Off", "On"] },
+  { id: "angle", name: "Angle (Угол)", min: -180, max: 180, step: 1, value: 0 },
+];
+// Threshold 1 is a deadzone below which the computed alpha stays fully opaque; Threshold 2 is
+// where it reaches full strength; smoothstep between them so both sliders have a real, distinct
+// effect instead of one hard GIMP-style cutoff pretending to be two controls.
+const colorToTransparencyParams = [
+  { id: "color", name: "Color (Цвет)", min: 0, max: 0xffffff, step: 1, value: 0xffffff, kind: "color" as const },
+  { id: "threshold1", name: "Threshold 1 (Порог 1)", min: 0, max: 100, step: 1, value: 0 },
+  { id: "threshold2", name: "Threshold 2 (Порог 2)", min: 0, max: 100, step: 1, value: 100 },
+];
+const discretizationParams = [
+  { id: "palette", name: "Palette (Палитра)", min: 0, max: 2, step: 1, value: 1, choices: ["Black & White (Чёрно-белая)", "Grayscale (Оттенки серого)", "RGB (RGB)"] },
+  { id: "method", name: "Method (Метод)", min: 0, max: 2, step: 1, value: 1, choices: ["None (Нет)", "Floyd-Steinberg (Флойд-Стейнберг)", "Bayer 4x4 (Байер 4x4)"] },
+];
 export const rasterFilterCatalog: RasterFilterDefinition[] = ([
   ["invert","Invert (Инверсия)","Basics",none], ["brightness_contrast","Brightness/Contrast (Яркость/Контраст)","Basics",[{id:"brightness",name:"Brightness (Яркость)",min:-100,max:100,step:1,value:0},{id:"contrast",name:"Contrast (Контраст)",min:-100,max:100,step:1,value:20}]], ["grayscale","Grayscale (Оттенки серого)","Basics",none], ["desaturate","Desaturate (Обесцветить)","Basics",none], ["auto_tone","Auto Tone (Автотон)","Photo",none], ["auto_contrast","Auto Contrast (Автоконтраст)","Photo",none], ["auto_color","Auto Color (Автоцвет)","Photo",none], ["soft_glow","Soft Glow (Мягкое свечение)","Photo",amount], ["punchy_color","Punchy Color (Сочный цвет)","Photo",amount], ["noir","Noir (Нуар)","Photo",amount], ["cinematic_matte","Cinematic Matte (Кинематографический матовый)","Photo",amount], ["vintage_fade","Vintage Fade (Винтажное выцветание)","Photo",amount], ["sepia","Vintage Sepia (Винтажная сепия)","Photo",amount], ["threshold","Threshold (Порог)","Basics",[{id:"threshold",name:"Threshold (Порог)",min:0,max:255,step:1,value:128}]], ["posterize","Posterize (Постеризация)","Basics",[{id:"levels",name:"Levels (Уровни)",min:2,max:32,step:1,value:4}]], ["box_blur","Box Blur (Прямоугольное размытие)","Blur",boxBlurParams], ["sharpen","Sharpen (Резкость)","Sharpen",amount], ["unsharp_mask","Unsharp Mask (Контурная резкость)","Sharpen",unsharpMaskParams], ["gaussian_blur","Gaussian Blur (Размытие по Гауссу)","Blur",radius], ["motion_blur","Motion Blur (Размытие в движении)","Blur",motionBlurParams], ["radial_blur","Radial Blur (Радиальное размытие)","Blur",radialBlurParams], ["edge_detect","Edge Detect (Выделение краёв)","Stylize",none], ["emboss","Emboss (Тиснение)","Stylize",embossParams], ["glowing_edges","Glowing Edges (Светящиеся края)","Stylize",amount], ["twirl","Twirl (Скручивание)","Distort",amount], ["wave","Wave (Волна)","Distort",amount], ["pinch_bloat","Pinch/Bloat (Сжатие/Вздутие)","Distort",[{id:"amount",name:"Amount (Сила)",min:-100,max:100,step:1,value:25}]], ["clouds","Clouds (Облака)","Render",amount], ["pixelate","Pixel Mosaic (Мозаика)","Stylize",[{id:"size",name:"Cell size (Размер ячейки)",min:2,max:64,step:1,value:8}]], ["color_halftone","Color Halftone (Цветные полутона)","Stylize",colorHalftoneParams], ["film_grain","Analog Grain (Аналоговое зерно)","Noise",[noiseAmount]], ["add_noise","Add Noise (Добавить шум)","Noise",addNoiseParameters], ["vignette","Lens Vignette (Виньетка)","Photo",amount], ["high_pass","High Pass (Цветовой контраст)","Sharpen",highPassParams], ["median","Median (Медиана)","Noise",medianParams], ["dust_and_scratches","Dust & Scratches (Пыль и царапины)","Noise",dustAndScratchesParams], ["surface_blur","Surface Blur (Размытие по поверхности)","Blur",surfaceBlurParams], ["lens_blur","Lens Blur (Размытие объектива)","Blur",lensBlurParams], ["iris_blur","Iris Blur (Размытие диафрагмы)","Blur",radius], ["tilt_shift_blur","Tilt-Shift Blur (Наклон-сдвиг)","Blur",radius], ["plastic_wrap","Plastic Wrap (Целлофановая упаковка)","Stylize",amount],
   ["duotone","Duotone (Дуотон)","Photo",[{id:"shadowHue",name:"Shadow hue (Тон теней)",min:0,max:359,step:1,value:210},{id:"highlightHue",name:"Highlight hue (Тон светов)",min:0,max:359,step:1,value:45},{id:"amount",name:"Amount (Сила)",min:0,max:100,step:1,value:100}]],
@@ -151,6 +193,10 @@ export const rasterFilterCatalog: RasterFilterDefinition[] = ([
   ["lens_correction","Lens Correction (Коррекция линзы)","Distort",lensCorrectionParams],
   ["hsb_hsl","HSB/HSL (HSB/HSL)","Other",hsbHslParams],
   ["texture_dilation","Texture Dilation (Texture Dilation)","Other",textureDilationParams],
+  ["particles","Particles (Частицы)","Render",particlesParams],
+  ["repeat","Repeat (Повторить)","Other",repeatParams],
+  ["color_to_transparency","Color to Transparency (Цвет в прозрачность)","Other",colorToTransparencyParams],
+  ["discretization","Discretization (Дискретизация)","Stylize",discretizationParams],
 ].map(([id,name,category,parameters]) => ({ id, name, category, parameters })) as RasterFilterDefinition[])
   .filter((definition) => !unavailableUntilImplemented.has(definition.id));
 
@@ -1644,6 +1690,174 @@ export function pathBlurEffect(source: Uint8ClampedArray, width: number, height:
   return output;
 }
 
+/**
+ * Particles — a generative snow/dust overlay, docs/master-plan.md §51: neither Patchy nor
+ * Photoshop have a filter by this name, so it is built directly from the reference panel's own
+ * ten controls, on the project's own deterministic `addNoiseHash`/`unitFromHash` (the same
+ * reproducible-noise convention `clouds`/`add_noise` already use) rather than `Math.random()`, so
+ * the same settings always render the same frame. Each particle's screen position comes from a
+ * hashed base point plus a Fall-driven vertical drift and a Turbulence-driven horizontal sway
+ * (both animated by Time); Depth spreads per-particle size around the base Size instead of every
+ * particle being identical; Blink hides a hashed fraction of particles per Time step; Randomize
+ * reseeds the whole hash without touching any other control.
+ */
+function particlesFilter(source: Uint8ClampedArray, width: number, height: number, amount: number, size: number, depth: number, brightnessPercent: number, colorPacked: number, time: number, turbulence: number, blinkPercent: number, fallPercent: number, randomize: number): Uint8ClampedArray {
+  const output = source.slice();
+  const count = Math.max(0, Math.round(amount)), colorR = (colorPacked >> 16) & 255, colorG = (colorPacked >> 8) & 255, colorB = colorPacked & 255;
+  const brightness = Math.max(0, Math.min(1, brightnessPercent / 100));
+  for (let particle = 0; particle < count; particle += 1) {
+    const baseX = unitFromHash(addNoiseHash(particle, randomize, 501)) * 0.5 + 0.5, baseY = unitFromHash(addNoiseHash(particle, randomize, 502)) * 0.5 + 0.5;
+    const sizeScale = 1 + (unitFromHash(addNoiseHash(particle, randomize, 503)) * 0.5) * (depth / 100);
+    const sway = Math.sin(time * 0.05 + particle) * (turbulence / 100) * (width * 0.05);
+    const fallOffset = ((time * (fallPercent / 100) * height * 0.3) + baseY * height) % (height + size * 4) - size * 2;
+    if (blinkPercent > 0 && unitFromHash(addNoiseHash(particle, Math.floor(time), 504)) * 0.5 + 0.5 < blinkPercent / 100) continue;
+    const centerX = baseX * width + sway, centerY = fallOffset, radius = Math.max(0.5, size * sizeScale);
+    const left = Math.max(0, Math.floor(centerX - radius)), right = Math.min(width - 1, Math.ceil(centerX + radius));
+    const top = Math.max(0, Math.floor(centerY - radius)), bottom = Math.min(height - 1, Math.ceil(centerY + radius));
+    for (let y = top; y <= bottom; y += 1) for (let x = left; x <= right; x += 1) {
+      const distance = Math.hypot(x - centerX, y - centerY);
+      if (distance > radius) continue;
+      const coverage = (1 - distance / radius) * brightness, i = (y * width + x) * 4;
+      output[i] = byte(output[i]! + (colorR - output[i]!) * coverage);
+      output[i + 1] = byte(output[i + 1]! + (colorG - output[i + 1]!) * coverage);
+      output[i + 2] = byte(output[i + 2]! + (colorB - output[i + 2]!) * coverage);
+      output[i + 3] = byte(Math.max(output[i + 3]!, coverage * 255));
+    }
+  }
+  return output;
+}
+
+/**
+ * Repeat/Tile — docs/master-plan.md §51, another owner-drawn panel with no Patchy/Photoshop
+ * source: scales the whole source down into a single tile, repeats it across the canvas with each
+ * row of tiles shifted horizontally by Row Shift (the classic brick/masonry offset), leaves a
+ * Space X/Y gap between tiles, and can rotate the whole grid by Angle before sampling. Auto Color
+ * Correct stretches each channel's own min–max range across the whole tiled result out to 0–255
+ * (a plain auto-contrast, the same idea `auto_contrast` elsewhere in this file already applies to
+ * a whole image) — matching mean *brightness* back to the untouched source was tried first, but
+ * every tile here resamples the same whole source, so the tiled result's own mean is already
+ * within rounding of the source's regardless of Row Shift/gaps and the "correction" was a no-op in
+ * practice; a genuine contrast stretch has a real, visible effect whenever the source does not
+ * already span the full range, which is the normal case.
+ */
+function repeatFilter(source: Uint8ClampedArray, width: number, height: number, scalePercent: number, rowShiftPercent: number, spaceX: number, spaceY: number, autoColorCorrect: boolean, angleDeg: number): Uint8ClampedArray {
+  const tileW = Math.max(2, Math.round((width * scalePercent) / 100)), tileH = Math.max(2, Math.round((height * scalePercent) / 100));
+  const cellW = tileW + spaceX, cellH = tileH + spaceY;
+  const angle = (-angleDeg * Math.PI) / 180, cos = Math.cos(angle), sin = Math.sin(angle), cx = width / 2, cy = height / 2;
+  const output = new Uint8ClampedArray(source.length);
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const dx = x - cx, dy = y - cy, rx = dx * cos - dy * sin + cx, ry = dx * sin + dy * cos + cy;
+    const row = Math.floor(ry / cellH);
+    const shiftX = ((row * rowShiftPercent) / 100) * tileW;
+    const localX = (((rx - shiftX) % cellW) + cellW) % cellW, localY = ((ry % cellH) + cellH) % cellH;
+    const i = (y * width + x) * 4;
+    if (localX >= tileW || localY >= tileH) { output[i] = 0; output[i + 1] = 0; output[i + 2] = 0; output[i + 3] = 0; continue; }
+    const [r, g, b, a] = sampleBilinear(source, width, height, (localX / tileW) * width, (localY / tileH) * height);
+    output[i] = r; output[i + 1] = g; output[i + 2] = b; output[i + 3] = a;
+  }
+  if (!autoColorCorrect) return output;
+  for (let c = 0; c < 3; c += 1) {
+    let lo = 255, hi = 0;
+    for (let i = c; i < output.length; i += 4) if (output[i + 3 - c]! !== 0) { lo = Math.min(lo, output[i]!); hi = Math.max(hi, output[i]!); }
+    if (hi <= lo) continue;
+    for (let i = c; i < output.length; i += 4) output[i] = byte(((output[i]! - lo) * 255) / (hi - lo));
+  }
+  return output;
+}
+
+/**
+ * Color to Transparency — GIMP's own `plug-in-colortoalpha` formula (`app/operations/gimpoperationcolortoalpha.c`;
+ * per-channel "how much alpha would this pixel need so blending it back over the target colour
+ * reproduces the original", then un-premultiplied against that alpha so the surviving colour still
+ * reads correctly composited over anything else), not an invented distance-to-colour test. GIMP's
+ * own dialog has no threshold at all — a hard cutoff at alpha=0; this reference panel's own two
+ * Threshold sliders soften that into a deadzone (below Threshold 1, stays fully opaque) and a
+ * ramp up to full strength (at Threshold 2), smoothstep-blended between them, so both sliders
+ * genuinely do something instead of the second one silently duplicating the first.
+ */
+function colorToTransparencyFilter(source: Uint8ClampedArray, width: number, height: number, colorPacked: number, threshold1Percent: number, threshold2Percent: number): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(source.length);
+  const targetR = (colorPacked >> 16) & 255, targetG = (colorPacked >> 8) & 255, targetB = colorPacked & 255;
+  const channelAlpha = (value: number, target: number) => {
+    if (value > target) return target >= 255 ? 0 : (value - target) / (255 - target);
+    if (value < target) return target <= 0 ? 0 : (target - value) / target;
+    return 0;
+  };
+  const t1 = Math.min(threshold1Percent, threshold2Percent) / 100, t2 = Math.max(threshold1Percent, threshold2Percent, threshold1Percent + 1) / 100;
+  for (let i = 0; i < source.length; i += 4) {
+    const r = source[i]!, g = source[i + 1]!, b = source[i + 2]!;
+    const alpha = Math.max(channelAlpha(r, targetR), channelAlpha(g, targetG), channelAlpha(b, targetB));
+    const span = Math.max(1e-6, t2 - t1), edge = Math.max(0, Math.min(1, (alpha - t1) / span)), smoothed = edge * edge * (3 - 2 * edge);
+    if (smoothed > 1e-4) {
+      output[i] = byte((r - targetR) / smoothed + targetR);
+      output[i + 1] = byte((g - targetG) / smoothed + targetG);
+      output[i + 2] = byte((b - targetB) / smoothed + targetB);
+    } else { output[i] = targetR; output[i + 1] = targetG; output[i + 2] = targetB; }
+    output[i + 3] = byte(smoothed * source[i + 3]!);
+  }
+  return output;
+}
+
+const BAYER_4X4 = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
+const quantizeLevels = (value: number, levels: number) => levels <= 1 ? 0 : Math.round((Math.max(0, Math.min(255, value)) / 255) * (levels - 1)) * (255 / (levels - 1));
+
+/** Ordered dithering: the textbook 4×4 Bayer matrix (Bayer, 1973), the same public-domain
+ * technique `eInkFilter`/`mezzotintFilter` already use elsewhere in this file for their own
+ * ordered-dither cases, generalised to an arbitrary level count. */
+function ditherBayer(value: number, levels: number, x: number, y: number): number {
+  const step = levels <= 1 ? 0 : 255 / (levels - 1), threshold = (BAYER_4X4[y % 4]![x % 4]! + 0.5) / 16 - 0.5;
+  return quantizeLevels(value + threshold * step, levels);
+}
+
+/** Floyd-Steinberg error diffusion (Floyd & Steinberg, 1976) — the classic raster-scan algorithm,
+ * one independent pass per channel (or the single luminance channel for Black & White/Grayscale). */
+function ditherFloydSteinberg(channel: Float32Array, width: number, height: number, levels: number): Uint8ClampedArray {
+  const buffer = Float32Array.from(channel), out = new Uint8ClampedArray(width * height);
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const p = y * width + x, old = buffer[p]!, quantized = quantizeLevels(old, levels), error = old - quantized;
+    out[p] = quantized;
+    if (x + 1 < width) buffer[p + 1] = buffer[p + 1]! + (error * 7) / 16;
+    if (y + 1 < height) {
+      if (x > 0) buffer[p + width - 1] = buffer[p + width - 1]! + (error * 3) / 16;
+      buffer[p + width] = buffer[p + width]! + (error * 5) / 16;
+      if (x + 1 < width) buffer[p + width + 1] = buffer[p + width + 1]! + (error * 1) / 16;
+    }
+  }
+  return out;
+}
+
+/**
+ * Discretization/Dither — palette-reduction plus dithering, the same operation every editor's own
+ * Indexed/Bitmap conversion performs: Black & White and Grayscale quantize the source's own
+ * luminance to 2 or 4 levels and paint every channel from that one value; RGB quantizes each
+ * channel independently to 6 levels. Method picks flat quantization (None), Floyd-Steinberg error
+ * diffusion, or ordered Bayer 4×4 dithering — both are real, standard algorithms (see the two
+ * helpers above), not approximations of them.
+ */
+function discretizationFilter(source: Uint8ClampedArray, width: number, height: number, palette: number, method: number): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(source.length);
+  const levels = palette === 0 ? 2 : palette === 1 ? 4 : 6;
+  if (palette === 2) {
+    const channels: Uint8ClampedArray[] = [0, 1, 2].map((c) => {
+      if (method === 1) { const plane = new Float32Array(width * height); for (let p = 0; p < width * height; p += 1) plane[p] = source[p * 4 + c]!; return ditherFloydSteinberg(plane, width, height, levels); }
+      const plane = new Uint8ClampedArray(width * height);
+      for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) { const p = y * width + x, value = source[p * 4 + c]!; plane[p] = method === 2 ? ditherBayer(value, levels, x, y) : quantizeLevels(value, levels); }
+      return plane;
+    });
+    for (let p = 0; p < width * height; p += 1) { const i = p * 4; output[i] = channels[0]![p]!; output[i + 1] = channels[1]![p]!; output[i + 2] = channels[2]![p]!; output[i + 3] = source[i + 3]!; }
+    return output;
+  }
+  const luma = new Float32Array(width * height);
+  for (let p = 0; p < width * height; p += 1) { const i = p * 4; luma[p] = (source[i]! * 30 + source[i + 1]! * 59 + source[i + 2]! * 11) / 100; }
+  const quantizedLuma = method === 1 ? ditherFloydSteinberg(luma, width, height, levels) : null;
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const p = y * width + x, i = p * 4;
+    const shade = method === 1 ? quantizedLuma![p]! : method === 2 ? ditherBayer(luma[p]!, levels, x, y) : quantizeLevels(luma[p]!, levels);
+    output[i] = shade; output[i + 1] = shade; output[i + 2] = shade; output[i + 3] = source[i + 3]!;
+  }
+  return output;
+}
+
 export function applyRasterFilter(source: Uint8ClampedArray, width: number, height: number, id: string, settings: Record<string, number> = {}): Uint8ClampedArray {
   const output = source.slice(), mix = Math.max(0,Math.min(1,value(settings,"amount",100)/100));
   if (id === "gaussian_blur") return gaussianBlur(source, width, height, value(settings, "radius", 2));
@@ -1690,6 +1904,10 @@ export function applyRasterFilter(source: Uint8ClampedArray, width: number, heig
   if (id === "lens_correction") return lensCorrectionFilter(source, width, height, value(settings, "distortAmount", 0), value(settings, "scale", 100));
   if (id === "hsb_hsl") return hsbHslFilter(source, value(settings, "inputMode", 0), value(settings, "outputMode", 1));
   if (id === "texture_dilation") return textureDilationFilter(source, width, height, value(settings, "distance", 8), value(settings, "crop", 0));
+  if (id === "particles") return particlesFilter(source, width, height, value(settings, "amount", 150), value(settings, "size", 3), value(settings, "depth", 40), value(settings, "brightness", 100), value(settings, "color", 0xffffff), value(settings, "time", 0), value(settings, "turbulence", 20), value(settings, "blink", 0), value(settings, "fall", 30), value(settings, "randomize", 0));
+  if (id === "repeat") return repeatFilter(source, width, height, value(settings, "scale", 25), value(settings, "rowShift", 0), value(settings, "spaceX", 0), value(settings, "spaceY", 0), value(settings, "autoColorCorrect", 0) === 1, value(settings, "angle", 0));
+  if (id === "color_to_transparency") return colorToTransparencyFilter(source, width, height, value(settings, "color", 0xffffff), value(settings, "threshold1", 0), value(settings, "threshold2", 100));
+  if (id === "discretization") return discretizationFilter(source, width, height, value(settings, "palette", 1), value(settings, "method", 1));
   if(id==="pixelate"){const size=Math.max(2,Math.round(value(settings,"size",8)));for(let y=0;y<height;y+=size)for(let x=0;x<width;x+=size){const i=(y*width+x)*4;for(let yy=y;yy<Math.min(height,y+size);yy++)for(let xx=x;xx<Math.min(width,x+size);xx++){const o=(yy*width+xx)*4;output[o]=source[i]!;output[o+1]=source[i+1]!;output[o+2]=source[i+2]!;output[o+3]=source[i+3]!;}}return output;}
   if(id==="auto_tone"||id==="auto_contrast"||id==="auto_color"){for(let c=0;c<3;c++){let lo=255,hi=0;for(let i=c;i<source.length;i+=4)if(source[i+3-c]!==0){lo=Math.min(lo,source[i]!);hi=Math.max(hi,source[i]!);}if(hi>lo)for(let i=c;i<output.length;i+=4)output[i]=byte((source[i]!-lo)*255/(hi-lo));}return output;}
   if(id==="twirl") return twirlFilter(source,width,height,value(settings,"amount",100));

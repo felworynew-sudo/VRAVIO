@@ -3,8 +3,15 @@ import { localized, text } from "../i18n";
 import { AngleDial } from "../ui/atoms/AngleDial";
 import { ButtonGroup } from "../ui/atoms/ButtonGroup";
 import { Checkbox } from "../ui/atoms/Checkbox";
+import { ColorSwatch } from "../ui/atoms/ColorSwatch";
 import { SliderWithNumber } from "../ui/molecules/SliderWithNumber";
 import type { FilterPanelEditorProps } from "./types";
+
+// A packed 0xRRGGBB integer (the settings object stays `Record<string, number>`, see
+// `RasterFilterParameter`'s own `kind: "color"` doc comment) round-tripped through the hex string
+// `<input type="color">`/`ColorSwatch` actually wants.
+const packedToHex = (packed: number) => `#${Math.max(0, Math.min(0xffffff, Math.round(packed))).toString(16).padStart(6, "0")}`;
+const hexToPacked = (hex: string) => Number.parseInt(hex.slice(1), 16);
 
 // Angle parameters get the same draggable dial `AdjustmentEditor.tsx`'s siblings never needed but
 // this catalog's own Emboss/Wind/Kaleidoscope/Color Halftone panels do — a slider cannot represent
@@ -34,6 +41,9 @@ export function GenericFilterEditor({ parameters, settings, language, onChange }
     const label = localized(parameter.name, language);
     const currentValue = Number.isFinite(settings[parameter.id]) ? settings[parameter.id]! : parameter.value;
     const setValue = (value: number) => onChange({ ...settings, [parameter.id]: value });
+    if (parameter.kind === "color") {
+      return <ColorSwatch key={parameter.id} className="adjustment-color" label={label} value={packedToHex(currentValue)} onChange={(hex) => setValue(hexToPacked(hex))}/>;
+    }
     if (parameter.choices) {
       if (isOffOnChoices(parameter.choices)) {
         return <Checkbox key={parameter.id} className="adjustment-check" label={label} checked={currentValue >= parameter.max} onChange={(checked) => setValue(checked ? parameter.max : parameter.min)}/>;
