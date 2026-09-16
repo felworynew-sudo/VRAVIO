@@ -61,6 +61,7 @@ const fibersParams = [{ id: "variance", name: "Variance (Разброс)", min: 
 const normalMapParams = [{ id: "scale", name: "Scale (Масштаб)", min: 1, max: 100, step: 1, value: 10 }];
 const lensCorrectionParams = [{ id: "distortAmount", name: "Remove Distortion (Удалить искажение)", min: -100, max: 100, step: 1, value: 0 }, { id: "chromaticAberration", name: "Fix Chromatic Aberration (Хроматические аберрации)", min: 0, max: 100, step: 1, value: 0 }, { id: "vignetteAmount", name: "Vignette (Виньетирование)", min: -100, max: 100, step: 1, value: 0 }];
 const hsbHslParams = [{ id: "mode", name: "Mode (Режим)", min: 0, max: 1, step: 1, value: 0, choices: ["HSB (HSB)", "HSL (HSL)"] }];
+const textureDilationParams = [{ id: "distance", name: "Distance (Дистанция)", min: 1, max: 64, step: 1, value: 8 }];
 export const rasterFilterCatalog: RasterFilterDefinition[] = ([
   ["invert","Invert (Инверсия)","Basics",none], ["brightness_contrast","Brightness/Contrast (Яркость/Контраст)","Basics",[{id:"brightness",name:"Brightness (Яркость)",min:-100,max:100,step:1,value:0},{id:"contrast",name:"Contrast (Контраст)",min:-100,max:100,step:1,value:20}]], ["grayscale","Grayscale (Оттенки серого)","Basics",none], ["desaturate","Desaturate (Обесцветить)","Basics",none], ["auto_tone","Auto Tone (Автотон)","Photo",none], ["auto_contrast","Auto Contrast (Автоконтраст)","Photo",none], ["auto_color","Auto Color (Автоцвет)","Photo",none], ["soft_glow","Soft Glow (Мягкое свечение)","Photo",amount], ["punchy_color","Punchy Color (Сочный цвет)","Photo",amount], ["noir","Noir (Нуар)","Photo",amount], ["cinematic_matte","Cinematic Matte (Кинематографический матовый)","Photo",amount], ["vintage_fade","Vintage Fade (Винтажное выцветание)","Photo",amount], ["sepia","Vintage Sepia (Винтажная сепия)","Photo",amount], ["threshold","Threshold (Порог)","Basics",[{id:"threshold",name:"Threshold (Порог)",min:0,max:255,step:1,value:128}]], ["posterize","Posterize (Постеризация)","Basics",[{id:"levels",name:"Levels (Уровни)",min:2,max:32,step:1,value:4}]], ["box_blur","Box Blur (Прямоугольное размытие)","Blur",radius], ["sharpen","Sharpen (Резкость)","Sharpen",amount], ["unsharp_mask","Unsharp Mask (Контурная резкость)","Sharpen",amount], ["gaussian_blur","Gaussian Blur (Размытие по Гауссу)","Blur",radius], ["motion_blur","Motion Blur (Размытие в движении)","Blur",motionBlurParams], ["radial_blur","Radial Blur (Радиальное размытие)","Blur",radialBlurParams], ["edge_detect","Edge Detect (Выделение краёв)","Stylize",none], ["emboss","Emboss (Тиснение)","Stylize",embossParams], ["glowing_edges","Glowing Edges (Светящиеся края)","Stylize",amount], ["twirl","Twirl (Скручивание)","Distort",amount], ["wave","Wave (Волна)","Distort",amount], ["pinch_bloat","Pinch/Bloat (Сжатие/Вздутие)","Distort",[{id:"amount",name:"Amount (Сила)",min:-100,max:100,step:1,value:25}]], ["clouds","Clouds (Облака)","Render",amount], ["pixelate","Pixel Mosaic (Мозаика)","Stylize",[{id:"size",name:"Cell size (Размер ячейки)",min:2,max:64,step:1,value:8}]], ["color_halftone","Color Halftone (Цветные полутона)","Stylize",radius], ["film_grain","Analog Grain (Аналоговое зерно)","Noise",[noiseAmount]], ["add_noise","Add Noise (Добавить шум)","Noise",addNoiseParameters], ["vignette","Lens Vignette (Виньетка)","Photo",amount], ["high_pass","High Pass (Цветовой контраст)","Sharpen",radius], ["median","Median (Медиана)","Noise",radius], ["dust_and_scratches","Dust & Scratches (Пыль и царапины)","Noise",radius], ["surface_blur","Surface Blur (Размытие по поверхности)","Blur",surfaceBlurParams], ["lens_blur","Lens Blur (Размытие объектива)","Blur",lensBlurParams], ["iris_blur","Iris Blur (Размытие диафрагмы)","Blur",radius], ["tilt_shift_blur","Tilt-Shift Blur (Наклон-сдвиг)","Blur",radius], ["plastic_wrap","Plastic Wrap (Целлофановая упаковка)","Stylize",amount],
   ["duotone","Duotone (Дуотон)","Photo",[{id:"shadowHue",name:"Shadow hue (Тон теней)",min:0,max:359,step:1,value:210},{id:"highlightHue",name:"Highlight hue (Тон светов)",min:0,max:359,step:1,value:45},{id:"amount",name:"Amount (Сила)",min:0,max:100,step:1,value:100}]],
@@ -99,6 +100,7 @@ export const rasterFilterCatalog: RasterFilterDefinition[] = ([
   ["normal_map","Normal Map (Карта нормалей)","Other",normalMapParams],
   ["lens_correction","Lens Correction (Коррекция линзы)","Distort",lensCorrectionParams],
   ["hsb_hsl","HSB/HSL (HSB/HSL)","Other",hsbHslParams],
+  ["texture_dilation","Texture Dilation (Texture Dilation)","Other",textureDilationParams],
 ].map(([id,name,category,parameters]) => ({ id, name, category, parameters })) as RasterFilterDefinition[])
   .filter((definition) => !unavailableUntilImplemented.has(definition.id));
 
@@ -1309,6 +1311,52 @@ function hsbHslFilter(source: Uint8ClampedArray, useHsl: boolean): Uint8ClampedA
   return output;
 }
 
+/**
+ * Texture Dilation — not a native Photoshop filter (confirmed against
+ * Photoshop's real 3D-panel documentation; docs/master-plan.md §51), but a
+ * real, well-known technique from game-texture baking (Substance Painter,
+ * GIMP's UVPadder): iteratively extends each opaque pixel's colour one step
+ * into its transparent neighbours, `distance` times, so a texture atlas's
+ * UV-island edges don't fringe black when a renderer's mipmapping or
+ * bilinear filtering samples slightly outside them. Alpha itself is left
+ * untouched — only the RGB a transparent pixel *would* show if sampled is
+ * corrected — kept here as the same kind of honest bonus addition as
+ * Kaleidoscope: real and useful, just not from Photoshop's own menu.
+ */
+function textureDilationFilter(source: Uint8ClampedArray, width: number, height: number, distance: number): Uint8ClampedArray {
+  let current = source.slice();
+  let filled = new Uint8Array(width * height);
+  for (let p = 0; p < width * height; p += 1) if (source[p * 4 + 3]! >= 10) filled[p] = 1;
+  const offsets = [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]];
+  for (let pass = 0; pass < Math.max(1, Math.round(distance)); pass += 1) {
+    const next = current.slice(), nextFilled = filled.slice();
+    let grew = false;
+    for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+      const p = y * width + x;
+      if (filled[p]) continue;
+      const sum = [0, 0, 0], count = { value: 0 };
+      for (const [dx, dy] of offsets) {
+        const nx = x + dx!, ny = y + dy!;
+        if (nx < 0 || nx >= width || ny < 0 || ny >= height) continue;
+        const np = ny * width + nx;
+        if (!filled[np]) continue;
+        const ni = np * 4;
+        sum[0] = sum[0]! + current[ni]!; sum[1] = sum[1]! + current[ni + 1]!; sum[2] = sum[2]! + current[ni + 2]!; count.value += 1;
+      }
+      if (count.value > 0) {
+        const i = p * 4;
+        next[i] = byte(sum[0]! / count.value); next[i + 1] = byte(sum[1]! / count.value); next[i + 2] = byte(sum[2]! / count.value);
+        nextFilled[p] = 1; grew = true;
+      }
+    }
+    current = next; filled = nextFilled;
+    if (!grew) break;
+  }
+  const output = current;
+  for (let i = 3; i < output.length; i += 4) output[i] = source[i]!;
+  return output;
+}
+
 export function applyRasterFilter(source: Uint8ClampedArray, width: number, height: number, id: string, settings: Record<string, number> = {}): Uint8ClampedArray {
   const output = source.slice(), mix = Math.max(0,Math.min(1,value(settings,"amount",100)/100));
   if (id === "gaussian_blur") return gaussianBlur(source, width, height, value(settings, "radius", 2));
@@ -1352,6 +1400,7 @@ export function applyRasterFilter(source: Uint8ClampedArray, width: number, heig
   if (id === "normal_map") return normalMapFilter(source, width, height, value(settings, "scale", 10));
   if (id === "lens_correction") return lensCorrectionFilter(source, width, height, value(settings, "distortAmount", 0), value(settings, "chromaticAberration", 0), value(settings, "vignetteAmount", 0));
   if (id === "hsb_hsl") return hsbHslFilter(source, value(settings, "mode", 0) === 1);
+  if (id === "texture_dilation") return textureDilationFilter(source, width, height, value(settings, "distance", 8));
   if(id==="pixelate"){const size=Math.max(2,Math.round(value(settings,"size",8)));for(let y=0;y<height;y+=size)for(let x=0;x<width;x+=size){const i=(y*width+x)*4;for(let yy=y;yy<Math.min(height,y+size);yy++)for(let xx=x;xx<Math.min(width,x+size);xx++){const o=(yy*width+xx)*4;output[o]=source[i]!;output[o+1]=source[i+1]!;output[o+2]=source[i+2]!;output[o+3]=source[i+3]!;}}return output;}
   if(id==="auto_tone"||id==="auto_contrast"||id==="auto_color"){for(let c=0;c<3;c++){let lo=255,hi=0;for(let i=c;i<source.length;i+=4)if(source[i+3-c]!==0){lo=Math.min(lo,source[i]!);hi=Math.max(hi,source[i]!);}if(hi>lo)for(let i=c;i<output.length;i+=4)output[i]=byte((source[i]!-lo)*255/(hi-lo));}return output;}
   if(id==="twirl") return twirlFilter(source,width,height,value(settings,"amount",100));

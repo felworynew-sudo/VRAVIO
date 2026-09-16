@@ -924,7 +924,7 @@ export function App() {
           ["Vanishing Point… (Vanishing Point…)", "", () => {}, true],
           { label: "3D (3D)", items: [
             ["Normal Map… (Карта нормалей…)", "", () => openFilter("normal_map"), !active || active.kind!=="raster"],
-            ["Texture Dilation… (Texture Dilation…)", "", () => {}, true],
+            ["Texture Dilation… (Texture Dilation…)", "", () => openFilter("texture_dilation"), !active || active.kind!=="raster"],
           ] },
           { label: "Blur (Размытие)", items: [
             ["Average (Средний)", "", () => applyOneShotFilter("average"), !active || active.kind!=="raster"],

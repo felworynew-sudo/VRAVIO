@@ -33,7 +33,7 @@ describe("Filter menu skeleton's newly-implemented filters (docs/master-plan.md 
     "sharpen_more", "sharpen_edges", "smart_sharpen",
     "diffuse", "solarize", "trace_contour", "wind", "oil_paint", "lens_flare",
     "crystallize", "pointillize", "fragment", "mezzotint", "shape_mosaic", "difference_clouds", "fibers",
-    "normal_map", "lens_correction", "hsb_hsl",
+    "normal_map", "lens_correction", "hsb_hsl", "texture_dilation",
   ];
 
   it("registers every new filter in the catalog exactly once", () => {
@@ -57,6 +57,11 @@ describe("Filter menu skeleton's newly-implemented filters (docs/master-plan.md 
   it("changes its output when a declared parameter changes, for every new filter that has one", () => {
     const source = checkerboard(WIDTH, HEIGHT);
     for (const id of newIds) {
+      // texture_dilation only has anything to do on transparent pixels, and the shared
+      // checkerboard fixture is fully opaque — its own dedicated test below uses a fixture with
+      // an actual transparent neighbour instead, which is what its Distance parameter needs to
+      // demonstrate anything at all.
+      if (id === "texture_dilation") continue;
       const definition = rasterFilterCatalog.find((filter) => filter.id === id)!;
       if (definition.parameters.length === 0) continue;
       const defaults = Object.fromEntries(definition.parameters.map((parameter) => [parameter.id, parameter.value]));
@@ -323,5 +328,30 @@ describe("Blur Gallery effects (docs/master-plan.md §51, interactivity level 3)
     const hsb = applyRasterFilter(source, 1, 1, "hsb_hsl", { mode: 0 });
     const hsl = applyRasterFilter(source, 1, 1, "hsb_hsl", { mode: 1 });
     expect([hsb[1], hsb[2]]).not.toEqual([hsl[1], hsl[2]]);
+  });
+
+  it("Texture Dilation extends an opaque pixel's colour into its transparent neighbour without touching alpha", () => {
+    const source = new Uint8ClampedArray(10 * 10 * 4);
+    const opaque = (5 * 10 + 1) * 4;
+    source[opaque] = 200; source[opaque + 1] = 50; source[opaque + 2] = 10; source[opaque + 3] = 255;
+    const result = applyRasterFilter(source, 10, 10, "texture_dilation", { distance: 8 });
+    const transparentNeighbour = (5 * 10 + 2) * 4;
+    expect(result[transparentNeighbour]).toBe(200);
+    expect(result[transparentNeighbour + 1]).toBe(50);
+    expect(result[transparentNeighbour + 2]).toBe(10);
+    // Alpha is the one channel the filter promises never to change.
+    expect(result[transparentNeighbour + 3]).toBe(source[transparentNeighbour + 3]);
+    expect(result[opaque + 3]).toBe(255);
+  });
+
+  it("Texture Dilation's Distance controls how far the colour reaches, not just whether it spreads at all", () => {
+    const source = new Uint8ClampedArray(10 * 10 * 4);
+    const opaque = (5 * 10 + 1) * 4;
+    source[opaque] = 200; source[opaque + 1] = 50; source[opaque + 2] = 10; source[opaque + 3] = 255;
+    const far = (5 * 10 + 6) * 4; // 5 pixels away from the opaque source
+    const shortReach = applyRasterFilter(source, 10, 10, "texture_dilation", { distance: 1 });
+    const longReach = applyRasterFilter(source, 10, 10, "texture_dilation", { distance: 8 });
+    expect(shortReach[far]).toBe(0);
+    expect(longReach[far]).toBe(200);
   });
 });
