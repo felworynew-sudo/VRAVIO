@@ -919,7 +919,7 @@ export function App() {
           ["Liquify… (Пластика…)", "Ctrl+Shift+X", () => setLiquifyOpen(true), !active || !isRasterDocumentState(active.state)],
           ["Vanishing Point… (Vanishing Point…)", "", () => {}, true],
           { label: "3D (3D)", items: [
-            ["Normal Map… (Карта нормалей…)", "", () => {}, true],
+            ["Normal Map… (Карта нормалей…)", "", () => openFilter("normal_map"), !active || active.kind!=="raster"],
             ["Texture Dilation… (Texture Dilation…)", "", () => {}, true],
           ] },
           { label: "Blur (Размытие)", items: [

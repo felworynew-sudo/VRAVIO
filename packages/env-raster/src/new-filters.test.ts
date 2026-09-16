@@ -33,6 +33,7 @@ describe("Filter menu skeleton's newly-implemented filters (docs/master-plan.md 
     "sharpen_more", "sharpen_edges", "smart_sharpen",
     "diffuse", "solarize", "trace_contour", "wind", "oil_paint", "lens_flare",
     "crystallize", "pointillize", "fragment", "mezzotint", "shape_mosaic", "difference_clouds", "fibers",
+    "normal_map",
   ];
 
   it("registers every new filter in the catalog exactly once", () => {
@@ -208,5 +209,15 @@ describe("Filter menu skeleton's newly-implemented filters (docs/master-plan.md 
     expect([...result]).not.toEqual([...source]);
     // Fully opaque throughout, like the real generator (it does not read or preserve alpha holes).
     for (let i = 3; i < result.length; i += 4) expect(result[i]).toBe(255);
+  });
+
+  it("Normal Map encodes a flat, unchanging height field as a straight-up-facing (128,128,255) normal", () => {
+    const source = new Uint8ClampedArray(WIDTH * HEIGHT * 4).fill(128);
+    for (let i = 3; i < source.length; i += 4) source[i] = 255;
+    const result = applyRasterFilter(source, WIDTH, HEIGHT, "normal_map", { scale: 10 });
+    const centre = (16 * WIDTH + 16) * 4;
+    expect(result[centre]).toBeCloseTo(128, 0);
+    expect(result[centre + 1]).toBeCloseTo(128, 0);
+    expect(result[centre + 2]).toBe(255);
   });
 });
