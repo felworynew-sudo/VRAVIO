@@ -30,6 +30,8 @@ import { FilterGalleryDialog } from "./FilterGalleryDialog";
 import { LiquifyDialog } from "./LiquifyDialog";
 import { BlurGalleryDialog } from "./BlurGalleryDialog";
 import { DisplaceDialog } from "./DisplaceDialog";
+import { FilterPanelDialog } from "./raster-filters-v2/FilterPanelDialog";
+import { filterPanelDefinitionFor } from "./raster-filters-v2/filterPanelDefinitions";
 import { rawExtensionOf, rawFileExtensions, type DecodedRaw } from "./rawDecode";
 import { CameraRawDialog } from "./CameraRawDialog";
 import { CameraRawFilterDialog } from "./CameraRawFilterDialog";
@@ -125,6 +127,12 @@ export function App() {
   // skeleton: "Гауссово размытие…" must land on Gaussian Blur, not on
   // whatever the Gallery happened to open on last time).
   const [filterGallerySelection, setFilterGallerySelection] = useState<string | undefined>(undefined);
+  // Every individual Filter-menu item with parameters (Gaussian Blur…, Wind…, Emboss… — everything
+  // that used to reopen the Gallery pre-selected) now opens its own small standalone dialog instead
+  // — docs/master-plan.md §51's panel-fidelity pass: the reference screenshots show a compact
+  // Patchy-style panel per filter (Подтвердить/Сбросить/Просмотр, live on the real canvas), not the
+  // Gallery's own list+big-preview surface, which stays reserved for "Filter Gallery…" itself.
+  const [filterPanelId, setFilterPanelId] = useState<string | null>(null);
   // The last filter actually applied through the Gallery (id + the exact
   // settings used), for "Предыдущий фильтр" (Alt+Ctrl+F) to repeat without
   // reopening the dialog — Photoshop's own Ctrl+F behaviour. Liquify and
@@ -381,10 +389,54 @@ export function App() {
     const filtered = applyRasterFilter(source, state0.width, state0.height, lastFilter.id, lastFilter.settings);
     applyFilter(filtered, lastFilter.label);
   };
-  // A Filter-menu item for an already-implemented catalog filter opens the
-  // Gallery pre-selected on it, instead of whatever the dialog last happened
-  // to show (docs/master-plan.md's Filter menu skeleton).
-  const openFilter = (id: string) => { setFilterGallerySelection(id); setFilterGalleryOpen(true); };
+  // A Filter-menu item for an already-implemented catalog filter opens that
+  // filter's own small standalone panel (docs/master-plan.md §51), not the Gallery.
+  const openFilter = (id: string) => setFilterPanelId(id);
+  // The panel's own live preview, mirroring `runImageAdjustmentPreview`/`previewImageAdjustment`
+  // exactly (RAF-coalesced so a dragged slider cannot fire this once per pointermove): compute the
+  // filter over the active pixel layer's own buffer, confine to the selection the same way
+  // `applyFilter` itself does, and push the composited result onto the real canvas via the same
+  // `vravio-raster-preview` event the adjustment dialogs already use — no second preview mechanism.
+  const filterPanelPreviewFrameRef = useRef<{ frame: number; settings: Record<string, number> | null } | null>(null);
+  const runFilterPanelPreview = (settings: Record<string, number> | null) => {
+    if (!filterPanelId) return;
+    const document = active && kernel.documents.get<RasterDocumentState>(active.id);
+    if (!document || !isRasterDocumentState(document.state)) return;
+    if (!settings) { window.dispatchEvent(new CustomEvent("vravio-raster-preview", { detail: { documentId: document.id, pixels: null } })); return; }
+    const target = document.state.layers.find((layer) => layer.id === document.state.activeLayerId);
+    if (!target || target.kind !== "pixel") return;
+    const before = layerDocumentPixels(target, document.state.width, document.state.height);
+    const filtered = applyRasterFilter(before, document.state.width, document.state.height, filterPanelId, settings);
+    const selection = document.state.selection, confined = selection ? confineToSelection(before, filtered, selection.mask) : filtered;
+    const layers = document.state.layers.map((layer) => layer.id === target.id ? { ...layer, effects: structuredClone(layer.effects) } : layer);
+    const previewState = { ...document.state, layers }; const previewLayer = layers.find((layer) => layer.id === target.id)!;
+    setLayerPixels(previewLayer, confined, previewState.width, previewState.height);
+    window.dispatchEvent(new CustomEvent("vravio-raster-preview", { detail: { documentId: document.id, pixels: compositeRasterDocument(previewState) } }));
+  };
+  const previewFilterPanel = (settings: Record<string, number> | null) => {
+    if (!settings) {
+      if (filterPanelPreviewFrameRef.current) { cancelAnimationFrame(filterPanelPreviewFrameRef.current.frame); filterPanelPreviewFrameRef.current = null; }
+      runFilterPanelPreview(null);
+      return;
+    }
+    const pending = filterPanelPreviewFrameRef.current;
+    if (pending) { pending.settings = settings; return; }
+    const entry = { frame: 0, settings };
+    filterPanelPreviewFrameRef.current = entry;
+    entry.frame = requestAnimationFrame(() => { filterPanelPreviewFrameRef.current = null; runFilterPanelPreview(entry.settings); });
+  };
+  const applyFilterPanel = (settings: Record<string, number>) => {
+    if (!filterPanelId || !active || !isRasterDocumentState(active.state)) return;
+    const definition = rasterFilterCatalog.find((item) => item.id === filterPanelId);
+    const state0 = active.state, target = state0.layers.find((item) => item.id === state0.activeLayerId);
+    if (!target || target.kind !== "pixel") return;
+    const source = layerDocumentPixels(target, state0.width, state0.height);
+    const filtered = applyRasterFilter(source, state0.width, state0.height, filterPanelId, settings);
+    applyFilter(filtered, definition?.name ?? filterPanelId);
+    setLastFilter({ id: filterPanelId, settings, label: definition?.name ?? filterPanelId });
+    previewFilterPanel(null);
+    setFilterPanelId(null);
+  };
   // One-click Photoshop presets (Average, Blur, Sharpen More, Solarize, Despeckle…) apply the
   // catalog's own default settings immediately, the same way `repeatLastFilter` reapplies a
   // remembered one — no dialog to open, because there is nothing in it for a filter with no
@@ -1129,6 +1181,11 @@ export function App() {
     <BusyAnnouncement />
     {diagnosticsOpen && <div className="dialog-backdrop" onMouseDown={() => setDiagnosticsOpen(false)}><section className="diagnostics-dialog" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><header><strong>Diagnostics log (Журнал диагностики)</strong><button onClick={() => setDiagnosticsOpen(false)}>×</button></header><div className="diagnostics-list">{diagnostics.length ? [...diagnostics].reverse().map((entry, index) => <article data-level={entry.level} key={`${entry.time}-${index}`}><time>{new Date(entry.time).toLocaleTimeString()}</time><b>{entry.area}</b><span>{entry.message}</span>{entry.detail && <pre>{entry.detail}</pre>}</article>) : <p>No events recorded (Событий пока нет).</p>}</div><footer><button onClick={() => { clearDiagnostics(); setDiagnostics([]); }}>Clear (Очистить)</button><button onClick={() => { const blob = new Blob([JSON.stringify(diagnostics, null, 2)], { type: "application/json" }); download(blob, `vravio-diagnostics-${Date.now()}.json`); }}>Export JSON (Экспорт JSON)</button></footer></section></div>}
     {filterGalleryOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<FilterGalleryDialog layer={layer} initialFilterId={filterGallerySelection} onApply={(pixels,label,meta)=>{applyFilter(pixels,label);if(meta)setLastFilter({id:meta.filterId,settings:meta.settings,label});}} onClose={()=>setFilterGalleryOpen(false)}/>:null;})()}
+    {filterPanelId && active && isRasterDocumentState(active.state) && (() => {
+      const definition = filterPanelDefinitionFor(filterPanelId);
+      if (!definition) return null;
+      return <FilterPanelDialog definition={definition} initialSettings={definition.defaults} language={store.language} onPreview={previewFilterPanel} onCancel={() => { previewFilterPanel(null); setFilterPanelId(null); }} onApply={applyFilterPanel}/>;
+    })()}
     {liquifyOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<LiquifyDialog layer={layer} language={store.language} onApply={applyFilter} onClose={()=>setLiquifyOpen(false)}/>:null;})()}
     {blurGalleryType && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<BlurGalleryDialog key={blurGalleryType} layer={layer} initialType={blurGalleryType} language={store.language} onApply={applyFilter} onClose={()=>setBlurGalleryType(null)}/>:null;})()}
     {displaceOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<DisplaceDialog layer={layer} language={store.language} onApply={applyFilter} onClose={()=>setDisplaceOpen(false)}/>:null;})()}
