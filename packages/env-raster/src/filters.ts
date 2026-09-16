@@ -1134,6 +1134,79 @@ function normalMapFilter(source: Uint8ClampedArray, width: number, height: numbe
   return output;
 }
 
+/**
+ * The Blur Gallery (docs/master-plan.md §51's interactivity level 3): unlike
+ * the plain-dialog filters above, Field/Iris/Tilt-Shift/Spin Blur are driven
+ * by a pin the user places and drags directly on the canvas, so they are not
+ * routed through `applyRasterFilter`'s settings-object dispatch — they are
+ * called directly by `BlurGalleryDialog.tsx`, the same way `LiquifyDialog.tsx`
+ * calls the exported `liquify*` functions in `liquify.ts` rather than going
+ * through a filter id.
+ *
+ * Photoshop's own fast path for a spatially-varying blur is exactly this:
+ * blur the whole image once at the pin's full radius, then blend it back
+ * toward the untouched source using a mask shaped by distance from the pin
+ * (an ellipse for Iris, a band for Tilt-Shift) — not a true per-pixel
+ * variable-radius convolution, which is what makes it fast enough for a
+ * live drag. Field Blur has no shape at all with a single pin — one pin's
+ * blur applies uniformly, exactly `gaussianBlur` itself.
+ */
+export function fieldBlurEffect(source: Uint8ClampedArray, width: number, height: number, radius: number): Uint8ClampedArray {
+  return gaussianBlur(source, width, height, radius);
+}
+
+/** Iris Blur: sharp inside `innerRadius`, fully blurred outside
+ * `outerRadius`, smoothly feathered (smoothstep) in between — an elliptical
+ * falloff around `(centerX, centerY)`, matching the draggable inner/outer
+ * rings Photoshop's own Iris Blur pin shows. */
+export function irisBlurEffect(source: Uint8ClampedArray, width: number, height: number, centerX: number, centerY: number, innerRadius: number, outerRadius: number, blurRadius: number): Uint8ClampedArray {
+  const blurred = gaussianBlur(source, width, height, blurRadius), output = new Uint8ClampedArray(source.length);
+  const inner = Math.max(0, innerRadius), outer = Math.max(inner + 1, outerRadius);
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const distance = Math.hypot(x - centerX, y - centerY);
+    const t = Math.max(0, Math.min(1, (distance - inner) / (outer - inner))), smooth = t * t * (3 - 2 * t);
+    const i = (y * width + x) * 4;
+    for (let c = 0; c < 4; c += 1) output[i + c] = byte(source[i + c]! + (blurred[i + c]! - source[i + c]!) * smooth);
+  }
+  return output;
+}
+
+/** Tilt-Shift: sharp within `focusDistance` of the pin's centre line
+ * (at `angle`, through `(centerX, centerY)`), fully blurred past
+ * `focusDistance + featherDistance` on either side. */
+export function tiltShiftBlurEffect(source: Uint8ClampedArray, width: number, height: number, centerX: number, centerY: number, angleDeg: number, focusDistance: number, featherDistance: number, blurRadius: number): Uint8ClampedArray {
+  const blurred = gaussianBlur(source, width, height, blurRadius), output = new Uint8ClampedArray(source.length);
+  const angle = angleDeg * Math.PI / 180, normalX = -Math.sin(angle), normalY = Math.cos(angle), feather = Math.max(1, featherDistance);
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const distance = Math.abs((x - centerX) * normalX + (y - centerY) * normalY);
+    const t = Math.max(0, Math.min(1, (distance - focusDistance) / feather)), smooth = t * t * (3 - 2 * t);
+    const i = (y * width + x) * 4;
+    for (let c = 0; c < 4; c += 1) output[i + c] = byte(source[i + c]! + (blurred[i + c]! - source[i + c]!) * smooth);
+  }
+  return output;
+}
+
+/** Spin Blur: `radialBlurFilter`'s own Spin algorithm, parameterised by an
+ * arbitrary pin centre instead of the fixed image centre `radial_blur`
+ * itself uses. */
+export function spinBlurEffect(source: Uint8ClampedArray, width: number, height: number, centerX: number, centerY: number, amountPercent: number): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(source.length), angle = Math.max(0, Math.min(100, amountPercent)) / 100 * Math.PI / 6;
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const dx = x - centerX, dy = y - centerY, r = Math.hypot(dx, dy);
+    const steps = Math.max(3, Math.min(64, Math.ceil(r * angle * 1.41)));
+    const phiBase = Math.atan2(dy, dx), phiStart = phiBase + angle / 2, phiStep = angle / steps;
+    const sum = [0, 0, 0, 0];
+    for (let step = 0; step < steps; step += 1) {
+      const phi = phiStart - step * phiStep;
+      const [sr, sg, sb, sa] = sampleBilinear(source, width, height, centerX + r * Math.cos(phi), centerY + r * Math.sin(phi));
+      sum[0] = sum[0]! + sr; sum[1] = sum[1]! + sg; sum[2] = sum[2]! + sb; sum[3] = sum[3]! + sa;
+    }
+    const i = (y * width + x) * 4;
+    for (let c = 0; c < 4; c += 1) output[i + c] = byte(sum[c]! / steps);
+  }
+  return output;
+}
+
 export function applyRasterFilter(source: Uint8ClampedArray, width: number, height: number, id: string, settings: Record<string, number> = {}): Uint8ClampedArray {
   const output = source.slice(), mix = Math.max(0,Math.min(1,value(settings,"amount",100)/100));
   if (id === "gaussian_blur") return gaussianBlur(source, width, height, value(settings, "radius", 2));

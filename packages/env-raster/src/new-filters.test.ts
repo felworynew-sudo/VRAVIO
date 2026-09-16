@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyRasterFilter, rasterFilterCatalog } from "./index";
+import { applyRasterFilter, rasterFilterCatalog, fieldBlurEffect, irisBlurEffect, tiltShiftBlurEffect, spinBlurEffect } from "./index";
 
 /**
  * docs/master-plan.md §51: the Filter menu skeleton's stub items graduating to real,
@@ -219,5 +219,57 @@ describe("Filter menu skeleton's newly-implemented filters (docs/master-plan.md 
     expect(result[centre]).toBeCloseTo(128, 0);
     expect(result[centre + 1]).toBeCloseTo(128, 0);
     expect(result[centre + 2]).toBe(255);
+  });
+});
+
+/**
+ * docs/master-plan.md §51's Blur Gallery: these four are called directly by
+ * BlurGalleryDialog.tsx rather than through applyRasterFilter's settings-object
+ * dispatch (the pin is drag-positioned, not a slider value), so they get their
+ * own describe block instead of joining the id-driven loop above.
+ */
+describe("Blur Gallery effects (docs/master-plan.md §51, interactivity level 3)", () => {
+  function checkerboard(width: number, height: number): Uint8ClampedArray {
+    const pixels = new Uint8ClampedArray(width * height * 4);
+    for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+      const i = (y * width + x) * 4, on = (Math.floor(x / 2) + Math.floor(y / 2)) % 2 === 0;
+      pixels[i] = on ? 220 : 30; pixels[i + 1] = on ? 220 : 30; pixels[i + 2] = on ? 220 : 30; pixels[i + 3] = 255;
+    }
+    return pixels;
+  }
+
+  it("Field Blur is a plain uniform Gaussian blur", () => {
+    const source = checkerboard(WIDTH, HEIGHT);
+    const result = fieldBlurEffect(source, WIDTH, HEIGHT, 6);
+    // A uniform blur softens every high-contrast checkerboard edge, corners included.
+    expect(result[0]).not.toBe(source[0]);
+    const farCorner = ((HEIGHT - 1) * WIDTH + (WIDTH - 1)) * 4;
+    expect(result[farCorner]).not.toBe(source[farCorner]);
+  });
+
+  it("Iris Blur leaves its own centre sharp and blurs far outside the outer ring", () => {
+    const source = checkerboard(WIDTH, HEIGHT);
+    const result = irisBlurEffect(source, WIDTH, HEIGHT, WIDTH / 2, HEIGHT / 2, 4, 10, 6);
+    const centre = (16 * WIDTH + 16) * 4, farCorner = (1 * WIDTH + 1) * 4;
+    expect(result[centre]).toBe(source[centre]);
+    expect(result[farCorner]).not.toBe(source[farCorner]);
+  });
+
+  it("Tilt-Shift leaves its own focus band sharp and blurs beyond the feather distance", () => {
+    const source = checkerboard(WIDTH, HEIGHT);
+    const result = tiltShiftBlurEffect(source, WIDTH, HEIGHT, WIDTH / 2, HEIGHT / 2, 0, 3, 4, 6);
+    const onAxis = (16 * WIDTH + 16) * 4, farAbove = (2 * WIDTH + 16) * 4;
+    expect(result[onAxis]).toBe(source[onAxis]);
+    expect(result[farAbove]).not.toBe(source[farAbove]);
+  });
+
+  it("Spin Blur centred away from the image middle rotates around its own pin, not the canvas centre", () => {
+    const source = checkerboard(WIDTH, HEIGHT);
+    const spinAtCorner = spinBlurEffect(source, WIDTH, HEIGHT, 4, 4, 80);
+    const spinAtCentre = spinBlurEffect(source, WIDTH, HEIGHT, WIDTH / 2, HEIGHT / 2, 80);
+    expect([...spinAtCorner]).not.toEqual([...spinAtCentre]);
+    // The pixel exactly at the pin has zero radius, so it never moves regardless of amount.
+    const atPin = (4 * WIDTH + 4) * 4;
+    expect(spinAtCorner[atPin]).toBe(source[atPin]);
   });
 });

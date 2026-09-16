@@ -28,6 +28,7 @@ import { errorModal, openModal } from "./modals/runtime";
 import { clearDiagnostics, diagnostic, readDiagnostics, type DiagnosticEntry } from "./diagnostics";
 import { FilterGalleryDialog } from "./FilterGalleryDialog";
 import { LiquifyDialog } from "./LiquifyDialog";
+import { BlurGalleryDialog } from "./BlurGalleryDialog";
 import { rawExtensionOf, rawFileExtensions, type DecodedRaw } from "./rawDecode";
 import { CameraRawDialog } from "./CameraRawDialog";
 import { CameraRawFilterDialog } from "./CameraRawFilterDialog";
@@ -131,6 +132,7 @@ export function App() {
   // does not reach them either.
   const [lastFilter, setLastFilter] = useState<{ id: string; settings: Record<string, number>; label: string } | null>(null);
   const [liquifyOpen, setLiquifyOpen] = useState(false);
+  const [blurGalleryType, setBlurGalleryType] = useState<"field" | "iris" | "tiltShift" | "spin" | null>(null);
   const [cameraRawFilterOpen, setCameraRawFilterOpen] = useState(false);
   const [cameraRawImport, setCameraRawImport] = useState<{ buffer: ArrayBuffer; name: string } | null>(null);
   const [cameraRawReopen, setCameraRawReopen] = useState<{ buffer: ArrayBuffer; name: string } | null>(null);
@@ -934,11 +936,11 @@ export function App() {
             ["Surface Blur… (Поверхностное размытие…)", "", () => openFilter("surface_blur"), !active || active.kind!=="raster"],
           ] },
           { label: "Blur Gallery (Галерея размытия)", items: [
-            ["Field Blur… (Размытие поля…)", "", () => {}, true],
-            ["Iris Blur… (Размытие диафрагмы…)", "", () => {}, true],
-            ["Tilt-Shift… (Наклон-смещение…)", "", () => {}, true],
+            ["Field Blur… (Размытие поля…)", "", () => setBlurGalleryType("field"), !active || active.kind!=="raster"],
+            ["Iris Blur… (Размытие диафрагмы…)", "", () => setBlurGalleryType("iris"), !active || active.kind!=="raster"],
+            ["Tilt-Shift… (Наклон-смещение…)", "", () => setBlurGalleryType("tiltShift"), !active || active.kind!=="raster"],
             ["Path Blur… (Размытие пути…)", "", () => {}, true],
-            ["Spin Blur… (Размытие вращения…)", "", () => {}, true],
+            ["Spin Blur… (Размытие вращения…)", "", () => setBlurGalleryType("spin"), !active || active.kind!=="raster"],
           ] },
           { label: "Distort (Искажение)", items: [
             ["Displace… (Смещение…)", "", () => {}, true],
@@ -1126,6 +1128,7 @@ export function App() {
     {diagnosticsOpen && <div className="dialog-backdrop" onMouseDown={() => setDiagnosticsOpen(false)}><section className="diagnostics-dialog" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><header><strong>Diagnostics log (Журнал диагностики)</strong><button onClick={() => setDiagnosticsOpen(false)}>×</button></header><div className="diagnostics-list">{diagnostics.length ? [...diagnostics].reverse().map((entry, index) => <article data-level={entry.level} key={`${entry.time}-${index}`}><time>{new Date(entry.time).toLocaleTimeString()}</time><b>{entry.area}</b><span>{entry.message}</span>{entry.detail && <pre>{entry.detail}</pre>}</article>) : <p>No events recorded (Событий пока нет).</p>}</div><footer><button onClick={() => { clearDiagnostics(); setDiagnostics([]); }}>Clear (Очистить)</button><button onClick={() => { const blob = new Blob([JSON.stringify(diagnostics, null, 2)], { type: "application/json" }); download(blob, `vravio-diagnostics-${Date.now()}.json`); }}>Export JSON (Экспорт JSON)</button></footer></section></div>}
     {filterGalleryOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<FilterGalleryDialog layer={layer} initialFilterId={filterGallerySelection} onApply={(pixels,label,meta)=>{applyFilter(pixels,label);if(meta)setLastFilter({id:meta.filterId,settings:meta.settings,label});}} onClose={()=>setFilterGalleryOpen(false)}/>:null;})()}
     {liquifyOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<LiquifyDialog layer={layer} language={store.language} onApply={applyFilter} onClose={()=>setLiquifyOpen(false)}/>:null;})()}
+    {blurGalleryType && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<BlurGalleryDialog key={blurGalleryType} layer={layer} initialType={blurGalleryType} language={store.language} onApply={applyFilter} onClose={()=>setBlurGalleryType(null)}/>:null;})()}
     {cameraRawFilterOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<CameraRawFilterDialog layer={layer} language={store.language} onApply={applyFilter} onClose={()=>setCameraRawFilterOpen(false)}/>:null;})()}
     {cameraRawImport && <CameraRawDialog
       buffer={cameraRawImport.buffer}
