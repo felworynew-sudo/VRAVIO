@@ -509,28 +509,52 @@ function slideLayerBounds<T extends { bounds: RasterRect; width: number; height:
  * comment — so it is always physically cropped either way; only a layer's
  * own `pixels`/`bounds` follow the toggle.
  */
-export function cropRasterDocument(state: RasterDocumentState, crop: RasterRect, deleteCroppedPixels = false): RasterDocumentState {
-  const left = Math.max(0, Math.min(state.width - 1, Math.floor(crop.x))), top = Math.max(0, Math.min(state.height - 1, Math.floor(crop.y)));
-  const right = Math.max(left + 1, Math.min(state.width, Math.ceil(crop.x + crop.width))), bottom = Math.max(top + 1, Math.min(state.height, Math.ceil(crop.y + crop.height)));
+export function cropRasterDocument(state: RasterDocumentState, crop: RasterRect, deleteCroppedPixels = false, allowExtension = false): RasterDocumentState {
+  // Clamped to the existing canvas by default — Crop's own historical contract, and the one
+  // every caller before "Allow Canvas Extension" (docs/master-plan.md §52.8) relied on.
+  // `allowExtension` lets `left`/`top` go negative and `right`/`bottom` exceed the canvas, which
+  // is exactly what growing the frame past an edge means; `slideLayerBounds` and `TileStore.reframe`
+  // were already written to treat out-of-range as "nothing there yet" (their own doc comments),
+  // so this is the one place that was refusing to ask for it.
+  const left = allowExtension ? Math.floor(crop.x) : Math.max(0, Math.min(state.width - 1, Math.floor(crop.x)));
+  const top = allowExtension ? Math.floor(crop.y) : Math.max(0, Math.min(state.height - 1, Math.floor(crop.y)));
+  const right = allowExtension ? Math.max(left + 1, Math.ceil(crop.x + crop.width)) : Math.max(left + 1, Math.min(state.width, Math.ceil(crop.x + crop.width)));
+  const bottom = allowExtension ? Math.max(top + 1, Math.ceil(crop.y + crop.height)) : Math.max(top + 1, Math.min(state.height, Math.ceil(crop.y + crop.height)));
   const width = right - left, height = bottom - top;
   const layers = state.layers.map((layer) => {
     // `reframe` is exactly a crop when the new frame's size and origin both shrink to fit inside
     // the old one, and it does it at tile granularity — a plain window into the mask's own
-    // TileStore, not the materialise-then-recrop `cropChannel` needs for a flat buffer.
+    // TileStore, not the materialise-then-recrop `cropChannel` needs for a flat buffer. It already
+    // treats a frame reaching past its own bounds as transparent there, so extension needs nothing
+    // extra here.
     const maskPatch = layer.mask ? { mask: { ...layer.mask, tiles: layer.mask.tiles.reframe(left, top, width, height) } } : {};
     if (!deleteCroppedPixels) return { ...layer, ...maskPatch, ...slideLayerBounds(layer, left, top) };
     // Read in canvas space: a layer is stored at the size of its content, so
-    // its own buffer cannot be indexed by the document's stride.
+    // its own buffer cannot be indexed by the document's stride. Only the
+    // rows/columns that actually existed in the old canvas are copied — the
+    // rest of `pixels` stays at its `Uint8ClampedArray` default of zero,
+    // which is exactly transparent black, the same as everywhere else this
+    // package treats "nothing was ever drawn there".
     const canvas = layerDocumentPixels(layer, state.width, state.height);
     const pixels = new Uint8ClampedArray(width * height * 4);
-    for (let y = 0; y < height; y += 1) {
-      const source = ((top + y) * state.width + left) * 4;
-      pixels.set(canvas.subarray(source, source + width * 4), y * width * 4);
+    const sourceLeft = Math.max(0, left), sourceTop = Math.max(0, top);
+    const sourceRight = Math.min(state.width, right), sourceBottom = Math.min(state.height, bottom);
+    const rowWidth = sourceRight - sourceLeft;
+    if (rowWidth > 0) {
+      for (let y = sourceTop; y < sourceBottom; y += 1) {
+        const source = (y * state.width + sourceLeft) * 4;
+        const dest = ((y - top) * width + (sourceLeft - left)) * 4;
+        pixels.set(canvas.subarray(source, source + rowWidth * 4), dest);
+      }
     }
     return { ...layer, ...maskPatch, bounds: { x: 0, y: 0, width, height }, width, height, tiles: TileStore.fromPixels(pixels, width, height) };
   });
+  // A selection is drawn in the old canvas's own coordinates; extension moves the origin, and
+  // `cropChannel` below assumes an in-bounds window the way the un-extended path always was.
+  // Simpler and honest to drop it than to carry a selection into a canvas it no longer fits,
+  // the same call `GenerativeUpscaleDialog.tsx` makes for the same reason.
   let selection: PixelSelection | null = null;
-  if (state.selection) {
+  if (state.selection && !(allowExtension && (left < 0 || top < 0 || right > state.width || bottom > state.height))) {
     const mask = cropChannel(state.selection.mask, state.width, left, top, width, height);
     const bounds = selectionBounds(mask, width, height);
     if (bounds.width && bounds.height) selection = { mask, bounds };

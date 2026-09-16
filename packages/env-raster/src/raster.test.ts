@@ -462,6 +462,50 @@ describe("raster transform", () => {
     expect(croppedPixels).toHaveLength(4);
     expect(croppedPixels[0]).toBe(200);
   });
+
+  describe("allowExtension (docs/master-plan.md §52.8 — AI Border Fill)", () => {
+    it("is a no-op for a rect already inside the canvas, whether or not extension is allowed", () => {
+      const document = createRasterDocument(4, 3, { backgroundColor: "#112233" });
+      const unextended = cropRasterDocument(document, { x: 1, y: 1, width: 2, height: 2 }, false, false);
+      const extended = cropRasterDocument(document, { x: 1, y: 1, width: 2, height: 2 }, false, true);
+      expect(extended).toEqual(unextended);
+    });
+
+    it("grows the canvas past the original edge instead of clamping to it", () => {
+      const document = createRasterDocument(4, 3, { backgroundColor: "#112233" });
+      const grown = cropRasterDocument(document, { x: -2, y: -1, width: 8, height: 6 }, false, true);
+      expect(grown).toMatchObject({ width: 8, height: 6 });
+      // Every original pixel is still there, shifted by (2,1) — the same
+      // "slide, don't touch" contract the in-bounds case already has.
+      const layer = grown.layers[0]!;
+      expect(layer.bounds).toEqual({ x: 2, y: 1, width: 4, height: 3 });
+      expect(layerDocumentPixels(layer, 8, 6)[(1 * 8 + 2) * 4 + 3]).toBe(255); // the old (0,0) pixel, now at (2,1)
+      expect(layerDocumentPixels(layer, 8, 6)[3]).toBe(0); // the new border is transparent, not the old background colour
+    });
+
+    it("leaves only the overlap with the old canvas opaque when deleteCroppedPixels is also true", () => {
+      const document = createRasterDocument(4, 3, { backgroundColor: "#112233" });
+      const grown = cropRasterDocument(document, { x: -2, y: -1, width: 8, height: 6 }, true, true);
+      const pixels = grown.layers[0]!.tiles.toPixels(8, 6);
+      expect(pixels[((1) * 8 + 2) * 4 + 3]).toBe(255); // inside the old canvas's new position
+      expect(pixels[3]).toBe(0); // (0,0) — in the new border, never part of the old canvas
+      expect(pixels[(5 * 8 + 7) * 4 + 3]).toBe(0); // (7,5) — bottom-right corner, also new border
+    });
+
+    it("drops a selection that no longer fits the grown canvas instead of misplacing it", () => {
+      const document = createRasterDocument(4, 3, { backgroundColor: "#112233" });
+      document.selection = createRectangleSelection(4, 3, 1, 1, 2, 2);
+      const grown = cropRasterDocument(document, { x: -1, y: 0, width: 6, height: 3 }, false, true);
+      expect(grown.selection).toBeNull();
+    });
+
+    it("shrinking with allowExtension behaves exactly like an ordinary crop", () => {
+      const document = createRasterDocument(4, 3, { backgroundColor: "#112233" });
+      const shrunk = cropRasterDocument(document, { x: 1, y: 1, width: 2, height: 1 }, false, true);
+      expect(shrunk).toMatchObject({ width: 2, height: 1 });
+      expect(shrunk.layers[0]!.bounds).toEqual({ x: -1, y: -1, width: 4, height: 3 });
+    });
+  });
 });
 
 describe("raster retouch tools", () => {

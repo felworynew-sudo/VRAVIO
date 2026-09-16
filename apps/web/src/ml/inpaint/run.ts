@@ -2,7 +2,7 @@ import { resampleRgba } from "@vravio/env-raster";
 import type { MLSession, MLTensor } from "@vravio/kernel";
 import { kernel } from "../../kernel";
 import { diagnostic } from "../../diagnostics";
-import { buildInpaintInput, compositeInpaint, cropMask, cropRgba, readInpaintOutput, regionForMask, resampleMask } from "./prepare";
+import { buildInpaintInput, compositeInpaint, cropMask, cropRgba, readInpaintOutput, regionForMask, resampleMask, type InpaintRegion } from "./prepare";
 import type { InpaintModelDefinition } from "./types";
 
 /**
@@ -51,9 +51,26 @@ export async function runInpaint(
   width: number,
   height: number,
   mask: Uint8ClampedArray,
-  options: { signal?: AbortSignal; onConsent?: (spec: InpaintModelDefinition["spec"]) => boolean | Promise<boolean> } = {},
+  options: {
+    signal?: AbortSignal;
+    onConsent?: (spec: InpaintModelDefinition["spec"]) => boolean | Promise<boolean>;
+    /**
+     * Overrides `regionForMask`'s own auto-detected crop. `regionForMask` assumes what every
+     * caller before this one actually was — a hole somewhere inside a photo, small next to the
+     * whole image — and picks the tightest square around it for the most detail per model pixel.
+     * A border a canvas-extending crop just exposed is the opposite shape: it touches every edge
+     * and wraps most of the image's own perimeter, so its marked-pixel bounding box is close to
+     * the *whole* canvas already. Letting `regionForMask` still clamp that box to a small square
+     * (`docs/master-plan.md §52.8`, found live) crops the model's view down to a fraction of the
+     * image, and `compositeInpaint` never touches a masked pixel lying outside that square —
+     * most of the border came back untouched, not filled. Passing the caller's own region (the
+     * whole canvas, for a border) skips that auto-detection instead of trying to make it guess
+     * the right shape for a case it was never built for.
+     */
+    region?: InpaintRegion;
+  } = {},
 ): Promise<InpaintOutcome> {
-  const region = regionForMask(mask, width, height);
+  const region = options.region ?? regionForMask(mask, width, height);
   // Nothing marked is not a failure; it is a gesture that touched nothing. Said
   // out loud all the same: a brush that does nothing and explains nothing is
   // indistinguishable from a broken one, which is exactly how this looked the

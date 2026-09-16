@@ -1,5 +1,10 @@
 import { useEffect, useRef } from "react";
-import { cloneRasterState, cropRasterDocument, layerAccepts, type Point, type RasterRect } from "@vravio/env-raster";
+import { appendLayer, cloneRasterState, compositeRasterDocument, createRasterLayer, cropRasterDocument, layerAccepts, setLayerPixels, type Point, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
+import { kernel } from "../../../../kernel";
+import { beginBusy } from "../../../../busy";
+import { errorModal } from "../../../../modals/runtime";
+import { defaultInpaintModelId, inpaintModelById } from "../../../../ml/inpaint/registry";
+import { runInpaint } from "../../../../ml/inpaint/run";
 import type { RasterToolDefinition, ToolContext } from "../types";
 
 /**
@@ -53,8 +58,11 @@ function ratioFor(value: string, documentWidth: number, documentHeight: number):
   }
 }
 
-/** Keeps the rect entirely within the canvas — this pass has no "Allow Canvas Extension" yet (see the file's own top comment). */
-function clampToCanvas(rect: RasterRect, width: number, height: number): RasterRect {
+/** Keeps the rect entirely within the canvas, unless "AI Border Fill" is on — dragging a handle
+ * past the edge then means "grow the canvas here", not "stop at the edge" (docs/master-plan.md
+ * §52.8's own "Allow Canvas Extension" gap, closed by the same option that fills what it exposes). */
+function clampToCanvas(rect: RasterRect, width: number, height: number, allowExtension: boolean): RasterRect {
+  if (allowExtension) return rect;
   const w = Math.min(rect.width, width), h = Math.min(rect.height, height);
   const x = Math.max(0, Math.min(rect.x, width - w));
   const y = Math.max(0, Math.min(rect.y, height - h));
@@ -108,22 +116,113 @@ function applyHandleDrag(start: RasterRect, handle: HandleId, point: Point, rati
  * `scheduleWork`): a fast pointer-up can land before the last scheduled RAF runs, so
  * gesture end has to compute the true final rect itself rather than trust whatever
  * pending already happens to hold. */
-function rectForDrag(drag: CropDrag, point: Point, width: number, height: number, ratio: number | undefined): RasterRect {
-  if (drag.kind === "out") return clampToCanvas(rectFromDragOut(drag.anchor, point, ratio), width, height);
+function rectForDrag(drag: CropDrag, point: Point, width: number, height: number, ratio: number | undefined, allowExtension: boolean): RasterRect {
+  if (drag.kind === "out") return clampToCanvas(rectFromDragOut(drag.anchor, point, ratio), width, height, allowExtension);
   if (drag.kind === "move") {
     const dx = point.x - drag.startPoint.x, dy = point.y - drag.startPoint.y;
-    const x = Math.max(0, Math.min(drag.startRect.x + dx, width - drag.startRect.width));
-    const y = Math.max(0, Math.min(drag.startRect.y + dy, height - drag.startRect.height));
+    const x = allowExtension ? drag.startRect.x + dx : Math.max(0, Math.min(drag.startRect.x + dx, width - drag.startRect.width));
+    const y = allowExtension ? drag.startRect.y + dy : Math.max(0, Math.min(drag.startRect.y + dy, height - drag.startRect.height));
     return { x, y, width: drag.startRect.width, height: drag.startRect.height };
   }
-  return clampToCanvas(applyHandleDrag(drag.startRect, drag.handle, point, ratio), width, height);
+  return clampToCanvas(applyHandleDrag(drag.startRect, drag.handle, point, ratio), width, height, allowExtension);
+}
+
+/**
+ * Fills the border a canvas-extending crop just exposed, on its own new layer.
+ *
+ * Runs after the crop itself has already committed — inpainting is a model
+ * call that takes real time, and `inpaint.tsx`'s own `fill()` already
+ * established the pattern for this project: the fast, synchronous part
+ * (here, the crop) lands immediately, the slow part follows as its own
+ * separate history step once the model answers, with a busy indicator
+ * standing in for the wait.
+ *
+ * The owner's own explicit requirement: the fill lands as a *new layer on
+ * top*, not written over what is already there. `runInpaint` returns a full
+ * composited picture (existing content plus the fill blended in), so only
+ * the pixels the mask actually covers are kept here — the rest of the new
+ * layer stays transparent, and the original layers underneath are untouched.
+ */
+async function fillExtendedBorder(documentId: string, oldWidth: number, oldHeight: number, cropRect: RasterRect, modelId: string): Promise<void> {
+  const model = inpaintModelById(modelId) ?? inpaintModelById(defaultInpaintModelId);
+  if (!model) return;
+  const done = beginBusy("AI Border Fill (ИИ заливка границ)");
+  try {
+    const live = kernel.documents.get<RasterDocumentState>(documentId);
+    if (!live) return;
+    const state = live.state;
+    const composite = compositeRasterDocument(state);
+    // Where the old canvas now sits in the new one — everything else is the
+    // border this crop exposed, the same sign flip `cropRasterDocument`'s
+    // own `left`/`top` uses for `slideLayerBounds`.
+    const oldLeft = -Math.floor(cropRect.x), oldTop = -Math.floor(cropRect.y);
+    const mask = new Uint8ClampedArray(state.width * state.height);
+    for (let y = 0; y < state.height; y += 1) {
+      const inOldRowRange = y >= oldTop && y < oldTop + oldHeight;
+      for (let x = 0; x < state.width; x += 1) {
+        if (inOldRowRange && x >= oldLeft && x < oldLeft + oldWidth) continue;
+        mask[y * state.width + x] = 255;
+      }
+    }
+    // The whole canvas as the region, not `runInpaint`'s own auto-detected crop around the
+    // marked pixels: a border wraps most of the image's own perimeter, so the auto-detected
+    // box is close to the whole canvas anyway, except clamped down to a small square around it
+    // — which left most of a wide/tall border outside the model's view entirely (found live,
+    // §52.8 — see `runInpaint`'s own comment on its `region` option). The trade this makes for a
+    // large document is real: the whole photo gets downscaled to the model's fixed square rather
+    // than only the border at full detail, so a big canvas fills at lower fidelity than a small
+    // one. Correct and complete beats sharp and half-missing.
+    const outcome = await runInpaint(model, composite, state.width, state.height, mask, { region: { x: 0, y: 0, width: state.width, height: state.height } });
+    if (outcome.error) { errorModal({ title: "AI border fill failed (Не удалось заполнить границы)", message: `${model.id}: ${outcome.error}` }); return; }
+    if (!outcome.pixels) return;
+
+    const isolated = new Uint8ClampedArray(outcome.pixels.length);
+    for (let pixel = 0; pixel < mask.length; pixel += 1) {
+      if (!mask[pixel]) continue;
+      const at = pixel * 4;
+      isolated[at] = outcome.pixels[at]!; isolated[at + 1] = outcome.pixels[at + 1]!; isolated[at + 2] = outcome.pixels[at + 2]!; isolated[at + 3] = outcome.pixels[at + 3]!;
+    }
+
+    const before = cloneRasterState(state);
+    const after = cloneRasterState(state);
+    const layer = createRasterLayer(after.width, after.height, "AI Border Fill (ИИ заливка границ)");
+    setLayerPixels(layer, isolated, after.width, after.height);
+    appendLayer(after, layer);
+    after.activeLayerId = layer.id;
+
+    const history = kernel.historyByDocument.get(documentId);
+    if (!history) return;
+    const clone = (value: RasterDocumentState) => cloneRasterState(value);
+    await history.execute({
+      label: "AI Border Fill (ИИ заливка границ)",
+      redo: () => { kernel.documents.update<RasterDocumentState>(documentId, (current) => { Object.assign(current, clone(after)); }); },
+      undo: () => { kernel.documents.update<RasterDocumentState>(documentId, (current) => { Object.assign(current, clone(before)); }); },
+    });
+  } catch (error) {
+    errorModal({ title: "AI border fill failed (Не удалось заполнить границы)", message: error instanceof Error ? error.message : String(error) });
+  } finally {
+    done();
+  }
 }
 
 function commitCrop(context: ToolContext<CropState>, pending: PendingCrop): void {
   const before = cloneRasterState(context.document);
   const deleteCroppedPixels = Boolean(context.options.deleteCroppedPixels);
-  void context.commitDocument(before, cropRasterDocument(before, pending.rect, deleteCroppedPixels), "Crop (Кадрирование)");
+  const oldWidth = before.width, oldHeight = before.height;
+  const extendsBeyondCanvas = pending.rect.x < 0 || pending.rect.y < 0 || pending.rect.x + pending.rect.width > oldWidth || pending.rect.y + pending.rect.height > oldHeight;
+  const aiBorderFill = Boolean(context.options.aiBorderFill) && extendsBeyondCanvas;
+  const after = cropRasterDocument(before, pending.rect, deleteCroppedPixels, aiBorderFill);
+  const documentId = context.documentId, modelId = String(context.options.aiFillModel ?? defaultInpaintModelId);
+  // Awaited before the fill reads the document back: `commitDocument` records the crop through
+  // `history.execute`, which is itself async (`ReversibleOperation.redo` may be awaited), so the
+  // live document is still the *pre-crop* one for a tick after this call returns. Reading it too
+  // early was found live: the fill silently did nothing, because it built its border mask against
+  // the old, uncropped canvas — a mask covering "the old canvas minus itself" left `regionForMask`
+  // nothing to mark, and a nothing-was-marked result is not an error (`ml/inpaint/run.ts`'s own
+  // comment on that), so it returned quietly instead of throwing.
+  const committed = context.commitDocument(before, after, "Crop (Кадрирование)");
   context.resetViewportToFit();
+  if (aiBorderFill) void committed.then(() => fillExtendedBorder(documentId, oldWidth, oldHeight, pending.rect, modelId));
 }
 
 const crop: RasterToolDefinition<CropState> = {
@@ -167,6 +266,7 @@ const crop: RasterToolDefinition<CropState> = {
     if (!drag || drag.pointerId !== pointer.pointerId) return;
     const { width, height } = context.document;
     const ratio = ratioFor(String(context.options.ratio ?? "unconstrained"), width, height);
+    const allowExtension = Boolean(context.options.aiBorderFill);
     // Native pointermove can fire well above the display's own frame rate — computing and
     // committing a new React state on every single one of them (a full RasterWorkspace +
     // Overlay re-render, plus this component's own keydown-listener effect re-subscribing,
@@ -176,7 +276,7 @@ const crop: RasterToolDefinition<CropState> = {
     // matching move.tsx's identical use of it for its own (heavier) per-frame resample.
     const point = pointer.point;
     context.scheduleWork(() => {
-      context.setState({ pending: { rect: rectForDrag(drag, point, width, height, ratio) }, drag });
+      context.setState({ pending: { rect: rectForDrag(drag, point, width, height, ratio, allowExtension) }, drag });
     });
   },
 
@@ -185,9 +285,10 @@ const crop: RasterToolDefinition<CropState> = {
     if (!drag || drag.pointerId !== pointer.pointerId) { context.setState({ pending: context.state.pending, drag: null }); return; }
     const { width, height } = context.document;
     const ratio = ratioFor(String(context.options.ratio ?? "unconstrained"), width, height);
+    const allowExtension = Boolean(context.options.aiBorderFill);
     // Synchronous, not the scheduled frame above: a fast pointer-up can land before the last
     // scheduleWork callback runs, and the release position is the one the user actually meant.
-    const pending: PendingCrop = { rect: rectForDrag(drag, pointer.point, width, height, ratio) };
+    const pending: PendingCrop = { rect: rectForDrag(drag, pointer.point, width, height, ratio, allowExtension) };
     if (drag.kind === "out" && (pending.rect.width < 2 || pending.rect.height < 2)) { context.setState(empty); return; }
     context.setState({ pending, drag: null });
   },
