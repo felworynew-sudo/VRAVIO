@@ -64,7 +64,9 @@ const radialBlurParams = [{ id: "amount", name: "Amount (Сила)", min: 1, max
 const surfaceBlurParams = [{ id: "radius", name: "Radius (Радиус)", min: 1, max: 50, step: 1, value: 5 }, { id: "threshold", name: "Threshold (Порог)", min: 0, max: 100, step: 1, value: 15 }];
 const lensBlurParams = [{ id: "radius", name: "Radius (Радиус)", min: 1, max: 50, step: 1, value: 8 }];
 const polarCoordinatesParams = [{ id: "direction", name: "Direction (Направление)", min: 0, max: 1, step: 1, value: 0, choices: ["Rectangular to Polar (В полярные координаты)", "Polar to Rectangular (В прямоугольные координаты)"] }];
-const shearParams = [{ id: "amount", name: "Amount (Сила)", min: -100, max: 100, step: 1, value: 20 }];
+// Five curve-point percentages (top to bottom), not one Amount — see `shearFilter`'s own doc
+// comment. All zero is Photoshop's own default: a straight, undistorted vertical line.
+const shearParams = [0, 1, 2, 3, 4].map((index) => ({ id: `point${index}`, name: `Point ${index + 1} (Точка ${index + 1})`, min: -100, max: 100, step: 1, value: 0 }));
 const spherizeParams = [{ id: "amount", name: "Amount (Сила)", min: -100, max: 100, step: 1, value: 50 }];
 const zigzagParams = [{ id: "amount", name: "Amount (Сила)", min: 0, max: 100, step: 1, value: 30 }];
 const kaleidoscopeParams = [{ id: "segments", name: "Segments (Сегменты)", min: 3, max: 16, step: 1, value: 6 }, { id: "angle", name: "Angle (Угол)", min: -180, max: 180, step: 1, value: 0 }];
@@ -693,13 +695,25 @@ function polarCoordinatesFilter(source: Uint8ClampedArray, width: number, height
 }
 
 /** Shear — the affine core of GEGL's `gegl:shear` (operations/transform):
- * a horizontal offset proportional to distance from the vertical centre.
- * Photoshop's own dialog wraps the same transform in a draggable curve;
- * this engine's single Amount slider drives the linear case of that curve. */
-function shearFilter(source: Uint8ClampedArray, width: number, height: number, amountPercent: number): Uint8ClampedArray {
-  const output = new Uint8ClampedArray(source.length), cy = height / 2, maxShift = (amountPercent / 100) * (width / 4);
+ * a horizontal offset that follows an actual draggable curve, not just a linear slope: Photoshop's
+ * own Shear dialog is a vertical curve editor, not an Amount slider (docs/master-plan.md §51 —
+ * the earlier single-Amount version was this filter's own honest admission that it only covered
+ * the curve's straight-line case). `points` is five control values (percent horizontal offset,
+ * evenly spaced top-to-bottom) interpolated with a Catmull-Rom spline — the standard way to draw a
+ * smooth curve through a small fixed set of points without needing free-form point add/remove.
+ */
+function evalCurve(points: readonly number[], t: number): number {
+  const n = points.length, scaled = t * (n - 1);
+  const i = Math.max(0, Math.min(n - 2, Math.floor(scaled))), localT = scaled - i;
+  const p0 = points[Math.max(0, i - 1)]!, p1 = points[i]!, p2 = points[i + 1]!, p3 = points[Math.min(n - 1, i + 2)]!;
+  const t2 = localT * localT, t3 = t2 * localT;
+  return 0.5 * (2 * p1 + (-p0 + p2) * localT + (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 + (-p0 + 3 * p1 - 3 * p2 + p3) * t3);
+}
+function shearFilter(source: Uint8ClampedArray, width: number, height: number, points: readonly number[]): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(source.length);
   for (let y = 0; y < height; y += 1) {
-    const shift = maxShift * ((y - cy) / (cy || 1));
+    const t = height > 1 ? y / (height - 1) : 0;
+    const shift = (evalCurve(points, t) / 100) * (width / 4);
     for (let x = 0; x < width; x += 1) {
       const [r, g, b, a] = sampleBilinear(source, width, height, x - shift, y), i = (y * width + x) * 4;
       output[i] = r; output[i + 1] = g; output[i + 2] = b; output[i + 3] = a;
@@ -1873,7 +1887,7 @@ export function applyRasterFilter(source: Uint8ClampedArray, width: number, heig
   if (id === "blur") return blur(source, width, height, 1);
   if (id === "blur_more") return blur(source, width, height, 3);
   if (id === "polar_coordinates") return polarCoordinatesFilter(source, width, height, value(settings, "direction", 0) === 1);
-  if (id === "shear") return shearFilter(source, width, height, value(settings, "amount", 20));
+  if (id === "shear") return shearFilter(source, width, height, [0, 1, 2, 3, 4].map((index) => value(settings, `point${index}`, 0)));
   if (id === "spherize") return spherizeFilter(source, width, height, value(settings, "amount", 50));
   if (id === "zigzag") return zigzagFilter(source, width, height, value(settings, "amount", 30));
   if (id === "ripple") return rippleFilter(source, width, height, value(settings, "amount", 100), value(settings, "size", 1));
