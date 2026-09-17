@@ -115,6 +115,16 @@ export interface PendingTransform {
    * transforms just the primary layer, matching Photoshop's own Free Transform (which does not
    * extend to a layer's link partners either). */
   readonly linked?: readonly { readonly layerId: string; readonly pixels: Uint8ClampedArray; readonly dx: number; readonly dy: number }[];
+  /**
+   * This is a transform the user opened — Free Transform, or a grab of a transform handle — not the
+   * description of a plain drag.
+   *
+   * Both are carried by the same `PendingTransform`, but only one of them is a session: a plain
+   * move commits the moment the pointer comes up and leaves no frame and nothing to confirm, which
+   * is what the owner asked for ("a move by itself is not a transform", docs/master-plan.md §58.3)
+   * and what Photoshop's Move tool does.
+   */
+  readonly session?: boolean;
 }
 
 type QuadTransformMode = "skew" | "distort" | "perspective";
@@ -349,6 +359,22 @@ function resizeCursorFor([hx, hy]: readonly [-1 | 0 | 1, -1 | 0 | 1]): string {
   return scaleCursorFor(hx, hy);
 }
 
+/**
+ * The frame Photoshop's "Show Transform Controls" draws around what the Move tool would transform,
+ * before any transform exists: the selection if there is one, otherwise the active layer's own
+ * extent. Grabbing one of its handles is what opens the Free Transform (`onPointerDown`).
+ */
+export function transformControlsFrame(context: ToolContext<MoveState>): RasterRect | null {
+  const document = context.document;
+  if (document.selection) return document.selection.bounds;
+  const layer = context.activeLayer;
+  if (!layer || layer.kind === "group") return null;
+  const left = Math.max(0, layer.bounds.x), top = Math.max(0, layer.bounds.y);
+  const right = Math.min(document.width, layer.bounds.x + layer.bounds.width), bottom = Math.min(document.height, layer.bounds.y + layer.bounds.height);
+  if (right - left < 1 || bottom - top < 1) return null;
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
 function rotateCursorFor([hx, hy]: readonly [-1 | 1, -1 | 1]): string {
   return rotateCursorForCorner(hx, hy);
 }
@@ -357,6 +383,7 @@ function rotateCursorFor([hx, hy]: readonly [-1 | 1, -1 | 1]): string {
  * A no-op if one is already open (matches the old menu command's own guard). */
 export function startPendingTransform(context: ToolContext<MoveState>): void {
   if (context.state.pending) return;
+  // Everything this opens is a session (see `PendingTransform.session`): it waits for Enter or Esc.
   const state = context.document;
   const layer = context.activeLayer;
   if (!layer) return;
@@ -378,7 +405,7 @@ export function startPendingTransform(context: ToolContext<MoveState>): void {
   if (!selection && !textBounds && !opaque) { diagnostic("info", "transform", "Transform ignored: layer is empty", { layerId: target.id }); return; }
   const bounds = textBounds ?? opaque!;
   const pending: PendingTransform = {
-    before, layerId: target.id, dx: 0, dy: 0, pixels: pixels.slice(), selection, rotation: 0,
+    before, layerId: target.id, dx: 0, dy: 0, pixels: pixels.slice(), selection, rotation: 0, session: true,
     ...(liveText ? { text: { original: structuredClone(target.text!), initialBounds: { ...bounds }, targetBounds: { ...bounds } } } : {}),
   };
   context.setState({ pending, drag: null });
@@ -513,7 +540,11 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
   // Undo returns to the document as it was a moment ago, not to how it looked
   // when the frame opened: an edit made while the transform was up is its own
   // history step and must not be swallowed by this one.
-  void context.commitDocument(current, after, "Commit Transform (Применить трансформацию)", bounds);
+  // A plain move says so in the history; only a session is a transform (see `PendingTransform.session`).
+  const label = pending.session || pending.corners || pending.mesh || pending.rotation
+    || (pending.live && (pending.live.source.width !== pending.live.target.width || pending.live.source.height !== pending.live.target.height))
+    ? "Commit Transform (Применить трансформацию)" : "Move (Перемещение)";
+  void context.commitDocument(current, after, label, bounds);
 }
 
 /** A layer's pixels laid out at document size — every ToolContext hands this out already
@@ -632,7 +663,17 @@ function beginMoveDrag(context: ToolContext<MoveState>, pointer: ToolPointer, pe
 /** Recomputes one frame of whichever drag is in progress and previews it — the direct port of
  * the pre-catalogue `applyTransformFrame`, called from `scheduleWork` (per-frame, coalesced)
  * during a drag and once more, synchronously, from `onGestureEnd`. */
+/**
+ * `buildDragFrame`, with the transform's own `session` flag put back: each branch below rebuilds a
+ * `PendingTransform` from the drag rather than from the previous one, and losing the flag there
+ * would turn an open Free Transform back into a plain move at the next frame (§58.3).
+ */
 function applyDragFrame(context: ToolContext<MoveState>, drag: MoveDrag, interpolate = true): PendingTransform | null {
+  const next = buildDragFrame(context, drag, interpolate);
+  return next && context.state.pending?.session && !next.session ? { ...next, session: true } : next;
+}
+
+function buildDragFrame(context: ToolContext<MoveState>, drag: MoveDrag, interpolate = true): PendingTransform | null {
   const state = context.document;
   const point = drag.current;
   if (drag.kind === "scale") {
@@ -759,7 +800,22 @@ const move: RasterToolDefinition<MoveState> = {
   onPointerDown(context, pointer) {
     const state = context.document;
     const point = pointer.point;
-    const pending = context.state.pending;
+    let pending = context.state.pending;
+
+    // With "Transform controls" on, the frame is already on screen (see the overlay below) — a grab
+    // of one of its handles opens the Free Transform it belongs to, as in Photoshop, instead of
+    // starting a plain move (docs/master-plan.md §58.3).
+    if (!pending && context.options.showTransform !== false) {
+      const frame = transformControlsFrame(context);
+      // Never wider than a quarter of the frame: on a small layer the usual 11-pixel grab radius
+      // covers the whole thing, and dragging its middle would scale instead of move.
+      const tolerance = frame ? Math.min(11 / context.viewport.zoom, frame.width / 4, frame.height / 4) : 0;
+      if (frame && (findScaleHandle(frame, point, tolerance) || findRotateCorner(frame, point))) {
+        let opened: PendingTransform | null = null;
+        startPendingTransform({ ...context, setState: (next: MoveState) => { opened = next.pending; context.setState(next); } });
+        pending = opened;
+      }
+    }
 
     if (pending) {
       const tolerance = 11 / context.viewport.zoom;
@@ -886,8 +942,17 @@ const move: RasterToolDefinition<MoveState> = {
       context.setState({ pending: drag.createdTextTransform ? null : context.state.pending, drag: null });
       return;
     }
-    const pending = applyDragFrame(context, drag);
-    context.setState({ pending: pending ?? context.state.pending, drag: null });
+    const next = applyDragFrame(context, drag) ?? context.state.pending;
+    // A plain move is finished when the pointer comes up: committed, in the history, no frame left
+    // behind and nothing to press Enter on (§58.3). Only a session — Free Transform, or a handle
+    // grabbed on the controls frame — stays open.
+    if (next && !next.session && !next.corners && !next.mesh && !next.text
+      && (!next.live || (next.live.rotation === 0 && next.live.source.width === next.live.target.width && next.live.source.height === next.live.target.height))) {
+      commitPending(context, next);
+      context.setState(empty);
+      return;
+    }
+    context.setState({ pending: next, drag: null });
   },
 
   /** Hover feedback for a pending transform's frame — the same hit-test `onPointerDown` commits
@@ -1030,8 +1095,18 @@ const move: RasterToolDefinition<MoveState> = {
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [live?.source.x, live?.source.y, live?.source.width, live?.source.height, pending?.pixels, pending?.livePixels, document.width]);
 
-    if (!pending) return null;
     const zoom = context.viewport.zoom;
+    if (!pending) {
+      // "Transform controls": the frame is shown as soon as a layer is active, without waiting for
+      // a drag to open a transform (§58.3). Its handles are live — see `onPointerDown`.
+      if (context.options.showTransform === false) return null;
+      const frame = transformControlsFrame(context);
+      if (!frame) return null;
+      return <svg className="transform-controls" strokeWidth={1 / zoom} viewBox={`0 0 ${document.width} ${document.height}`} preserveAspectRatio="none" aria-hidden="true">
+        <rect x={frame.x} y={frame.y} width={frame.width} height={frame.height}/>
+        {([[0, 0], [.5, 0], [1, 0], [0, .5], [1, .5], [0, 1], [.5, 1], [1, 1]] as [number, number][]).map(([x, y], index) => <rect className="transform-handle" key={index} x={frame.x + frame.width * x - 4 / zoom} y={frame.y + frame.height * y - 4 / zoom} width={8 / zoom} height={8 / zoom}/>)}
+      </svg>;
+    }
     const bounds = pendingBounds(pending, document.width, document.height);
     const showControls = options.showTransform !== false;
 

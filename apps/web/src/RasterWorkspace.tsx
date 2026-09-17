@@ -602,7 +602,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const selectionLike = activeToolId === "raster.marquee" || activeToolId === "raster.ellipseMarquee" || activeToolId === "raster.lasso";
   const activeLayer3D = activeRasterLayer(state)?.kind === "3d" ? activeRasterLayer(state) ?? null : null;
   const { selectionContextMenu, transformContextMenu, onSelectionContextMenu, onTransformContextMenu } = useRasterContextMenus({
-    activeToolId, toolOptions, setToolOption, language, state, toolContextFor, canvas: canvasRef.current, selectionLike,
+    activeToolId, toolOptions, setToolOption, language, state, toolContextFor, setTool: (toolId: string) => setTool(document.id, toolId), canvas: canvasRef.current, selectionLike,
   });
   // "Convert to 3D" / "Harmonize with Scene" on canvas — the owner's own
   // request that both reach the layer whether right-clicked in the Layers

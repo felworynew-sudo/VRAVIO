@@ -1,5 +1,6 @@
 import type { RasterDocumentState, SelectionCombineMode } from "@vravio/env-raster";
-import { enterQuadTransformMode, enterWarpTransformMode, pendingBounds, type MoveState, type QuadTransformMode } from "./environments/raster/tools/definitions/move";
+import { commitPending, enterQuadTransformMode, enterWarpTransformMode, empty as moveToolEmpty, pendingBounds, type MoveState, type QuadTransformMode } from "./environments/raster/tools/definitions/move";
+import { canQuickRotate, quickRotatePending } from "./environments/raster/tools/transform-quick-rotate";
 import type { ToolContext } from "./environments/raster/tools/types";
 import { useContextMenu } from "./ContextMenu";
 import { text } from "./i18n";
@@ -24,10 +25,11 @@ export function useRasterContextMenus(params: {
   language: Language;
   state: RasterDocumentState;
   toolContextFor: (toolId: string, canvas: HTMLCanvasElement | null) => ToolContext<unknown>;
+  setTool: (toolId: string) => void;
   canvas: HTMLCanvasElement | null;
   selectionLike: boolean;
 }) {
-  const { activeToolId, toolOptions, setToolOption, language, state, toolContextFor, canvas, selectionLike } = params;
+  const { activeToolId, toolOptions, setToolOption, language, state, toolContextFor, canvas, selectionLike, setTool } = params;
   const selectionContextMenu = useContextMenu();
   const transformContextMenu = useContextMenu();
 
@@ -84,12 +86,32 @@ export function useRasterContextMenus(params: {
       { value: "distort", english: "Distort", russian: "Искажение" },
       { value: "perspective", english: "Perspective", russian: "Перспектива" },
     ];
+    // Photoshop's own Free Transform right-click menu (owner's screenshot, master-plan §58.3).
+    // Only what this editor really does is listed (CLAUDE.md §3): Scale and Rotate are not separate
+    // modes here — the same frame does both, so Free Transform stands for all three; Flip
+    // Horizontal/Vertical need a mirror term the transform session does not have; the Warp split
+    // commands, Content-Aware Scale and the warp reference point do not exist yet.
+    const rotateBy = (degrees: 90 | -90) => {
+      const next = quickRotatePending(pending, state.width, state.height, degrees);
+      if (next) context.setState({ pending: next, drag: null });
+    };
+    const rotateHalfTurn = () => {
+      const once = quickRotatePending(pending, state.width, state.height, 90);
+      const twice = once ? quickRotatePending(once, state.width, state.height, 90) : null;
+      if (twice) context.setState({ pending: twice, drag: null });
+    };
     transformContextMenu.open(event, [
+      { label: (currentMode === "free" ? "✓ " : "") + text(language, "Free Transform", "Свободное трансформирование"), onSelect: () => undefined, disabled: currentMode === "free" },
       ...modes.map((entry) => ({
         label: (currentMode === entry.value ? "✓ " : "") + text(language, entry.english, entry.russian),
         onSelect: () => enterQuadMode(entry.value),
+        separatorBefore: entry.value === "skew",
       })),
       { label: (currentMode === "warp" ? "✓ " : "") + text(language, "Warp", "Деформация"), onSelect: enterWarp, separatorBefore: true },
+      { label: text(language, "Puppet Warp", "Марионеточная деформация"), onSelect: () => { commitPending(context, pending); context.setState(moveToolEmpty); setTool("raster.puppetWarp"); } },
+      { label: text(language, "Rotate 180°", "Поворот на 180°"), onSelect: rotateHalfTurn, separatorBefore: true, disabled: !canQuickRotate(pending) },
+      { label: text(language, "Rotate 90° Clockwise", "Повернуть на 90° по ч. с."), onSelect: () => rotateBy(90), disabled: !canQuickRotate(pending) },
+      { label: text(language, "Rotate 90° Counter Clockwise", "Повернуть на 90° против ч. с."), onSelect: () => rotateBy(-90), disabled: !canQuickRotate(pending) },
     ]);
   };
 
