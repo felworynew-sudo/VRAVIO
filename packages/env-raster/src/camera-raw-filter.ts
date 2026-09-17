@@ -192,13 +192,54 @@ function boxBlur(source: Float32Array, width: number, height: number, channels: 
   return output;
 }
 
-function mulberry32(seed: number): () => number {
-  let a = seed;
-  return () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+
+/**
+ * Where a buffer sits in the image it was taken from, for rendering a region of interest.
+ *
+ * darktable's pixelpipe hands every module a `roi` (x, y, width, height, scale) instead of the whole
+ * image: a zoomed-in view computes only what is on screen at full resolution, a fitted view the
+ * whole image at screen resolution. Without it Camera Raw could only preview a fixed downsample, and
+ * what it previewed was not what it applied — the vignette followed the crop's centre, the grain
+ * followed the crop's own pixel order, and every radius meant a different distance at 640 px than
+ * at full size (owner, docs/master-plan.md §58.1). `offsetX`/`offsetY` are the buffer's top-left in
+ * scaled image pixels; `scale` is buffer pixels per full-resolution pixel.
+ */
+export interface CameraRawFrame {
+  readonly imageWidth: number;
+  readonly imageHeight: number;
+  readonly offsetX: number;
+  readonly offsetY: number;
+  readonly scale: number;
 }
 
-export function applyCameraRawFilter(source: Uint8ClampedArray, width: number, height: number, settings: CameraRawFilterSettings): Uint8ClampedArray {
+/** How far outside a region its result can depend on, in buffer pixels at `scale` — the margin a
+ *  region render must compute and then discard for its edges to match the whole-image render. */
+export function cameraRawRegionMargin(settings: CameraRawFilterSettings, scale: number): number {
+  // The passes run one after another over each other's output, so their reaches add up.
+  const blurReach = (radius: number) => radius * scale < 1 ? 0 : Math.max(1, Math.round(radius * scale));
+  return 1
+    + Math.max(settings.clarity !== 0 ? blurReach(14) : 0, settings.texture !== 0 ? blurReach(2) : 0)
+    + Math.max(settings.noiseLuminance > 0 ? blurReach(1) : 0, settings.noiseColor > 0 ? blurReach(2) : 0)
+    + (settings.sharpenAmount > 0 ? blurReach(Math.max(0.5, settings.sharpenRadius)) : 0)
+    + (settings.grainAmount > 0 ? blurReach(Math.max(0.01, settings.grainSize / 100) * 3) : 0);
+}
+
+/** Deterministic noise in [-1, 1] keyed to a full-resolution image coordinate, so every region and
+ *  every scale sees the same grain at the same place. */
+function grainNoise(x: number, y: number): number {
+  let value = Math.imul(x + 16384, 374761393) >>> 0;
+  value = (value ^ Math.imul(y + 8192, 668265263)) >>> 0;
+  value = (value ^ (value >>> 13)) >>> 0;
+  value = Math.imul(value, 1274126177) >>> 0;
+  return ((value ^ (value >>> 16)) >>> 0) * (2 / 4294967295) - 1;
+}
+
+export function applyCameraRawFilter(source: Uint8ClampedArray, width: number, height: number, settings: CameraRawFilterSettings, frame?: CameraRawFrame): Uint8ClampedArray {
   const s = settings;
+  const scale = frame?.scale ?? 1, offsetX = frame?.offsetX ?? 0, offsetY = frame?.offsetY ?? 0;
+  const imageWidth = frame?.imageWidth ?? width, imageHeight = frame?.imageHeight ?? height;
+  // A kernel radius is a distance in full-resolution pixels; at a reduced scale it spans fewer.
+  const scaled = (radius: number) => radius * scale;
   const pixels = new Uint8ClampedArray(source.length);
   // Most Camera Raw adjustments leave the colour-mixer panel untouched.  Do
   // not pay for RGB→HSL→RGB conversion (and its temporary triples) once per
@@ -221,8 +262,8 @@ export function applyCameraRawFilter(source: Uint8ClampedArray, width: number, h
   if (s.texture !== 0 || s.clarity !== 0) {
     const luminanceFloat = new Float32Array(width * height);
     for (let i = 0; i < width * height; i += 1) { const at = i * 4; luminanceFloat[i] = 0.2126 * pixels[at]! + 0.7152 * pixels[at + 1]! + 0.0722 * pixels[at + 2]!; }
-    const textureBlur = s.texture !== 0 ? boxBlur(luminanceFloat, width, height, 1, 2) : null;
-    const clarityBlur = s.clarity !== 0 ? boxBlur(luminanceFloat, width, height, 1, 14) : null;
+    const textureBlur = s.texture !== 0 ? boxBlur(luminanceFloat, width, height, 1, scaled(2)) : null;
+    const clarityBlur = s.clarity !== 0 ? boxBlur(luminanceFloat, width, height, 1, scaled(14)) : null;
     for (let i = 0; i < width * height; i += 1) {
       let delta = 0;
       if (textureBlur) delta += (luminanceFloat[i]! - textureBlur[i]!) * (s.texture / 100) * 1.2;
@@ -241,9 +282,9 @@ export function applyCameraRawFilter(source: Uint8ClampedArray, width: number, h
       const at = i * 4, r = pixels[at]!, g = pixels[at + 1]!, b = pixels[at + 2]!;
       y[i] = 0.2126 * r + 0.7152 * g + 0.0722 * b; cb[i] = -0.1146 * r - 0.3854 * g + 0.5 * b + 128; cr[i] = 0.5 * r - 0.4542 * g - 0.0458 * b + 128;
     }
-    const yBlur = s.noiseLuminance > 0 ? boxBlur(y, width, height, 1, 1) : null;
-    const cbBlur = s.noiseColor > 0 ? boxBlur(cb, width, height, 1, 2) : null;
-    const crBlur = s.noiseColor > 0 ? boxBlur(cr, width, height, 1, 2) : null;
+    const yBlur = s.noiseLuminance > 0 ? boxBlur(y, width, height, 1, scaled(1)) : null;
+    const cbBlur = s.noiseColor > 0 ? boxBlur(cb, width, height, 1, scaled(2)) : null;
+    const crBlur = s.noiseColor > 0 ? boxBlur(cr, width, height, 1, scaled(2)) : null;
     const lumMix = s.noiseLuminance / 100, colorMix = s.noiseColor / 100;
     for (let i = 0; i < width * height; i += 1) {
       const nextY = yBlur ? y[i]! + (yBlur[i]! - y[i]!) * lumMix : y[i]!;
@@ -261,7 +302,7 @@ export function applyCameraRawFilter(source: Uint8ClampedArray, width: number, h
   if (s.sharpenAmount > 0) {
     const luminanceFloat = new Float32Array(width * height);
     for (let i = 0; i < width * height; i += 1) { const at = i * 4; luminanceFloat[i] = 0.2126 * pixels[at]! + 0.7152 * pixels[at + 1]! + 0.0722 * pixels[at + 2]!; }
-    const blurred = boxBlur(luminanceFloat, width, height, 1, Math.max(0.5, s.sharpenRadius));
+    const blurred = boxBlur(luminanceFloat, width, height, 1, scaled(Math.max(0.5, s.sharpenRadius)));
     const amount = (s.sharpenAmount / 100) * (0.5 + s.sharpenDetail / 200);
     const maskThreshold = (s.sharpenMasking / 100) * 40;
     for (let i = 0; i < width * height; i += 1) {
@@ -276,13 +317,14 @@ export function applyCameraRawFilter(source: Uint8ClampedArray, width: number, h
   // Pass 5: Vignette — radial gain from center, Roundness bends the ellipse toward a rectangle
   // or a circle, Feather softens the transition, Midpoint sets where the falloff starts.
   if (s.vignetteAmount !== 0) {
-    const cx = width / 2, cy = height / 2;
+    // Centred on the whole image, in its full-resolution coordinates — not on this buffer.
+    const cx = imageWidth / 2, cy = imageHeight / 2;
     const roundness = s.vignetteRoundness / 100; // -1 rectangular .. 1 circular
-    const aspect = width / height;
+    const aspect = imageWidth / imageHeight;
     const midpoint = s.vignetteMidpoint / 100, feather = Math.max(0.01, s.vignetteFeather / 100);
     const amount = s.vignetteAmount / 100;
     for (let py = 0; py < height; py += 1) for (let px = 0; px < width; px += 1) {
-      const nx = (px - cx) / cx, ny = (py - cy) / cy;
+      const nx = ((px + offsetX) / scale - cx) / cx, ny = ((py + offsetY) / scale - cy) / cy;
       const ellipse = Math.sqrt(nx * nx + ny * ny);
       const rectangular = Math.max(Math.abs(nx), Math.abs(ny) * aspect);
       const shape = ellipse * (1 + roundness) / 2 + rectangular * (1 - roundness) / 2;
@@ -298,10 +340,12 @@ export function applyCameraRawFilter(source: Uint8ClampedArray, width: number, h
   // Pass 6: Grain — luminance noise with Size controlling how blurred the noise field is (larger
   // = coarser grain) and Roughness controlling how uneven the grain looks.
   if (s.grainAmount > 0) {
-    const random = mulberry32(0x9E3779B9);
     const noise = new Float32Array(width * height);
-    for (let i = 0; i < width * height; i += 1) noise[i] = random() * 2 - 1;
-    const size = Math.max(0.01, s.grainSize / 100) * 3;
+    for (let py = 0; py < height; py += 1) {
+      const fullY = Math.floor((py + offsetY) / scale);
+      for (let px = 0; px < width; px += 1) noise[py * width + px] = grainNoise(Math.floor((px + offsetX) / scale), fullY);
+    }
+    const size = scaled(Math.max(0.01, s.grainSize / 100) * 3);
     const softened = size > 0.1 ? boxBlur(noise, width, height, 1, size) : noise;
     const roughness = s.grainRoughness / 100;
     const amount = s.grainAmount / 100 * 30;
