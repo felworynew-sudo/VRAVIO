@@ -9,7 +9,7 @@ import { RasterWorkspace } from "./RasterWorkspace";
 import { VectorWorkspace } from "./VectorWorkspace";
 import { AudioMassWorkspace } from "./AudioMassWorkspace";
 import { VideoWorkspace } from "./VideoWorkspace";
-import { appendLayer, appendRasterGroup, compositeRasterDocument, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, createRasterLayerMaskFromSelection, defaultScene3DGround, isRasterDocumentState, layerDocumentPixels, layerPixelsView, punchSelectionIntoMask, rasterLayerDescendantIds, rasterLayerRows, renderLayerEffects, setLayerPixels, TileStore, dropPositionInRow, dropTargetForRow, placeLayer, toggleLayerLink, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerEffects, type RasterLayerMask } from "@vravio/env-raster";
+import { appendLayer, appendRasterGroup, compositeRasterDocument, createAdjustmentLayer, createRasterLayer, createRasterLayerMask, createRasterLayerMaskFromSelection, isRasterDocumentState, layerDocumentPixels, layerPixelsView, punchSelectionIntoMask, rasterLayerDescendantIds, rasterLayerRows, renderLayerEffects, setLayerPixels, TileStore, dropPositionInRow, dropTargetForRow, placeLayer, toggleLayerLink, type RasterBlendMode, type RasterDocumentState, type RasterLayer, type RasterLayerEffects, type RasterLayerMask } from "@vravio/env-raster";
 import { kernel } from "./kernel";
 import { EnvironmentIcon } from "./EnvironmentIcon";
 import { localized, text } from "./i18n";
@@ -314,8 +314,6 @@ function Scene3DProperties({ documentId, document, layer, language }: { document
   };
   const commitLighting = (patch: Partial<typeof data.lighting>) => commit({ lighting: { ...data.lighting, ...patch } });
   const commitSource = (patch: Partial<typeof data.source>) => commit({ source: { ...data.source, ...patch } as typeof data.source });
-  const ground = data.ground ?? { ...defaultScene3DGround, distance: data.size * 0.3 };
-  const commitGround = (patch: Partial<typeof ground>) => commit({ ground: { ...ground, ...patch } });
   return <div className="dock-panel-body property-stack scene3d-properties">
     <strong>{text(language, "3D Layer", "3D-слой")}</strong>
     {data.source.kind === "text" && <>
@@ -349,17 +347,13 @@ function Scene3DProperties({ documentId, document, layer, language }: { document
         <div className="scene3d-dial-row"><AngleDial value={data.lighting.directionalIntensity} min={0} max={4} onChange={(value) => commitLighting({ directionalIntensity: value })} title={text(language, "Light Intensity", "Яркость света")}/><span>💡</span><output>{data.lighting.directionalIntensity.toFixed(1)}</output></div>
       </div>
     </div>
-    <label className="export-check"><input type="checkbox" checked={ground.enabled} onChange={(event) => commitGround({ enabled: event.target.checked })}/>{text(language, "Shadow on surface", "Тень на поверхность")}</label>
+    {/* Shadow-on-surface UI removed at the owner's own request (docs/master-plan.md §56.2) — even
+        after the position-drift fix (§56.1), live quality wasn't good enough to leave reachable.
+        `scene3d-ground.ts`/`Scene3DGround` stay untouched as the base a real redo reuses; only the
+        controls that reached them from this panel are gone. */}
     <strong>{text(language, "Lighting", "Освещение")}</strong>
     <label>{text(language, "Light Color", "Цвет света")}<input type="color" value={data.lighting.directionalColor} onChange={(event) => commitLighting({ directionalColor: event.target.value })}/></label>
     <label>{text(language, "Ambient Intensity", "Рассеянный свет")}<input type="range" min={0} max={2} step={0.05} value={data.lighting.ambientIntensity} onChange={(event) => commitLighting({ ambientIntensity: event.target.valueAsNumber })}/><output>{data.lighting.ambientIntensity}</output></label>
-    {ground.enabled && <>
-      {/* Numeric fallback for tiltX/distance — tiltZ has no slider here (only the on-canvas point-placement flow, Scene3DGroundPointsGizmo.tsx, sets it), matching the owner's own request to keep this panel plain until a redesigned one replaces it. Either door commits through the same updateScene3DLayer call. */}
-      <label>{text(language, "Surface Tilt", "Наклон поверхности")}<input type="range" min={0} max={90} value={ground.tiltX} onChange={(event) => commitGround({ tiltX: event.target.valueAsNumber })}/><output>{Math.round(ground.tiltX)}°</output></label>
-      <label>{text(language, "Surface Distance", "Расстояние до поверхности")}<input type="range" min={0} max={Math.max(ground.distance * 2, data.size)} value={ground.distance} onChange={(event) => commitGround({ distance: event.target.valueAsNumber })}/><output>{Math.round(ground.distance)}</output></label>
-      <label>{text(language, "Shadow Opacity", "Непрозрачность тени")}<input type="range" min={0} max={100} value={ground.opacity} onChange={(event) => commitGround({ opacity: event.target.valueAsNumber })}/><output>{Math.round(ground.opacity)}%</output></label>
-      <label>{text(language, "Shadow Softness", "Мягкость тени")}<input type="range" min={0} max={20} value={ground.softness} onChange={(event) => commitGround({ softness: event.target.valueAsNumber })}/><output>{Math.round(ground.softness)}</output></label>
-    </>}
     {data.source.kind === "model" && <button className="secondary-action" onClick={() => { const input = window.document.createElement("input"); input.type = "file"; input.accept = ".obj,.glb,.gltf"; input.onchange = () => { const file = input.files?.[0]; if (file) void importModelAsLayer(documentId, file); }; input.click(); }}>{text(language, "Replace Model…", "Заменить модель…")}</button>}
   </div>;
 }
@@ -763,8 +757,8 @@ function LayersPanel() {
         // so choosing it from here has to switch tools too, or the click
         // would silently do nothing.
         ...(layer.kind === "3d" ? [{ label: text(language, "Rotate 3D Object", "Повернуть 3D объект"), onSelect: () => { setTool(active.id, "raster.move"); setScene3DGroundLayer(active.id, null); setScene3DOrbitLayer(active.id, layer.id); } }] : []),
-        ...(layer.kind === "3d" ? [{ label: text(language, "Cast Shadow…", "Настроить тень…"), onSelect: () => { setTool(active.id, "raster.move"); setScene3DOrbitLayer(active.id, null); setScene3DGroundLayer(active.id, layer.id); } }] : []),
-        ...(layer.kind === "3d" && layer.scene3d?.ground ? [{ label: text(language, "Reset Shadow Settings", "Сбросить настройки тени"), onSelect: () => void updateScene3DLayer(active.id, layer.id, { ground: { ...defaultScene3DGround } }) }] : []),
+        // "Cast Shadow…"/"Reset Shadow Settings" removed here too (docs/master-plan.md §56.2) —
+        // this row is RasterWorkspace.tsx's own context menu duplicated (same reasoning there).
         // Harmonize moved off the right-click menu, to Изображение ▸ Коррекция ▸ Быстрая
         // гармонизация (adjustments.ts's `quickHarmonizeCommand`) — the owner's own
         // reclassification of it from a 3D-only scene tweak to a general one-shot filter any
