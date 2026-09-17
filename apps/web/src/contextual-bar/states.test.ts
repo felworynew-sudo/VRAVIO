@@ -73,7 +73,7 @@ describe("contextual task bar states", () => {
       const layer = state.layers.find((item) => item.id === state.activeLayerId)!;
       layer.mask = createRasterLayerMask(state.width, state.height);
     });
-    expect(resolved(context(document, { editingMaskLayerId: document.state.activeLayerId }))).toEqual({ state: "raster.mask", actions: ["image.adjustment.invert"] });
+    expect(resolved(context(document, { editingMaskLayerId: document.state.activeLayerId }))).toEqual({ state: "raster.mask", actions: ["image.adjustment.invert", "layer.toggleMaskEnabled", "layer.applyMask", "layer.deleteMask"] });
   });
 
   it("offers Group for a multi-layer selection", () => {

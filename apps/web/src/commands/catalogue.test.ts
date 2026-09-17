@@ -104,10 +104,12 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   // master-plan §11: Add Layer Mask was a Layers-panel closure; the Contextual Task Bar needed
   // it too, so it became one command both call.
   "layer.addMask|||Layer",
+  "layer.applyMask|||Layer", // master-plan §11: the Layers panel mask closures, made commands
   "layer.bringForward|Mod+]||Layer",
   "layer.bringToFront|Mod+Shift+]||Layer",
   "layer.clear|Delete||Layer",
   "layer.convertToSmartObject|||Layer",
+  "layer.deleteMask|||Layer",
   "layer.delete|||Layer",
   "layer.duplicate|Mod+J||Layer",
   "layer.editSmartObjectContents|||Layer",
@@ -130,6 +132,7 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "layer.sendToBack|Mod+Shift+[||Layer",
   "layer.stampVisible|Mod+Shift+Alt+E||Layer",
   "layer.toggleClippingMask|Mod+Alt+G||Layer",
+  "layer.toggleMaskEnabled|||Layer",
   "layer.ungroup|Mod+Shift+G||Layer",
   "layer.updateLinkedSmartObject|||Layer",
   "layer.viaCut|Mod+Shift+J||Layer",

@@ -87,15 +87,14 @@ export const contextualBarStates: readonly ContextualBarState[] = [
     actions: [command("select.feather"), command("select.invert"), command("layer.addMask"), command("edit.fillForeground"), command("select.none")],
   },
   {
-    // Photoshop's mask bar also has Disable/Delete/Apply mask; in VRAVIO those
-    // are Layers-panel closures, not commands, so only Invert is offered.
+    // Photoshop's mask bar: Invert, Disable/Enable, Delete, Apply mask.
     id: "raster.mask",
     label: { en: "Layer mask", ru: "Маска слоя" },
     when: (context) => {
       const state = raster(context);
       return Boolean(state && context.editingMaskLayerId && state.layers.find((layer) => layer.id === context.editingMaskLayerId)?.mask);
     },
-    actions: [command("image.adjustment.invert")],
+    actions: [command("image.adjustment.invert"), command("layer.toggleMaskEnabled"), command("layer.applyMask"), command("layer.deleteMask")],
   },
   {
     id: "raster.layers",
