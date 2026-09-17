@@ -57,7 +57,7 @@ describe("contextual task bar states", () => {
 
   it("switches to the selection actions once there is a selection", () => {
     const document = open((state) => { state.selection = selectAllPixels(state.width, state.height); });
-    expect(resolved(context(document))).toEqual({ state: "raster.selection", actions: [{ "select.modify": ["select.feather", "select.expand", "select.contract", "select.smooth"] }, "select.invert", "layer.addMask", "edit.fillForeground", "select.none"] });
+    expect(resolved(context(document))).toEqual({ state: "raster.selection", actions: [{ "select.modify": ["select.feather", "select.expand", "select.contract", "select.smooth"] }, "select.invert", "select.transform", "layer.addMask", "edit.fillForeground", "select.none"] });
   });
 
   it("drops Create Mask, not the whole bar, when the layer already has a mask", () => {
@@ -66,7 +66,7 @@ describe("contextual task bar states", () => {
       const layer = state.layers.find((item) => item.id === state.activeLayerId)!;
       layer.mask = createRasterLayerMask(state.width, state.height);
     });
-    expect(resolved(context(document))?.actions).toEqual([{ "select.modify": ["select.feather", "select.expand", "select.contract", "select.smooth"] }, "select.invert", "edit.fillForeground", "select.none"]);
+    expect(resolved(context(document))?.actions).toEqual([{ "select.modify": ["select.feather", "select.expand", "select.contract", "select.smooth"] }, "select.invert", "select.transform", "edit.fillForeground", "select.none"]);
   });
 
   it("offers Invert on a mask being edited", () => {

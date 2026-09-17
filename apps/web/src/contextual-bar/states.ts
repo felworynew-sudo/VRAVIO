@@ -132,14 +132,13 @@ export const contextualBarStates: readonly ContextualBarState[] = [
   },
   {
     // Photoshop: Modify selection ▸ Feather, Invert selection, Create mask,
-    // Fill selection, Deselect. Transform Selection is left out: VRAVIO's
-    // Free Transform moves the selected *pixels*, not the outline.
+    // Transform selection (outline only), Fill selection, Deselect.
     id: "raster.selection",
     label: { en: "Selection", ru: "Выделение" },
     when: (context) => Boolean(raster(context)?.selection),
     actions: [
       { kind: "menu", id: "select.modify", icon: "ПАРАМЕТРЫ.svg", label: { en: "Modify selection", ru: "Изменить выделение" }, items: [command("select.feather"), command("select.expand", { icon: "РАЗДУТИЕ.svg" }), command("select.contract", { icon: "СЖАТИЕ.svg" }), command("select.smooth", { icon: "СГЛАЖИВАНИЕ.svg" })] },
-      command("select.invert", { icon: "ИНВЕРСИЯ-КОРР.svg" }), command("layer.addMask", { icon: "МАСКА СЛОЯ.svg" }), command("edit.fillForeground", { icon: "Заливка.svg" }), command("select.none", { icon: "КРЕСТ.svg" }),
+      command("select.invert", { icon: "ИНВЕРСИЯ-КОРР.svg" }), command("select.transform", { icon: "УГОЛЬНИК.svg" }), command("layer.addMask", { icon: "МАСКА СЛОЯ.svg" }), command("edit.fillForeground", { icon: "Заливка.svg" }), command("select.none", { icon: "КРЕСТ.svg" }),
     ],
   },
   {

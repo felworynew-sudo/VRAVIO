@@ -154,6 +154,7 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "select.reselect|Mod+Shift+D||Select",
   "select.smooth|||Select",
   "select.subject|||Select", // master-plan §11, see layer.removeBackground
+  "select.transform|||Select", // master-plan §11: Transform Selection, outline only
   "tool.raster.b|B|raster|Tools",
   "tool.raster.c|C|raster|Tools",
   "tool.raster.e|E|raster|Tools",

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProp
 import { resolveLabel, text } from "./i18n";
 import { useShellStore, type Language } from "./store";
 import { useAnyModalOpen } from "./modals/ModalBackdrop";
-import { useEditSession } from "./contextual-bar/sessions";
+import { useEditSession, useEditSessionFrameVersion } from "./contextual-bar/sessions";
 import { contextualAnchor, resolveContextualBar, type ContextualBarContext, type ResolvedAction } from "./contextual-bar/states";
 
 /**
@@ -85,6 +85,7 @@ export function ContextualBar({ documentId, state, language, visible }: {
   const modalOpen = useAnyModalOpen();
 
   const session = useEditSession(documentId);
+  const sessionFrameVersion = useEditSessionFrameVersion();
   const context: ContextualBarContext = { documentId, state, editingMaskLayerId, selectedLayerIds: selectedLayerIds ?? [], session };
   const resolved = visible && !modalOpen ? resolveContextualBar(context) : null;
   const anchor = resolved ? contextualAnchor(context) : null;
@@ -169,7 +170,7 @@ export function ContextualBar({ documentId, state, language, visible }: {
       setPosition(candidates.find(fits) ?? fallback);
     });
     return () => cancelAnimationFrame(frame);
-  }, [stateId, actionKey, anchorKey, pin, viewport?.zoom, viewport?.panX, viewport?.panY, viewport?.rotation, viewport?.mode, layoutTick, drag, gesture, language]);
+  }, [stateId, actionKey, anchorKey, pin, viewport?.zoom, viewport?.panX, viewport?.panY, viewport?.rotation, viewport?.mode, layoutTick, drag, gesture, language, sessionFrameVersion]);
 
   // A different state is a different set of buttons; an open menu belongs to the old one.
   useEffect(() => { setMenuOpen(false); setOpenDropdown(null); }, [stateId]);

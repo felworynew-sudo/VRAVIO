@@ -4,6 +4,7 @@ import { useShellStore } from "../../../../store";
 import { CATEGORY_SELECT, CATEGORY_VIEW } from "../../../../commands/categories";
 import { isRasterActive, hasActiveDocument } from "../../../../commands/shared";
 import { selectModifyModal } from "../../../../modals/runtime";
+import { startTransformSelection } from "../../../../transform-selection/session";
 import type { CommandDefinition } from "../../../../commands/types";
 import { changeRasterSelection } from "../document-edits";
 
@@ -126,6 +127,20 @@ const commands: readonly CommandDefinition[] = [
     (selection, width, height, amount, atBounds) => contractSelection(selection, width, height, amount, atBounds)),
   modifyCommand("smooth", "select.smooth", { en: "Smooth Selection", ru: "Сгладить выделение" }, { en: "Sample radius", ru: "Радиус выборки" }, { min: 1, max: 500 }, true, null,
     (selection, width, height, amount, atBounds) => smoothSelection(selection, width, height, amount, atBounds)),
+  {
+    // Photoshop: Select ▸ Transform Selection — the outline only, pixels stay. The session is
+    // `TransformSelectionOverlay` on the canvas (Enter applies, Escape cancels) and the
+    // Contextual Task Bar's Cancel / Done / Rotate 90°.
+    id: "select.transform",
+    label: { en: "Transform Selection", ru: "Трансформировать выделение" },
+    category: CATEGORY_SELECT,
+    surfaces: ["menu", "palette", "canvas-context"],
+    isEnabled: hasSelection,
+    execute: ({ activeDocumentId }) => {
+      const selection = activeDocumentId ? kernel.documents.get<RasterDocumentState>(activeDocumentId)?.state.selection : null;
+      if (activeDocumentId && selection) startTransformSelection(activeDocumentId, selection.bounds);
+    },
+  },
   {
     id: "select.hideEdges",
     label: { en: "Show/Hide Selection Edges", ru: "Показать/скрыть края выделения" },

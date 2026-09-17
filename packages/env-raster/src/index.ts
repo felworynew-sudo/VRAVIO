@@ -45,3 +45,4 @@ export * from "./layer-bounds";
 export * from "./tile-store";
 export * from "./psd-import";
 export * from "./selection-modify";
+export * from "./selection-transform";

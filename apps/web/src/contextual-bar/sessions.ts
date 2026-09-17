@@ -38,6 +38,21 @@ export function publishEditSession(documentId: string, session: EditSession): ()
   };
 }
 
+/**
+ * A session's frame changed without the bar being involved in the gesture (Rotate 90° from the
+ * bar itself): bumps a counter the bar re-places itself on. Pointer gestures on the canvas need
+ * no call — the bar re-places itself on pointerup anyway.
+ */
+let frameVersion = 0;
+export function touchEditSessions(): void { frameVersion += 1; notify(); }
+export function useEditSessionFrameVersion(): number {
+  return useSyncExternalStore(
+    (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    () => frameVersion,
+    () => 0,
+  );
+}
+
 export const editSessionFor = (documentId: string): EditSession | null => sessions.get(documentId) ?? null;
 
 export function useEditSession(documentId: string): EditSession | null {

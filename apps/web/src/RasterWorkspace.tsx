@@ -13,7 +13,9 @@ import { rasterToolById } from "./environments/raster/tools/registry";
 import type { PaintTarget, ToolContext, ToolPointer } from "./environments/raster/tools/types";
 import { applyWarpPreset, commitPending, empty as moveToolEmpty, pendingBounds, startPendingTransform, type MoveState, type PendingTransform } from "./environments/raster/tools/definitions/move";
 import { canQuickRotate, quickRotatePending } from "./environments/raster/tools/transform-quick-rotate";
-import { publishEditSession } from "./contextual-bar/sessions";
+import { publishEditSession, touchEditSessions } from "./contextual-bar/sessions";
+import { TransformSelectionOverlay } from "./transform-selection/TransformSelectionOverlay";
+import { useTransformSelection } from "./transform-selection/session";
 import { defaultViewport, useShellStore, type DocumentViewport } from "./store";
 import { beginBusy } from "./busy";
 import { usePluginRuns } from "./plugins/usePluginRuns";
@@ -384,7 +386,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
           const context = toolContextFor("raster.move", canvasRef.current) as ToolContext<MoveState>;
           const pending = context.state.pending;
           const next = pending ? quickRotatePending(pending, state.width, state.height, degrees) : null;
-          if (next) context.setState({ pending: next, drag: null });
+          if (next) { context.setState({ pending: next, drag: null }); touchEditSessions(); }
         },
       } : {}),
     });
@@ -590,10 +592,12 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   // committed selection with nothing being dragged, reported after §41's drag/lasso fix shipped.
   // `displayedSelection.bounds` is passed through so the scan is skipped entirely, not just
   // memoized away.
+  // Select ▸ Transform Selection draws its own, transformed outline while it is open.
+  const transformingSelection = Boolean(useTransformSelection(document.id));
   const committedSelectionPath = useMemo(() => {
-    if (!displayedSelection || selectionEdgesHidden || activeToolId === "raster.selectionBrush" || toolHidesCommittedSelection) return "";
+    if (!displayedSelection || selectionEdgesHidden || activeToolId === "raster.selectionBrush" || toolHidesCommittedSelection || transformingSelection) return "";
     return selectionOutlinePath(displayedSelection.mask, state.width, state.height, 127, displayedSelection.bounds);
-  }, [displayedSelection, selectionEdgesHidden, activeToolId, state.width, state.height, toolHidesCommittedSelection]);
+  }, [displayedSelection, selectionEdgesHidden, activeToolId, state.width, state.height, toolHidesCommittedSelection, transformingSelection]);
   const brushLike = activeToolId === "raster.brush" || activeToolId === "raster.pencil" || activeToolId === "raster.highlighter" || activeToolId === "raster.eraser" || activeToolId === "raster.clone" || activeToolId === "raster.spotHeal" || activeToolId === "raster.blur" || activeToolId === "raster.smudge" || activeToolId === "raster.dodge" || activeToolId === "raster.burn";
   const selectionLike = activeToolId === "raster.marquee" || activeToolId === "raster.ellipseMarquee" || activeToolId === "raster.lasso";
   const activeLayer3D = activeRasterLayer(state)?.kind === "3d" ? activeRasterLayer(state) ?? null : null;
@@ -777,6 +781,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       {/* Whatever the active catalogue tool draws over the canvas. */}
       {catalogueTool?.Overlay && <catalogueTool.Overlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>} context={toolContextFor(catalogueTool.id, canvasRef.current)}/>}
       {committedSelectionPath && <svg className="selection-overlay committed-selection" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><MarchingAnts zoom={viewport.zoom}><path d={committedSelectionPath} /></MarchingAnts></svg>}
+      <TransformSelectionOverlay documentId={document.id} state={state} zoom={viewport.zoom} />
     </div>
     {/*
       Cursors live outside .raster-stage on purpose: that element carries the zoom's CSS scale
