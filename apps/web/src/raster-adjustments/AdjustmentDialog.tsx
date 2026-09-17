@@ -3,8 +3,10 @@ import type { RasterAdjustment } from "@vravio/env-raster";
 import { text } from "../i18n";
 import type { Language } from "../store";
 import type { RasterAdjustmentDefinition } from "./types";
+import { useModalPresence } from "../modals/ModalBackdrop";
 
 export function AdjustmentDialog({ definition, initialValue, language, histogram, pixels, onPreview, onCancel, onApply }: { definition: RasterAdjustmentDefinition; initialValue: RasterAdjustment; language: Language; histogram?: readonly number[]; pixels?: Uint8ClampedArray; onPreview(value: RasterAdjustment | null): void; onCancel(): void; onApply(value: RasterAdjustment): void }) {
+  useModalPresence();
   const [value, setValue] = useState(initialValue);
   const [preview, setPreview] = useState(true);
   const dialog = useRef<HTMLElement>(null);

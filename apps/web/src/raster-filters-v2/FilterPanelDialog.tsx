@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { text } from "../i18n";
 import type { Language } from "../store";
 import type { FilterPanelDefinition } from "./types";
+import { useModalPresence } from "../modals/ModalBackdrop";
 
 /**
  * The compact standalone filter dialog docs/master-plan.md §51 found in the
@@ -24,6 +25,7 @@ export function FilterPanelDialog({ definition, initialSettings, language, onPre
   onCancel(): void;
   onApply(settings: Record<string, number>): void;
 }) {
+  useModalPresence();
   const [settings, setSettings] = useState(initialSettings);
   const [preview, setPreview] = useState(true);
   const dialog = useRef<HTMLElement>(null);

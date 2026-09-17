@@ -71,7 +71,7 @@ import { probeVideoMetadata } from "./videoImport";
 import { addClipFromAsset as addVideoClipFromAsset } from "./video-commands";
 import { isVideoDocumentState } from "@vravio/env-video";
 import "./styles.css";
-import { ModalBackdrop } from "./modals/ModalBackdrop";
+import { isModalOpen, ModalBackdrop } from "./modals/ModalBackdrop";
 
 export function App() {
   ensureCommandsRegistered();
@@ -798,6 +798,10 @@ export function App() {
       const key = physicalShortcutKey(event);
       const target = event.target as HTMLElement | null;
       const editing = target?.tagName === "INPUT" || target?.tagName === "SELECT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
+      // A modal dialog owns the keyboard: a tool switch, an undo or a fill must not run underneath an
+      // open filter or Camera Raw (owner, master-plan §58.2). The dialog's own Escape/Enter listeners
+      // are separate and keep working.
+      if (isModalOpen()) return;
       const scopes = active ? ["global", active.kind] : ["global"];
       let mappedCommand = kernel.keymap.resolve(event, scopes);
       // A quick tap selects Zoom like every other tool shortcut. Holding its

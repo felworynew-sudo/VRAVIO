@@ -4,6 +4,7 @@ import { NumberBox } from "../ui/atoms/NumberBox";
 import { Checkbox } from "../ui/atoms/Checkbox";
 import { text } from "../i18n";
 import type { Language } from "../store";
+import { useModalPresence } from "../modals/ModalBackdrop";
 
 const MODELS: readonly { id: AutoLevelsModel; en: string; ru: string }[] = [
   { id: "monochromaticContrast", en: "Enhance Monochromatic Contrast", ru: "Улучшить монохроматический контраст" },
@@ -24,6 +25,7 @@ const CLIP_SPEC = { min: 0, max: 9.99, step: 0.01, unit: "%" };
  * the form around it.
  */
 export function LevelsAutoOptionsDialog({ options, language, onApply, onCancel }: { options: AutoLevelsOptions; language: Language; onApply(options: AutoLevelsOptions, saveAsDefault: boolean): void; onCancel(): void }) {
+  useModalPresence();
   const [draft, setDraft] = useState(options);
   const [saveAsDefault, setSaveAsDefault] = useState(false);
   const patch = (next: Partial<AutoLevelsOptions>) => setDraft({ ...draft, ...next });
