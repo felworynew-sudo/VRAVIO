@@ -664,23 +664,33 @@ function radialBlurFilter(source: Uint8ClampedArray, width: number, height: numb
  * smoothing flat regions.
  */
 function surfaceBlurFilter(source: Uint8ClampedArray, width: number, height: number, radius: number, thresholdPercent: number): Uint8ClampedArray {
+  // Unchanged arithmetic (pinned by filters-speed.test.ts); the disc's offsets and each offset's
+  // Gaussian weight are computed once per call instead of per sample, and the per-pixel arrays are
+  // plain locals.
   const output = new Uint8ClampedArray(source.length), r = Math.max(1, Math.min(50, Math.round(radius))), maxDelta = Math.max(0, Math.min(100, thresholdPercent)) * 2.55;
-  const clampX = (x: number) => Math.max(0, Math.min(width - 1, x)), clampY = (y: number) => Math.max(0, Math.min(height - 1, y));
+  const offsetX: number[] = [], offsetY: number[] = [], falloff: number[] = [];
+  for (let dy = -r; dy <= r; dy += 1) for (let dx = -r; dx <= r; dx += 1) {
+    const distanceSquared = dx * dx + dy * dy;
+    if (distanceSquared > r * r) continue;
+    offsetX.push(dx); offsetY.push(dy); falloff.push(Math.exp(-0.5 * distanceSquared / r));
+  }
+  const taps = offsetX.length, maxX = width - 1, maxY = height - 1;
   for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
-    const centerIndex = (y * width + x) * 4, sum = [0, 0, 0], weightSum = [0, 0, 0];
-    for (let dy = -r; dy <= r; dy += 1) for (let dx = -r; dx <= r; dx += 1) {
-      const distanceSquared = dx * dx + dy * dy;
-      if (distanceSquared > r * r) continue;
-      const sampleIndex = (clampY(y + dy) * width + clampX(x + dx)) * 4;
-      const weight = Math.exp(-0.5 * distanceSquared / r) * (source[sampleIndex + 3]! / 255);
-      for (let c = 0; c < 3; c += 1) {
-        const diff = source[centerIndex + c]! - source[sampleIndex + c]!;
-        if (diff > maxDelta || diff < -maxDelta) continue;
-        sum[c]! += weight * source[sampleIndex + c]!;
-        weightSum[c]! += weight;
-      }
+    const centerIndex = (y * width + x) * 4;
+    const c0 = source[centerIndex]!, c1 = source[centerIndex + 1]!, c2 = source[centerIndex + 2]!;
+    let sum0 = 0, sum1 = 0, sum2 = 0, weight0 = 0, weight1 = 0, weight2 = 0;
+    for (let t = 0; t < taps; t += 1) {
+      const sx = x + offsetX[t]!, sy = y + offsetY[t]!;
+      const sampleIndex = ((sy < 0 ? 0 : sy > maxY ? maxY : sy) * width + (sx < 0 ? 0 : sx > maxX ? maxX : sx)) * 4;
+      const weight = falloff[t]! * (source[sampleIndex + 3]! / 255);
+      const s0 = source[sampleIndex]!, s1 = source[sampleIndex + 1]!, s2 = source[sampleIndex + 2]!;
+      let diff = c0 - s0; if (!(diff > maxDelta || diff < -maxDelta)) { sum0 += weight * s0; weight0 += weight; }
+      diff = c1 - s1; if (!(diff > maxDelta || diff < -maxDelta)) { sum1 += weight * s1; weight1 += weight; }
+      diff = c2 - s2; if (!(diff > maxDelta || diff < -maxDelta)) { sum2 += weight * s2; weight2 += weight; }
     }
-    for (let c = 0; c < 3; c += 1) output[centerIndex + c] = weightSum[c]! > 0 ? byte(sum[c]! / weightSum[c]!) : source[centerIndex + c]!;
+    output[centerIndex] = weight0 > 0 ? byte(sum0 / weight0) : c0;
+    output[centerIndex + 1] = weight1 > 0 ? byte(sum1 / weight1) : c1;
+    output[centerIndex + 2] = weight2 > 0 ? byte(sum2 / weight2) : c2;
     output[centerIndex + 3] = source[centerIndex + 3]!;
   }
   return output;
@@ -691,18 +701,45 @@ function surfaceBlurFilter(source: Uint8ClampedArray, width: number, height: num
  * full depth-map-driven implementation needs a depth channel this engine
  * does not have yet (docs/master-plan.md §51). */
 function lensBlurFilter(source: Uint8ClampedArray, width: number, height: number, radius: number): Uint8ClampedArray {
+  // A disc average is separable into per-row spans: for each output row, a running column sum over
+  // the disc's vertical extent is not enough (the disc is not a box), but each disc row is a
+  // contiguous horizontal span, so a per-row prefix sum makes every span O(1). Integer sums, same
+  // division — identical output (pinned by filters-speed.test.ts), O(width·height·(2r+1)) instead
+  // of O(width·height·πr²).
   const output = new Uint8ClampedArray(source.length), r = Math.max(1, Math.min(50, Math.round(radius)));
-  const clampX = (x: number) => Math.max(0, Math.min(width - 1, x)), clampY = (y: number) => Math.max(0, Math.min(height - 1, y));
-  const offsets: [number, number][] = [];
-  for (let dy = -r; dy <= r; dy += 1) for (let dx = -r; dx <= r; dx += 1) if (dx * dx + dy * dy <= r * r) offsets.push([dx, dy]);
-  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
-    const sum = [0, 0, 0, 0];
-    for (const [dx, dy] of offsets) {
-      const index = (clampY(y + dy) * width + clampX(x + dx)) * 4;
-      for (let c = 0; c < 4; c += 1) sum[c]! += source[index + c]!;
+  let taps = 0;
+  const halfWidth = new Int32Array(2 * r + 1);
+  for (let dy = -r; dy <= r; dy += 1) { let extent = -1; for (let dx = 0; dx <= r; dx += 1) if (dx * dx + dy * dy <= r * r) extent = dx; halfWidth[dy + r] = extent; taps += extent >= 0 ? extent * 2 + 1 : 0; }
+  // A row's prefix sums over its clamped pixels, extended by r copies of the edge pixel on each side
+  // so a span past the edge counts those copies, as the clamped sampling did. Only the 2r+1 rows the
+  // current output row reads are kept.
+  const paddedWidth = width + 2 * r, maxY = height - 1;
+  const rowPrefix: (Float64Array | null)[] = new Array(height).fill(null);
+  const prefixOf = (sourceRow: number): Float64Array => {
+    let row = rowPrefix[sourceRow];
+    if (row) return row;
+    row = new Float64Array((paddedWidth + 1) * 4);
+    for (let px = 0; px < paddedWidth; px += 1) {
+      const sx = px - r, index = (sourceRow * width + (sx < 0 ? 0 : sx >= width ? width - 1 : sx)) * 4, at = (px + 1) * 4, previous = px * 4;
+      row[at] = row[previous]! + source[index]!; row[at + 1] = row[previous + 1]! + source[index + 1]!; row[at + 2] = row[previous + 2]! + source[index + 2]!; row[at + 3] = row[previous + 3]! + source[index + 3]!;
     }
-    const i = (y * width + x) * 4;
-    for (let c = 0; c < 4; c += 1) output[i + c] = byte(sum[c]! / offsets.length);
+    rowPrefix[sourceRow] = row;
+    return row;
+  };
+  for (let y = 0; y < height; y += 1) {
+    if (y - r - 1 >= 0) rowPrefix[y - r - 1] = null;
+    for (let x = 0; x < width; x += 1) {
+      let sum0 = 0, sum1 = 0, sum2 = 0, sum3 = 0;
+      for (let dy = -r; dy <= r; dy += 1) {
+        const extent = halfWidth[dy + r]!;
+        if (extent < 0) continue;
+        const sy = y + dy, row = prefixOf(sy < 0 ? 0 : sy > maxY ? maxY : sy);
+        const from = (x + r - extent) * 4, to = (x + r + extent + 1) * 4;
+        sum0 += row[to]! - row[from]!; sum1 += row[to + 1]! - row[from + 1]!; sum2 += row[to + 2]! - row[from + 2]!; sum3 += row[to + 3]! - row[from + 3]!;
+      }
+      const i = (y * width + x) * 4;
+      output[i] = byte(sum0 / taps); output[i + 1] = byte(sum1 / taps); output[i + 2] = byte(sum2 / taps); output[i + 3] = byte(sum3 / taps);
+    }
   }
   return output;
 }
@@ -896,37 +933,44 @@ function morphologyFilter(source: Uint8ClampedArray, width: number, height: numb
  * its own Strength slider.
  */
 function noiseReductionFilter(source: Uint8ClampedArray, width: number, height: number, iterations: number): Uint8ClampedArray {
+  // The first version's exact arithmetic (pinned by filters-speed.test.ts), minus a closure and a
+  // four-element array per channel of every pixel, and two destructurings per neighbour test — it
+  // was the slowest filter in the catalogue, ~66 s projected at 2048x2048 (§58.1). The nine
+  // clamped neighbour offsets are resolved once per pixel and shared by all three channels.
   let current = source;
-  const clampX = (x: number) => Math.max(0, Math.min(width - 1, x)), clampY = (y: number) => Math.max(0, Math.min(height - 1, y));
-  const offsets: [number, number][] = [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]];
+  const maxX = width - 1, maxY = height - 1;
+  // Neighbour order as before: [-1,-1] [0,-1] [1,-1] [-1,0] [1,0] [-1,1] [0,1] [1,1]; axis a pairs
+  // neighbour a with 7 - a.
+  const neighbour = new Int32Array(8), reference = new Float64Array(4), at = new Float64Array(8);
   for (let pass = 0; pass < Math.max(0, Math.round(iterations)); pass += 1) {
     const next = new Uint8ClampedArray(current.length), snapshot = current;
-    const at = (x: number, y: number, c: number) => snapshot[(clampY(y) * width + clampX(x)) * 4 + c]!;
-    for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
-      const i = (y * width + x) * 4;
-      for (let c = 0; c < 3; c += 1) {
-        const center = at(x, y, c);
-        const metric = (axis: number) => {
-          const [bx, by] = offsets[axis]!, [ax, ay] = offsets[7 - axis]!;
-          const before = at(x + bx, y + by, c), after = at(x + ax, y + ay, c);
-          return (center * 2 - before - after) ** 2;
-        };
-        const reference = [metric(0), metric(1), metric(2), metric(3)];
-        let sum = center, count = 1;
-        for (let direction = 0; direction < 8; direction += 1) {
-          const [ox, oy] = offsets[direction]!, neighbor = at(x + ox, y + oy, c), candidate = neighbor * 0.5 + center * 0.5;
-          let valid = true;
-          for (let axis = 0; axis < 4 && valid; axis += 1) {
-            const [bx, by] = offsets[axis]!, [ax, ay] = offsets[7 - axis]!;
-            const before = axis === direction % 4 ? candidate : at(x + bx, y + by, c);
-            const after = 7 - axis === direction ? candidate : at(x + ax, y + ay, c);
-            if ((center * 2 - before - after) ** 2 > reference[axis]!) valid = false;
+    for (let y = 0; y < height; y += 1) {
+      const up = (y === 0 ? 0 : y - 1) * width, row = y * width, down = (y === maxY ? maxY : y + 1) * width;
+      for (let x = 0; x < width; x += 1) {
+        const left = x === 0 ? 0 : x - 1, right = x === maxX ? maxX : x + 1;
+        neighbour[0] = (up + left) * 4; neighbour[1] = (up + x) * 4; neighbour[2] = (up + right) * 4;
+        neighbour[3] = (row + left) * 4; neighbour[4] = (row + right) * 4;
+        neighbour[5] = (down + left) * 4; neighbour[6] = (down + x) * 4; neighbour[7] = (down + right) * 4;
+        const i = (row + x) * 4;
+        for (let c = 0; c < 3; c += 1) {
+          const center = snapshot[i + c]!;
+          for (let n = 0; n < 8; n += 1) at[n] = snapshot[neighbour[n]! + c]!;
+          for (let axis = 0; axis < 4; axis += 1) reference[axis] = (center * 2 - at[axis]! - at[7 - axis]!) ** 2;
+          let sum = center, count = 1;
+          for (let direction = 0; direction < 8; direction += 1) {
+            const candidate = at[direction]! * 0.5 + center * 0.5;
+            let valid = true;
+            for (let axis = 0; axis < 4 && valid; axis += 1) {
+              const before = axis === direction % 4 ? candidate : at[axis]!;
+              const after = 7 - axis === direction ? candidate : at[7 - axis]!;
+              if ((center * 2 - before - after) ** 2 > reference[axis]!) valid = false;
+            }
+            if (valid) { sum += candidate; count += 1; }
           }
-          if (valid) { sum += candidate; count += 1; }
+          next[i + c] = byte(sum / count);
         }
-        next[i + c] = byte(sum / count);
+        next[i + 3] = snapshot[i + 3]!;
       }
-      next[i + 3] = snapshot[i + 3]!;
     }
     current = next;
   }
@@ -1073,33 +1117,49 @@ function windFilter(source: Uint8ClampedArray, width: number, height: number, te
  * approach rather than a plain neighbourhood blur.
  */
 function oilPaintFilter(source: Uint8ClampedArray, width: number, height: number, brushSize: number, exponent: number): Uint8ClampedArray {
+  // Same arithmetic, in the same order, as the first version — its output is pinned byte for byte by
+  // filters-speed.test.ts — without what made it hang the tab (docs/master-plan.md §58.1): 33 fresh
+  // arrays, a spread and a closure per pixel. Buckets are computed once per source pixel, the disc's
+  // offsets once per call, and the per-pixel state lives in typed arrays reset only where touched.
   const output = new Uint8ClampedArray(source.length), r = Math.max(1, Math.min(8, Math.round(brushSize))), buckets = 32;
-  const clampX = (x: number) => Math.max(0, Math.min(width - 1, x)), clampY = (y: number) => Math.max(0, Math.min(height - 1, y));
   const exp = Math.max(1, Math.round(exponent));
+  const bucketOf = new Uint8Array(width * height);
+  for (let p = 0, index = 0; p < bucketOf.length; p += 1, index += 4) {
+    const luma = (source[index]! * 30 + source[index + 1]! * 59 + source[index + 2]! * 11) / 100;
+    bucketOf[p] = Math.min(buckets - 1, Math.floor((luma / 255) * buckets));
+  }
+  const offsetX: number[] = [], offsetY: number[] = [];
+  for (let dy = -r; dy <= r; dy += 1) for (let dx = -r; dx <= r; dx += 1) if (dx * dx + dy * dy <= r * r) { offsetX.push(dx); offsetY.push(dy); }
+  const taps = offsetX.length, maxX = width - 1, maxY = height - 1;
+  const histogram = new Int32Array(buckets), bucketColor = new Float64Array(buckets * 4);
   for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
-    const histogram = new Array(buckets).fill(0);
-    const bucketColor: number[][] = Array.from({ length: buckets }, () => [0, 0, 0, 0]);
-    for (let dy = -r; dy <= r; dy += 1) for (let dx = -r; dx <= r; dx += 1) {
-      if (dx * dx + dy * dy > r * r) continue;
-      const index = (clampY(y + dy) * width + clampX(x + dx)) * 4;
-      const luma = (source[index]! * 30 + source[index + 1]! * 59 + source[index + 2]! * 11) / 100;
-      const bucket = Math.min(buckets - 1, Math.floor((luma / 255) * buckets));
-      histogram[bucket] += 1;
-      for (let c = 0; c < 4; c += 1) bucketColor[bucket]![c] = bucketColor[bucket]![c]! + source[index + c]!;
+    histogram.fill(0);
+    bucketColor.fill(0);
+    for (let t = 0; t < taps; t += 1) {
+      const sx = x + offsetX[t]!, sy = y + offsetY[t]!;
+      const p = (sy < 0 ? 0 : sy > maxY ? maxY : sy) * width + (sx < 0 ? 0 : sx > maxX ? maxX : sx), index = p * 4, bucket = bucketOf[p]!, slot = bucket * 4;
+      histogram[bucket] = histogram[bucket]! + 1;
+      bucketColor[slot] = bucketColor[slot]! + source[index]!;
+      bucketColor[slot + 1] = bucketColor[slot + 1]! + source[index + 1]!;
+      bucketColor[slot + 2] = bucketColor[slot + 2]! + source[index + 2]!;
+      bucketColor[slot + 3] = bucketColor[slot + 3]! + source[index + 3]!;
     }
-    const maxCount = Math.max(1, ...histogram);
-    let sum = [0, 0, 0, 0], weightSum = 0;
+    let maxCount = 1;
+    for (let b = 0; b < buckets; b += 1) if (histogram[b]! > maxCount) maxCount = histogram[b]!;
+    let sum0 = 0, sum1 = 0, sum2 = 0, sum3 = 0, weightSum = 0;
     for (let b = 0; b < buckets; b += 1) {
-      if (histogram[b] === 0) continue;
+      const count = histogram[b]!;
+      if (count === 0) continue;
       let weight = 1;
-      const ratio = histogram[b] / maxCount;
+      const ratio = count / maxCount;
       for (let power = 0; power < exp; power += 1) weight *= ratio;
-      const perPixel = weight / histogram[b];
-      for (let c = 0; c < 4; c += 1) sum[c]! += perPixel * bucketColor[b]![c]!;
+      const perPixel = weight / count, slot = b * 4;
+      sum0 += perPixel * bucketColor[slot]!; sum1 += perPixel * bucketColor[slot + 1]!; sum2 += perPixel * bucketColor[slot + 2]!; sum3 += perPixel * bucketColor[slot + 3]!;
       weightSum += weight;
     }
     const i = (y * width + x) * 4;
-    for (let c = 0; c < 4; c += 1) output[i + c] = weightSum > 0 ? byte(sum[c]! / weightSum) : source[i + c]!;
+    if (weightSum > 0) { output[i] = byte(sum0 / weightSum); output[i + 1] = byte(sum1 / weightSum); output[i + 2] = byte(sum2 / weightSum); output[i + 3] = byte(sum3 / weightSum); }
+    else { output[i] = source[i]!; output[i + 1] = source[i + 1]!; output[i + 2] = source[i + 2]!; output[i + 3] = source[i + 3]!; }
   }
   return output;
 }
@@ -1267,16 +1327,25 @@ function crystallizeFilter(source: Uint8ClampedArray, width: number, height: num
  * Crystallize's solid facets even though both share one nearest-point
  * search. */
 function pointillizeFilter(source: Uint8ClampedArray, width: number, height: number, cellSize: number): Uint8ClampedArray {
+  // Every pixel used to be tested against every dot in the image. A dot lies inside its own cell,
+  // and one within `dotRadius` (< one cell) of a pixel can only be in the pixel's cell or a direct
+  // neighbour — so only those nine are tested, in ascending index order so ties resolve as before
+  // (pinned by filters-speed.test.ts).
   const size = Math.max(3, Math.round(cellSize)), { cellColor, points } = cellularTessellation(source, width, height, cellSize);
+  const cols = Math.ceil(width / size), rows = Math.ceil(height / size);
   const output = new Uint8ClampedArray(source.length).fill(255);
   for (let i = 3; i < output.length; i += 4) output[i] = 255;
   const dotRadius = size * 0.42;
   for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
-    const i = (y * width + x) * 4;
+    const i = (y * width + x) * 4, col = Math.floor(x / size), row = Math.floor(y / size);
     let best = -1, bestDistance = dotRadius * dotRadius;
-    for (let index = 0; index < points.length; index += 1) {
-      const point = points[index]!, distance = (point.x - x) ** 2 + (point.y - y) ** 2;
-      if (distance < bestDistance) { bestDistance = distance; best = index; }
+    for (let dr = -1; dr <= 1; dr += 1) {
+      const r = row + dr; if (r < 0 || r >= rows) continue;
+      for (let dc = -1; dc <= 1; dc += 1) {
+        const c = col + dc; if (c < 0 || c >= cols) continue;
+        const index = r * cols + c, point = points[index]!, distance = (point.x - x) ** 2 + (point.y - y) ** 2;
+        if (distance < bestDistance) { bestDistance = distance; best = index; }
+      }
     }
     if (best >= 0) { const color = cellColor[best]!; output[i] = byte(color[0]!); output[i + 1] = byte(color[1]!); output[i + 2] = byte(color[2]!); output[i + 3] = byte(color[3]!); }
   }
