@@ -1,9 +1,9 @@
-import { layerDocumentPixels, unionRect } from "./layer-bounds";
+import { documentToFrame, layerDocumentPixels, layerFramePixels, unionRect } from "./layer-bounds";
 import { bilinearSample, sampleBilinearInto, type BilinearSample } from "./sampling";
 import { selectionBounds } from "./selection";
 import { translateSmartObject } from "./smart-object";
 import { TileStore } from "./tile-store";
-import type { PixelSelection, Point, RasterDocumentState, RasterLayer, RasterRect } from "./types";
+import type { PixelSelection, Point, RasterDocumentState, RasterLayer, RasterLayerMask, RasterRect } from "./types";
 
 /**
  * Moves a whole layer by giving its own buffer a new origin — no pixel is read or written.
@@ -501,6 +501,32 @@ function cropChannel(pixels: Uint8ClampedArray, sourceWidth: number, left: numbe
 }
 
 /**
+ * A layer mask through a crop. The mask itself stays canvas-sized; with `keepOutside` whatever the
+ * crop leaves beyond the new canvas is parked in `mask.outside` (see its doc comment), and a crop
+ * that reaches back into previously parked area takes the mask from there rather than filling it
+ * black — so content kept outside by "Delete Cropped Pixels" off comes back visible.
+ */
+function cropLayerMask(mask: RasterLayerMask, documentWidth: number, documentHeight: number, left: number, top: number, width: number, height: number, keepOutside: boolean): RasterLayerMask {
+  const parked = mask.outside;
+  if (!parked && !keepOutside) return { ...mask, tiles: mask.tiles.reframe(left, top, width, height) };
+  // Everything known about this mask, in the old document's space: what was parked, with the
+  // current canvas-sized mask written over the canvas part (inside the canvas `tiles` is the truth).
+  const extentLeft = Math.min(0, parked?.bounds.x ?? 0), extentTop = Math.min(0, parked?.bounds.y ?? 0);
+  const extentRight = Math.max(documentWidth, parked ? parked.bounds.x + parked.bounds.width : 0);
+  const extentBottom = Math.max(documentHeight, parked ? parked.bounds.y + parked.bounds.height : 0);
+  const extent: RasterRect = { x: extentLeft, y: extentTop, width: extentRight - extentLeft, height: extentBottom - extentTop };
+  const known = parked
+    ? parked.tiles.reframe(extent.x - parked.bounds.x, extent.y - parked.bounds.y, extent.width, extent.height)
+    : mask.tiles.reframe(extent.x, extent.y, extent.width, extent.height);
+  if (parked) known.writeLocalRegion({ x: -extent.x, y: -extent.y, width: documentWidth, height: documentHeight }, mask.tiles.toPixels());
+  const tiles = known.reframe(left - extent.x, top - extent.y, width, height);
+  const { outside: _dropped, ...rest } = mask;
+  return keepOutside
+    ? { ...rest, tiles, outside: { tiles: known, bounds: { ...extent, x: extent.x - left, y: extent.y - top } } }
+    : { ...rest, tiles };
+}
+
+/**
  * Slides a layer's own buffer into the new canvas's coordinate space without
  * touching its pixels, for the `deleteCroppedPixels: false` path below.
  * Negative coordinates are deliberate: they retain the portion left/above the
@@ -545,7 +571,7 @@ export function cropRasterDocument(state: RasterDocumentState, crop: RasterRect,
     // TileStore, not the materialise-then-recrop `cropChannel` needs for a flat buffer. It already
     // treats a frame reaching past its own bounds as transparent there, so extension needs nothing
     // extra here.
-    const maskPatch = layer.mask ? { mask: { ...layer.mask, tiles: layer.mask.tiles.reframe(left, top, width, height) } } : {};
+    const maskPatch = layer.mask ? { mask: cropLayerMask(layer.mask, state.width, state.height, left, top, width, height, !deleteCroppedPixels) } : {};
     if (!deleteCroppedPixels) return { ...layer, ...maskPatch, ...slideLayerBounds(layer, left, top) };
     // Read in canvas space: a layer is stored at the size of its content, so
     // its own buffer cannot be indexed by the document's stride. Only the
@@ -724,6 +750,67 @@ export function stampFloating(
     }
   }
   return output;
+}
+
+/**
+ * The rectangle a transform's result has to be computed in so nothing it moves is lost: the
+ * canvas, everything the layer already holds (which may reach past the canvas), and wherever the
+ * moved content lands. Integer-aligned, one pixel of slack for the resample's own edge.
+ */
+function transformFrame(documentWidth: number, documentHeight: number, layerBounds: RasterRect, landing: RasterRect): RasterRect {
+  const left = Math.floor(Math.min(0, layerBounds.x, landing.x)) - 1, top = Math.floor(Math.min(0, layerBounds.y, landing.y)) - 1;
+  const right = Math.ceil(Math.max(documentWidth, layerBounds.x + layerBounds.width, landing.x + landing.width)) + 1;
+  const bottom = Math.ceil(Math.max(documentHeight, layerBounds.y + layerBounds.height, landing.y + landing.height)) + 1;
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+const shiftRect = (rect: RasterRect, frame: RasterRect): RasterRect => ({ ...rect, x: rect.x - frame.x, y: rect.y - frame.y });
+
+function selectionInFrame(selection: PixelSelection | null, documentWidth: number, documentHeight: number, frame: RasterRect): PixelSelection | null {
+  return selection ? { mask: documentToFrame(selection.mask, documentWidth, documentHeight, frame, 1), bounds: shiftRect(selection.bounds, frame) } : null;
+}
+
+/**
+ * `transformLayerPixels` for a commit: the same one resample, computed over a frame that holds the
+ * layer's content past the canvas edge and wherever the transform carries it, instead of over the
+ * canvas — which could keep neither. Store the result with `setLayerFramePixels`.
+ */
+export function transformLayerInFrame(
+  layer: RasterLayer, documentWidth: number, documentHeight: number,
+  source: RasterRect, target: RasterRect, degrees: number, selection: PixelSelection | null = null,
+): { pixels: Uint8ClampedArray; frame: RasterRect } {
+  const frame = transformFrame(documentWidth, documentHeight, layer.bounds, rotatedDestinationBounds(target, degrees));
+  const pixels = transformLayerPixels(
+    layerFramePixels(layer, frame), frame.width, frame.height,
+    shiftRect(source, frame), shiftRect(target, frame), degrees, selectionInFrame(selection, documentWidth, documentHeight, frame),
+  );
+  return { pixels, frame };
+}
+
+/**
+ * `stampFloating` for a commit, over a frame rather than the canvas: selected content carried over
+ * an edge keeps the part that went past it, and whatever the layer held outside the canvas before
+ * the move stays where it was. `float` is the document-space lift the drag previewed with — its
+ * hole is reused exactly, so the result is the preview plus what the canvas could not show.
+ */
+export function stampFloatingInFrame(
+  layer: RasterLayer, documentWidth: number, documentHeight: number, float: FloatingPixels, dx: number, dy: number,
+): { pixels: Uint8ClampedArray; frame: RasterRect } {
+  const landing = { ...float.bounds, x: float.bounds.x + Math.round(dx), y: float.bounds.y + Math.round(dy) };
+  const frame = transformFrame(documentWidth, documentHeight, layer.bounds, landing);
+  const base = layerFramePixels(layer, frame);
+  const insideCanvas = documentToFrame(float.base, documentWidth, documentHeight, frame);
+  const left = -frame.x, top = -frame.y, rowBytes = documentWidth * 4;
+  for (let y = 0; y < documentHeight; y += 1) {
+    const row = ((top + y) * frame.width + left) * 4;
+    base.set(insideCanvas.subarray(row, row + rowBytes), row);
+  }
+  const framed: FloatingPixels = {
+    base,
+    content: documentToFrame(float.content, documentWidth, documentHeight, frame),
+    bounds: shiftRect(float.bounds, frame),
+  };
+  return { pixels: stampFloating(framed, frame.width, frame.height, dx, dy), frame };
 }
 
 /** Photoshop's default Warp grid: 3x3 cells, so 4x4 draggable anchor points, row-major. */

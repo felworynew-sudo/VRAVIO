@@ -222,6 +222,18 @@ export interface RasterLayerMask {
    * flat-buffer version of this same field).
    */
   tiles: TileStore;
+  /**
+   * The mask beyond the canvas, kept by a Crop with "Delete Cropped Pixels" off.
+   *
+   * `tiles` stays exactly document-sized (every reader relies on that), so what a crop cuts away
+   * is parked here instead of discarded: `bounds` is document space and covers at least the
+   * canvas it was taken from, and only its pixels *outside the current canvas* mean anything —
+   * inside, `tiles` is the truth. A later crop that grows the canvas back reads from it, so the
+   * layer content the crop kept outside comes back with the mask that went with it rather than
+   * hidden behind a black one. Never written in place, only replaced, so sharing it between a
+   * document and its history snapshots is safe.
+   */
+  outside?: { readonly tiles: TileStore; readonly bounds: RasterRect };
   /** `RasterLayer.pixelsRevision`'s own doc comment explains the contract; this is the same thing for `tiles` above, bumped by `swapMaskRegion` and anything else that writes mask pixels through this package's single door. */
   pixelsRevision: number;
   assetId: string | null;

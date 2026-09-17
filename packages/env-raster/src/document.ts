@@ -142,6 +142,9 @@ export function migrateRasterDocumentState(state: RasterDocumentState): RasterDo
           mask.tiles = TileStore.fromJSON(mask.tiles as unknown as { width: number; height: number; channels: number; pixels: Uint8ClampedArray });
         }
       }
+      if (mask.outside && !(mask.outside.tiles instanceof TileStore)) {
+        mask.outside = { bounds: mask.outside.bounds, tiles: TileStore.fromJSON(mask.outside.tiles as unknown as { width: number; height: number; channels: number; pixels: Uint8ClampedArray }) };
+      }
       if (typeof mask.pixelsRevision !== "number") mask.pixelsRevision = 0;
     }
     if (layer.kind === "group") {

@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import {
   cloneRasterState, compositeRasterDocument, flattenRasterLayers, layerAccepts, layerDocumentPixels, layerLockReason, layerOpaqueBounds, layerPixelsView, liftSelection, linkedLayers, meshLayerPixels, meshSelection,
   pickLayerAt, quadLayerPixels, quadSelection, regularMesh, restrictSelectionToContent, rotateLayerPixels, rotateSelection,
-  rotatedDestinationBounds, scaleLayerPixels, scaleSelection, setLayerPixels, stampFloating, transformLayerPixels, transformSmartObject, translateLayerOrigin, translateLayerPixels, translateSelection, unionRect, WARP_GRID, warpPresetMesh,
+  rotatedDestinationBounds, scaleLayerPixels, scaleSelection, setLayerFramePixels, setLayerPixels, smartObjectTransform, stampFloating, stampFloatingInFrame, transformLayerInFrame, transformLayerPixels, transformSmartObject, translateLayerOrigin, translateLayerPixels, translateSelection, unionRect, WARP_GRID, warpPresetMesh,
   type WarpPresetId,
   type FloatingPixels, type PixelSelection, type Point, type RasterDocumentState, type RasterLayer, type RasterRect, type RasterTextData, type TransformDragCache,
 } from "@vravio/env-raster";
@@ -243,7 +243,14 @@ export function pendingBounds(pending: PendingTransform, width: number, height: 
       ? rotatedDestinationBounds(pending.live.target, pending.live.rotation)
       : pending.live.target;
   }
-  return pending.text?.targetBounds ?? pending.selection?.bounds ?? layerOpaqueBounds(pending.pixels, width, height);
+  if (pending.text) return pending.text.targetBounds;
+  if (pending.selection) return pending.selection.bounds;
+  // A layer reaching past the canvas transforms as a whole, the way Photoshop's frame wraps the
+  // entire layer: the canvas-sized `pending.pixels` only knows the visible part, so a frame built
+  // from it left the rest out of every scale or turn (docs/master-plan.md §57.1).
+  const layer = pending.before.layers.find((item) => item.id === pending.layerId);
+  if (layer && layer.kind === "pixel" && (layer.bounds.x < 0 || layer.bounds.y < 0 || layer.bounds.x + layer.bounds.width > width || layer.bounds.y + layer.bounds.height > height)) return { ...layer.bounds };
+  return layerOpaqueBounds(pending.pixels, width, height);
 }
 
 /**
@@ -456,11 +463,30 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
       // The session's one and only resample. Everything the hand did — every
       // scale, turn or selected-pixel transform — is applied once here, never
       // once per pointer frame.
-      const resolved = pending.live
-        ? transformLayerPixels(pending.pixels, pending.before.width, pending.before.height, pending.live.source, pending.live.target, pending.live.rotation, pending.selection)
-        : pending.pixels;
-      isThere = layerOpaqueBounds(resolved, pending.before.width, pending.before.height);
-      setLayerPixels(layer, resolved, pending.before.width, pending.before.height);
+      //
+      // Computed over a frame that reaches past the canvas wherever the layer or the transform
+      // does, not over the canvas: a canvas-sized result had nowhere to put the part of a scale,
+      // a turn or a moved selection that crossed an edge, nor what the layer already held beyond
+      // it (docs/master-plan.md §57.1). Warp and Skew/Distort/Perspective still resample on the
+      // canvas — their own pristine origins are canvas-sized.
+      const { width, height } = pending.before;
+      const framed = sourceLayer && sourceLayer.kind === "pixel" && !smartObjectTransform(sourceLayer) && !pending.corners && !pending.mesh
+        ? pending.live
+          ? transformLayerInFrame(sourceLayer, width, height, pending.live.source, pending.live.target, pending.live.rotation, pending.selection)
+          : pending.float ? stampFloatingInFrame(sourceLayer, width, height, pending.float, pending.dx, pending.dy) : null
+        : null;
+      if (framed) {
+        setLayerFramePixels(layer, framed.pixels, framed.frame);
+        const left = Math.max(0, layer.bounds.x), top = Math.max(0, layer.bounds.y);
+        const right = Math.min(width, layer.bounds.x + layer.bounds.width), bottom = Math.min(height, layer.bounds.y + layer.bounds.height);
+        isThere = right > left && bottom > top ? { x: left, y: top, width: right - left, height: bottom - top } : null;
+      } else {
+        const resolved = pending.live
+          ? transformLayerPixels(pending.pixels, width, height, pending.live.source, pending.live.target, pending.live.rotation, pending.selection)
+          : pending.pixels;
+        isThere = layerOpaqueBounds(resolved, width, height);
+        setLayerPixels(layer, resolved, width, height);
+      }
     }
     bounds = wasThere && isThere ? unionRect(wasThere, isThere.x, isThere.y, isThere.x + isThere.width, isThere.y + isThere.height, 1) : wasThere ?? isThere;
   }

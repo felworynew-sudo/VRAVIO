@@ -1,8 +1,63 @@
 import { createRasterGroup, createRasterLayer, makeLayerOrderKey } from "./document";
 import { appendLayer, flattenRasterLayers, isLayerEffectivelyVisible, rasterLayerDescendantIds } from "./layer-tree";
-import { layerDocumentPixels, setLayerPixels } from "./layer-bounds";
+import { documentToFrame, layerDocumentPixels, setLayerFramePixels, setLayerPixels } from "./layer-bounds";
 import { compositeRasterRegion } from "./render";
-import type { PixelSelection, RasterDocumentState, RasterLayer } from "./types";
+import { TileStore } from "./tile-store";
+import { translateLayerOrigin } from "./transform";
+import type { PixelSelection, RasterDocumentState, RasterLayer, RasterRect } from "./types";
+
+/** The canvas and every given layer's own extent — what a merge has to composite to lose nothing. */
+function mergeFrame(state: RasterDocumentState, layers: readonly RasterLayer[]): RasterRect {
+  let left = 0, top = 0, right = state.width, bottom = state.height;
+  for (const layer of layers) {
+    if (layer.kind === "group" || layer.kind === "adjustment") continue;
+    left = Math.min(left, Math.floor(layer.bounds.x)); top = Math.min(top, Math.floor(layer.bounds.y));
+    right = Math.max(right, Math.ceil(layer.bounds.x + layer.bounds.width)); bottom = Math.max(bottom, Math.ceil(layer.bounds.y + layer.bounds.height));
+  }
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+/**
+ * The same document seen through a larger canvas: every layer's origin moved so `frame`'s corner is
+ * (0, 0), and every canvas-sized mask padded to the frame. Compositing this is compositing the real
+ * document, pixels past the canvas edge included — the compositor itself needs no second mode.
+ *
+ * Past the canvas a mask reads what a crop parked there (`RasterLayerMask.outside`), and otherwise
+ * white — `createRasterLayerMask`'s own default, Photoshop's Reveal All — since nothing ever painted
+ * a mask where the canvas never was.
+ */
+function stateInFrame(state: RasterDocumentState, layers: readonly RasterLayer[], frame: RasterRect): RasterDocumentState {
+  if (frame.x === 0 && frame.y === 0 && frame.width === state.width && frame.height === state.height) return { ...state, layers: [...layers] };
+  const shifted = layers.map((original) => {
+    const layer: RasterLayer = { ...original };
+    translateLayerOrigin(layer, -frame.x, -frame.y);
+    if (layer.mask) {
+      const padded = new Uint8ClampedArray(frame.width * frame.height).fill(255);
+      const parked = layer.mask.outside;
+      if (parked) {
+        const window = { x: parked.bounds.x - frame.x, y: parked.bounds.y - frame.y };
+        const values = parked.tiles.toPixels();
+        for (let y = 0; y < parked.bounds.height; y += 1) {
+          const row = window.y + y; if (row < 0 || row >= frame.height) continue;
+          for (let x = 0; x < parked.bounds.width; x += 1) {
+            const column = window.x + x; if (column < 0 || column >= frame.width) continue;
+            padded[row * frame.width + column] = values[y * parked.bounds.width + x]!;
+          }
+        }
+      }
+      const inside = documentToFrame(layer.mask.tiles.toPixels(), state.width, state.height, frame, 1);
+      const rowStart = -frame.x;
+      for (let y = 0; y < state.height; y += 1) {
+        const at = (y - frame.y) * frame.width + rowStart;
+        padded.set(inside.subarray(at, at + state.width), at);
+      }
+      const { outside: _parked, ...mask } = layer.mask;
+      layer.mask = { ...mask, tiles: TileStore.fromPixels(padded, frame.width, frame.height, 1) };
+    }
+    return layer;
+  });
+  return { ...state, width: frame.width, height: frame.height, selection: null, layers: shifted };
+}
 
 const siblingsOf = (state: RasterDocumentState, parentId: string | null): RasterLayer[] =>
   state.layers.filter((layer) => layer.parentId === parentId).sort((a, b) => a.orderKey.localeCompare(b.orderKey));
@@ -176,13 +231,15 @@ export function mergeLayerDown(state: RasterDocumentState, layerId: string): Ras
   // Compositing the pair on their own gives the same result the canvas shows,
   // including blend mode and opacity, which hand-blending the two buffers would
   // have to reimplement and get wrong.
-  const pair: RasterDocumentState = {
-    ...state,
-    layers: [{ ...lower, parentId: null, clipping: false, orderKey: makeLayerOrderKey(0) }, { ...upper, parentId: null, orderKey: makeLayerOrderKey(1) }],
-  };
-  const merged = compositeRasterRegion(pair, { x: 0, y: 0, width: state.width, height: state.height });
+  //
+  // Composited over a frame that holds both layers' full extent, not just the canvas: a layer can
+  // reach past the canvas (a crop that kept pixels, a move over an edge), and a canvas-sized merge
+  // silently deleted that part of both (docs/master-plan.md §57.1).
+  const frame = mergeFrame(state, [lower, upper]);
+  const pair = stateInFrame(state, [{ ...lower, parentId: null, clipping: false, orderKey: makeLayerOrderKey(0) }, { ...upper, parentId: null, orderKey: makeLayerOrderKey(1) }], frame);
+  const merged = compositeRasterRegion(pair, { x: 0, y: 0, width: frame.width, height: frame.height });
 
-  setLayerPixels(lower, merged, state.width, state.height);
+  setLayerFramePixels(lower, merged, frame);
   lower.kind = "pixel";
   lower.opacity = 1;
   lower.fillOpacity = 1;
@@ -205,11 +262,13 @@ export function mergeVisibleLayers(state: RasterDocumentState): RasterLayer | nu
   const visible = flattenRasterLayers(state.layers).filter((layer) => layer.kind !== "group" && isLayerEffectivelyVisible(layer, state.layers));
   if (visible.length < 2) return null;
 
-  const merged = compositeRasterRegion(state, { x: 0, y: 0, width: state.width, height: state.height });
+  // Over the full extent of what is visible, for the same reason as `mergeLayerDown`.
+  const frame = mergeFrame(state, visible);
+  const merged = compositeRasterRegion(stateInFrame(state, state.layers, frame), { x: 0, y: 0, width: frame.width, height: frame.height });
   const lowest = visible[0]!;
   const removed = new Set(visible.slice(1).flatMap((layer) => [layer.id, ...rasterLayerDescendantIds(state.layers, layer.id)]));
 
-  setLayerPixels(lowest, merged, state.width, state.height);
+  setLayerFramePixels(lowest, merged, frame);
   lowest.kind = "pixel";
   lowest.opacity = 1;
   lowest.fillOpacity = 1;

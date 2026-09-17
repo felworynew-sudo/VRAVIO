@@ -255,6 +255,54 @@ export function trimToContent(pixels: Uint8ClampedArray, documentWidth: number, 
   return { bounds, pixels: cropToRect(pixels, documentWidth, bounds) };
 }
 
+/**
+ * A layer's pixels laid out in an arbitrary rectangle of document space — the document-sized
+ * `layerDocumentPixels`, but for a frame that may reach past the canvas.
+ *
+ * A transform whose result lands partly outside the document has to be computed somewhere that
+ * can hold it; the engine's own transforms (`transformLayerPixels`, `stampFloating`, …) take any
+ * width/height, so handing them this frame instead of the canvas is all it takes. Pixel layers
+ * only — a Smart Object's placement is transformed without sampling and never comes here.
+ */
+export function layerFramePixels(layer: RasterLayer, frame: RasterRect): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(frame.width * frame.height * 4);
+  const bounds = layer.bounds;
+  const left = Math.max(frame.x, bounds.x), top = Math.max(frame.y, bounds.y);
+  const right = Math.min(frame.x + frame.width, bounds.x + bounds.width), bottom = Math.min(frame.y + frame.height, bounds.y + bounds.height);
+  if (right <= left || bottom <= top) return output;
+  const source = layerPixelsView(layer), rowBytes = (right - left) * 4;
+  for (let y = top; y < bottom; y += 1) {
+    const from = ((y - bounds.y) * bounds.width + (left - bounds.x)) * 4;
+    output.set(source.subarray(from, from + rowBytes), ((y - frame.y) * frame.width + (left - frame.x)) * 4);
+  }
+  return output;
+}
+
+/** A document-sized buffer (`channels` per pixel) placed into `frame`, zero outside the document. */
+export function documentToFrame(pixels: Uint8ClampedArray, documentWidth: number, documentHeight: number, frame: RasterRect, channels = 4): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(frame.width * frame.height * channels);
+  const left = Math.max(0, frame.x), top = Math.max(0, frame.y);
+  const right = Math.min(documentWidth, frame.x + frame.width), bottom = Math.min(documentHeight, frame.y + frame.height);
+  const rowBytes = (right - left) * channels;
+  if (rowBytes <= 0) return output;
+  for (let y = top; y < bottom; y += 1) {
+    const from = (y * documentWidth + left) * channels;
+    output.set(pixels.subarray(from, from + rowBytes), ((y - frame.y) * frame.width + (left - frame.x)) * channels);
+  }
+  return output;
+}
+
+/** Stores a buffer laid out in `frame` on a layer, trimmed to what it holds — `setLayerPixels`
+ * for a result that was computed outside the canvas's bounds rather than inside them. */
+export function setLayerFramePixels(layer: RasterLayer, pixels: Uint8ClampedArray, frame: RasterRect): void {
+  const inner = opaqueBoundsOf(pixels, frame.width, frame.height) ?? { x: 0, y: 0, width: 1, height: 1 };
+  layer.bounds = { x: frame.x + inner.x, y: frame.y + inner.y, width: inner.width, height: inner.height };
+  layer.width = inner.width;
+  layer.height = inner.height;
+  layer.tiles = TileStore.fromPixels(cropToRect(pixels, frame.width, inner), inner.width, inner.height);
+  layer.pixelsRevision += 1;
+}
+
 export interface SetLayerPixelsOptions {
   /**
    * The buffer is an *edit* of the layer, not a replacement for it: keep whatever the layer holds

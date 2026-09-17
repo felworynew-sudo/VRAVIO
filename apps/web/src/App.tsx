@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { WARP_PRESETS, applyRasterFilter, rasterFilterCatalog, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerOrigin, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
+import { WARP_PRESETS, applyRasterFilter, rasterFilterCatalog, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerOrigin, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterLayer, type RasterRect } from "@vravio/env-raster";
 import { maskToRgba, rgbaToMask } from "./raster-pixel-buffers";
 import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
 import { withBusyPainted } from "./busy";
@@ -554,7 +554,10 @@ export function App() {
     const state = active.state, ids = (selectedLayerIds.length ? selectedLayerIds : [state.activeLayerId]).filter((id) => state.layers.some((layer) => layer.id === id));
     if (kind === "distribute" ? ids.length < 3 : ids.length < 1) return;
     const targets = state.layers.filter((layer) => ids.includes(layer.id));
-    const bounds = targets.map((layer) => layerContentBounds(layerDocumentPixels(layer, state.width, state.height), state.width, state.height));
+    // A layer reaching past the canvas is measured by its whole extent, as Photoshop aligns layers,
+    // not by the part the canvas shows — the rest now survives, so it has to count (§57.1).
+    const overhangs = (layer: RasterLayer) => layer.bounds.x < 0 || layer.bounds.y < 0 || layer.bounds.x + layer.bounds.width > state.width || layer.bounds.y + layer.bounds.height > state.height;
+    const bounds = targets.map((layer) => layer.kind === "pixel" && overhangs(layer) ? { ...layer.bounds } : layerContentBounds(layerDocumentPixels(layer, state.width, state.height), state.width, state.height));
     const offsets = kind === "align"
       ? computeAlignOffsets(bounds, edge, ids.length > 1 ? unionBounds(bounds) : { x: 0, y: 0, width: state.width, height: state.height })
       : computeDistributeOffsets(bounds, edge);
