@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { WARP_PRESETS, applyRasterFilter, rasterFilterCatalog, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerPixels, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
+import { WARP_PRESETS, applyRasterFilter, rasterFilterCatalog, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerOrigin, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
 import { maskToRgba, rgbaToMask } from "./raster-pixel-buffers";
 import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
 import { withBusyPainted } from "./busy";
@@ -381,7 +381,7 @@ export function App() {
     // canvas coordinates, so both sides are brought into canvas space before
     // the rule is applied and trimmed again on the way in.
     const before=layerDocumentPixels(target,state0.width,state0.height).slice();
-    const filtered=pixels.length===before.length?pixels:layerDocumentPixels({...target,tiles:TileStore.fromPixels(pixels,target.width,target.height),bounds:target.bounds,width:target.width,height:target.height},state0.width,state0.height);const assign=(value:Uint8ClampedArray)=>{kernel.documents.update<RasterDocumentState>(id,(state)=>{const layer=state.layers.find((item)=>item.id===layerId);if(layer)setLayerPixels(layer,value,state.width,state.height);});};
+    const filtered=pixels.length===before.length?pixels:layerDocumentPixels({...target,tiles:TileStore.fromPixels(pixels,target.width,target.height),bounds:target.bounds,width:target.width,height:target.height},state0.width,state0.height);const assign=(value:Uint8ClampedArray)=>{kernel.documents.update<RasterDocumentState>(id,(state)=>{const layer=state.layers.find((item)=>item.id===layerId);if(layer)setLayerPixels(layer,value,state.width,state.height,null,{keepOutsideDocument:true});});};
     // The same rule as every other tool: a filter may not touch pixels outside
     // the selection. Filters run over the whole layer, so the confinement is
     // what makes "apply to the selection" mean anything at all.
@@ -559,12 +559,14 @@ export function App() {
       ? computeAlignOffsets(bounds, edge, ids.length > 1 ? unionBounds(bounds) : { x: 0, y: 0, width: state.width, height: state.height })
       : computeDistributeOffsets(bounds, edge);
     if (!offsets.some((offset) => offset.dx || offset.dy)) return;
-    type LayerSnapshot = { id: string; pixels: Uint8ClampedArray };
-    const id = active.id, before: LayerSnapshot[] = targets.map((layer) => ({ id: layer.id, pixels: layerDocumentPixels(layer, state.width, state.height).slice() }));
-    const after: LayerSnapshot[] = targets.map((layer, index) => ({ id: layer.id, pixels: translateLayerPixels(layerDocumentPixels(layer, state.width, state.height), state.width, state.height, offsets[index]!.dx, offsets[index]!.dy) }));
-    const assign = (list: LayerSnapshot[]) => { kernel.documents.update<RasterDocumentState>(id, (current) => { for (const item of list) { const layer = current.layers.find((entry) => entry.id === item.id); if (layer) setLayerPixels(layer, item.pixels, current.width, current.height); } }); };
+    // A new origin for each layer's own buffer, not a translate through a document-sized one: the
+    // latter could only keep what stays on the canvas, and undo restored the same clipped copy.
+    // It also left type layers and Smart Objects as plain pixels. Two offsets per layer is the
+    // whole history step, where the buffers were two canvases per layer.
+    const id = active.id, shifts = targets.map((layer, index) => ({ id: layer.id, dx: Math.round(offsets[index]!.dx), dy: Math.round(offsets[index]!.dy) }));
+    const shift = (direction: 1 | -1) => { kernel.documents.update<RasterDocumentState>(id, (current) => { for (const item of shifts) { const layer = current.layers.find((entry) => entry.id === item.id); if (layer) translateLayerOrigin(layer, item.dx * direction, item.dy * direction); } }); };
     const history = kernel.historyByDocument.get(id);
-    if (history) void history.execute({ label: kind === "align" ? `Align: ${edge}` : `Distribute: ${edge}`, memoryEstimate: [...before, ...after].reduce((sum, item) => sum + item.pixels.byteLength, 0), redo: () => assign(after), undo: () => assign(before) });
+    if (history) void history.execute({ label: kind === "align" ? `Align: ${edge}` : `Distribute: ${edge}`, redo: () => shift(1), undo: () => shift(-1) });
   };
 
   const openImageAdjustment = (definition: RasterAdjustmentDefinition) => {
@@ -651,7 +653,7 @@ export function App() {
     }
     if (target.kind !== "pixel") return;
     const before = layerDocumentPixels(target, document.state.width, document.state.height).slice(), confined = adjustedPixels(before, value, document.state.selection);
-    const assign = (pixels: Uint8ClampedArray) => { kernel.documents.update<RasterDocumentState>(document.id, (state) => { const layer = state.layers.find((item) => item.id === target.id); if (layer) setLayerPixels(layer, pixels, state.width, state.height); }); };
+    const assign = (pixels: Uint8ClampedArray) => { kernel.documents.update<RasterDocumentState>(document.id, (state) => { const layer = state.layers.find((item) => item.id === target.id); if (layer) setLayerPixels(layer, pixels, state.width, state.height, null, { keepOutsideDocument: true }); }); };
     if (history) void history.execute({ label: `Adjustment: ${definition?.name.en ?? value.kind}`, memoryEstimate: before.byteLength + confined.byteLength, redo: () => assign(confined), undo: () => assign(before) }); else assign(confined);
     previewImageAdjustment(null); setAdjustmentDialog(null);
   };

@@ -53,7 +53,7 @@ export async function harmonizeLayer(documentId: string, layerId: string, streng
   const after = harmonizeToReference(before, state.width, state.height, source, reference, strength, bounds);
   const write = (pixels: Uint8ClampedArray) => kernel.documents.update<RasterDocumentState>(documentId, (current) => {
     const target = current.layers.find((item) => item.id === layerId);
-    if (target) setLayerPixels(target, pixels, current.width, current.height);
+    if (target) setLayerPixels(target, pixels, current.width, current.height, null, { keepOutsideDocument: true });
   });
   write(after);
   const history = kernel.historyByDocument.get(documentId);

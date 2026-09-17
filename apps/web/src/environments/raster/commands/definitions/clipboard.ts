@@ -219,7 +219,7 @@ const commands: readonly CommandDefinition[] = [
         if (!layer) return false;
         // The same removal Delete performs, through the one function that
         // defines what "the selection's contents are gone" means.
-        setLayerPixels(layer, clearSelectedPixels(layerDocumentPixels(layer, draft.width, draft.height), draft.width, draft.height, selection), draft.width, draft.height);
+        setLayerPixels(layer, clearSelectedPixels(layerDocumentPixels(layer, draft.width, draft.height), draft.width, draft.height, selection), draft.width, draft.height, null, { keepOutsideDocument: true });
         return true;
       });
     },

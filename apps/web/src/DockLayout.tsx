@@ -872,7 +872,7 @@ function LayersPanel() {
         const alpha = (maskPixels[index]! / 255) * mask.density, offset = index * 4 + 3;
         pixels[offset] = Math.round(pixels[offset]! * alpha);
       }
-      setLayerPixels(target, pixels, current.width, current.height);
+      setLayerPixels(target, pixels, current.width, current.height, null, { keepOutsideDocument: true });
       delete target.mask;
       if (editingMaskLayerId === target.id) setEditingMask(active.id, null);
       return true;
@@ -900,7 +900,7 @@ function LayersPanel() {
       const documentPixels = layerDocumentPixels(target, current.width, current.height);
       const expanded: RasterLayer = { ...target, tiles: TileStore.fromPixels(documentPixels, current.width, current.height), bounds: { x: 0, y: 0, width: current.width, height: current.height } };
       const rendered = renderLayerEffects(expanded, current.width, current.height).slice();
-      setLayerPixels(target, rendered, current.width, current.height);
+      setLayerPixels(target, rendered, current.width, current.height, null, { keepOutsideDocument: true });
       target.effects = {};
       return true;
     });

@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 import {
   cloneRasterState, compositeRasterDocument, flattenRasterLayers, layerAccepts, layerDocumentPixels, layerLockReason, layerOpaqueBounds, layerPixelsView, liftSelection, linkedLayers, meshLayerPixels, meshSelection,
   pickLayerAt, quadLayerPixels, quadSelection, regularMesh, restrictSelectionToContent, rotateLayerPixels, rotateSelection,
-  rotatedDestinationBounds, scaleLayerPixels, scaleSelection, setLayerPixels, stampFloating, transformLayerPixels, transformSmartObject, translateLayerPixels, translateSelection, translateSmartObject, unionRect, WARP_GRID, warpPresetMesh,
+  rotatedDestinationBounds, scaleLayerPixels, scaleSelection, setLayerPixels, stampFloating, transformLayerPixels, transformSmartObject, translateLayerOrigin, translateLayerPixels, translateSelection, unionRect, WARP_GRID, warpPresetMesh,
   type WarpPresetId,
   type FloatingPixels, type PixelSelection, type Point, type RasterDocumentState, type RasterLayer, type RasterRect, type RasterTextData, type TransformDragCache,
 } from "@vravio/env-raster";
@@ -114,7 +114,7 @@ export interface PendingTransform {
    * pointer grabbed. Plain-translate only: entering Scale/Rotate/Skew/Warp on a linked layer
    * transforms just the primary layer, matching Photoshop's own Free Transform (which does not
    * extend to a layer's link partners either). */
-  readonly linked?: readonly { readonly layerId: string; readonly pixels: Uint8ClampedArray }[];
+  readonly linked?: readonly { readonly layerId: string; readonly pixels: Uint8ClampedArray; readonly dx: number; readonly dy: number }[];
 }
 
 type QuadTransformMode = "skew" | "distort" | "perspective";
@@ -445,7 +445,7 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
     if (storedTranslation) {
       const offsetX = Math.round(pending.live!.target.x - pending.live!.source.x);
       const offsetY = Math.round(pending.live!.target.y - pending.live!.source.y);
-      if (!translateSmartObject(layer, offsetX, offsetY)) layer.bounds = { ...layer.bounds, x: layer.bounds.x + offsetX, y: layer.bounds.y + offsetY };
+      translateLayerOrigin(layer, offsetX, offsetY);
       isThere = layerOpaqueBounds(materialise(layer, after), after.width, after.height);
     } else if (pending.live && transformSmartObject(layer, pending.live.source, pending.live.target, pending.live.rotation)) {
       // Smart Object transform changes only its placement matrix. The raw
@@ -477,7 +477,10 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
     const partnerIsThere = layerOpaqueBounds(entry.pixels, pending.before.width, pending.before.height);
     const partnerBounds = partnerWasThere && partnerIsThere ? unionRect(partnerWasThere, partnerIsThere.x, partnerIsThere.y, partnerIsThere.x + partnerIsThere.width, partnerIsThere.y + partnerIsThere.height, 1) : partnerWasThere ?? partnerIsThere;
     if (partnerBounds) bounds = bounds ? unionRect(bounds, partnerBounds.x, partnerBounds.y, partnerBounds.x + partnerBounds.width, partnerBounds.y + partnerBounds.height, 0) : partnerBounds;
-    setLayerPixels(partner, entry.pixels, pending.before.width, pending.before.height);
+    // A partner always moves as a whole, never scaled or turned, so it commits the way a plain
+    // Move of the primary layer does: a new origin for its own buffer. `entry.pixels` is only the
+    // preview — document-sized, it has already lost whatever the drag carried past an edge.
+    translateLayerOrigin(partner, entry.dx, entry.dy);
   }
   after.selection = cloneSelection(pending.selection);
   if (nextActiveLayerId) after.activeLayerId = nextActiveLayerId;
@@ -716,7 +719,7 @@ function applyDragFrame(context: ToolContext<MoveState>, drag: MoveDrag, interpo
   const moved = translateSelection(drag.baseSelection, state.width, state.height, shiftX, shiftY);
   // A linked partner has no selection of its own to restrict the drag to — the selection, if any,
   // belongs to the layer the pointer actually grabbed — so it always translates its whole buffer.
-  const linked = drag.linkedBase?.map((entry) => ({ layerId: entry.layerId, pixels: translateLayerPixels(entry.basePixels, state.width, state.height, shiftX, shiftY, null) }));
+  const linked = drag.linkedBase?.map((entry) => ({ layerId: entry.layerId, pixels: translateLayerPixels(entry.basePixels, state.width, state.height, shiftX, shiftY, null), dx: Math.round(shiftX), dy: Math.round(shiftY) }));
   const pending: PendingTransform = { before: drag.before, layerId: drag.before.activeLayerId, dx, dy, pixels: working, selection: moved, rotation: drag.rotation, ...(drag.float ? { float: drag.float } : {}), ...(linked ? { linked } : {}) };
   if (linked?.length) context.schedulePreviewLayers([{ layerId: pending.layerId, pixels: working }, ...linked], dirty);
   else context.schedulePreview(working, "pixels", pending.layerId, dirty);

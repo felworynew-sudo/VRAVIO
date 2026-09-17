@@ -35,6 +35,13 @@ import type { DocumentViewport } from "./store";
 const TILE_BUDGET_MS = 8;
 
 /**
+ * Every commit below is an edit of a layer, never its replacement: pixels the layer holds past the
+ * canvas edge (a crop that kept them, a move over the edge) are not in the document-sized buffer a
+ * tool works on, and must survive the write — see `SetLayerPixelsOptions.keepOutsideDocument`.
+ */
+const KEEP_OUTSIDE_DOCUMENT = { keepOutsideDocument: true } as const;
+
+/**
  * The direct preview path is an optimisation, never a second compositor.
  * Keep its contract deliberately narrower than "one normal layer": masks,
  * fill opacity, clipping and enabled layer effects all change the pixels that
@@ -432,7 +439,7 @@ export function useRasterCommit(params: {
         // `bounds` parameter — a rule can have confined the edit to something smaller (the
         // selection), and the union has to grow around what actually got written, not what
         // the tool originally asked for.
-        setLayerPixels(layer, buffer, current.width, current.height, !canShrinkBounds && edit.bounds ? { bounds: edit.bounds, canShrink: false } : undefined);
+        setLayerPixels(layer, buffer, current.width, current.height, !canShrinkBounds && edit.bounds ? { bounds: edit.bounds, canShrink: false } : undefined, KEEP_OUTSIDE_DOCUMENT);
       });
     };
 

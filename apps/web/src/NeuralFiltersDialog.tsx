@@ -81,7 +81,7 @@ export function NeuralFiltersDialog({ documentId, document, layer, language, onC
     const afterState = cloneRasterState(document);
     const target = afterState.layers.find((item) => item.id === layer.id);
     if (!target) return;
-    setLayerPixels(target, preview.pixels, afterState.width, afterState.height);
+    setLayerPixels(target, preview.pixels, afterState.width, afterState.height, null, { keepOutsideDocument: true });
 
     const history = kernel.historyByDocument.get(documentId);
     if (history) {

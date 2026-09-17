@@ -1,8 +1,26 @@
 import { layerDocumentPixels, unionRect } from "./layer-bounds";
 import { bilinearSample, sampleBilinearInto, type BilinearSample } from "./sampling";
 import { selectionBounds } from "./selection";
+import { translateSmartObject } from "./smart-object";
 import { TileStore } from "./tile-store";
-import type { PixelSelection, Point, RasterDocumentState, RasterRect } from "./types";
+import type { PixelSelection, Point, RasterDocumentState, RasterLayer, RasterRect } from "./types";
+
+/**
+ * Moves a whole layer by giving its own buffer a new origin — no pixel is read or written.
+ *
+ * This is how a layer moves in GIMP (`gimp_item_translate` changes the drawable's offsets) and in
+ * Photoshop, and it is the only way that keeps content carried past a canvas edge: a translate
+ * through a document-sized buffer has nowhere to put it. A Smart Object moves its placement, a type
+ * layer moves the description it is re-rendered from as well as its pixels.
+ */
+export function translateLayerOrigin(layer: RasterLayer, dx: number, dy: number): void {
+  if (!dx && !dy) return;
+  if (!translateSmartObject(layer, dx, dy)) layer.bounds = { ...layer.bounds, x: layer.bounds.x + dx, y: layer.bounds.y + dy };
+  if (layer.text) {
+    const visualBounds = layer.text.visualBounds;
+    layer.text = { ...layer.text, x: layer.text.x + dx, y: layer.text.y + dy, ...(visualBounds ? { visualBounds: { ...visualBounds, x: visualBounds.x + dx, y: visualBounds.y + dy } } : {}) };
+  }
+}
 
 /** Coefficients of the projective map from the unit square (0,0)-(1,0)-(1,1)-(0,1) onto an
  * arbitrary quadrilateral (corners given in the same TL,TR,BR,BL order), by Heckbert's method

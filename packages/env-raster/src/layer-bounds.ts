@@ -255,6 +255,67 @@ export function trimToContent(pixels: Uint8ClampedArray, documentWidth: number, 
   return { bounds, pixels: cropToRect(pixels, documentWidth, bounds) };
 }
 
+export interface SetLayerPixelsOptions {
+  /**
+   * The buffer is an *edit* of the layer, not a replacement for it: keep whatever the layer holds
+   * outside the document untouched.
+   *
+   * A layer's own buffer can reach past the canvas — Crop with "Delete Cropped Pixels" off, a
+   * move that drags content over an edge — and that is Photoshop's and GIMP's model too: a
+   * drawable is not the image, and painting on it never trims it to the image. A document-sized
+   * buffer cannot represent those pixels at all, so without this every brush stroke, fill or
+   * filter on such a layer silently deleted them.
+   *
+   * Only for edits. A caller that *regenerates* the layer from a description (a text or 3D layer
+   * re-rendered, a merge result, a freshly created layer) must leave this off, or the previous
+   * render's off-canvas part would stay behind next to the new one.
+   */
+  readonly keepOutsideDocument?: boolean;
+}
+
+function reachesOutsideDocument(layer: RasterLayer, documentWidth: number, documentHeight: number): boolean {
+  const { bounds } = layer;
+  if (smartObjectTransform(layer) || layer.tiles.evicted) return false;
+  return bounds.x < 0 || bounds.y < 0 || bounds.x + bounds.width > documentWidth || bounds.y + bounds.height > documentHeight;
+}
+
+/**
+ * Writes the document-space part of `pixels` into a layer whose buffer extends past the document,
+ * leaving every pixel outside the document as it was — the same grow/write/trim a GIMP undo swap
+ * does (`swapLayerRegion`), which never needed a document-sized frame either.
+ */
+function writeInsideDocument(layer: RasterLayer, pixels: Uint8ClampedArray, documentWidth: number, documentHeight: number, edit: { bounds: RasterRect; canShrink: boolean } | null): void {
+  const hinted = edit && !edit.canShrink ? edit.bounds : { x: 0, y: 0, width: documentWidth, height: documentHeight };
+  const left = Math.max(0, Math.floor(hinted.x)), top = Math.max(0, Math.floor(hinted.y));
+  const right = Math.min(documentWidth, Math.ceil(hinted.x + hinted.width)), bottom = Math.min(documentHeight, Math.ceil(hinted.y + hinted.height));
+  if (right <= left || bottom <= top) return;
+  const region: RasterRect = { x: left, y: top, width: right - left, height: bottom - top };
+
+  const old = layer.bounds;
+  const frameLeft = Math.min(old.x, region.x), frameTop = Math.min(old.y, region.y);
+  const frameRight = Math.max(old.x + old.width, region.x + region.width), frameBottom = Math.max(old.y + old.height, region.y + region.height);
+  const frame: RasterRect = { x: frameLeft, y: frameTop, width: frameRight - frameLeft, height: frameBottom - frameTop };
+  // `reframe` returns a new store, so the write below never reaches tiles a history snapshot or a
+  // duplicated layer still shares with the old one.
+  let tiles = layer.tiles.reframe(frame.x - old.x, frame.y - old.y, frame.width, frame.height);
+  tiles.writeLocalRegion({ x: region.x - frame.x, y: region.y - frame.y, width: region.width, height: region.height }, cropToRect(pixels, documentWidth, region));
+
+  let bounds = frame;
+  if (!edit || edit.canShrink) {
+    // The edit may have erased what used to hold the layer's extent in place.
+    const inner = opaqueBoundsOf(tiles.toPixels(), frame.width, frame.height) ?? { x: 0, y: 0, width: 1, height: 1 };
+    if (inner.x !== 0 || inner.y !== 0 || inner.width !== frame.width || inner.height !== frame.height) {
+      tiles = tiles.reframe(inner.x, inner.y, inner.width, inner.height);
+      bounds = { x: frame.x + inner.x, y: frame.y + inner.y, width: inner.width, height: inner.height };
+    }
+  }
+  layer.bounds = bounds;
+  layer.width = bounds.width;
+  layer.height = bounds.height;
+  layer.tiles = tiles;
+  layer.pixelsRevision += 1;
+}
+
 /**
  * Stores a document-sized result on a layer, trimmed to what it holds.
  *
@@ -271,7 +332,14 @@ export function trimToContent(pixels: Uint8ClampedArray, documentWidth: number, 
  * the layer (the eraser, `clear`, a transparent fill, `canShrink: true`, or simply no `edit`
  * at all) still takes the scanning path below.
  */
-export function setLayerPixels(layer: RasterLayer, pixels: Uint8ClampedArray, documentWidth: number, documentHeight: number, edit?: { bounds: RasterRect; canShrink: boolean } | null): void {
+export function setLayerPixels(
+  layer: RasterLayer, pixels: Uint8ClampedArray, documentWidth: number, documentHeight: number,
+  edit?: { bounds: RasterRect; canShrink: boolean } | null, options?: SetLayerPixelsOptions,
+): void {
+  if (options?.keepOutsideDocument && reachesOutsideDocument(layer, documentWidth, documentHeight)) {
+    writeInsideDocument(layer, pixels, documentWidth, documentHeight, edit ?? null);
+    return;
+  }
   if (edit && !edit.canShrink) {
     const target = edit.bounds;
     const grown = unionRect(layer.bounds, target.x, target.y, target.x + target.width, target.y + target.height, 0);

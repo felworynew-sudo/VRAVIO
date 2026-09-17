@@ -59,7 +59,7 @@ function fill(documentId: string, foreground: boolean, label: string): void {
     }
     const layer = draft.layers.find((item) => item.id === target.layer.id);
     if (!layer || layer.kind === "group" || !layerAccepts(layer, "paint")) return false;
-    setLayerPixels(layer, fillSelectedPixels(layerDocumentPixels(layer, draft.width, draft.height), draft.width, draft.height, draft.selection, parseHexColor(hex)), draft.width, draft.height);
+    setLayerPixels(layer, fillSelectedPixels(layerDocumentPixels(layer, draft.width, draft.height), draft.width, draft.height, draft.selection, parseHexColor(hex)), draft.width, draft.height, null, { keepOutsideDocument: true });
     return true;
   });
 }

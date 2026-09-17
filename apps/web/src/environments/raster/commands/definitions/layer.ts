@@ -321,7 +321,7 @@ const commands: readonly CommandDefinition[] = [
         await edit(activeDocumentId, "Clear Selection (Очистить выделение)", (draft) => {
           const layer = draft.layers.find((item) => item.id === draft.activeLayerId);
           if (!layer || layer.kind === "group" || !layerAccepts(layer, "paint")) return false;
-          setLayerPixels(layer, clearSelectedPixels(layerDocumentPixels(layer, draft.width, draft.height), draft.width, draft.height, selection), draft.width, draft.height);
+          setLayerPixels(layer, clearSelectedPixels(layerDocumentPixels(layer, draft.width, draft.height), draft.width, draft.height, selection), draft.width, draft.height, null, { keepOutsideDocument: true });
           return true;
         });
         return;
