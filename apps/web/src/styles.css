@@ -12,8 +12,12 @@
    still read `var(--number-field-width)`, never repeat the number. A panel that genuinely needs a
    different width (tighter toolbars/inspectors: `.option-field`, `.audio-clip-inspector`,
    `.gradient-stop-row`, `.picker-channel`) says so as its own deliberate value, not copied from
-   here. */
-input[type="number"] { width: var(--number-field-width); }
+   here. Right-aligned for the same reason as the width: a short value left-aligned in *any*
+   box wider than the digits still reads as "empty space after the number" even once that box
+   itself is no longer stretched — confirmed live on `NumberBox` (`ui/atoms/NumberBox.tsx`, the
+   options-bar's own custom `type="text"` numeric field, not a native `<input type="number">` at
+   all, so this rule alone never reached it — fixed separately at `.number-box-field input`). */
+input[type="number"] { width: var(--number-field-width); text-align: right; }
 html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
 button, input, select { font: inherit; }
 /* One rule for every checkbox in the app, present or future — the native
@@ -979,7 +983,7 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
    the label text instead of moving the value. */
 .number-box-label{cursor:ns-resize;user-select:none;-webkit-user-select:none;touch-action:none}
 .number-box-field{display:inline-flex;align-items:center;gap:3px}
-.number-box-field input{width:62px;height:25px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);padding:2px 5px;text-align:left}
+.number-box-field input{width:46px;height:25px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);padding:2px 5px;text-align:right}
 .number-box-field input:focus-visible{outline:1px solid var(--focus);outline-offset:-1px}
 .number-box-unit{font-style:normal;color:var(--muted)}
 .checkbox{display:flex;align-items:center;gap:6px;color:var(--text)}
