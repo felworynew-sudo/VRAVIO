@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { WARP_PRESETS, applyRasterFilter, rasterFilterCatalog, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerOrigin, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterLayer, type RasterRect } from "@vravio/env-raster";
 import { maskToRgba, rgbaToMask } from "./raster-pixel-buffers";
 import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
-import { withBusyPainted } from "./busy";
+import { withBusy, withBusyPainted } from "./busy";
 import { interfacePaletteForTheme, useShellStore, type Language } from "./store";
 import { useTooltipSuppression } from "./useTooltipSuppression";
 import type { EnvironmentKind, RenderBackend } from "@vravio/kernel";
@@ -72,6 +72,7 @@ import { addClipFromAsset as addVideoClipFromAsset } from "./video-commands";
 import { isVideoDocumentState } from "@vravio/env-video";
 import "./styles.css";
 import { isModalOpen, ModalBackdrop } from "./modals/ModalBackdrop";
+import { filterLayerPixels } from "./raster-filter-run";
 
 export function App() {
   ensureCommandsRegistered();
@@ -398,9 +399,9 @@ export function App() {
     const state0 = active.state;
     const target = state0.layers.find((item) => item.id === state0.activeLayerId);
     if (!target) return;
-    const source = layerDocumentPixels(target, state0.width, state0.height);
-    const filtered = applyRasterFilter(source, state0.width, state0.height, lastFilter.id, lastFilter.settings);
-    applyFilter(filtered, lastFilter.label);
+    const last = lastFilter;
+    void withBusy(text(store.language, "Applying filter", "Применение фильтра"), () => filterLayerPixels(state0, target, last.id, last.settings))
+      .then(({ after }) => applyFilter(after, last.label));
   };
   // A Filter-menu item for an already-implemented catalog filter opens that
   // filter's own small standalone panel (docs/master-plan.md §51), not the Gallery.
@@ -438,28 +439,37 @@ export function App() {
   // happen.
   const filterPanelPreviewFrameRef = useRef<{ frame: number; settings: Record<string, number> | null } | null>(null);
   const filterPanelPreviewKeyRef = useRef<string | null>(null);
+  const filterPanelPreviewAbortRef = useRef<AbortController | null>(null);
+  /** The last finished preview's result and the request it answered — Confirm with unchanged settings applies it instead of computing the same filter again. */
+  const filterPanelResultRef = useRef<{ key: string; pixels: Uint8ClampedArray } | null>(null);
   const activeDocumentId = active?.id ?? null;
   const runFilterPanelPreview = useCallback((settings: Record<string, number> | null) => {
     if (!filterPanelId) return;
     const document = activeDocumentId ? kernel.documents.get<RasterDocumentState>(activeDocumentId) : null;
     if (!document || !isRasterDocumentState(document.state)) return;
-    if (!settings) { filterPanelPreviewKeyRef.current = null; window.dispatchEvent(new CustomEvent("vravio-raster-preview", { detail: { documentId: document.id, pixels: null } })); return; }
+    if (!settings) { filterPanelPreviewAbortRef.current?.abort(); filterPanelPreviewKeyRef.current = null; window.dispatchEvent(new CustomEvent("vravio-raster-preview", { detail: { documentId: document.id, pixels: null } })); return; }
     const target = document.state.layers.find((layer) => layer.id === document.state.activeLayerId);
     if (!target || target.kind !== "pixel") return;
     const key = JSON.stringify([document.id, target.id, target.pixelsRevision, filterPanelId, settings]);
     if (filterPanelPreviewKeyRef.current === key) return; // an incidental re-render, not a real change — the request this already started (or already finished) still answers it
     filterPanelPreviewKeyRef.current = key;
-    const before = layerDocumentPixels(target, document.state.width, document.state.height);
-    void applyRasterFilterParallel(filterWorkerPool(), before, document.state.width, document.state.height, filterPanelId, settings)
-      .then((filtered) => {
+    // A newer request makes this one's work pointless: stop its workers instead of letting every
+    // intermediate slider position finish computing behind the latest (§58.1).
+    filterPanelPreviewAbortRef.current?.abort();
+    const controller = new AbortController();
+    filterPanelPreviewAbortRef.current = controller;
+    filterPanelResultRef.current = null;
+    void filterLayerPixels(document.state, target, filterPanelId, settings, controller.signal)
+      .then(({ before, after: filtered }) => {
         if (filterPanelPreviewKeyRef.current !== key) return; // superseded by a real, later settings change
+        filterPanelResultRef.current = { key, pixels: filtered };
         const selection = document.state.selection, confined = selection ? confineToSelection(before, filtered, selection.mask) : filtered;
         const layers = document.state.layers.map((layer) => layer.id === target.id ? { ...layer, effects: structuredClone(layer.effects) } : layer);
         const previewState = { ...document.state, layers }; const previewLayer = layers.find((layer) => layer.id === target.id)!;
         setLayerPixels(previewLayer, confined, previewState.width, previewState.height);
         window.dispatchEvent(new CustomEvent("vravio-raster-preview", { detail: { documentId: document.id, pixels: compositeRasterDocument(previewState) } }));
       })
-      .catch((error: unknown) => diagnostic("warn", "filter-panel.preview-failed", "Live filter preview failed", { filterId: filterPanelId, error: error instanceof Error ? error.message : String(error) }));
+      .catch((error: unknown) => { if (!controller.signal.aborted) diagnostic("warn", "filter-panel.preview-failed", "Live filter preview failed", { filterId: filterPanelId, error: error instanceof Error ? error.message : String(error) }); });
   }, [filterPanelId, activeDocumentId]);
   const previewFilterPanel = useCallback((settings: Record<string, number> | null) => {
     if (!settings) {
@@ -473,15 +483,20 @@ export function App() {
     filterPanelPreviewFrameRef.current = entry;
     entry.frame = requestAnimationFrame(() => { filterPanelPreviewFrameRef.current = null; runFilterPanelPreview(entry.settings); });
   }, [runFilterPanelPreview]);
-  const applyFilterPanel = (settings: Record<string, number>) => {
+  const applyFilterPanel = async (settings: Record<string, number>) => {
     if (!filterPanelId || !active || !isRasterDocumentState(active.state)) return;
-    const definition = rasterFilterCatalog.find((item) => item.id === filterPanelId);
+    const filterId = filterPanelId, definition = rasterFilterCatalog.find((item) => item.id === filterId);
     const state0 = active.state, target = state0.layers.find((item) => item.id === state0.activeLayerId);
     if (!target || target.kind !== "pixel") return;
-    const source = layerDocumentPixels(target, state0.width, state0.height);
-    const filtered = applyRasterFilter(source, state0.width, state0.height, filterPanelId, settings);
-    applyFilter(filtered, definition?.name ?? filterPanelId);
-    setLastFilter({ id: filterPanelId, settings, label: definition?.name ?? filterPanelId });
+    // The preview already computed exactly this when nothing has changed since; otherwise compute it
+    // in the worker pool. Never the synchronous whole-canvas run on the main thread that used to
+    // freeze the tab on Confirm (§58.1).
+    const key = JSON.stringify([active.id, target.id, target.pixelsRevision, filterId, settings]);
+    const ready = filterPanelResultRef.current?.key === key ? filterPanelResultRef.current.pixels : null;
+    const label = definition?.name ?? filterId;
+    const filtered = ready ?? (await withBusy(text(store.language, "Applying filter", "Применение фильтра"), () => filterLayerPixels(state0, target, filterId, settings))).after;
+    applyFilter(filtered, label);
+    setLastFilter({ id: filterId, settings, label });
     previewFilterPanel(null);
     setFilterPanelId(null);
   };
@@ -498,10 +513,8 @@ export function App() {
     const target = state0.layers.find((item) => item.id === state0.activeLayerId);
     if (!target) return;
     const settings = Object.fromEntries(definition.parameters.map((parameter) => [parameter.id, parameter.value]));
-    const source = layerDocumentPixels(target, state0.width, state0.height);
-    const filtered = applyRasterFilter(source, state0.width, state0.height, id, settings);
-    applyFilter(filtered, definition.name);
-    setLastFilter({ id, settings, label: definition.name });
+    void withBusy(text(store.language, "Applying filter", "Применение фильтра"), () => filterLayerPixels(state0, target, id, settings))
+      .then(({ after }) => { applyFilter(after, definition.name); setLastFilter({ id, settings, label: definition.name }); });
   };
   const openCameraRawReprocess = async () => {
     if (!active) return;

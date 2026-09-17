@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyRasterFilter } from "./filters";
-import { PARALLEL_SAFE_FILTERS, paddingForFilter, planFilterBands, type FilterBand } from "./filter-tiling";
+import { filterWorkRegion, PARALLEL_SAFE_FILTERS, paddingForFilter, planFilterBands, type FilterBand } from "./filter-tiling";
 
 describe("paddingForFilter", () => {
   it("mirrors blur()'s own radius clamp for radius-driven filters", () => {
@@ -93,5 +93,72 @@ describe("PARALLEL_SAFE_FILTERS, checked against the real filter output", () => 
     const whole = applyRasterFilter(source, w, h, "gaussian_blur", settings);
     const banded = runBandedInProcess(source, "gaussian_blur", settings, 8);
     expect([...banded]).toEqual([...whole]);
+  });
+});
+
+describe("filterWorkRegion: computing only around the layer matches the whole canvas", () => {
+  const W = 70, H = 60, content = { x: 20, y: 15, width: 21, height: 22 };
+
+  /** Transparent everywhere except `content`, which is noisy and partly translucent. */
+  function layerOnCanvas(): Uint8ClampedArray {
+    const pixels = new Uint8ClampedArray(W * H * 4);
+    for (let y = content.y; y < content.y + content.height; y += 1) for (let x = content.x; x < content.x + content.width; x += 1) {
+      const index = (y * W + x) * 4;
+      pixels[index] = (x * 37 + y * 11) % 256; pixels[index + 1] = (x * 5 + y * 29) % 256; pixels[index + 2] = (x * y) % 256; pixels[index + 3] = (x + y) % 3 === 0 ? 128 : 255;
+    }
+    return pixels;
+  }
+
+  function runInRegion(source: Uint8ClampedArray, id: string, settings: Record<string, number>, selection: { x: number; y: number; width: number; height: number } | null) {
+    const region = filterWorkRegion(W, H, content, selection, id, settings)!;
+    const { input, output } = region;
+    const cropped = new Uint8ClampedArray(input.width * input.height * 4);
+    for (let y = 0; y < input.height; y += 1) cropped.set(source.subarray(((input.y + y) * W + input.x) * 4, ((input.y + y) * W + input.x + input.width) * 4), y * input.width * 4);
+    const filtered = applyRasterFilter(cropped, input.width, input.height, id, settings);
+    const result = source.slice();
+    for (let y = 0; y < output.height; y += 1) {
+      const from = ((output.y - input.y + y) * input.width + (output.x - input.x)) * 4;
+      result.set(filtered.subarray(from, from + output.width * 4), ((output.y + y) * W + output.x) * 4);
+    }
+    return { result, output };
+  }
+
+  const settingsFor = (id: string): Record<string, number> => id === "oil_paint" ? { brushSize: 5, stylization: 8 } : id === "reduce_noise" ? { strength: 3 } : { radius: 6, amount: 100, threshold: 20 };
+
+  for (const id of PARALLEL_SAFE_FILTERS) {
+    it(`${id}: matches the whole-canvas result everywhere`, () => {
+      const source = layerOnCanvas(), settings = settingsFor(id);
+      const whole = applyRasterFilter(source, W, H, id, settings);
+      const { result } = runInRegion(source, id, settings, null);
+      // Visible equality: alpha everywhere, colour wherever there is alpha. High Pass and Emboss
+      // write a grey into fully transparent pixels (alpha stays 0) that a crop leaves untouched —
+      // colour nobody can see, and that straight-alpha compositing never reads.
+      let mismatch = -1;
+      for (let index = 0; index < whole.length; index += 4) {
+        const alpha = whole[index + 3]!;
+        if (alpha !== result[index + 3] || (alpha > 0 && (whole[index] !== result[index] || whole[index + 1] !== result[index + 1] || whole[index + 2] !== result[index + 2]))) { mismatch = index; break; }
+      }
+      expect(mismatch, mismatch >= 0 ? `first difference at pixel ${Math.floor(mismatch / 4) % W},${Math.floor(Math.floor(mismatch / 4) / W)}` : "").toBe(-1);
+    });
+    it(`${id}: with a selection, matches inside the selection`, () => {
+      const source = layerOnCanvas(), settings = settingsFor(id), selection = { x: 25, y: 10, width: 12, height: 30 };
+      const whole = applyRasterFilter(source, W, H, id, settings);
+      const { result } = runInRegion(source, id, settings, selection);
+      for (let y = selection.y; y < selection.y + selection.height; y += 1) for (let x = selection.x; x < selection.x + selection.width; x += 1) {
+        const index = (y * W + x) * 4, alpha = whole[index + 3]!;
+        expect(result[index + 3]).toBe(alpha);
+        if (alpha > 0) expect([...result.subarray(index, index + 3)]).toEqual([...whole.subarray(index, index + 3)]);
+      }
+    });
+  }
+
+  it("falls back to the whole canvas for a filter keyed to the canvas centre", () => {
+    expect(filterWorkRegion(W, H, content, null, "twirl", {})).toBeNull();
+  });
+
+  it("a small layer on a big canvas computes a small rectangle", () => {
+    const region = filterWorkRegion(4000, 3000, { x: 100, y: 100, width: 50, height: 40 }, null, "gaussian_blur", { radius: 4 })!;
+    expect(region.output).toEqual({ x: 96, y: 96, width: 58, height: 48 });
+    expect(region.input).toEqual({ x: 92, y: 92, width: 66, height: 56 });
   });
 });

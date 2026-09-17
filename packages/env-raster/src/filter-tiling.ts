@@ -1,3 +1,4 @@
+import type { RasterRect } from "./types";
 /**
  * docs/master-plan.md §37.3 item 4 — GEGL's adaptive per-thread pixel range
  * (`gegl_operation_get_pixels_per_thread`), applied to `filters.ts`'s own filter catalogue
@@ -38,6 +39,10 @@ export const PARALLEL_SAFE_FILTERS: ReadonlySet<string> = new Set([
   "lens_blur", "iris_blur", "tilt_shift_blur",
   "sharpen", "unsharp_mask", "high_pass", "soft_glow",
   "edge_detect", "emboss", "glowing_edges", "plastic_wrap",
+  // docs/master-plan.md §58.1: neighbourhood-only by construction — Oil Paint reads a disc of
+  // `brushSize`, noise reduction one pixel per iteration — and pinned banded == whole by this
+  // file's own test like every id above.
+  "oil_paint", "despeckle", "reduce_noise",
 ]);
 
 /** Filters whose read radius is fixed by `filters.ts` itself rather than a user setting —
@@ -62,9 +67,22 @@ const FIXED_PADDING: Partial<Record<string, number>> = {
  * (filters.ts:39) for the filters that read the user's `radius` setting, so the two never
  * disagree about how far a filter actually reaches.
  */
+/** A setting rounded and clamped exactly as `filters.ts` does before using it as a reach. */
+const reach = (settings: Record<string, number>, key: string, fallback: number, max: number) => {
+  const raw = settings[key];
+  return Math.max(1, Math.min(max, Math.round(Number.isFinite(raw) ? raw! : fallback)));
+};
+
 export function paddingForFilter(id: string, settings: Record<string, number>): number {
   const fixed = FIXED_PADDING[id];
   if (fixed !== undefined) return fixed;
+  // Filters whose reach is not the generic `radius` capped at 32: a smaller padding than the real
+  // reach is a visible seam at every band edge (surface/lens blur clamp their radius at 50).
+  if (id === "oil_paint") return reach(settings, "brushSize", 4, 8);
+  if (id === "despeckle") return 1;
+  if (id === "reduce_noise") return Math.max(1, Math.round(Number.isFinite(settings.strength) ? settings.strength! : 4));
+  if (id === "surface_blur") return reach(settings, "radius", 5, 50);
+  if (id === "lens_blur") return reach(settings, "radius", 8, 50);
   const radius = settings.radius;
   return Math.max(1, Math.min(32, Math.round(Number.isFinite(radius) ? radius! : 2)));
 }
@@ -90,4 +108,44 @@ export function planFilterBands(height: number, padding: number, maxBands: numbe
     bands.push({ startY, endY });
   }
   return bands;
+}
+
+export interface FilterWorkRegion {
+  /** What to hand the filter: the output rectangle plus the filter's reach, inside the document. */
+  readonly input: RasterRect;
+  /** What to write back: the content (and, with a selection, only its part inside the selection)
+   *  plus how far the filter can spread it — a blur of a small layer reaches past its edge. */
+  readonly output: RasterRect;
+}
+
+/**
+ * The part of the document a filter actually has to compute for one layer (owner, §58.1: "speed
+ * depends on the canvas size, not on the layer I chose").
+ *
+ * Only for `PARALLEL_SAFE_FILTERS`: those read nothing beyond their padding and nothing keyed to
+ * absolute position, which is exactly what makes a padded crop come out identical to the whole
+ * canvas inside `output` — the same property row bands already rely on, in both directions.
+ * Everything else (distortions around the canvas centre, positional noise) returns `null` and runs
+ * over the whole document as before. `content` is the layer's extent in document space;
+ * `selection` the selection's bounds, if any.
+ */
+export function filterWorkRegion(
+  documentWidth: number, documentHeight: number, content: RasterRect, selection: RasterRect | null,
+  id: string, settings: Record<string, number>,
+): FilterWorkRegion | null {
+  if (!PARALLEL_SAFE_FILTERS.has(id)) return null;
+  const padding = paddingForFilter(id, settings);
+  const clamp = (rect: RasterRect): RasterRect => {
+    const left = Math.max(0, Math.floor(rect.x)), top = Math.max(0, Math.floor(rect.y));
+    const right = Math.min(documentWidth, Math.ceil(rect.x + rect.width)), bottom = Math.min(documentHeight, Math.ceil(rect.y + rect.height));
+    return { x: left, y: top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+  };
+  const grow = (rect: RasterRect, by: number): RasterRect => ({ x: rect.x - by, y: rect.y - by, width: rect.width + by * 2, height: rect.height + by * 2 });
+  let output = clamp(grow(content, padding));
+  if (selection) {
+    const left = Math.max(output.x, selection.x), top = Math.max(output.y, selection.y);
+    const right = Math.min(output.x + output.width, selection.x + selection.width), bottom = Math.min(output.y + output.height, selection.y + selection.height);
+    output = clamp({ x: left, y: top, width: right - left, height: bottom - top });
+  }
+  return { output, input: clamp(grow(output, padding)) };
 }
