@@ -1,5 +1,5 @@
-import { isRasterDocumentState, type RasterDocumentState } from "@vravio/env-raster";
-import { isVectorDocumentState } from "@vravio/env-vector";
+import { isRasterDocumentState, type RasterDocumentState, type RasterLayer } from "@vravio/env-raster";
+import { isVectorDocumentState, shapeWorldBounds } from "@vravio/env-vector";
 import type { CommandContext } from "@vravio/kernel";
 import { commandDefinitionById } from "../commands/registry";
 import type { LocalizedText } from "../i18n";
@@ -85,6 +85,25 @@ const activeLayer = (context: ContextualBarContext) => {
   const state = raster(context);
   return state?.layers.find((layer) => layer.id === state.activeLayerId) ?? null;
 };
+
+/**
+ * Whether a pixel layer has anything on it.
+ *
+ * `setLayerPixels` trims a layer to its opaque content, and a layer with none
+ * left keeps the 1×1 fully transparent rectangle `trimToContent` returns as its
+ * sentinel — that is the case this checks, with one `readPixel`, no document
+ * scan. Photoshop's own bar offers Generate Image on an empty layer, which
+ * VRAVIO has no backend for, so the honest answer here is no bar at all.
+ * A never-edited layer still carries the canvas-sized bounds it was created
+ * with, and is not detected as empty; finding that out costs a full scan.
+ */
+function layerHasContent(layer: RasterLayer): boolean {
+  if (layer.kind !== "pixel") return true;
+  const { width, height } = layer.bounds;
+  if (width > 1 || height > 1) return true;
+  if (layer.tiles.evicted) return true;
+  return (layer.tiles.readPixel(0, 0)[3] ?? 0) > 0;
+}
 
 const vectorSelection = (context: ContextualBarContext): readonly string[] => isVectorDocumentState(context.state) ? context.state.selection : [];
 const vectorActiveIsGroup = (context: ContextualBarContext): boolean => {
@@ -180,7 +199,7 @@ export const contextualBarStates: readonly ContextualBarState[] = [
     // Photoshop's no-selection pixel-layer bar: Select subject, Remove background.
     id: "raster.pixelLayer",
     label: { en: "Layer", ru: "Слой" },
-    when: (context) => activeLayer(context)?.kind === "pixel",
+    when: (context) => { const layer = activeLayer(context); return layer?.kind === "pixel" && layerHasContent(layer); },
     actions: [command("select.subject", { icon: "ВЫДЕЛЕНИЕ ОБЪЕКТА ИИ.svg", primary: true }), command("layer.removeBackground", { icon: "УДАЛЕНИЕ ОБЪЕКТА.svg", primary: true })],
   },
   {
@@ -265,6 +284,17 @@ export function resolveContextualBar(context: ContextualBarContext): ResolvedCon
 export function contextualAnchor(context: ContextualBarContext): { x: number; y: number; width: number; height: number } | null {
   const frame = context.session?.frame?.();
   if (frame) return frame;
+  const vector = context.state;
+  if (isVectorDocumentState(vector)) {
+    // The selected shapes' own box, so the bar follows a vector object the way
+    // it follows a raster selection.
+    const chosen = vector.shapes.filter((shape) => vector.selection.includes(shape.id));
+    if (!chosen.length) return null;
+    const boxes = chosen.map((shape) => shapeWorldBounds(shape, vector.shapes));
+    const x = Math.min(...boxes.map((box) => box.x)), y = Math.min(...boxes.map((box) => box.y));
+    const right = Math.max(...boxes.map((box) => box.x + box.width)), bottom = Math.max(...boxes.map((box) => box.y + box.height));
+    return right > x && bottom > y ? { x, y, width: right - x, height: bottom - y } : null;
+  }
   const state = raster(context);
   if (!state) return null;
   if (state.selection) return state.selection.bounds;

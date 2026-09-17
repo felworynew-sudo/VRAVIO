@@ -38,10 +38,9 @@ import { contextualAnchor, resolveContextualBar, type ContextualBarContext, type
  *
  * The bar lives outside the zoomable stage (it is mounted beside the dock, not
  * inside `.raster-stage`), so nothing about it scales with zoom — the anchor
- * is measured from the canvas element's on-screen rectangle instead, which
- * already includes zoom and pan. A rotated view has no axis-aligned
- * rectangle to follow; there the bar falls back to its default spot (bottom
- * centre of the canvas area) rather than guess.
+ * is measured through the stage's own `getScreenCTM()` — the matrix the SVG
+ * inside the stage already carries — so pan, zoom and a rotated view all come
+ * out right, in raster and in vector alike.
  */
 
 interface Point { x: number; y: number }
@@ -142,12 +141,22 @@ export function ContextualBar({ documentId, state, language, visible }: {
       });
       if (pin) { setPosition(clamp({ x: area.left + pin.x, y: area.top + pin.y })); return; }
       const fallback = clamp({ x: area.left + (area.width - width) / 2, y: area.bottom - height - 20 });
-      const canvas = document.querySelector<HTMLCanvasElement>(".viewport-chrome-canvas .raster-stage canvas");
-      if (!anchor || !canvas || !canvas.width || (viewport?.rotation ?? 0) % 360 !== 0) { setPosition(fallback); return; }
-      const rect = canvas.getBoundingClientRect();
-      const scaleX = rect.width / canvas.width, scaleY = rect.height / canvas.height;
-      const left = rect.left + anchor.x * scaleX, right = rect.left + (anchor.x + anchor.width) * scaleX;
-      const top = rect.top + anchor.y * scaleY, bottom = rect.top + (anchor.y + anchor.height) * scaleY;
+      // The stage's own coordinate system, read off an SVG inside it: its
+      // screen matrix carries the stage's CSS transform, view rotation included.
+      const mapper = document.querySelector<SVGSVGElement>(".viewport-chrome-canvas .raster-stage svg.stage-metrics, .viewport-chrome-canvas .vector-stage > svg");
+      const matrix = mapper?.getScreenCTM();
+      if (!anchor || !mapper || !matrix) { setPosition(fallback); return; }
+      const corner = (x: number, y: number): Point => {
+        const svgPoint = mapper.createSVGPoint();
+        svgPoint.x = x; svgPoint.y = y;
+        const mapped = svgPoint.matrixTransform(matrix);
+        return { x: mapped.x, y: mapped.y };
+      };
+      const mapped = [corner(anchor.x, anchor.y), corner(anchor.x + anchor.width, anchor.y), corner(anchor.x + anchor.width, anchor.y + anchor.height), corner(anchor.x, anchor.y + anchor.height)];
+      // A rotated view turns the object's rectangle into a quad; the bar keeps
+      // clear of the box around it.
+      const left = Math.min(...mapped.map((point) => point.x)), right = Math.max(...mapped.map((point) => point.x));
+      const top = Math.min(...mapped.map((point) => point.y)), bottom = Math.max(...mapped.map((point) => point.y));
       // Candidates in order of preference — centred below, centred above, then
       // beside — each kept inside the canvas area. The first that covers
       // neither the object (plus a gap) nor the last pointer position wins; if

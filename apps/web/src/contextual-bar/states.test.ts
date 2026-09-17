@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { createRasterDocument, createRasterLayerMask, selectAllPixels, type RasterDocumentState } from "@vravio/env-raster";
+import { createRasterDocument, createRasterLayerMask, selectAllPixels, TileStore, type RasterDocumentState } from "@vravio/env-raster";
 import { commandDefinitionById } from "../commands/registry";
 import { kernel } from "../kernel";
-import { contextualBarStates, resolveContextualBar, type ContextualAction, type ContextualBarContext, type ResolvedAction } from "./states";
+import { contextualAnchor, contextualBarStates, resolveContextualBar, type ContextualAction, type ContextualBarContext, type ResolvedAction } from "./states";
 
 /**
  * The Contextual Task Bar is a table of states → catalogue commands
@@ -101,6 +101,26 @@ describe("contextual task bar states", () => {
   it("offers Cancel / Done while a crop is open", () => {
     const document = open();
     expect(resolved(context(document, { session: { kind: "crop", commit: () => {}, cancel: () => {} } }))).toEqual({ state: "raster.crop", actions: ["session.cancel", "session.commit"] });
+  });
+
+  it("offers nothing on an empty layer — Photoshop's Generate Image has no backend here", () => {
+    const document = open((state) => {
+      const layer = state.layers.find((item) => item.id === state.activeLayerId)!;
+      // What `setLayerPixels`/`trimToContent` leave behind when a layer loses its last pixel.
+      layer.bounds = { x: 0, y: 0, width: 1, height: 1 };
+      layer.tiles = TileStore.empty(1, 1);
+    });
+    expect(resolved(context(document))).toBeNull();
+  });
+
+  it("follows the selected shapes in a vector document", () => {
+    const shapes = [
+      { id: "a", kind: "rectangle", name: "a", x: 10, y: 20, width: 30, height: 40, style: {}, parentId: null, orderKey: "0", visible: true, locked: false },
+      { id: "b", kind: "rectangle", name: "b", x: 60, y: 10, width: 20, height: 20, style: {}, parentId: null, orderKey: "1", visible: true, locked: false },
+    ];
+    const vector = { kind: "vector", schemaVersion: 12, shapes, selection: ["a", "b"], activeShapeId: "a", artboards: [], activeArtboardId: null, palette: [], guides: [], rulerOrigin: null, rulerMode: "global", cmykProfileAssetId: null, softproof: false };
+    const anchor = contextualAnchor({ documentId: "v", state: vector, editingMaskLayerId: null, selectedLayerIds: [] });
+    expect(anchor).toEqual({ x: 10, y: 10, width: 70, height: 50 });
   });
 
   it("shows nothing when nothing applies", () => {

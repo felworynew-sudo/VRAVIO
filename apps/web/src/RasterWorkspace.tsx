@@ -781,6 +781,10 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       {/* Whatever the active catalogue tool draws over the canvas. */}
       {catalogueTool?.Overlay && <catalogueTool.Overlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>} context={toolContextFor(catalogueTool.id, canvasRef.current)}/>}
       {committedSelectionPath && <svg className="selection-overlay committed-selection" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><MarchingAnts zoom={viewport.zoom}><path d={committedSelectionPath} /></MarchingAnts></svg>}
+      {/* Document coordinates as the screen sees them: the Contextual Task Bar reads this
+          element's `getScreenCTM()` to place itself beside a selection, through pan, zoom and a
+          rotated view alike. Hidden, and never in the way (`.stage-metrics`, styles.css). */}
+      <svg className="stage-metrics" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true" />
       <TransformSelectionOverlay documentId={document.id} state={state} zoom={viewport.zoom} />
     </div>
     {/*
