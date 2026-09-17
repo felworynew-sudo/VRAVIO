@@ -52,6 +52,17 @@ import { createLiquifyState, liquifyWarp, renderLiquify } from "./liquify";
 import { TileStore } from "./tile-store";
 import type { RgbaColor } from "./types";
 
+/** The reduced composite's contract: each pixel is the premultiplied average of its step×step block of the full composite. */
+function blockAverage(full: Uint8ClampedArray, width: number, height: number, step: number, column: number, row: number): number[] {
+  let red = 0, green = 0, blue = 0, alpha = 0, count = 0;
+  for (let y = row * step; y < Math.min(height, (row + 1) * step); y += 1) for (let x = column * step; x < Math.min(width, (column + 1) * step); x += 1) {
+    const index = (y * width + x) * 4, a = full[index + 3]!;
+    red += full[index]! * a; green += full[index + 1]! * a; blue += full[index + 2]! * a; alpha += a; count += 1;
+  }
+  const clamp = (value: number) => Math.min(255, Math.max(0, Math.round(value)));
+  return alpha > 0 ? [clamp(red / alpha), clamp(green / alpha), clamp(blue / alpha), clamp(alpha / count)] : [0, 0, 0, clamp(alpha / count)];
+}
+
 describe("liquify", () => {
   it("moves visible pixels with the forward-warp gesture like Patchy's inverse field", () => {
     const pixels = new Uint8ClampedArray(5 * 4); pixels.set([255, 0, 0, 255], 4);
@@ -287,7 +298,7 @@ describe("layer rendering", () => {
     expect([...thumbnail.pixels.slice(0, 4)]).toEqual([255, 0, 0, 255]);
   });
 
-  it("samples the same colours at reduced resolution as at full resolution", () => {
+  it("averages each block of the full-resolution colours at reduced resolution", () => {
     const document = createRasterDocument(8, 8);
     const layer = document.layers[0]!;
     const pixels = new Uint8ClampedArray(8 * 8 * 4);
@@ -296,8 +307,9 @@ describe("layer rendering", () => {
     const full = compositeRasterDocument(document);
     const half = compositeRasterRegion(document, { x: 0, y: 0, width: 8, height: 8 }, { step: 2 });
     for (let row = 0; row < 4; row += 1) for (let column = 0; column < 4; column += 1) {
-      const reduced = (row * 4 + column) * 4, source = ((row * 2) * 8 + column * 2) * 4;
-      expect([...half.slice(reduced, reduced + 4)]).toEqual([...full.slice(source, source + 4)]);
+      const reduced = (row * 4 + column) * 4;
+      const actual = [...half.slice(reduced, reduced + 4)], expected = blockAverage(full, 8, 8, 2, column, row);
+      actual.forEach((value, channel) => expect(Math.abs(value - expected[channel]!)).toBeLessThanOrEqual(1));
     }
   });
 

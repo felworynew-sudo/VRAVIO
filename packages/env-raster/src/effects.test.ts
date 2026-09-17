@@ -4,6 +4,17 @@ import { layerPixelsView } from "./layer-bounds";
 import { TileStore } from "./tile-store";
 import type { RasterLayer, RasterLayerEffects, RasterRect } from "./types";
 
+/** The reduced composite's contract: each pixel is the premultiplied average of its step×step block of the full composite. */
+function blockAverage(full: Uint8ClampedArray, width: number, height: number, step: number, column: number, row: number): number[] {
+  let red = 0, green = 0, blue = 0, alpha = 0, count = 0;
+  for (let y = row * step; y < Math.min(height, (row + 1) * step); y += 1) for (let x = column * step; x < Math.min(width, (column + 1) * step); x += 1) {
+    const index = (y * width + x) * 4, a = full[index + 3]!;
+    red += full[index]! * a; green += full[index + 1]! * a; blue += full[index + 2]! * a; alpha += a; count += 1;
+  }
+  const clamp = (value: number) => Math.min(255, Math.max(0, Math.round(value)));
+  return alpha > 0 ? [clamp(red / alpha), clamp(green / alpha), clamp(blue / alpha), clamp(alpha / count)] : [0, 0, 0, clamp(alpha / count)];
+}
+
 const W = 40, H = 40;
 
 /** An opaque square in the middle of a transparent layer. */
@@ -253,7 +264,10 @@ describe("Glass backdrop effect", () => {
     const document = backdropDocument(255);
     const full = compositeRasterDocument(document);
     const reduced = compositeRasterRegion(document, { x: 0, y: 0, width: 9, height: 1 }, { step: 2 });
-    expect(reduced.slice(2 * 4, 3 * 4)).toEqual(full.slice(4 * 4, 5 * 4));
+    // The reduced pixel covers full-resolution columns 4 and 5 of the first row; a radius inflated
+    // by the step would show up as a clearly different value, not a one-level rounding difference.
+    const expected = blockAverage(full, 9, 1, 2, 2, 0);
+    [...reduced.slice(2 * 4, 3 * 4)].forEach((value, channel) => expect(Math.abs(value - expected[channel]!)).toBeLessThanOrEqual(1));
   });
 });
 
