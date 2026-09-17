@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useShellStore } from "../../store";
 import { text } from "../../i18n";
 import type { ModalDefinition } from "../types";
+import { ModalBackdrop } from "../ModalBackdrop";
 
 interface ConfirmProps {
   readonly title: string;
@@ -39,7 +40,7 @@ function Confirm({ title, message, confirmLabel, danger, confirmKey, onResolve, 
     close();
   };
 
-  return <div className="dialog-backdrop rasterize-confirm-backdrop" onMouseDown={cancel}>
+  return <ModalBackdrop className="rasterize-confirm-backdrop" onMouseDown={cancel}>
     <section
       className="rasterize-confirm"
       role="alertdialog"
@@ -59,7 +60,7 @@ function Confirm({ title, message, confirmLabel, danger, confirmKey, onResolve, 
         </button>
       </footer>
     </section>
-  </div>;
+  </ModalBackdrop>;
 }
 
 export default { id: "confirm", component: Confirm } satisfies ModalDefinition<ConfirmProps> as ModalDefinition<never>;

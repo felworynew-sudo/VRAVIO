@@ -5,6 +5,7 @@ import { resolveLabel } from "../i18n";
 import { toolById } from "../tools";
 import { useShellStore } from "../store";
 import { defaultLayout, hasCustomToolbarLayout, persistToolbarLayout, readToolbarLayout, resetToolbarLayout, type ToolbarLayout } from "./layout";
+import { ModalBackdrop } from "../modals/ModalBackdrop";
 
 /**
  * Photoshop's "Edit Toolbar…", reached by the `(…)` button at the foot of the
@@ -93,7 +94,7 @@ export function ToolbarEditor({ kind, close }: { kind: EnvironmentKind; close: (
     <span aria-hidden="true">⠿</span>{name(id)}<kbd>{toolById(id)?.shortcut}</kbd>
   </button>;
 
-  return <div className="dialog-backdrop" onMouseDown={close} onPointerUp={drop}>
+  return <ModalBackdrop onMouseDown={close} onPointerUp={drop}>
     <section className="toolbar-editor" role="dialog" aria-modal="true" aria-label={text(language, "Customise toolbar", "Настроить панель инструментов")} onMouseDown={(event) => event.stopPropagation()} onPointerUp={drop}>
       <header>
         <h2>{text(language, "Customise Toolbar", "Настроить панель инструментов")}</h2>
@@ -146,5 +147,5 @@ export function ToolbarEditor({ kind, close }: { kind: EnvironmentKind; close: (
         <button className="primary" onClick={save}>{text(language, "Done", "Готово")}</button>
       </footer>
     </section>
-  </div>;
+  </ModalBackdrop>;
 }

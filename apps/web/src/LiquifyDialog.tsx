@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { createLiquifyState, isLiquifyIdentity, layerPixelsView, liquifyFreeze, liquifyPuckerBloat, liquifyReconstruct, liquifySmooth, liquifyTwirl, liquifyWarp, renderLiquify, type LiquifyState, type LiquifyTool, type RasterLayer } from "@vravio/env-raster";
 import { text } from "./i18n";
 import type { Language } from "./store";
+import { ModalBackdrop } from "./modals/ModalBackdrop";
 
 const tools: Array<[LiquifyTool, string, string]> = [
   ["warp", "ДЕФОРМАЦИЯ.svg", "Warp (Деформация)"],
@@ -174,7 +175,7 @@ export function LiquifyDialog({ layer, onApply, onClose, language }: { layer: Ra
 
   const brushPreviewSize = useMemo(() => Math.max(6, Math.round(brushSize * scale)), [brushSize, scale]);
 
-  return <div className="dialog-backdrop liquify-backdrop" onMouseDown={onClose}>
+  return <ModalBackdrop className="liquify-backdrop" onMouseDown={onClose}>
     <section className="liquify-dialog" role="dialog" aria-modal="true" aria-label="Liquify (Пластика)" onMouseDown={(event) => event.stopPropagation()}>
       <header><strong>Liquify (Пластика)</strong><button onClick={onClose}>×</button></header>
       <div className="liquify-body">
@@ -195,5 +196,5 @@ export function LiquifyDialog({ layer, onApply, onClose, language }: { layer: Ra
       </div>
       <footer><button onClick={onClose}>{text(language, "Cancel", "Отмена")}</button><button className="primary" onClick={apply}>{text(language, "Apply", "Применить")}</button></footer>
     </section>
-  </div>;
+  </ModalBackdrop>;
 }

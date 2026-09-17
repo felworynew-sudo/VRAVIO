@@ -6,6 +6,7 @@ import {
   defaultExportSettings, encodeExport, exportFileName, exportFormatInfo, exportFormats, exportPixelSize,
   formatBytes, renderExportCanvas, supportedExportFormats, type ExportFormat, type ExportSettings,
 } from "./exportImage";
+import { ModalBackdrop } from "./modals/ModalBackdrop";
 
 const scalePresets = [0.25, 0.5, 1, 2, 3, 4] as const;
 
@@ -91,7 +92,7 @@ export function ExportDialog({ state, documentName, language, variant = "export"
     }
   };
 
-  return <div className="dialog-backdrop export-backdrop" onMouseDown={onCancel}>
+  return <ModalBackdrop className="export-backdrop" onMouseDown={onCancel}>
     <section className="export-dialog" role="dialog" aria-modal="true" aria-labelledby="export-title" onMouseDown={(event) => event.stopPropagation()}>
       <header>
         <div><small>{variant === "saveCopy" ? text(language, "SAVE A COPY", "СОХРАНИТЬ КОПИЮ") : text(language, "EXPORT", "ЭКСПОРТ")}</small><h2 id="export-title">{variant === "saveCopy" ? text(language, "Save a copy", "Сохранить копию") : text(language, "Export image", "Экспорт изображения")}</h2></div>
@@ -202,5 +203,5 @@ export function ExportDialog({ state, documentName, language, variant = "export"
         <button className="primary" disabled={busy} onClick={() => void run()}>{busy ? (variant === "saveCopy" ? text(language, "Saving…", "Сохранение…") : text(language, "Exporting…", "Экспорт…")) : (variant === "saveCopy" ? text(language, "Save", "Сохранить") : text(language, "Export", "Экспортировать"))}</button>
       </footer>
     </section>
-  </div>;
+  </ModalBackdrop>;
 }

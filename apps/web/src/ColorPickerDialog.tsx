@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { parseHexColor, toHexColor } from "@vravio/env-raster";
 import { text } from "./i18n";
 import type { Language } from "./store";
+import { ModalBackdrop } from "./modals/ModalBackdrop";
 
 type Rgb = { r: number; g: number; b: number };
 
@@ -78,7 +79,7 @@ export function ColorPickerDialog({ language, initial, onApply, onClose }: { lan
   const addSwatch = () => { const next = [value, ...swatches.filter((swatch) => swatch !== value)].slice(0, 40); setSwatches(next); writeCustomSwatches(next); };
   const removeSwatch = (swatch: string) => { const next = swatches.filter((item) => item !== swatch); setSwatches(next); writeCustomSwatches(next); };
 
-  return <div className="dialog-backdrop" onMouseDown={onClose}>
+  return <ModalBackdrop onMouseDown={onClose}>
     <section className="color-picker-dialog" role="dialog" aria-modal="true" aria-labelledby="color-picker-title" onMouseDown={(event) => event.stopPropagation()}>
       <header><h2 id="color-picker-title">{text(language, "Color Picker", "Выбор цвета")}</h2><button onClick={onClose} aria-label={text(language, "Close", "Закрыть")}>×</button></header>
       <div className="color-picker-body">
@@ -122,5 +123,5 @@ export function ColorPickerDialog({ language, initial, onApply, onClose }: { lan
         <button className="picker-apply" onClick={() => { onApply(value); onClose(); }}>{text(language, "OK", "ОК")}</button>
       </footer>
     </section>
-  </div>;
+  </ModalBackdrop>;
 }

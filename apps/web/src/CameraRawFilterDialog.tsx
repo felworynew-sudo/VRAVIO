@@ -7,6 +7,7 @@ import { runDenoise } from "./ml/denoise/run";
 import { defaultDenoiseModelId, denoiseModelById } from "./ml/denoise/registry";
 import { kernel } from "./kernel";
 import { confirmModal } from "./modals/runtime";
+import { ModalBackdrop } from "./modals/ModalBackdrop";
 
 export function CameraRawFilterDialog({ layer, language, onApply, onClose }: { layer: RasterLayer; language: Language; onApply(pixels: Uint8ClampedArray, label: string): void; onClose(): void }) {
   const [settings, setSettings] = useState<CameraRawFilterSettings>(defaultCameraRawFilterSettings);
@@ -68,7 +69,7 @@ export function CameraRawFilterDialog({ layer, language, onApply, onClose }: { l
     onClose();
   };
 
-  return <div className="dialog-backdrop camera-raw-filter-backdrop" onMouseDown={onClose}>
+  return <ModalBackdrop className="camera-raw-filter-backdrop" onMouseDown={onClose}>
     <section className="camera-raw-filter-dialog" role="dialog" aria-modal="true" aria-label="Camera Raw Filter" onMouseDown={(event) => event.stopPropagation()}>
       <header><strong>{t("Camera Raw Filter", "Фильтр Camera Raw")}</strong><button onClick={onClose}>×</button></header>
       <div className="camera-raw-filter-body">
@@ -84,5 +85,5 @@ export function CameraRawFilterDialog({ layer, language, onApply, onClose }: { l
         <button className="primary" onClick={() => void apply()}>{t("OK", "ОК")}</button>
       </footer>
     </section>
-  </div>;
+  </ModalBackdrop>;
 }

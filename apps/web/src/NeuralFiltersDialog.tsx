@@ -7,6 +7,7 @@ import { neuralFilterById, neuralFilters } from "./ml/neural-filters/registry";
 import type { NeuralFilterDefinition } from "./ml/neural-filters/types";
 import { text as t } from "./i18n";
 import type { Language } from "./store";
+import { ModalBackdrop } from "./modals/ModalBackdrop";
 
 /**
  * Filter → Neural Filters (docs/master-plan.md §52.9) — a shared home for neural filters, styled
@@ -97,7 +98,7 @@ export function NeuralFiltersDialog({ documentId, document, layer, language, onC
 
   const categories = [...new Map(neuralFilters.map((filter) => [filter.category.en, filter.category])).values()];
 
-  return <div className="dialog-backdrop neural-filters-backdrop" onMouseDown={onClose}>
+  return <ModalBackdrop className="neural-filters-backdrop" onMouseDown={onClose}>
     <section className="neural-filters-dialog" role="dialog" aria-modal="true" aria-label={t(language, "Neural Filters", "Нейрофильтры")} onMouseDown={(event) => event.stopPropagation()}>
       <header><strong>{t(language, "Neural Filters", "Нейрофильтры")}</strong><button onClick={onClose}>×</button></header>
       <div className="neural-filters-body">
@@ -137,7 +138,7 @@ export function NeuralFiltersDialog({ documentId, document, layer, language, onC
         <button className="primary" disabled={!preview || preview.filterId !== selectedId} onClick={() => void apply()}>{t(language, "OK", "ОК")}</button>
       </footer>
     </section>
-  </div>;
+  </ModalBackdrop>;
 }
 
 function NeuralFilterRow({ filter, selected, language, onSelect }: { filter: NeuralFilterDefinition; selected: boolean; language: Language; onSelect(): void }) {

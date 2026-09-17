@@ -5,6 +5,7 @@ import { TextGeometry } from "three/addons/geometries/TextGeometry.js";
 import { applyLighting, centerAndFit, createScene3D, defaultLighting, readPixelsRgba, type LightingSettings, type Scene3D } from "./three3d";
 import { text as t } from "./i18n";
 import type { Language } from "./store";
+import { ModalBackdrop } from "./modals/ModalBackdrop";
 
 interface Text3DSettings {
   value: string;
@@ -78,7 +79,7 @@ export function Text3DDialog({ documentWidth, documentHeight, language, onCancel
     onConfirm(pixels);
   };
 
-  return <div className="dialog-backdrop text3d-backdrop" onMouseDown={onCancel}>
+  return <ModalBackdrop className="text3d-backdrop" onMouseDown={onCancel}>
     <section className="text3d-dialog" role="dialog" aria-modal="true" aria-label="3D Text" onMouseDown={(event) => event.stopPropagation()}>
       <header><strong>{t(language, "3D Text", "Объёмный текст")}</strong><button onClick={onCancel}>×</button></header>
       <div className="text3d-body">
@@ -104,5 +105,5 @@ export function Text3DDialog({ documentWidth, documentHeight, language, onCancel
       </div>
       <footer><button onClick={onCancel}>{t(language, "Cancel", "Отмена")}</button><button className="primary" onClick={confirm}>{t(language, "Add Layer", "Добавить слой")}</button></footer>
     </section>
-  </div>;
+  </ModalBackdrop>;
 }

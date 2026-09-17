@@ -1,6 +1,7 @@
 import { useShellStore } from "../../store";
 import { text } from "../../i18n";
 import type { ModalDefinition } from "../types";
+import { ModalBackdrop } from "../ModalBackdrop";
 
 interface ErrorProps {
   readonly title: string;
@@ -23,7 +24,7 @@ interface ErrorProps {
 function ErrorModal({ title, message, detail, close }: ErrorProps & { close: () => void }) {
   const language = useShellStore((state) => state.language);
 
-  return <div className="dialog-backdrop rasterize-confirm-backdrop" onMouseDown={close}>
+  return <ModalBackdrop className="rasterize-confirm-backdrop" onMouseDown={close}>
     <section
       className="rasterize-confirm"
       role="alertdialog"
@@ -40,7 +41,7 @@ function ErrorModal({ title, message, detail, close }: ErrorProps & { close: () 
         <button className="primary" onClick={close}>{text(language, "Close", "Закрыть")}</button>
       </footer>
     </section>
-  </div>;
+  </ModalBackdrop>;
 }
 
 export default { id: "error", component: ErrorModal } satisfies ModalDefinition<ErrorProps> as ModalDefinition<never>;

@@ -3,6 +3,7 @@ import { displaceEffect, layerPixelsView, type RasterLayer } from "@vravio/env-r
 import { decodeImportedImage } from "./imageImport";
 import { text } from "./i18n";
 import type { Language } from "./store";
+import { ModalBackdrop } from "./modals/ModalBackdrop";
 
 /** Draws a decoded image onto a `width`×`height` canvas — "Stretch To Fit" scales it to cover
  * the whole area (Photoshop's own default), "Tile" repeats it at its own native size, matching
@@ -75,7 +76,7 @@ export function DisplaceDialog({ layer, onApply, onClose, language }: { layer: R
     onClose();
   };
 
-  return <div className="dialog-backdrop liquify-backdrop" onMouseDown={onClose}>
+  return <ModalBackdrop className="liquify-backdrop" onMouseDown={onClose}>
     <section className="liquify-dialog displace-dialog" role="dialog" aria-modal="true" aria-label="Displace (Смещение)" onMouseDown={(event) => event.stopPropagation()}>
       <header><strong>Displace (Смещение)</strong><button onClick={onClose}>×</button></header>
       <div className="liquify-body displace-body">
@@ -98,5 +99,5 @@ export function DisplaceDialog({ layer, onApply, onClose, language }: { layer: R
       </div>
       <footer><button onClick={onClose}>{text(language, "Cancel", "Отмена")}</button><button className="primary" disabled={!mapImage} onClick={apply}>{text(language, "Apply", "Применить")}</button></footer>
     </section>
-  </div>;
+  </ModalBackdrop>;
 }

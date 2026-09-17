@@ -71,6 +71,7 @@ import { probeVideoMetadata } from "./videoImport";
 import { addClipFromAsset as addVideoClipFromAsset } from "./video-commands";
 import { isVideoDocumentState } from "@vravio/env-video";
 import "./styles.css";
+import { ModalBackdrop } from "./modals/ModalBackdrop";
 
 export function App() {
   ensureCommandsRegistered();
@@ -1243,18 +1244,18 @@ export function App() {
     {chromeSlots.bottom && active && createPortal(<footer className="status-bar"><span>{resolveLabel(environmentMeta[active.kind].label, store.language)}</span><span>{isAudioDocumentState(active.state) ? `${(active.state.sampleRate / 1000).toLocaleString()} kHz · ${active.state.channels === 1 ? text(store.language, "Mono", "Моно") : text(store.language, "Stereo", "Стерео")} · ${active.state.bitDepth} bit` : isVideoDocumentState(active.state) ? `${active.state.width}×${active.state.height} · ${active.state.frameRate} fps` : `${Math.round((store.viewports[active.id]?.zoom ?? 1) * 100)}% · sRGB · ${renderBackend ?? "detecting"}`}</span></footer>, chromeSlots.bottom)}
     {store.preferences.showPerformanceOverlay && <PerformanceOverlay documentId={active?.id ?? null} />}
 
-    {store.paletteOpen && <div className="dialog-backdrop" onMouseDown={() => store.setPaletteOpen(false)}>
+    {store.paletteOpen && <ModalBackdrop onMouseDown={() => store.setPaletteOpen(false)}>
       <section className="command-palette" role="dialog" aria-modal="true" aria-label="Command palette (Палитра команд)" onMouseDown={(event) => event.stopPropagation()}>
         <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder={store.language === "ru" ? "Введите команду…" : "Type a command…"} />
         <div>{commands.map((command) => <button key={command.id} disabled={command.isEnabled?.(activeCommandContext()) === false} onClick={() => { void kernel.commands.execute(command.id, activeCommandContext()); store.setPaletteOpen(false); }}><span>{localized(command.label, store.language)}</span>{command.shortcut && <kbd>{command.shortcut}</kbd>}</button>)}</div>
       </section>
-    </div>}
+    </ModalBackdrop>}
 
     <SettingsDialog />
     <ModalHost />
     <BusyCursor />
     <BusyAnnouncement />
-    {diagnosticsOpen && <div className="dialog-backdrop" onMouseDown={() => setDiagnosticsOpen(false)}><section className="diagnostics-dialog" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><header><strong>Diagnostics log (Журнал диагностики)</strong><button onClick={() => setDiagnosticsOpen(false)}>×</button></header><div className="diagnostics-list">{diagnostics.length ? [...diagnostics].reverse().map((entry, index) => <article data-level={entry.level} key={`${entry.time}-${index}`}><time>{new Date(entry.time).toLocaleTimeString()}</time><b>{entry.area}</b><span>{entry.message}</span>{entry.detail && <pre>{entry.detail}</pre>}</article>) : <p>No events recorded (Событий пока нет).</p>}</div><footer><button onClick={() => { clearDiagnostics(); setDiagnostics([]); }}>Clear (Очистить)</button><button onClick={() => { const blob = new Blob([JSON.stringify(diagnostics, null, 2)], { type: "application/json" }); download(blob, `vravio-diagnostics-${Date.now()}.json`); }}>Export JSON (Экспорт JSON)</button></footer></section></div>}
+    {diagnosticsOpen && <ModalBackdrop onMouseDown={() => setDiagnosticsOpen(false)}><section className="diagnostics-dialog" role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}><header><strong>Diagnostics log (Журнал диагностики)</strong><button onClick={() => setDiagnosticsOpen(false)}>×</button></header><div className="diagnostics-list">{diagnostics.length ? [...diagnostics].reverse().map((entry, index) => <article data-level={entry.level} key={`${entry.time}-${index}`}><time>{new Date(entry.time).toLocaleTimeString()}</time><b>{entry.area}</b><span>{entry.message}</span>{entry.detail && <pre>{entry.detail}</pre>}</article>) : <p>No events recorded (Событий пока нет).</p>}</div><footer><button onClick={() => { clearDiagnostics(); setDiagnostics([]); }}>Clear (Очистить)</button><button onClick={() => { const blob = new Blob([JSON.stringify(diagnostics, null, 2)], { type: "application/json" }); download(blob, `vravio-diagnostics-${Date.now()}.json`); }}>Export JSON (Экспорт JSON)</button></footer></section></ModalBackdrop>}
     {filterGalleryOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<FilterGalleryDialog layer={layer} initialFilterId={filterGallerySelection} onApply={(pixels,label,meta)=>{applyFilter(pixels,label);if(meta)setLastFilter({id:meta.filterId,settings:meta.settings,label});}} onClose={()=>setFilterGalleryOpen(false)}/>:null;})()}
     {upscaleDialogOpen && active && isRasterDocumentState(active.state) && <GenerativeUpscaleDialog documentId={active.id} document={active.state} language={store.language} onClose={() => setUpscaleDialogOpen(false)}/>}
     {neuralFiltersOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<NeuralFiltersDialog documentId={active.id} document={state} layer={layer} language={store.language} initialFilterId={neuralFilterSelection} onClose={()=>setNeuralFiltersOpen(false)}/>:null;})()}

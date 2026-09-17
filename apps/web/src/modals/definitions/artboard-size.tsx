@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useShellStore } from "../../store";
 import { text } from "../../i18n";
 import type { ModalDefinition } from "../types";
+import { ModalBackdrop } from "../ModalBackdrop";
 
 interface ArtboardSizeProps {
   readonly width: number;
@@ -42,7 +43,7 @@ function ArtboardSize({ width, height, onResolve, close }: ArtboardSizeProps & {
     close();
   };
 
-  return <div className="dialog-backdrop rasterize-confirm-backdrop" onMouseDown={cancel}>
+  return <ModalBackdrop className="rasterize-confirm-backdrop" onMouseDown={cancel}>
     <section
       className="rasterize-confirm artboard-size-dialog"
       role="dialog"
@@ -80,7 +81,7 @@ function ArtboardSize({ width, height, onResolve, close }: ArtboardSizeProps & {
         <button className="primary" onClick={create}>{text(language, "Create", "Создать")}</button>
       </footer>
     </section>
-  </div>;
+  </ModalBackdrop>;
 }
 
 export default { id: "artboard-size", component: ArtboardSize } satisfies ModalDefinition<ArtboardSizeProps> as ModalDefinition<never>;

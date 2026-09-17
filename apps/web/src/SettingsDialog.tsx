@@ -4,6 +4,7 @@ import { text } from "./i18n";
 import { interfacePaletteForTheme, useShellStore, type InterfacePalette, type Language, type RendererPreference, type Theme } from "./store";
 import { kernel } from "./kernel";
 import { isShortcutOverridden, rebindCommandShortcut, resetCommandShortcut } from "./shortcuts";
+import { ModalBackdrop } from "./modals/ModalBackdrop";
 
 type SettingsPage = "interface" | "performance" | "convenience" | "guides" | "shortcuts";
 
@@ -35,7 +36,7 @@ export function SettingsDialog() {
   ] as const).filter(([, label]) => label.toLocaleLowerCase().includes(query.toLocaleLowerCase())), [language, query]);
   if (!store.settingsOpen) return null;
 
-  return <div className="dialog-backdrop" onMouseDown={() => store.setSettingsOpen(false)}>
+  return <ModalBackdrop onMouseDown={() => store.setSettingsOpen(false)}>
     <section className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" onMouseDown={(event) => event.stopPropagation()}>
       <header><div><small>VRAVIO</small><h2 id="settings-title">{text(language, "Settings", "Настройки")}</h2></div><button onClick={() => store.setSettingsOpen(false)} aria-label={text(language, "Close", "Закрыть")}>×</button></header>
       <div className="settings-layout">
@@ -97,7 +98,7 @@ export function SettingsDialog() {
       </div>
       <footer>{text(language, "Settings are saved in this browser.", "Настройки сохраняются в этом браузере.")}</footer>
     </section>
-  </div>;
+  </ModalBackdrop>;
 }
 
 function SettingsHeading({ title, description }: { title: string; description: string }) { return <div className="settings-heading"><h3>{title}</h3><p>{description}</p></div>; }

@@ -4,6 +4,7 @@ import { EnvironmentIcon } from "./EnvironmentIcon";
 import { environmentMeta } from "./environment";
 import { resolveLabel, text } from "./i18n";
 import { useShellStore } from "./store";
+import { ModalBackdrop } from "./modals/ModalBackdrop";
 
 type Unit = "px" | "mm" | "cm" | "in";
 type PresetCategory = "recent" | "photo" | "print" | "art" | "web" | "mobile" | "video" | "icon" | "social";
@@ -109,7 +110,7 @@ export function NewDocumentDialog({ initialKind, close }: { initialKind: Environ
   // or "Mobile" tab with nothing inside it is worse than not showing the tab at all.
   const categories = allCategories.filter(([id]) => id === "recent" || kindPresets.some((preset) => preset.category === id));
 
-  return <div className="dialog-backdrop new-document-backdrop" onMouseDown={close}>
+  return <ModalBackdrop className="new-document-backdrop" onMouseDown={close}>
     <section className="new-document-dialog" role="dialog" aria-modal="true" aria-labelledby="new-document-title" onMouseDown={(event) => event.stopPropagation()}>
       <header><div className="new-document-title"><EnvironmentIcon kind={kind} /><div><small>{text(language, "NEW DOCUMENT", "НОВЫЙ ДОКУМЕНТ")}</small><h2 id="new-document-title">{text(language, "Create", "Создать")} {resolveLabel(meta.label, language)}</h2></div></div><button onClick={close} aria-label={text(language, "Close", "Закрыть")}>×</button></header>
       <div className="new-document-environments" role="tablist" aria-label={text(language, "Document type", "Тип документа")}>{environmentKinds.map((environmentKind) => <button role="tab" aria-selected={kind === environmentKind} className={kind === environmentKind ? "active" : ""} data-kind={environmentKind} key={environmentKind} onClick={() => setKind(environmentKind)}><EnvironmentIcon kind={environmentKind}/><span>{resolveLabel(environmentMeta[environmentKind].label, language)}</span></button>)}</div>
@@ -141,5 +142,5 @@ export function NewDocumentDialog({ initialKind, close }: { initialKind: Environ
       </div>
       <footer><button onClick={close}>{text(language, "Cancel", "Отмена")}</button><button className="primary" style={{ "--accent": `var(--${kind})`, "--accent-ink": kind === "audio" ? "#1a1204" : "#fff" } as CSSProperties} disabled={!valid} onClick={create}>{text(language, "Create", "Создать")}</button></footer>
     </section>
-  </div>;
+  </ModalBackdrop>;
 }

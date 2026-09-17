@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { text } from "./i18n";
 import type { Language } from "./store";
+import { ModalBackdrop } from "./modals/ModalBackdrop";
 
 /**
  * Any format to any. Common formats (PNG/JPG/WebP/BMP) decode/encode instantly through
@@ -266,7 +267,7 @@ export function ImageConverterDialog({ language, onClose }: { language: Language
   const common = FORMATS.filter((candidate) => candidate.group === "common");
   const pro = FORMATS.filter((candidate) => candidate.group === "pro");
 
-  return <div className="dialog-backdrop" onMouseDown={onClose}>
+  return <ModalBackdrop onMouseDown={onClose}>
     <section className="export-dialog converter-dialog" role="dialog" aria-modal="true" aria-labelledby="converter-title" onMouseDown={(event) => event.stopPropagation()}>
       <header>
         <div><small>{text(language, "CONVERT IMAGES", "КОНВЕРТЕР ИЗОБРАЖЕНИЙ")}</small><h2 id="converter-title">{text(language, "Convert images", "Конвертировать изображения")}</h2></div>
@@ -347,5 +348,5 @@ export function ImageConverterDialog({ language, onClose }: { language: Language
         <p className="converter-local-note">{text(language, "Files are processed right in your browser and never uploaded anywhere.", "Файлы обрабатываются прямо в вашем браузере и никуда не передаются.")}</p>
       </div>
     </section>
-  </div>;
+  </ModalBackdrop>;
 }

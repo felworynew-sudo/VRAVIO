@@ -8,6 +8,7 @@ import { runUpscale } from "./ml/upscale/run";
 import { defaultUpscaleModelId, upscaleModelById, upscaleModels } from "./ml/upscale/registry";
 import { text as t } from "./i18n";
 import type { Language } from "./store";
+import { ModalBackdrop } from "./modals/ModalBackdrop";
 
 /**
  * Image → Generative Upscale… (docs/master-plan.md §52.3).
@@ -76,7 +77,7 @@ export function GenerativeUpscaleDialog({ documentId, document, language, onClos
     }
   };
 
-  return <div className="dialog-backdrop rasterize-confirm-backdrop" onMouseDown={onClose}>
+  return <ModalBackdrop className="rasterize-confirm-backdrop" onMouseDown={onClose}>
     <section className="rasterize-confirm upscale-dialog" role="dialog" aria-modal="true" aria-label={t(language, "Generative Upscale", "Генеративное увеличение масштаба")} onMouseDown={(event) => event.stopPropagation()}>
       <header className="upscale-dialog-header"><strong>{t(language, "Generative Upscale", "Генеративное увеличение масштаба")}</strong><button onClick={onClose}>×</button></header>
       <div className="upscale-body">
@@ -99,5 +100,5 @@ export function GenerativeUpscaleDialog({ documentId, document, language, onClos
         </button>
       </footer>
     </section>
-  </div>;
+  </ModalBackdrop>;
 }

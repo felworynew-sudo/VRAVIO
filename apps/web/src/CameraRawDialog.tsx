@@ -9,6 +9,7 @@ import { runDenoise } from "./ml/denoise/run";
 import { defaultDenoiseModelId, denoiseModelById } from "./ml/denoise/registry";
 import { kernel } from "./kernel";
 import { confirmModal } from "./modals/runtime";
+import { ModalBackdrop } from "./modals/ModalBackdrop";
 
 async function decodePreview(buffer: ArrayBuffer, filename: string, settings: CameraRawSettings): Promise<DecodedRaw | null> {
   const raw = new LibRaw();
@@ -121,7 +122,7 @@ export function CameraRawDialog({ buffer, filename, language, mode, onCancel, on
   const setRaw = <K extends keyof CameraRawSettings>(key: K, value: CameraRawSettings[K]) => setRawSettings((current) => ({ ...current, [key]: value }));
   const setFilter = <K extends keyof CameraRawFilterSettings>(key: K, value: CameraRawFilterSettings[K]) => setFilterSettings((current) => ({ ...current, [key]: value }));
 
-  return <div className="dialog-backdrop camera-raw-backdrop" onMouseDown={onCancel}>
+  return <ModalBackdrop className="camera-raw-backdrop" onMouseDown={onCancel}>
     <section className="camera-raw-filter-dialog" role="dialog" aria-modal="true" aria-label="Camera Raw" onMouseDown={(event) => event.stopPropagation()}>
       <header><strong>Camera Raw — {filename}</strong><button onClick={onCancel}>×</button></header>
       <div className="camera-raw-filter-body">
@@ -146,5 +147,5 @@ export function CameraRawDialog({ buffer, filename, language, mode, onCancel, on
       </div>
       <footer><button onClick={onCancel}>{text(language, "Cancel", "Отмена")}</button><button className="primary" disabled={applying} onClick={() => void confirm()}>{applying ? text(language, "Developing…", "Проявка…") : mode === "open" ? text(language, "Open", "Открыть") : text(language, "Apply", "Применить")}</button></footer>
     </section>
-  </div>;
+  </ModalBackdrop>;
 }

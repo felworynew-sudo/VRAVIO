@@ -10,6 +10,7 @@ import { dispatchSystemPrint } from "./dispatch";
 import { createPrintPdf, printPdfFileName } from "./pdf";
 import { listNativePrinters, sendNativePrint, type NativePrinter } from "./native-desktop";
 import { isDesktop } from "../desktop-window";
+import { ModalBackdrop } from "../modals/ModalBackdrop";
 
 export function PrintCenter({ state, documentName, language, onCancel, onSavePdf }: {
   state: RasterDocumentState;
@@ -83,7 +84,7 @@ export function PrintCenter({ state, documentName, language, onCancel, onSavePdf
     finally { setBusy(null); }
   };
 
-  return <div className="dialog-backdrop export-backdrop" onMouseDown={onCancel}>
+  return <ModalBackdrop className="export-backdrop" onMouseDown={onCancel}>
     <section className="export-dialog print-center" role="dialog" aria-modal="true" aria-labelledby="print-title" onMouseDown={(event) => event.stopPropagation()}>
       <header>
         <div><small>{text(language, "PRINT CENTER", "ЦЕНТР ПЕЧАТИ")}</small><h2 id="print-title">{text(language, "Print image", "Печать изображения")}</h2></div>
@@ -113,5 +114,5 @@ export function PrintCenter({ state, documentName, language, onCancel, onSavePdf
       </div>
       <footer><button onClick={onCancel}>{text(language, "Cancel", "Отмена")}</button><button disabled={busy !== null} onClick={() => void savePdf()}>{busy === "pdf" ? text(language, "Preparing…", "Подготовка…") : text(language, "Save PDF", "Сохранить PDF")}</button><button className="primary" disabled={busy !== null || (isDesktop && !printerName)} onClick={() => void print()}>{busy === "print" ? text(language, "Preparing…", "Подготовка…") : text(language, "Print", "Печать")}</button></footer>
     </section>
-  </div>;
+  </ModalBackdrop>;
 }

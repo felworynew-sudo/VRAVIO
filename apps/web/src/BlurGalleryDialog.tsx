@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { fieldBlurEffect, irisBlurEffect, tiltShiftBlurEffect, spinBlurEffect, pathBlurEffect, layerPixelsView, type RasterLayer } from "@vravio/env-raster";
 import { text } from "./i18n";
 import type { Language } from "./store";
+import { ModalBackdrop } from "./modals/ModalBackdrop";
 
 type BlurGalleryType = "field" | "iris" | "tiltShift" | "spin" | "path";
 type DragTarget = "pin" | "outerRing" | "featherHandle" | { pathIndex: number };
@@ -134,7 +135,7 @@ export function BlurGalleryDialog({ layer, initialType, onApply, onClose, langua
     onClose();
   };
 
-  return <div className="dialog-backdrop liquify-backdrop" onMouseDown={onClose}>
+  return <ModalBackdrop className="liquify-backdrop" onMouseDown={onClose}>
     <section className="liquify-dialog blur-gallery-dialog" role="dialog" aria-modal="true" aria-label="Blur Gallery (Галерея размытия)" onMouseDown={(event) => event.stopPropagation()}>
       <header><strong>Blur Gallery (Галерея размытия)</strong><button onClick={onClose}>×</button></header>
       <div className="liquify-body blur-gallery-body">
@@ -182,5 +183,5 @@ export function BlurGalleryDialog({ layer, initialType, onApply, onClose, langua
       </div>
       <footer><button onClick={onClose}>{text(language, "Cancel", "Отмена")}</button><button className="primary" disabled={activeType === "path" && pathPoints.length < 2} onClick={apply}>{text(language, "Apply", "Применить")}</button></footer>
     </section>
-  </div>;
+  </ModalBackdrop>;
 }
