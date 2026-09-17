@@ -41,11 +41,29 @@ export interface ContextualBarContext {
  * state then come from the catalogue, so the bar cannot drift from the menu.
  * `run` is only for operations that exist as functions but were never made
  * catalogue commands (the vector Object-menu entries); they carry their own
- * label and condition.
+ * label and condition. `menu` is Photoshop's dropdown buttons ("Modify
+ * selection ▾"): a label over a list of actions, shown only while at least
+ * one of them is enabled.
  */
-export type ContextualAction =
+export type ContextualAction = ActionLook & (
   | { readonly kind: "command"; readonly command: string }
-  | { readonly kind: "run"; readonly id: string; readonly label: LocalizedText; enabled(context: ContextualBarContext): boolean; run(context: ContextualBarContext): void };
+  | { readonly kind: "run"; readonly id: string; readonly label: LocalizedText; enabled(context: ContextualBarContext): boolean; run(context: ContextualBarContext): void }
+  | { readonly kind: "menu"; readonly id: string; readonly label: LocalizedText; readonly items: readonly ContextualAction[] }
+);
+
+/**
+ * How a button looks. Photoshop's bar is a compact pill of icon buttons with
+ * the name in a tooltip, plus one or two text buttons for the state's main
+ * action ("Select subject", "Remove background", "Generative fill"); the owner
+ * found a bar of text buttons spanning the canvas unusable. So: `icon` (a file
+ * from the project's own `icons/` set) shows alone with the label as tooltip;
+ * `primary` also shows the label. An item inside a dropdown list always shows
+ * its label.
+ */
+export interface ActionLook {
+  readonly icon?: string;
+  readonly primary?: boolean;
+}
 
 export interface ContextualBarState {
   readonly id: string;
@@ -55,7 +73,7 @@ export interface ContextualBarState {
   readonly actions: readonly ContextualAction[];
 }
 
-const command = (id: string): ContextualAction => ({ kind: "command", command: id });
+const command = (id: string, look: ActionLook = {}): ContextualAction => ({ kind: "command", command: id, ...look });
 
 const raster = (context: ContextualBarContext): RasterDocumentState | null => isRasterDocumentState(context.state) ? context.state : null;
 const activeLayer = (context: ContextualBarContext) => {
@@ -84,7 +102,10 @@ export const contextualBarStates: readonly ContextualBarState[] = [
     id: "raster.selection",
     label: { en: "Selection", ru: "Выделение" },
     when: (context) => Boolean(raster(context)?.selection),
-    actions: [command("select.feather"), command("select.invert"), command("layer.addMask"), command("edit.fillForeground"), command("select.none")],
+    actions: [
+      { kind: "menu", id: "select.modify", icon: "ПАРАМЕТРЫ.svg", label: { en: "Modify selection", ru: "Изменить выделение" }, items: [command("select.feather"), command("select.expand", { icon: "РАЗДУТИЕ.svg" }), command("select.contract", { icon: "СЖАТИЕ.svg" }), command("select.smooth", { icon: "СГЛАЖИВАНИЕ.svg" })] },
+      command("select.invert", { icon: "ИНВЕРСИЯ-КОРР.svg" }), command("layer.addMask", { icon: "МАСКА СЛОЯ.svg" }), command("edit.fillForeground", { icon: "Заливка.svg" }), command("select.none", { icon: "КРЕСТ.svg" }),
+    ],
   },
   {
     // Photoshop's mask bar: Invert, Disable/Enable, Delete, Apply mask.
@@ -94,7 +115,7 @@ export const contextualBarStates: readonly ContextualBarState[] = [
       const state = raster(context);
       return Boolean(state && context.editingMaskLayerId && state.layers.find((layer) => layer.id === context.editingMaskLayerId)?.mask);
     },
-    actions: [command("image.adjustment.invert"), command("layer.toggleMaskEnabled"), command("layer.applyMask"), command("layer.deleteMask")],
+    actions: [command("image.adjustment.invert", { icon: "ИНВЕРСИЯ-КОРР.svg" }), command("layer.toggleMaskEnabled", { icon: "ГЛАЗ ЗАКРЫТ.svg" }), command("layer.applyMask", { icon: "ГАЛОЧКА.svg" }), command("layer.deleteMask", { icon: "КОРЗИНА.svg" })],
   },
   {
     id: "raster.layers",
@@ -107,26 +128,26 @@ export const contextualBarStates: readonly ContextualBarState[] = [
       const state = raster(context);
       return Boolean(state) && context.selectedLayerIds.length >= 2 && context.selectedLayerIds.includes(state!.activeLayerId);
     },
-    actions: [command("layer.group")],
+    actions: [command("layer.group", { icon: "ГРУППА.svg", primary: true })],
   },
   {
     id: "raster.group",
     label: { en: "Group", ru: "Группа" },
     when: (context) => activeLayer(context)?.kind === "group",
-    actions: [command("layer.ungroup")],
+    actions: [command("layer.ungroup", { icon: "ГРУППА.svg", primary: true })],
   },
   {
     id: "raster.smartObject",
     label: { en: "Smart object", ru: "Смарт-объект" },
     when: (context) => activeLayer(context)?.kind === "smart",
-    actions: [command("layer.editSmartObjectContents")],
+    actions: [command("layer.editSmartObjectContents", { icon: "СЛОЙ-СМАРТ.svg", primary: true })],
   },
   {
     // Photoshop's no-selection pixel-layer bar: Select subject, Remove background.
     id: "raster.pixelLayer",
     label: { en: "Layer", ru: "Слой" },
     when: (context) => activeLayer(context)?.kind === "pixel",
-    actions: [command("select.subject"), command("layer.removeBackground")],
+    actions: [command("select.subject", { icon: "ВЫДЕЛЕНИЕ ОБЪЕКТА ИИ.svg", primary: true }), command("layer.removeBackground", { icon: "УДАЛЕНИЕ ОБЪЕКТА.svg", primary: true })],
   },
   {
     // §11.3's own example: Vector, two shapes → Union/Subtract/Intersect/Exclude.
@@ -135,16 +156,21 @@ export const contextualBarStates: readonly ContextualBarState[] = [
     label: { en: "Selection", ru: "Выделение" },
     when: (context) => vectorSelection(context).length >= 2 || vectorActiveIsGroup(context),
     actions: [
-      { kind: "run", id: "vector.group", label: { en: "Group", ru: "Сгруппировать" }, enabled: (context) => vectorSelection(context).length >= 2, run: (context) => groupActiveVectorShapes(context.documentId) },
+      { kind: "run", id: "vector.group", icon: "ГРУППА.svg", label: { en: "Group", ru: "Сгруппировать" }, enabled: (context) => vectorSelection(context).length >= 2, run: (context) => groupActiveVectorShapes(context.documentId) },
       {
-        kind: "run", id: "vector.ungroup", label: { en: "Ungroup", ru: "Разгруппировать" },
+        kind: "run", id: "vector.ungroup", icon: "ГРУППА.svg", primary: true, label: { en: "Ungroup", ru: "Разгруппировать" },
         enabled: vectorActiveIsGroup,
         run: (context) => ungroupActiveVectorGroup(context.documentId),
       },
-      pathfinder("union", { en: "Unite", ru: "Объединить" }),
-      pathfinder("subtract", { en: "Subtract", ru: "Вычесть" }),
-      pathfinder("intersect", { en: "Intersect", ru: "Пересечь" }),
-      pathfinder("exclude", { en: "Exclude", ru: "Исключить" }),
+      {
+        kind: "menu", id: "vector.pathfinder", icon: "ПЕРЕСЕЧЕНИЕ.svg", label: { en: "Pathfinder", ru: "Обработка контуров" },
+        items: [
+          pathfinder("union", { en: "Unite", ru: "Объединить" }),
+          pathfinder("subtract", { en: "Subtract", ru: "Вычесть" }),
+          pathfinder("intersect", { en: "Intersect", ru: "Пересечь" }),
+          pathfinder("exclude", { en: "Exclude", ru: "Исключить" }),
+        ],
+      },
     ],
   },
 ];
@@ -153,6 +179,10 @@ export interface ResolvedAction {
   readonly id: string;
   readonly label: LocalizedText;
   run(): void;
+  /** Present for a dropdown: `run` is then unused and the bar lists these. */
+  readonly items?: readonly ResolvedAction[];
+  readonly icon?: string;
+  readonly primary?: boolean;
 }
 
 export interface ResolvedContextualBar {
@@ -172,14 +202,20 @@ export function resolveContextualBar(context: ContextualBarContext): ResolvedCon
   const commandContext: CommandContext = { activeDocumentId: context.documentId };
   for (const state of contextualBarStates) {
     if (!state.when(context)) continue;
-    const actions = state.actions.flatMap((action): ResolvedAction[] => {
-      if (action.kind === "run") return action.enabled(context) ? [{ id: action.id, label: action.label, run: () => action.run(context) }] : [];
+    const resolve = (action: ContextualAction): ResolvedAction[] => {
+      const look = { ...(action.icon ? { icon: action.icon } : {}), ...(action.primary ? { primary: true } : {}) };
+      if (action.kind === "run") return action.enabled(context) ? [{ id: action.id, label: action.label, run: () => action.run(context), ...look }] : [];
+      if (action.kind === "menu") {
+        const items = action.items.flatMap(resolve);
+        return items.length ? [{ id: action.id, label: action.label, run: () => {}, items, ...look }] : [];
+      }
       const definition = commandDefinitionById.get(action.command);
       // A missing id is a renamed or deleted command; the contract test fails
       // on it, and at runtime the button is left out rather than doing nothing.
       if (!definition || definition.isEnabled?.(commandContext) === false) return [];
-      return [{ id: definition.id, label: definition.label, run: () => { void kernel.commands.execute(definition.id, commandContext); } }];
-    });
+      return [{ id: definition.id, label: definition.label, run: () => { void kernel.commands.execute(definition.id, commandContext); }, ...look }];
+    };
+    const actions = state.actions.flatMap(resolve);
     if (actions.length) return { state, actions };
   }
   return null;

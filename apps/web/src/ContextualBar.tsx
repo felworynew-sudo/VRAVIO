@@ -47,6 +47,8 @@ export function ContextualBar({ documentId, state, language, visible }: {
   const barRef = useRef<HTMLDivElement>(null);
   const [position, setPosition] = useState<Point | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+  /** Which dropdown action ("Modify selection ▾") has its list open. */
+  const [openDropdown, setOpenDropdown] = useState<string | null>(null);
   const [drag, setDrag] = useState<{ pointerId: number; offset: Point; area: DOMRect } | null>(null);
   const [layoutTick, setLayoutTick] = useState(0);
 
@@ -98,7 +100,7 @@ export function ContextualBar({ documentId, state, language, visible }: {
   }, [stateId, actionKey, anchorKey, pin, viewport?.zoom, viewport?.panX, viewport?.panY, viewport?.rotation, viewport?.mode, layoutTick, drag, language]);
 
   // A different state is a different set of buttons; an open menu belongs to the old one.
-  useEffect(() => { setMenuOpen(false); }, [stateId]);
+  useEffect(() => { setMenuOpen(false); setOpenDropdown(null); }, [stateId]);
 
   const beginDrag = useCallback((event: ReactPointerEvent<HTMLElement>) => {
     const bar = barRef.current, area = canvasArea()?.getBoundingClientRect();
@@ -134,6 +136,8 @@ export function ContextualBar({ documentId, state, language, visible }: {
   };
 
   if (!resolved) return null;
+  // Lists open away from the nearer screen edge.
+  const upward = Boolean(position && position.y > window.innerHeight / 2);
 
   return <div
     ref={barRef}
@@ -145,10 +149,17 @@ export function ContextualBar({ documentId, state, language, visible }: {
   >
     <span className="contextual-bar-grip" role="separator" aria-label={text(language, "Drag to move", "Перетащите, чтобы переместить")} title={text(language, "Drag to move", "Перетащите, чтобы переместить")} onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag} />
     <span className="contextual-bar-caption">{resolveLabel(resolved.state.label, language)}</span>
-    {resolved.actions.map((action) => <button key={action.id} type="button" data-action={action.id} onClick={action.run}>{resolveLabel(action.label, language)}</button>)}
+    {resolved.actions.map((action) => action.items
+      ? <span key={action.id} className="contextual-bar-dropdown">
+        <button type="button" data-action={action.id} aria-haspopup="menu" aria-expanded={openDropdown === action.id} onClick={() => { setMenuOpen(false); setOpenDropdown((open) => open === action.id ? null : action.id); }}>{resolveLabel(action.label, language)} ▾</button>
+        {openDropdown === action.id && <div className="contextual-bar-menu contextual-bar-dropdown-menu" role="menu" data-open-upward={upward ? "" : undefined}>
+          {action.items.map((item) => <button key={item.id} type="button" role="menuitem" data-action={item.id} onClick={() => { setOpenDropdown(null); item.run(); }}>{resolveLabel(item.label, language)}</button>)}
+        </div>}
+      </span>
+      : <button key={action.id} type="button" data-action={action.id} onClick={action.run}>{resolveLabel(action.label, language)}</button>)}
     <span className="contextual-bar-more">
-      <button type="button" className="contextual-bar-more-trigger" aria-haspopup="menu" aria-expanded={menuOpen} aria-label={text(language, "More options", "Дополнительно")} title={text(language, "More options", "Дополнительно")} onClick={() => setMenuOpen((open) => !open)}>⋯</button>
-      {menuOpen && <div className="contextual-bar-menu" role="menu" data-open-upward={position && position.y > window.innerHeight / 2 ? "" : undefined}>
+      <button type="button" className="contextual-bar-more-trigger" aria-haspopup="menu" aria-expanded={menuOpen} aria-label={text(language, "More options", "Дополнительно")} title={text(language, "More options", "Дополнительно")} onClick={() => { setOpenDropdown(null); setMenuOpen((open) => !open); }}>⋯</button>
+      {menuOpen && <div className="contextual-bar-menu" role="menu" data-open-upward={upward ? "" : undefined}>
         <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); updatePreferences({ contextualBar: false }); }}>{text(language, "Hide bar", "Скрыть панель")}</button>
         {pin
           ? <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); updatePreferences({ contextualBarPin: null }); }}>{text(language, "Reset bar position", "Сбросить положение панели")}</button>

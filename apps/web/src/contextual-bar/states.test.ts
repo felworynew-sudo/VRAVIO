@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createRasterDocument, createRasterLayerMask, selectAllPixels, type RasterDocumentState } from "@vravio/env-raster";
 import { commandDefinitionById } from "../commands/registry";
 import { kernel } from "../kernel";
-import { contextualBarStates, resolveContextualBar, type ContextualBarContext } from "./states";
+import { contextualBarStates, resolveContextualBar, type ContextualAction, type ContextualBarContext, type ResolvedAction } from "./states";
 
 /**
  * The Contextual Task Bar is a table of states → catalogue commands
@@ -29,18 +29,19 @@ function open(mutate: (state: RasterDocumentState) => void = () => {}): { id: st
 const context = (document: { id: string; state: unknown }, extra: Partial<ContextualBarContext> = {}): ContextualBarContext =>
   ({ documentId: document.id, state: document.state, editingMaskLayerId: null, selectedLayerIds: [], ...extra });
 
+const ids = (actions: readonly ResolvedAction[]): unknown[] => actions.map((action) => action.items ? { [action.id]: ids(action.items) } : action.id);
 const resolved = (ctx: ContextualBarContext) => {
   const bar = resolveContextualBar(ctx);
-  return bar ? { state: bar.state.id, actions: bar.actions.map((action) => action.id) } : null;
+  return bar ? { state: bar.state.id, actions: ids(bar.actions) } : null;
 };
 
 describe("contextual task bar states", () => {
   it("names only commands that exist in the catalogue", () => {
-    for (const state of contextualBarStates) {
-      for (const action of state.actions) {
-        if (action.kind === "command") expect(commandDefinitionById.has(action.command), `${state.id} → ${action.command}`).toBe(true);
-      }
-    }
+    const check = (stateId: string, action: ContextualAction): void => {
+      if (action.kind === "command") expect(commandDefinitionById.has(action.command), `${stateId} → ${action.command}`).toBe(true);
+      if (action.kind === "menu") for (const item of action.items) check(stateId, item);
+    };
+    for (const state of contextualBarStates) for (const action of state.actions) check(state.id, action);
   });
 
   it("gives every state an id of its own and at least one action", () => {
@@ -56,7 +57,7 @@ describe("contextual task bar states", () => {
 
   it("switches to the selection actions once there is a selection", () => {
     const document = open((state) => { state.selection = selectAllPixels(state.width, state.height); });
-    expect(resolved(context(document))).toEqual({ state: "raster.selection", actions: ["select.feather", "select.invert", "layer.addMask", "edit.fillForeground", "select.none"] });
+    expect(resolved(context(document))).toEqual({ state: "raster.selection", actions: [{ "select.modify": ["select.feather", "select.expand", "select.contract", "select.smooth"] }, "select.invert", "layer.addMask", "edit.fillForeground", "select.none"] });
   });
 
   it("drops Create Mask, not the whole bar, when the layer already has a mask", () => {
@@ -65,7 +66,7 @@ describe("contextual task bar states", () => {
       const layer = state.layers.find((item) => item.id === state.activeLayerId)!;
       layer.mask = createRasterLayerMask(state.width, state.height);
     });
-    expect(resolved(context(document))?.actions).toEqual(["select.feather", "select.invert", "edit.fillForeground", "select.none"]);
+    expect(resolved(context(document))?.actions).toEqual([{ "select.modify": ["select.feather", "select.expand", "select.contract", "select.smooth"] }, "select.invert", "edit.fillForeground", "select.none"]);
   });
 
   it("offers Invert on a mask being edited", () => {

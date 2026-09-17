@@ -144,12 +144,15 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "script.record|||Scripts",
   "script.stop|||Scripts",
   "select.all|Mod+A||Select",
+  "select.contract|||Select", // master-plan §11: Select ▸ Modify, engine in env-raster/selection-modify.ts
+  "select.expand|||Select",
   "select.feather|Shift+F6||Select",
   "select.hideEdges|Mod+H||View",
   "select.invert|Mod+Shift+I||Select",
   "select.none|Mod+D||Select",
   "select.opaque|||Select",
   "select.reselect|Mod+Shift+D||Select",
+  "select.smooth|||Select",
   "select.subject|||Select", // master-plan §11, see layer.removeBackground
   "tool.raster.b|B|raster|Tools",
   "tool.raster.c|C|raster|Tools",

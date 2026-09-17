@@ -104,6 +104,23 @@ export function artboardSizeModal(props: { width: number; height: number }): Pro
 }
 
 /**
+ * Asks for Select ▸ Modify's amount (Feather / Expand / Contract / Smooth),
+ * resolving to the answer or null when dismissed.
+ */
+export function selectModifyModal(props: {
+  title: { en: string; ru: string }; label: { en: string; ru: string };
+  amount: number; min: number; max: number; step: number;
+  askCanvasBounds: boolean; applyAtCanvasBounds: boolean;
+}): Promise<{ amount: number; applyAtCanvasBounds: boolean } | null> {
+  return new Promise((resolve) => {
+    const close = openModal("select-modify", {
+      ...props,
+      onResolve: (answer: { amount: number; applyAtCanvasBounds: boolean } | null) => { close(); resolve(answer); },
+    });
+  });
+}
+
+/**
  * Shows an error to the user.
  *
  * Separate from `diagnostic("error", …)`, which records it: several import and
