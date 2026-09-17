@@ -19,3 +19,4 @@ export const CATEGORY_IMAGE: LocalizedText = { en: "Image", ru: "Изображ�
 export const CATEGORY_3D: LocalizedText = { en: "3D", ru: "3D" };
 export const CATEGORY_OBJECT: LocalizedText = { en: "Object", ru: "Объект" };
 export const CATEGORY_TOOLS: LocalizedText = { en: "Tools", ru: "Инструменты" };
+export const CATEGORY_AUDIO_EFFECTS: LocalizedText = { en: "Audio Effects", ru: "Аудиоэффекты" };

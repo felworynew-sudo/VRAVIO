@@ -26,6 +26,39 @@ import { localized } from "../i18n";
  */
 const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "app.settings|||Edit",
+  // docs/master-plan.md §49 point 2: every AudioMass menu command (File/Edit/Effects/View, all
+  // dispatching the same "vravio-audiomass-command" event the menu items already use) also
+  // reachable from the Command Palette — added deliberately after the palette's own catalogue
+  // was found to have zero entries for audio at all.
+  "audio.edit.deselectAll|||Edit",
+  "audio.edit.play|||Edit",
+  "audio.edit.redo|||Edit",
+  "audio.edit.selectAll|||Edit",
+  "audio.edit.stop|||Edit",
+  "audio.edit.undo|||Edit",
+  "audio.effect.compressor|||Audio Effects",
+  "audio.effect.delay|||Audio Effects",
+  "audio.effect.fadeIn|||Audio Effects",
+  "audio.effect.fadeOut|||Audio Effects",
+  "audio.effect.gain|||Audio Effects",
+  "audio.effect.graphicEq|||Audio Effects",
+  "audio.effect.hardLimiter|||Audio Effects",
+  "audio.effect.normalize|||Audio Effects",
+  "audio.effect.removeSilence|||Audio Effects",
+  "audio.effect.reverb|||Audio Effects",
+  "audio.effect.reverse|||Audio Effects",
+  "audio.file.export|||File",
+  "audio.file.newRecording|||File",
+  "audio.file.openDrafts|||File",
+  "audio.file.open|||File",
+  "audio.file.saveDraft|||File",
+  "audio.view.centerToCursor|||View",
+  "audio.view.frequencyAnalyser|||View",
+  "audio.view.id3Tags|||View",
+  "audio.view.multitrackMixer|||View",
+  "audio.view.resetZoom|||View",
+  "audio.view.spectrumAnalyser|||View",
+  "audio.view.tempoTools|||View",
   // Stage 11: copy/cut/paste, the first users of the platform's clipboard port.
   "edit.copy|Mod+C||Edit",
   "edit.cut|Mod+X||Edit",

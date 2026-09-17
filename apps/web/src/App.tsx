@@ -5,6 +5,7 @@ import { maskToRgba, rgbaToMask } from "./raster-pixel-buffers";
 import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
 import { withBusyPainted } from "./busy";
 import { interfacePaletteForTheme, useShellStore, type Language } from "./store";
+import { useTooltipSuppression } from "./useTooltipSuppression";
 import type { EnvironmentKind, RenderBackend } from "@vravio/kernel";
 import { CLEAN_CANVAS_EVENT, DockLayout, useCanvasChromeSlots } from "./DockLayout";
 import { environmentMeta } from "./environment";
@@ -74,6 +75,7 @@ import "./styles.css";
 export function App() {
   ensureCommandsRegistered();
   const store = useShellStore();
+  useTooltipSuppression(store.preferences.showTooltips);
   const documents = useDocuments();
   const chromeSlots = useCanvasChromeSlots();
   const [query, setQuery] = useState("");
@@ -916,7 +918,13 @@ export function App() {
           // format picker: clicking the menu item never reached that fix
           // at all, it called this array's own hardcoded `saveProject`.
           ...(active?.kind === "raster" ? [["Save a Copy… (Сохранить копию…)", "Ctrl+Alt+S", () => setExportOpen("saveCopy"), !isRasterDocumentState(active.state)] as MainMenuItem] : []),
-          ...(active?.kind === "raster" ? [["Export… (Экспортировать…)", "Ctrl+Shift+E", () => setExportOpen("export"), !isRasterDocumentState(active.state)] as MainMenuItem] : []),
+          // Label kept in sync with `commands/definitions/file.ts`'s own `file.export` binding
+          // (`Mod+Shift+Alt+W`) — docs/master-plan.md §44 found this menu's copy of the shortcut
+          // said "Ctrl+Shift+E" while the real bound key was already this one, confirmed live at
+          // the time (Ctrl+Shift+E did nothing); this array still hardcodes its own label text
+          // rather than reading the command registry, so the two can drift again the next time
+          // either one changes — worth migrating to `commandsForSurface` later, not done here.
+          ...(active?.kind === "raster" ? [["Export… (Экспортировать…)", "Ctrl+Shift+Alt+W", () => setExportOpen("export"), !isRasterDocumentState(active.state)] as MainMenuItem] : []),
           ...(active?.kind === "vector" ? [["Export as SVG… (Экспортировать в SVG…)", "", exportActiveVectorAsSvg, !isVectorDocumentState(active.state)] as MainMenuItem] : []),
           ...(active?.kind === "raster" ? [["Print… (Печать…)", "Ctrl+P", () => setPrintOpen(true), !isRasterDocumentState(active.state)] as MainMenuItem] : []),
           ["Settings… (Настройки…)", "", () => store.setSettingsOpen(true)],

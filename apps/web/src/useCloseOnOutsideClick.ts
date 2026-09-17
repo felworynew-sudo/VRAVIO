@@ -27,6 +27,17 @@ export function useCloseOnOutsideClick(active: boolean, selector: string, onClos
       onClose();
     };
     document.addEventListener("pointerdown", handlePointerDown);
-    return () => document.removeEventListener("pointerdown", handlePointerDown);
+    // A click landing inside an <iframe> (AudioMass, docs/master-plan.md §49) dispatches
+    // pointerdown to *its own* document, never reaching the listener above — an iframe-boundary
+    // property, true even same-origin, not a bug in this hook. Focus moving into any iframe
+    // reliably fires `blur` on the parent window first, so that is the signal this hook actually
+    // listens for — the "simpler, no bridge patch" fix §49 named over teaching the AudioMass
+    // bridge to post a message on every click inside it. Also closes a dropdown when focus leaves
+    // the browser window entirely (Alt-Tab), the same thing every native menu already does.
+    window.addEventListener("blur", onClose);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("blur", onClose);
+    };
   }, [active, selector, onClose]);
 }

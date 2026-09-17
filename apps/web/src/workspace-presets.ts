@@ -25,17 +25,17 @@ const vector: readonly WorkspacePreset[] = [
   { id: "essentials", label: { en: "Essentials", ru: "Основное" }, panels: ["properties", "layers", "history", "color"] },
   { id: "illustration", label: { en: "Illustration", ru: "Иллюстрация" }, panels: ["properties", "layers", "palette", "symbols", "color", "artboards"] },
 ];
-// AudioMass is a complete editor inside the audio workspace.  Giving it the old
-// VRAVIO Inspector beside it duplicated controls and left a mostly empty dock,
-// so audio has the same deliberately focused, panel-free shell as video.
-const audio: readonly WorkspacePreset[] = [
-  { id: "essentials", label: { en: "Audio Essentials", ru: "Основное аудио" }, panels: [] },
-  { id: "editing", label: { en: "Audio Editing", ru: "Монтаж аудио" }, panels: [] },
-];
-const video: readonly WorkspacePreset[] = [
-  { id: "essentials", label: { en: "Video Essentials", ru: "Основное видео" }, panels: [] },
-  { id: "editing", label: { en: "Video Editing", ru: "Монтаж видео" }, panels: [] },
-];
+// AudioMass/the video editor are each a complete editor inside their own workspace — no VRAVIO
+// panel dock beside them, so there is nothing a preset here could switch between. Two named
+// presets that both carried `panels: []` used to sit in the Window → Workspace menu regardless
+// (docs/master-plan.md §49's own finding, "the same checkbox-that-does-nothing class, on a
+// different element"): live-tested, switching between "Audio Essentials" and "Audio Editing"
+// changed nothing at all, since both meant the identical empty panel set. Empty here means
+// `workspacePresetsFor`'s own caller (`App.tsx`'s Window menu) hides the whole submenu for these
+// two kinds, the same way Plugins is already hidden for audio (`App.tsx`, `active?.kind !== "audio"`)
+// rather than shown as options that do nothing.
+const audio: readonly WorkspacePreset[] = [];
+const video: readonly WorkspacePreset[] = [];
 
 const customStorageKey = (kind: EnvironmentKind) => `vravio.${kind}.custom-workspaces`;
 function customPresetsFor(kind: EnvironmentKind): readonly WorkspacePreset[] {
