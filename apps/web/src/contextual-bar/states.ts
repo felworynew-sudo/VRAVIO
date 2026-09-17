@@ -5,6 +5,7 @@ import { commandDefinitionById } from "../commands/registry";
 import type { LocalizedText } from "../i18n";
 import { kernel } from "../kernel";
 import { applyPathfinderOp, groupActiveVectorShapes, ungroupActiveVectorGroup } from "../vector-commands";
+import type { EditSession } from "./sessions";
 
 /**
  * The Contextual Task Bar's states, as data (docs/master-plan.md §11.3).
@@ -34,6 +35,8 @@ export interface ContextualBarContext {
   readonly editingMaskLayerId: string | null;
   /** The Layers panel's multi-selection. */
   readonly selectedLayerIds: readonly string[];
+  /** An open crop / Free Transform, published by its tool (`sessions.ts`). */
+  readonly session?: EditSession | null;
 }
 
 /**
@@ -63,6 +66,8 @@ export type ContextualAction = ActionLook & (
 export interface ActionLook {
   readonly icon?: string;
   readonly primary?: boolean;
+  /** Draw the icon mirrored — one rotate arrow serves both directions. */
+  readonly mirror?: boolean;
 }
 
 export interface ContextualBarState {
@@ -94,7 +99,37 @@ const pathfinder = (op: "union" | "subtract" | "intersect" | "exclude", label: L
   run: (context) => { void applyPathfinderOp(context.documentId, op); },
 });
 
+const sessionAction = (id: string, label: LocalizedText, look: ActionLook, enabled: (session: EditSession) => boolean, run: (session: EditSession) => void): ContextualAction => ({
+  kind: "run", id, label, ...look,
+  enabled: (context) => Boolean(context.session && enabled(context.session)),
+  run: (context) => { if (context.session) run(context.session); },
+});
+const cancelSession = sessionAction("session.cancel", { en: "Cancel", ru: "Отмена" }, { primary: true }, () => true, (session) => session.cancel());
+const commitSession = sessionAction("session.commit", { en: "Done", ru: "Готово" }, { primary: true }, () => true, (session) => session.commit());
+
 export const contextualBarStates: readonly ContextualBarState[] = [
+  {
+    // Photoshop's transform bar (owner's screenshot, master-plan §58.3): Rotate 90° CCW, Rotate
+    // 90° CW, Flip Horizontal, Flip Vertical, Cancel, Done. The flips are not here: VRAVIO's
+    // transform session (`PendingTransform.live`) has no mirror term, and the places that
+    // resample it at commit would all need one — see master-plan §11's note.
+    id: "raster.transform",
+    label: { en: "Transform", ru: "Трансформирование" },
+    when: (context) => context.session?.kind === "transform",
+    actions: [
+      sessionAction("transform.rotateCcw", { en: "Rotate 90° counter-clockwise", ru: "Повернуть на 90° против часовой" }, { icon: "ВРАЩЕНИЕ ВИДА.svg", mirror: true }, (session) => Boolean(session.rotate), (session) => session.rotate?.(-90)),
+      sessionAction("transform.rotateCw", { en: "Rotate 90° clockwise", ru: "Повернуть на 90° по часовой" }, { icon: "ВРАЩЕНИЕ ВИДА.svg" }, (session) => Boolean(session.rotate), (session) => session.rotate?.(90)),
+      cancelSession,
+      commitSession,
+    ],
+  },
+  {
+    // Crop: the same Enter / Escape pair as buttons.
+    id: "raster.crop",
+    label: { en: "Crop", ru: "Кадрирование" },
+    when: (context) => context.session?.kind === "crop",
+    actions: [cancelSession, commitSession],
+  },
   {
     // Photoshop: Modify selection ▸ Feather, Invert selection, Create mask,
     // Fill selection, Deselect. Transform Selection is left out: VRAVIO's
@@ -183,6 +218,7 @@ export interface ResolvedAction {
   readonly items?: readonly ResolvedAction[];
   readonly icon?: string;
   readonly primary?: boolean;
+  readonly mirror?: boolean;
 }
 
 export interface ResolvedContextualBar {
@@ -203,7 +239,7 @@ export function resolveContextualBar(context: ContextualBarContext): ResolvedCon
   for (const state of contextualBarStates) {
     if (!state.when(context)) continue;
     const resolve = (action: ContextualAction): ResolvedAction[] => {
-      const look = { ...(action.icon ? { icon: action.icon } : {}), ...(action.primary ? { primary: true } : {}) };
+      const look = { ...(action.icon ? { icon: action.icon } : {}), ...(action.primary ? { primary: true } : {}), ...(action.mirror ? { mirror: true } : {}) };
       if (action.kind === "run") return action.enabled(context) ? [{ id: action.id, label: action.label, run: () => action.run(context), ...look }] : [];
       if (action.kind === "menu") {
         const items = action.items.flatMap(resolve);
@@ -228,6 +264,8 @@ export function resolveContextualBar(context: ContextualBarContext): ResolvedCon
  * default spot.
  */
 export function contextualAnchor(context: ContextualBarContext): { x: number; y: number; width: number; height: number } | null {
+  const frame = context.session?.frame?.();
+  if (frame) return frame;
   const state = raster(context);
   if (!state) return null;
   if (state.selection) return state.selection.bounds;

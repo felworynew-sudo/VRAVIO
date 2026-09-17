@@ -85,6 +85,24 @@ describe("contextual task bar states", () => {
     expect(resolved(context(document, { selectedLayerIds: ["a", "b"] }))?.state).toBe("raster.pixelLayer");
   });
 
+  it("offers Rotate / Cancel / Done while a Free Transform is open, ahead of the selection state", () => {
+    const calls: string[] = [];
+    const session = { kind: "transform" as const, commit: () => calls.push("commit"), cancel: () => calls.push("cancel"), rotate: (degrees: 90 | -90) => { calls.push(`rotate ${degrees}`); } };
+    const document = open((state) => { state.selection = selectAllPixels(state.width, state.height); });
+    const bar = resolveContextualBar(context(document, { session }))!;
+    expect(bar.state.id).toBe("raster.transform");
+    expect(bar.actions.map((action) => action.id)).toEqual(["transform.rotateCcw", "transform.rotateCw", "session.cancel", "session.commit"]);
+    for (const action of bar.actions) action.run();
+    expect(calls).toEqual(["rotate -90", "rotate 90", "cancel", "commit"]);
+    // A session that cannot turn (Warp, Skew) keeps only Cancel / Done.
+    expect(resolved(context(document, { session: { kind: "transform", commit: () => {}, cancel: () => {} } }))?.actions).toEqual(["session.cancel", "session.commit"]);
+  });
+
+  it("offers Cancel / Done while a crop is open", () => {
+    const document = open();
+    expect(resolved(context(document, { session: { kind: "crop", commit: () => {}, cancel: () => {} } }))).toEqual({ state: "raster.crop", actions: ["session.cancel", "session.commit"] });
+  });
+
   it("shows nothing when nothing applies", () => {
     const document = open((state) => { for (const layer of state.layers) (layer as { kind: string }).kind = "text"; });
     expect(resolved(context(document))).toBeNull();

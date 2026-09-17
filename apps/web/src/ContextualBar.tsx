@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProp
 import { resolveLabel, text } from "./i18n";
 import { useShellStore, type Language } from "./store";
 import { useAnyModalOpen } from "./modals/ModalBackdrop";
+import { useEditSession } from "./contextual-bar/sessions";
 import { contextualAnchor, resolveContextualBar, type ContextualBarContext, type ResolvedAction } from "./contextual-bar/states";
 
 /**
@@ -83,7 +84,8 @@ export function ContextualBar({ documentId, state, language, visible }: {
   // Nothing floats over a dialog waiting for the user (Camera Raw, Liquify…).
   const modalOpen = useAnyModalOpen();
 
-  const context: ContextualBarContext = { documentId, state, editingMaskLayerId, selectedLayerIds: selectedLayerIds ?? [] };
+  const session = useEditSession(documentId);
+  const context: ContextualBarContext = { documentId, state, editingMaskLayerId, selectedLayerIds: selectedLayerIds ?? [], session };
   const resolved = visible && !modalOpen ? resolveContextualBar(context) : null;
   const anchor = resolved ? contextualAnchor(context) : null;
   const anchorKey = anchor ? `${anchor.x},${anchor.y},${anchor.width},${anchor.height}` : "";
@@ -212,7 +214,7 @@ export function ContextualBar({ documentId, state, language, visible }: {
   const label = (action: ResolvedAction) => resolveLabel(action.label, language);
   /** An icon button (label as tooltip), or icon + text for a primary action. */
   const face = (action: ResolvedAction, caret?: string) => <>
-    {action.icon && <i className="contextual-bar-icon" style={iconStyle(action.icon)} aria-hidden="true" />}
+    {action.icon && <i className={`contextual-bar-icon${action.mirror ? " contextual-bar-icon-mirror" : ""}`} style={iconStyle(action.icon)} aria-hidden="true" />}
     {(action.primary || !action.icon) && <span>{label(action)}</span>}
     {caret && <i className="contextual-bar-icon contextual-bar-caret" style={iconStyle(caret)} aria-hidden="true" />}
   </>;

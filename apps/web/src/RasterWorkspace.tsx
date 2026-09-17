@@ -11,7 +11,9 @@ import { Scene3DOrbitGizmo } from "./Scene3DOrbitGizmo";
 import { Scene3DGroundPointsGizmo } from "./Scene3DGroundPointsGizmo";
 import { rasterToolById } from "./environments/raster/tools/registry";
 import type { PaintTarget, ToolContext, ToolPointer } from "./environments/raster/tools/types";
-import { applyWarpPreset, commitPending, empty as moveToolEmpty, pendingBounds, startPendingTransform, type MoveState } from "./environments/raster/tools/definitions/move";
+import { applyWarpPreset, commitPending, empty as moveToolEmpty, pendingBounds, startPendingTransform, type MoveState, type PendingTransform } from "./environments/raster/tools/definitions/move";
+import { canQuickRotate, quickRotatePending } from "./environments/raster/tools/transform-quick-rotate";
+import { publishEditSession } from "./contextual-bar/sessions";
 import { defaultViewport, useShellStore, type DocumentViewport } from "./store";
 import { beginBusy } from "./busy";
 import { usePluginRuns } from "./plugins/usePluginRuns";
@@ -42,6 +44,9 @@ const RASTER_ONLY_TOOLS = new Set([
 ]);
 // raster.move is intentionally excluded: Photoshop (and Patchy) let you reposition a text/shape
 // layer without rasterizing it first — only pixel-destructive tools require rasterizing.
+
+/** Pending transforms opened by Edit ▸ Free Transform, by their session's `before` snapshot. */
+const freeTransformSessions = new WeakSet<object>();
 
 export function RasterWorkspace({ document }: { document: VravioDocument }) {
   const workspaceRef = useRef<HTMLDivElement>(null);
@@ -347,12 +352,57 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     window.dispatchEvent(new CustomEvent("vravio-transform-state", { detail: pending && bounds ? { active: true, x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height, rotation: pending.rotation, warp: Boolean(pending.mesh) } : null }));
   }, [toolStates, state.width, state.height]);
 
+  // The Contextual Task Bar's transform state (master-plan §58.3): Rotate 90° ⟲/⟳, Cancel, Done —
+  // offered only while a real transform is open. A plain move of a layer leaves a pending
+  // transform too, but it is not one: the session counts once it was opened by Free Transform
+  // (remembered by its `before` snapshot, which every later frame of the same session carries)
+  // or has been scaled/rotated/skewed/warped. Done and Cancel dispatch the same events the
+  // options bar's own Commit/Cancel do; the rotate buttons step the session's angle the way a
+  // rotate-handle drag sets it.
+  const barPending = (toolStates["raster.move"] as MoveState | undefined)?.pending ?? null;
+  // A plain move is described with `live` too (same size, no angle), so only a size change or an
+  // angle makes `live` a transform.
+  const isRealTransform = (pending: PendingTransform | null): boolean => Boolean(pending && (
+    freeTransformSessions.has(pending.before) || pending.corners || pending.mesh || pending.rotation
+    || (pending.live && (pending.live.rotation || pending.live.source.width !== pending.live.target.width || pending.live.source.height !== pending.live.target.height))
+    || (pending.text && (pending.text.targetBounds.width !== pending.text.initialBounds.width || pending.text.targetBounds.height !== pending.text.initialBounds.height))
+  ));
+  const transformOpen = isRealTransform(barPending);
+  const transformCanRotate = Boolean(barPending && canQuickRotate(barPending));
+  useEffect(() => {
+    if (!transformOpen) return;
+    return publishEditSession(document.id, {
+      kind: "transform",
+      commit: () => window.dispatchEvent(new Event("vravio-transform-commit")),
+      cancel: () => window.dispatchEvent(new Event("vravio-transform-cancel")),
+      frame: () => {
+        const pending = (toolContextFor("raster.move", canvasRef.current) as ToolContext<MoveState>).state.pending;
+        return pending ? pendingBounds(pending, state.width, state.height) : null;
+      },
+      ...(transformCanRotate ? {
+        rotate: (degrees: 90 | -90) => {
+          const context = toolContextFor("raster.move", canvasRef.current) as ToolContext<MoveState>;
+          const pending = context.state.pending;
+          const next = pending ? quickRotatePending(pending, state.width, state.height, degrees) : null;
+          if (next) context.setState({ pending: next, drag: null });
+        },
+      } : {}),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transformOpen, transformCanRotate, document.id]);
+
   // Edit ▸ Free Transform (Ctrl+T): the one way to open a pending transform without a canvas
   // gesture, so it has to reach into the Move tool's own state from outside any pointer handler.
   useEffect(() => {
     const start = () => {
       if (activeToolId !== "raster.move") setTool(document.id, "raster.move");
-      startPendingTransform(toolContextFor("raster.move", canvasRef.current) as ToolContext<MoveState>);
+      const context = toolContextFor("raster.move", canvasRef.current) as ToolContext<MoveState>;
+      if (context.state.pending) return;
+      // `startPendingTransform` opens the session through `setState`; the snapshot it starts
+      // from is read back here so the bar can tell a Free Transform from a plain move.
+      let opened: PendingTransform | null = null;
+      startPendingTransform({ ...context, setState: (next: MoveState) => { opened = next.pending; context.setState(next); } } as ToolContext<MoveState>);
+      if (opened) freeTransformSessions.add((opened as PendingTransform).before);
     };
     const withPending = (run: (context: ToolContext<MoveState>, pending: NonNullable<MoveState["pending"]>) => void) => {
       const context = toolContextFor("raster.move", canvasRef.current) as ToolContext<MoveState>;

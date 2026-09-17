@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { publishEditSession } from "../../../../contextual-bar/sessions";
 import { appendLayer, cloneRasterState, compositeRasterDocument, createRasterLayer, cropRasterDocument, layerAccepts, setLayerPixels, type Point, type RasterDocumentState, type RasterRect } from "@vravio/env-raster";
 import { kernel } from "../../../../kernel";
 import { beginBusy } from "../../../../busy";
@@ -318,7 +319,14 @@ const crop: RasterToolDefinition<CropState> = {
         else if (event.key === "Escape") { event.preventDefault(); current.context.setState(empty); }
       };
       window.addEventListener("keydown", onKeyDown, true);
-      return () => window.removeEventListener("keydown", onKeyDown, true);
+      // The Contextual Task Bar's Apply / Cancel are these same two branches.
+      const withdraw = publishEditSession(latest.current.context.documentId, {
+        kind: "crop",
+        commit: () => { const current = latest.current; if (!current.pending) return; commitCrop(current.context, current.pending); current.context.setState(empty); },
+        cancel: () => { latest.current.context.setState(empty); },
+        frame: () => latest.current.pending?.rect ?? null,
+      });
+      return () => { window.removeEventListener("keydown", onKeyDown, true); withdraw(); };
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [Boolean(pending)]);
 

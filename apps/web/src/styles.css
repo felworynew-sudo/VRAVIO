@@ -114,6 +114,7 @@ select{-webkit-appearance:none;appearance:none;background-image:linear-gradient(
 .contextual-bar-icon{display:block;flex:none;width:16px;height:16px;background:currentColor;-webkit-mask:var(--icon-mask) center/contain no-repeat;mask:var(--icon-mask) center/contain no-repeat}
 .contextual-bar-icon.contextual-bar-caret{width:9px;height:9px;margin-left:-3px;opacity:.7}
 .contextual-bar-icon-space{display:block;width:16px;flex:none}
+.contextual-bar-icon.contextual-bar-icon-mirror{transform:scaleX(-1)}
 .contextual-bar-grip{align-self:stretch;width:10px;margin:0 2px;border-radius:4px;cursor:grab;touch-action:none;background:radial-gradient(circle,var(--muted) 1px,transparent 1.5px) 0 0/5px 5px;opacity:.7}
 .contextual-bar-grip:active{cursor:grabbing}
 .contextual-bar-more{position:relative;display:flex;margin-left:2px;padding-left:2px;border-left:1px solid var(--border)}
