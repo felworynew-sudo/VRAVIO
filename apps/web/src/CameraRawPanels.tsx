@@ -54,7 +54,20 @@ export function CameraRawTabs({ tab, onChange, language }: { tab: CameraRawTab; 
   </nav>;
 }
 
-export function CameraRawPanel({ tab, settings, language, onChange }: { tab: CameraRawTab; settings: CameraRawFilterSettings; language: Language; onChange<K extends keyof CameraRawFilterSettings>(key: K, value: CameraRawFilterSettings[K]): void }) {
+export function CameraRawPanel({ tab, settings, language, onChange, aiDenoiseOn, aiDenoiseBusy, onAiDenoiseChange }: {
+  tab: CameraRawTab; settings: CameraRawFilterSettings; language: Language;
+  onChange<K extends keyof CameraRawFilterSettings>(key: K, value: CameraRawFilterSettings[K]): void;
+  /**
+   * docs/master-plan.md §52.6 — "one engine, two entry points": the same RealPLKSR model behind
+   * Filter → Noise → AI Denoise lives here too, as a toggle rather than a slider. Unlike every
+   * other control on this panel, running it costs a model load plus a real inference pass, so it
+   * cannot re-run on every tick the way `applyCameraRawFilter`'s pure box-blur passes do — the
+   * caller (`CameraRawDialog.tsx`/`CameraRawFilterDialog.tsx`) runs it once when the toggle
+   * flips, not on every render, and reports back through `aiDenoiseBusy` while it does. Optional
+   * so neither caller is forced to wire it before the other does.
+   */
+  aiDenoiseOn?: boolean; aiDenoiseBusy?: boolean; onAiDenoiseChange?(value: boolean): void;
+}) {
   const t = (en: string, ru: string) => text(language, en, ru);
   const setHsl = (channel: HslChannelName, field: keyof CameraRawFilterSettings["hsl"][HslChannelName], value: number) =>
     onChange("hsl", { ...settings.hsl, [channel]: { ...settings.hsl[channel], [field]: value } });
@@ -95,6 +108,10 @@ export function CameraRawPanel({ tab, settings, language, onChange }: { tab: Cam
     <strong>{t("Noise Reduction", "Уменьшение шума")}</strong>
     <Slider label={t("Luminance", "Яркость")} value={settings.noiseLuminance} min={0} max={100} onChange={(value) => onChange("noiseLuminance", value)} />
     <Slider label={t("Color", "Цвет")} value={settings.noiseColor} min={0} max={100} onChange={(value) => onChange("noiseColor", value)} />
+    {onAiDenoiseChange && <label className="camera-raw-ai-denoise">
+      <input type="checkbox" checked={aiDenoiseOn ?? false} disabled={aiDenoiseBusy} onChange={(event) => onAiDenoiseChange(event.target.checked)} />
+      <span>{aiDenoiseBusy ? t("AI Denoise (running…)", "ИИ подавление шума (выполняется…)") : t("AI Denoise", "ИИ подавление шума")}</span>
+    </label>}
   </div>;
 
   if (tab === "hsl") return <div className="camera-raw-filter-panel camera-raw-hsl">

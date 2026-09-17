@@ -5,6 +5,10 @@ import { defaultCameraRawSettings, decodeRawBuffer, fallbackToEmbeddedPreview, t
 import { text } from "./i18n";
 import type { Language } from "./store";
 import { CameraRawPanel, CameraRawTabs, downsampleForPreview, type CameraRawTab } from "./CameraRawPanels";
+import { runDenoise } from "./ml/denoise/run";
+import { defaultDenoiseModelId, denoiseModelById } from "./ml/denoise/registry";
+import { kernel } from "./kernel";
+import { confirmModal } from "./modals/runtime";
 
 async function decodePreview(buffer: ArrayBuffer, filename: string, settings: CameraRawSettings): Promise<DecodedRaw | null> {
   const raw = new LibRaw();
@@ -38,6 +42,8 @@ export function CameraRawDialog({ buffer, filename, language, mode, onCancel, on
   const [error, setError] = useState<string | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const frameRef = useRef<number | null>(null);
+  const [aiDenoiseOn, setAiDenoiseOn] = useState(false);
+  const [aiDenoising, setAiDenoising] = useState(false);
 
   // Re-decodes from the sensor data — only needed when a raw-level setting (white balance mode,
   // highlight recovery) changes, not on every develop-panel slider tick.
@@ -59,11 +65,37 @@ export function CameraRawDialog({ buffer, filename, language, mode, onCancel, on
   // Runs the develop panel over the already-decoded preview — downsampled first (measured live:
   // ~5s/tick at a halfSize 3000×2000 decode without this, ~0.2s at 640px) so a slider tick stays
   // interactive instead of freezing the dialog.
+  //
+  // AI Denoise runs after the classic filter pipeline, as a discrete post-process rather than a
+  // slider: unlike `applyCameraRawFilter`'s pure, synchronous box-blur passes, it loads a model
+  // and runs real inference, too slow to redo on every settings tick. It reruns only when the
+  // toggle flips or the filtered pixels underneath it change — same `cancelled`-flag convention
+  // the raw-decode effect above already uses for its own async work.
   useEffect(() => {
     if (!decoded) return;
+    let cancelled = false;
     const small = downsampleForPreview(decoded.pixels, decoded.width, decoded.height);
-    setPreview({ width: small.width, height: small.height, pixels: applyCameraRawFilter(small.pixels, small.width, small.height, filterSettings) });
-  }, [decoded, filterSettings]);
+    const filtered = applyCameraRawFilter(small.pixels, small.width, small.height, filterSettings);
+    if (!aiDenoiseOn) { setPreview({ width: small.width, height: small.height, pixels: filtered }); return; }
+    setAiDenoising(true);
+    void (async () => {
+      const model = denoiseModelById(defaultDenoiseModelId);
+      if (!model) { if (!cancelled) setPreview({ width: small.width, height: small.height, pixels: filtered }); return; }
+      if (!(await kernel.models.isCached(model.spec))) {
+        const megabytes = (model.spec.sizeBytes / (1024 * 1024)).toFixed(1);
+        const ok = await confirmModal({
+          title: text(language, "Download model?", "Скачать модель?"),
+          message: text(language, `${model.label.en} (~${megabytes} MB) will be downloaded and cached in this browser — this happens once. Licence: ${model.spec.licence}.`, `${model.label.ru} (~${megabytes} МБ) будет загружена и закэширована в этом браузере — один раз. Лицензия: ${model.spec.licence}.`),
+          confirmKey: `model:${model.id}`,
+        });
+        if (!ok) { if (!cancelled) { setAiDenoiseOn(false); setPreview({ width: small.width, height: small.height, pixels: filtered }); } return; }
+      }
+      const outcome = await runDenoise(model, filtered, small.width, small.height, {});
+      if (cancelled) return;
+      setPreview({ width: small.width, height: small.height, pixels: outcome.pixels ?? filtered });
+    })().finally(() => { if (!cancelled) setAiDenoising(false); });
+    return () => { cancelled = true; };
+  }, [decoded, filterSettings, aiDenoiseOn, language]);
 
   useEffect(() => {
     const canvas = canvasRef.current, context = canvas?.getContext("2d");
@@ -76,9 +108,14 @@ export function CameraRawDialog({ buffer, filename, language, mode, onCancel, on
   const confirm = async () => {
     setApplying(true);
     const full = await decodeRawBuffer(buffer, filename, rawSettings);
+    if (!full) { setApplying(false); setError(text(language, "Could not develop this RAW file at full resolution.", "Не удалось проявить этот RAW-файл в полном разрешении.")); return; }
+    let pixels = applyCameraRawFilter(full.pixels, full.width, full.height, filterSettings);
+    if (aiDenoiseOn) {
+      const model = denoiseModelById(defaultDenoiseModelId);
+      if (model) { const outcome = await runDenoise(model, pixels, full.width, full.height, {}); if (outcome.pixels) pixels = outcome.pixels; }
+    }
     setApplying(false);
-    if (!full) { setError(text(language, "Could not develop this RAW file at full resolution.", "Не удалось проявить этот RAW-файл в полном разрешении.")); return; }
-    onConfirm({ width: full.width, height: full.height, pixels: applyCameraRawFilter(full.pixels, full.width, full.height, filterSettings) });
+    onConfirm({ width: full.width, height: full.height, pixels });
   };
 
   const setRaw = <K extends keyof CameraRawSettings>(key: K, value: CameraRawSettings[K]) => setRawSettings((current) => ({ ...current, [key]: value }));
@@ -104,7 +141,7 @@ export function CameraRawDialog({ buffer, filename, language, mode, onCancel, on
             <label className="camera-raw-slider"><span>{text(language, "Highlight Recovery", "Восстановление светов")}</span><input type="range" min={0} max={9} step={1} value={rawSettings.highlight} onChange={(event) => setRaw("highlight", event.target.valueAsNumber)}/><output>{rawSettings.highlight}</output></label>
           </div>
           <CameraRawTabs tab={tab} onChange={setTab} language={language} />
-          <CameraRawPanel tab={tab} settings={filterSettings} language={language} onChange={setFilter} />
+          <CameraRawPanel tab={tab} settings={filterSettings} language={language} onChange={setFilter} aiDenoiseOn={aiDenoiseOn} aiDenoiseBusy={aiDenoising} onAiDenoiseChange={setAiDenoiseOn} />
         </aside>
       </div>
       <footer><button onClick={onCancel}>{text(language, "Cancel", "Отмена")}</button><button className="primary" disabled={applying} onClick={() => void confirm()}>{applying ? text(language, "Developing…", "Проявка…") : mode === "open" ? text(language, "Open", "Открыть") : text(language, "Apply", "Применить")}</button></footer>

@@ -27,8 +27,8 @@ import type { Language } from "./store";
 
 type Preview = { readonly pixels: Uint8ClampedArray; readonly filterId: string };
 
-export function NeuralFiltersDialog({ documentId, document, layer, language, onClose }: { documentId: string; document: RasterDocumentState; layer: RasterLayer; language: Language; onClose(): void }) {
-  const [selectedId, setSelectedId] = useState<string | undefined>(neuralFilters[0]?.id);
+export function NeuralFiltersDialog({ documentId, document, layer, language, onClose, initialFilterId }: { documentId: string; document: RasterDocumentState; layer: RasterLayer; language: Language; onClose(): void; initialFilterId?: string | undefined }) {
+  const [selectedId, setSelectedId] = useState<string | undefined>(initialFilterId ?? neuralFilters[0]?.id);
   const [running, setRunning] = useState(false);
   const [showBefore, setShowBefore] = useState(false);
   const [preview, setPreview] = useState<Preview | null>(null);

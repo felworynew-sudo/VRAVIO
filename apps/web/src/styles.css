@@ -945,6 +945,7 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
 .camera-raw-slider{display:grid;grid-template-columns:88px 1fr 40px;align-items:center;gap:8px;font-size:11px;color:var(--text)}
 .camera-raw-slider input[type="range"]{width:100%}
 .camera-raw-slider output{text-align:right;color:var(--muted);font-variant-numeric:tabular-nums}
+.camera-raw-ai-denoise{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text);margin-top:4px}
 .camera-raw-hsl{display:grid;gap:14px;padding:12px 14px}
 .camera-raw-hsl-channel{display:grid;gap:6px;padding-bottom:10px;border-bottom:1px solid var(--border)}
 .camera-raw-hsl-channel:last-child{border-bottom:0}
