@@ -123,6 +123,19 @@ describe("contextual task bar states", () => {
     expect(anchor).toEqual({ x: 10, y: 10, width: 70, height: 50 });
   });
 
+  it("offers the type strip for a text layer", () => {
+    const document = open((state) => {
+      const layer = state.layers.find((item) => item.id === state.activeLayerId)!;
+      (layer as { kind: string }).kind = "text";
+      (layer as { text?: unknown }).text = { value: "hi", x: 0, y: 0, fontFamily: "Inter", fontSize: 24, align: "left", color: "#000000" };
+    });
+    const bar = resolveContextualBar(context(document))!;
+    expect(bar.state.id).toBe("raster.text");
+    expect(bar.actions.map((action) => action.id)).toEqual(["text.controls"]);
+    // A widget, not a button: the bar renders its component instead of a label.
+    expect(typeof bar.actions[0]!.Component).toBe("function");
+  });
+
   it("shows nothing when nothing applies", () => {
     const document = open((state) => { for (const layer of state.layers) (layer as { kind: string }).kind = "text"; });
     expect(resolved(context(document))).toBeNull();

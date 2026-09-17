@@ -24,7 +24,9 @@ import type { Language } from "./store";
  * `fontVariantCaps`, the same two real Canvas 2D context extensions `textRender.ts` sets.
  */
 
-function updateText(documentId: string, layerId: string, patch: Partial<RasterTextData>, label: string): void {
+/** Exported so the Contextual Task Bar's own font / size / alignment controls write through this
+ * exact path — one re-rasterise, one mergeable history step — instead of a second copy of it. */
+export function updateText(documentId: string, layerId: string, patch: Partial<RasterTextData>, label: string): void {
   let before: RasterTextData | null = null;
   kernel.documents.update<RasterDocumentState>(documentId, (state) => {
     const current = state.layers.find((item) => item.id === layerId);
@@ -82,7 +84,7 @@ const IconFlipH = () => svg(<><path d="M8 2v12"/><path d="M4 5 2 8l2 3M12 5l2 3-
 const IconFlipV = () => svg(<><path d="M2 8h12"/><path d="M5 4 8 2l3 2M5 12l3 2 3-2"/></>);
 const IconLock = () => svg(<><rect x="4" y="7.2" width="8" height="6" rx="1"/><path d="M5.5 7.2V5a2.5 2.5 0 0 1 5 0v2.2"/></>);
 const IconUnlock = () => svg(<><rect x="4" y="7.2" width="8" height="6" rx="1"/><path d="M5.5 7.2V5a2.5 2.5 0 0 1 4.6-1.4"/></>);
-const IconAlign = (kind: "left" | "center" | "right" | "justify") => svg(
+export const IconAlign = (kind: "left" | "center" | "right" | "justify") => svg(
   kind === "left" ? <><path d="M2 4h12M2 8h8M2 12h10"/></> :
   kind === "center" ? <><path d="M2 4h12M4 8h8M3 12h10"/></> :
   kind === "right" ? <><path d="M2 4h12M6 8h8M4 12h10"/></> :

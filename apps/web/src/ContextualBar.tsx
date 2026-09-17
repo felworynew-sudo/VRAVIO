@@ -239,7 +239,9 @@ export function ContextualBar({ documentId, state, language, visible }: {
     style={position ? { left: position.x, top: position.y } : { visibility: "hidden" }}
   >
     <span className="contextual-bar-grip" role="separator" aria-label={text(language, "Drag to move", "Перетащите, чтобы переместить")} title={text(language, "Drag to move", "Перетащите, чтобы переместить")} onPointerDown={beginDrag} onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={endDrag} />
-    {resolved.actions.map((action) => action.items
+    {resolved.actions.map((action) => action.Component
+      ? <action.Component key={action.id} context={context} />
+      : action.items
       ? <span key={action.id} className="contextual-bar-dropdown">
         <button type="button" data-action={action.id} className={buttonClass(action)} title={label(action)} aria-label={label(action)} aria-haspopup="menu" aria-expanded={openDropdown === action.id} onClick={() => { setMenuOpen(false); setOpenDropdown((open) => open === action.id ? null : action.id); }}>{face(action, "СТРЕЛКА-ВНИЗ.svg")}</button>
         {openDropdown === action.id && <div className="contextual-bar-menu contextual-bar-dropdown-menu" role="menu" data-open-upward={upward ? "" : undefined}>

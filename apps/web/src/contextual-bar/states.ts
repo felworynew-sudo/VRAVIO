@@ -1,3 +1,4 @@
+import type { ComponentType } from "react";
 import { isRasterDocumentState, type RasterDocumentState, type RasterLayer } from "@vravio/env-raster";
 import { isVectorDocumentState, shapeWorldBounds } from "@vravio/env-vector";
 import type { CommandContext } from "@vravio/kernel";
@@ -6,6 +7,7 @@ import type { LocalizedText } from "../i18n";
 import { kernel } from "../kernel";
 import { applyPathfinderOp, groupActiveVectorShapes, ungroupActiveVectorGroup } from "../vector-commands";
 import type { EditSession } from "./sessions";
+import { TextControls } from "./TextControls";
 
 /**
  * The Contextual Task Bar's states, as data (docs/master-plan.md §11.3).
@@ -52,6 +54,8 @@ export type ContextualAction = ActionLook & (
   | { readonly kind: "command"; readonly command: string }
   | { readonly kind: "run"; readonly id: string; readonly label: LocalizedText; enabled(context: ContextualBarContext): boolean; run(context: ContextualBarContext): void }
   | { readonly kind: "menu"; readonly id: string; readonly label: LocalizedText; readonly items: readonly ContextualAction[] }
+  // A state whose controls are fields rather than buttons — the type strip.
+  | { readonly kind: "widget"; readonly id: string; readonly label: LocalizedText; readonly Component: ComponentType<{ context: ContextualBarContext }> }
 );
 
 /**
@@ -184,6 +188,13 @@ export const contextualBarStates: readonly ContextualBarState[] = [
     actions: [command("layer.group", { icon: "ГРУППА.svg", primary: true })],
   },
   {
+    // Photoshop shows the type strip for a text layer: font, size, alignment.
+    id: "raster.text",
+    label: { en: "Text", ru: "Текст" },
+    when: (context) => activeLayer(context)?.kind === "text" && Boolean(activeLayer(context)?.text),
+    actions: [{ kind: "widget", id: "text.controls", label: { en: "Type", ru: "Текст" }, Component: TextControls }],
+  },
+  {
     id: "raster.group",
     label: { en: "Group", ru: "Группа" },
     when: (context) => activeLayer(context)?.kind === "group",
@@ -237,6 +248,8 @@ export interface ResolvedAction {
   readonly icon?: string;
   readonly primary?: boolean;
   readonly mirror?: boolean;
+  /** A widget action renders this instead of a button. */
+  readonly Component?: ComponentType<{ context: ContextualBarContext }>;
 }
 
 export interface ResolvedContextualBar {
@@ -258,6 +271,7 @@ export function resolveContextualBar(context: ContextualBarContext): ResolvedCon
     if (!state.when(context)) continue;
     const resolve = (action: ContextualAction): ResolvedAction[] => {
       const look = { ...(action.icon ? { icon: action.icon } : {}), ...(action.primary ? { primary: true } : {}), ...(action.mirror ? { mirror: true } : {}) };
+      if (action.kind === "widget") return [{ id: action.id, label: action.label, run: () => {}, Component: action.Component, ...look }];
       if (action.kind === "run") return action.enabled(context) ? [{ id: action.id, label: action.label, run: () => action.run(context), ...look }] : [];
       if (action.kind === "menu") {
         const items = action.items.flatMap(resolve);
