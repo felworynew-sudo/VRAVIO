@@ -80,6 +80,15 @@ const commands: readonly CommandDefinition[] = [
     surfaces: ["menu", "palette"],
     execute: () => useShellStore.getState().updatePreferences({ showGuides: !useShellStore.getState().preferences.showGuides }),
   },
+  {
+    // Photoshop: Window ▸ Contextual Task Bar. The same preference as the
+    // Settings toggle and the bar's own "Hide bar", so all three agree.
+    id: "view.contextualTaskBar",
+    label: { en: "Contextual Task Bar", ru: "Контекстная панель задач" },
+    category: CATEGORY_VIEW,
+    surfaces: ["menu", "palette"],
+    execute: () => useShellStore.getState().updatePreferences({ contextualBar: !useShellStore.getState().preferences.contextualBar }),
+  },
 ];
 
 export default commands;

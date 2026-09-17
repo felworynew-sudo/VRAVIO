@@ -1161,6 +1161,7 @@ export function App() {
             ["Reset Workspace (Сбросить рабочую среду)", "", () => resetWorkspacePreset(active.kind)] as MainMenuItem,
           ] }] as MainMenuGroup[] : []),
           ...windowMenuItems(active?.kind, store.language),
+          [`${store.preferences.contextualBar ? "✓ " : ""}${text(store.language, "Contextual Task Bar", "Контекстная панель задач")}`, "", () => void kernel.commands.execute("view.contextualTaskBar", activeCommandContext())],
           ["Settings (Настройки)", "", () => store.setSettingsOpen(true)],
           ["Command Palette (Палитра команд)", "Ctrl+K", () => store.setPaletteOpen(true)],
         ]}/>

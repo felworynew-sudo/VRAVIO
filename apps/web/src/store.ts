@@ -59,6 +59,10 @@ export interface ShellPreferences {
   dragZoom: boolean;
   showTooltips: boolean;
   contextualBar: boolean;
+  /** Where the Contextual Task Bar was pinned, in px from the canvas area's
+   * top-left corner; null while it follows the selection/layer (Photoshop's
+   * "Pin bar position" / "Reset bar position"). */
+  contextualBarPin: { x: number; y: number } | null;
   /** The command palette is always available via Ctrl+K; this only controls
    * its optional button in the application bar. */
   showCommandPaletteButton: boolean;
@@ -124,7 +128,7 @@ export const interfacePaletteForTheme = (theme: Theme): InterfacePalette => {
 
 const defaultPreferences: ShellPreferences = {
   renderer: "auto", memoryBudgetMb: 1024, workerCount: Math.max(1, Math.min(8, detectedConcurrency - 1)),
-  dragZoom: true, showTooltips: true, contextualBar: true, showCommandPaletteButton: true, showPerformanceOverlay: false, snapToGuides: true, smartGuides: true, snapToGrid: false, snapGridSize: 20, snapSensitivity: 8, showRulers: false, rulerUnit: "px", showGuides: true, selectionGlow: true,
+  dragZoom: true, showTooltips: true, contextualBar: true, contextualBarPin: null, showCommandPaletteButton: true, showPerformanceOverlay: false, snapToGuides: true, smartGuides: true, snapToGrid: false, snapGridSize: 20, snapSensitivity: 8, showRulers: false, rulerUnit: "px", showGuides: true, selectionGlow: true,
   guideColor: "#00a8ff", canvasSurround: "#2b2f36", focusColor: "#84a8ff",
   rasterColor: "#a100ff", vectorColor: "#0068ff", audioColor: "#ffb600", videoColor: "#ff0000",
   interfacePalette: interfacePaletteForTheme("dark"), useCustomInterfacePalette: false, confirmPreferences: {},

@@ -101,6 +101,9 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   // became one command with a `ratio` argument — the first command in the
   // application to take one, and what stopped `args` being a field nobody read.
   "image.smartCrop|||Image",
+  // master-plan §11: Add Layer Mask was a Layers-panel closure; the Contextual Task Bar needed
+  // it too, so it became one command both call.
+  "layer.addMask|||Layer",
   "layer.bringForward|Mod+]||Layer",
   "layer.bringToFront|Mod+Shift+]||Layer",
   "layer.clear|Delete||Layer",
@@ -120,6 +123,8 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "layer.openElsewhere|||Layer",
   "layer.placeLinkedSmartObject|||Layer",
   "layer.relinkSmartObject|||Layer",
+  // master-plan §11: the Properties Quick Actions pair, made commands for the Contextual Task Bar.
+  "layer.removeBackground|||Layer",
   "layer.replaceSmartObjectContents|||Layer",
   "layer.sendBackward|Mod+[||Layer",
   "layer.sendToBack|Mod+Shift+[||Layer",
@@ -142,6 +147,7 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "select.none|Mod+D||Select",
   "select.opaque|||Select",
   "select.reselect|Mod+Shift+D||Select",
+  "select.subject|||Select", // master-plan §11, see layer.removeBackground
   "tool.raster.b|B|raster|Tools",
   "tool.raster.c|C|raster|Tools",
   "tool.raster.e|E|raster|Tools",
@@ -180,6 +186,7 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "tool.vector.z|Z|vector|Tools", // the vector Zoom tool — same addition as vector.hand just above.
   "view.actual|Mod+1||View",
   "view.commandPalette|Mod+K||Edit", // was Mod+F — collided with the browser's own find-in-page and didn't match the shell's own menu label ("Ctrl+K"), so the shortcut was silently unreachable either way; see edit.ts's own note.
+  "view.contextualTaskBar|||View", // master-plan §11: Photoshop's Window ▸ Contextual Task Bar
   "view.fit|Mod+0||View",
   "view.resetRotation|||View",
   "view.theme|||View",
