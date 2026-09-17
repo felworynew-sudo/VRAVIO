@@ -153,7 +153,10 @@ export async function buildGeometrySource(data: Scene3DLayerData, document: Rast
  * lives — so `offset` is always *derived* from the layer's own current bounds by the caller that
  * knows them (`updateScene3DLayer`), not carried in `Scene3DLayerData` itself: a field there could
  * only ever go stale the moment Move changed `bounds` without knowing to update it too. Omitted
- * (or `{x:0,y:0}`) reproduces exactly what rendering always did.
+ * (or `{x:0,y:0}`) reproduces a *truly* centered pose — this function measures and cancels its own
+ * centering bias internally (see the `naturalBounds`/`bias` comment below) before `offset` is ever
+ * applied, so a caller passing `{x:0,y:0}` is guaranteed the alpha-trimmed content actually lands
+ * on the frame center, not merely that the 3D bounding box does.
  */
 export async function renderScene3DLayerPixels(data: Scene3DLayerData, document: RasterDocumentState, offset: { x: number; y: number } = { x: 0, y: 0 }): Promise<Uint8ClampedArray> {
   const object = await buildGeometrySource(data, document);
@@ -178,15 +181,38 @@ export async function renderScene3DLayerPixels(data: Scene3DLayerData, document:
     centerAndFit(rig, scene3d.camera);
     rig.rotation.set(data.rotationX * Math.PI / 180, data.rotationY * Math.PI / 180, data.rotationZ * Math.PI / 180);
     applyLighting(scene3d, data.lighting, 500);
+
+    // `centerAndFit` only guarantees the object's 3D *bounding-box* center projects to the exact
+    // frame center — not that the alpha-trimmed 2D *silhouette*'s own bounding-rectangle midpoint
+    // does. For an asymmetric mesh (this project's camera-rig/bracket import, any extruded logo,
+    // any off-center text) those are different points, and `layer.bounds` — what
+    // `updateScene3DLayer`'s own `offset` argument is derived from — is measured the second way.
+    // Re-deriving `offset` from `layer.bounds` on every edit therefore fed this render's own fixed
+    // asymmetry bias back in as if the user had intentionally moved the layer, and the *next* edit
+    // did it again on top of that: found live as lighting/shadow-only edits (nothing touching
+    // position) walking the object steadily off-frame, one fixed increment per edit, exactly the
+    // "checkbox moves the layer" symptom that should never happen — position is the Move tool's
+    // job alone. Measured fresh on every render (an extra cheap `readPixels` before the shadow-
+    // casting ground plane exists, not trusting the previous render's own already-biased bounds) and
+    // cancelled out below, so a non-positional edit can no longer accumulate any drift at all.
+    const naturalPixels = readPixelsRgba(scene3d.renderer, scene3d.scene, scene3d.camera, document.width, document.height);
+    const naturalBounds = layerContentBounds(naturalPixels, document.width, document.height);
+    const bias = {
+      x: naturalBounds.x + naturalBounds.width / 2 - document.width / 2,
+      y: naturalBounds.y + naturalBounds.height / 2 - document.height / 2,
+    };
+
     // After centerAndFit, not before: the ground plane sits at the rig's own
     // bounding-box bottom, which centerAndFit is what actually settles.
     applyGroundPlane(scene3d, rig, data.ground);
     const rendered = readPixelsRgba(scene3d.renderer, scene3d.scene, scene3d.camera, document.width, document.height);
-    // Applied after the render, on the finished bytes, rather than moving the object or camera
+    // Combines the caller's own requested shift with the bias correction above into one move —
+    // applied after the render, on the finished bytes, rather than moving the object or camera
     // before it: every other step above already assumes "centered" (the ground plane sits under
     // the centered bounding box, the fit distance is measured from it), and a post-render shift is
     // the one change that touches none of that.
-    return offset.x || offset.y ? translateLayerPixels(rendered, document.width, document.height, offset.x, offset.y) : rendered;
+    const shiftX = offset.x - bias.x, shiftY = offset.y - bias.y;
+    return shiftX || shiftY ? translateLayerPixels(rendered, document.width, document.height, shiftX, shiftY) : rendered;
   } finally {
     scene3d.dispose();
   }

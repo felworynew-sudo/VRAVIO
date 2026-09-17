@@ -1,4 +1,4 @@
-import { createRasterLayer, isRasterDocumentState, layerDocumentPixels, setLayerPixels, type RasterDocumentState, type RasterLayer, type Scene3DLayerData } from "@vravio/env-raster";
+import { createRasterLayer, isRasterDocumentState, layerContentBounds, layerDocumentPixels, setLayerPixels, type RasterDocumentState, type RasterLayer, type Scene3DLayerData } from "@vravio/env-raster";
 import { kernel } from "./kernel";
 import { defaultScene3DLayer, renderScene3DLayerPixels } from "./scene3d-render";
 import { mergeableEdit } from "./history-helpers";
@@ -125,14 +125,27 @@ export async function updateScene3DLayer(documentId: string, layerId: string, pa
   const next: Scene3DLayerData = { ...before, ...patch };
   // Wherever the layer's own bounds currently sit is wherever the Move tool (or an earlier edit
   // through this same function) last put it — the only place a 3D layer's position durably lives,
-  // see `renderScene3DLayerPixels`'s own doc comment on why. Re-deriving it here, from the layer
-  // as it stood right before this edit, is what keeps a rotate/colour/depth change from silently
-  // recentring a layer that had been dragged off-centre (docs/master-plan.md §52.10, found live).
-  const offset = {
-    x: layer.bounds.x + layer.bounds.width / 2 - state.width / 2,
-    y: layer.bounds.y + layer.bounds.height / 2 - state.height / 2,
-  };
+  // see `renderScene3DLayerPixels`'s own doc comment on why. But `layer.bounds`'s own center is not
+  // by itself a safe stand-in for "where the user put it": once a ground shadow is enabled, that
+  // center is the *aggregate* object-plus-shadow bounding box, and the shadow's own footprint
+  // shifts and skews with lighting/tilt alone — found live, toggling Cast Shadow (or even just
+  // Ambient Light while a shadow was already on) walked the object itself sideways on every single
+  // edit, because the previous version of this function fed that shadow-skewed center back in as
+  // if it were an intentional Move. `placement` (types.ts's own doc comment has the full contract)
+  // is what lets this diff out only the part Move actually contributed: both `currentCenter` and
+  // `placement.renderedCenter` are the *same* aggregate measurement, so the shadow's own
+  // contribution is identical in each and cancels out in the subtraction, leaving exactly the
+  // Move-tool delta (zero, most of the time — a plain property edit does not move anything).
+  const placement = before.placement ?? { offsetX: 0, offsetY: 0, renderedCenterX: state.width / 2, renderedCenterY: state.height / 2 };
+  const currentCenter = { x: layer.bounds.x + layer.bounds.width / 2, y: layer.bounds.y + layer.bounds.height / 2 };
+  const moveDelta = { x: currentCenter.x - placement.renderedCenterX, y: currentCenter.y - placement.renderedCenterY };
+  const offset = { x: placement.offsetX + moveDelta.x, y: placement.offsetY + moveDelta.y };
   const nextPixels = await renderScene3DLayerPixels(next, state, offset);
+  const nextBounds = layerContentBounds(nextPixels, state.width, state.height);
+  next.placement = {
+    offsetX: offset.x, offsetY: offset.y,
+    renderedCenterX: nextBounds.x + nextBounds.width / 2, renderedCenterY: nextBounds.y + nextBounds.height / 2,
+  };
   const write = (data: Scene3DLayerData, pixels: Uint8ClampedArray) => kernel.documents.update<RasterDocumentState>(documentId, (current) => {
     const target = current.layers.find((item) => item.id === layerId);
     if (target) { target.scene3d = data; setLayerPixels(target, pixels, current.width, current.height); }

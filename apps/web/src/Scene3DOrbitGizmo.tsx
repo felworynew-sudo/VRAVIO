@@ -116,13 +116,23 @@ export function Scene3DOrbitGizmo({
   // `beginLiveScene3D` always renders the object at `centerAndFit`'s own centered pose — see
   // `renderScene3DLayerPixels`'s own doc comment on `offset` — so a layer already moved off-centre
   // with the Move tool would otherwise visibly jump back to the middle for the whole time this
-  // gizmo is open, snapping back to its real position only once `onAccept` re-renders. The same
-  // "derive it from the layer's own current bounds" the commit path uses, applied here as a
-  // screen-space CSS shift instead (the live scene itself still renders centered) — puts it back
-  // where it already was for the entire session, matching what the commit is actually going to
-  // produce.
-  const offsetX = (layer.bounds.x + layer.bounds.width / 2 - document.width / 2) * zoom;
-  const offsetY = (layer.bounds.y + layer.bounds.height / 2 - document.height / 2) * zoom;
+  // gizmo is open, snapping back to its real position only once `onAccept` re-renders. Screen-space
+  // CSS shift instead (the live scene itself still renders centered) puts it back where it already
+  // was for the entire session, matching what the commit is actually going to produce.
+  //
+  // Not read straight off `layer.bounds`: the same reconciliation `updateScene3DLayer`
+  // (`scene3d-commands.ts`) does against `layer.scene3d.placement`, for the same reason — once a
+  // ground shadow is enabled, `layer.bounds`'s own center is the *aggregate* object-plus-shadow
+  // box, which shifts with lighting/tilt alone, not with where the object itself sits. Using it
+  // directly here made the object appear to jump (and, since this gizmo's canvas has no shadow of
+  // its own to offset by, look larger relative to the frame) the instant "Rotate 3D Object" was
+  // opened on a layer that had a shadow enabled — found live, reported as "the object grows when
+  // entering rotate mode". `placement`'s own doc comment (types.ts) has the full contract.
+  const placement = layer.scene3d?.placement ?? { offsetX: 0, offsetY: 0, renderedCenterX: document.width / 2, renderedCenterY: document.height / 2 };
+  const currentCenter = { x: layer.bounds.x + layer.bounds.width / 2, y: layer.bounds.y + layer.bounds.height / 2 };
+  const moveDelta = { x: currentCenter.x - placement.renderedCenterX, y: currentCenter.y - placement.renderedCenterY };
+  const offsetX = (placement.offsetX + moveDelta.x) * zoom;
+  const offsetY = (placement.offsetY + moveDelta.y) * zoom;
   return <canvas ref={canvasRef} className="scene3d-live-canvas" width={document.width} height={document.height}
     style={{ left: documentOriginX, top: documentOriginY, width: document.width * zoom, height: document.height * zoom, pointerEvents: "auto", transform: `translate(${offsetX}px, ${offsetY}px)` }} />;
 }

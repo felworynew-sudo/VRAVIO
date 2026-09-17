@@ -107,6 +107,24 @@ export interface Scene3DLayerData {
    * carries it through undo snapshots once present, the same as every other optional layer
    * property in this project; a layer with no `ground` renders exactly as it always has. */
   ground?: Scene3DGround;
+  /**
+   * Bookkeeping for `updateScene3DLayer` (`apps/web/src/scene3d-commands.ts`) to tell a genuine
+   * Move-tool drag apart from a property-only edit's own rendering artifacts — not itself a
+   * position a caller should read or set directly.
+   *
+   * `offset` is the document-pixel shift `renderScene3DLayerPixels` was last called with.
+   * `renderedCenter` is where the resulting *aggregate* alpha-trimmed content (the object and,
+   * when enabled, its ground shadow together) actually landed — `layer.bounds`'s own center right
+   * after that same render. Neither is meaningful alone; `updateScene3DLayer` diffs the layer's
+   * *current* bounds center against `renderedCenter` to isolate exactly how far Move has shifted
+   * the layer since this was last written, because that diff — unlike `layer.bounds`'s raw center
+   * — cancels out the shadow's own footprint (a ground plane widens and skews the aggregate
+   * bounding box away from the object's own center, by an amount that changes with lighting/tilt
+   * alone, with the object never having moved at all). Absent on every layer created before this
+   * field existed, or before a ground plane was ever enabled on it; treated as `{x:0,y:0}`/the
+   * document center, matching what rendering always produced with no ground plane.
+   */
+  placement?: { readonly offsetX: number; readonly offsetY: number; readonly renderedCenterX: number; readonly renderedCenterY: number };
 }
 
 export interface RasterTextPath { start: { x: number; y: number }; control: { x: number; y: number }; end: { x: number; y: number }; flip?: boolean }
