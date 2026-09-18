@@ -386,6 +386,56 @@ describe("DocumentSnapshotStore", () => {
     expect(writes.filter((key) => key.includes("/binaries/")).length).toBe(1);
   });
 
+  it("does not serialise a document whose revision has not moved", async () => {
+    // §60.4: skipping the *write* still left the walk — every layer's pixels materialised just to
+    // find out nothing had to be written. A revision that has not moved means nothing changed,
+    // which is cheaper to ask than to prove.
+    let serialisations = 0;
+    const adapter = new MemoryStorageAdapter();
+    const snapshots = new DocumentSnapshotStore(adapter);
+    const documents = new DocumentStore();
+    class Counted {
+      constructor(public bytes: Uint8ClampedArray) {}
+      toJSON() { serialisations += 1; return { contentKey: `c${this.bytes[0]}`, pixels: this.bytes.slice() }; }
+    }
+    const document = documents.create("raster", "Counted", { tiles: new Counted(new Uint8ClampedArray([1, 2, 3, 4])) });
+
+    await snapshots.saveSession(documents.list());
+    const afterFirst = serialisations;
+    await snapshots.saveSession(documents.list());
+    await snapshots.saveSession(documents.list());
+    const afterIdle = serialisations;
+
+    documents.update<{ tiles: Counted }>(document.id, (state) => { state.tiles = new Counted(new Uint8ClampedArray([9, 9, 9, 9])); });
+    await snapshots.saveSession(documents.list());
+
+    expect(afterFirst).toBe(1);
+    // Two saves with nothing touched did not read the document's pixels at all.
+    expect(afterIdle).toBe(1);
+    expect(serialisations).toBe(2);
+  });
+
+  it("writes a document again when its files have been pruned from under it", async () => {
+    // The revision shortcut must not trust itself blindly: a cleared storage has to be noticed.
+    const inner = new MemoryStorageAdapter();
+    const snapshots = new DocumentSnapshotStore(inner);
+    const documents = new DocumentStore();
+    documents.create("raster", "Doc", { pixels: new Uint8ClampedArray([1, 2, 3, 4]) });
+
+    await snapshots.saveSession(documents.list());
+    await inner.clear();
+    // The save during which storage vanished cannot know yet; the one after it must, because the
+    // pruning pass re-grounds the store's picture of what is on disk against what really is.
+    await snapshots.saveSession(documents.list());
+    await snapshots.saveSession(documents.list());
+
+    const keys = await inner.list("autosave/");
+    expect(keys.some((key) => key.endsWith("/document.json"))).toBe(true);
+    expect(keys.some((key) => key.includes("/binaries/"))).toBe(true);
+    // And it really restores, which is the only thing the user cares about.
+    expect((await snapshots.loadSession()).length).toBe(1);
+  });
+
   it("does not rewrite a document it has just restored", async () => {
     const writes: string[] = [];
     const inner = new MemoryStorageAdapter();

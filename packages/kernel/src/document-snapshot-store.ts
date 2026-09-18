@@ -140,6 +140,19 @@ export class DocumentSnapshotStore {
   readonly #contentKeys = new Map<string, string>();
   /** Keys the pruning pass has confirmed are still on disk. */
   readonly #stored = new Set<string>();
+  /**
+   * What was written for each document last time, keyed by the revision it was written at.
+   *
+   * A document whose revision has not moved has not changed — that is what a revision is — so
+   * there is nothing to serialise and nothing to compare. Without this, an autosave of an
+   * untouched document still walked its whole state and materialised every layer's pixels just to
+   * discover that every buffer was already on disk: 90 ms of the 110 ms a no-op save cost on a
+   * six-layer 3000x3000 document (docs/master-plan.md §60.4).
+   *
+   * The keys are remembered too, so the pruning pass at the end of a save does not delete the
+   * files of a document it skipped.
+   */
+  readonly #savedRevisions = new Map<string, { revision: number; snapshotKey: string; binaryKeys: readonly string[] }>();
   #nextBinaryId = 0;
   #onLoadError: (snapshotKey: string, error: unknown) => void = (key, error) => {
     console.warn(`[autosave] could not restore ${key}:`, error);
@@ -192,6 +205,16 @@ export class DocumentSnapshotStore {
       // the previous copy unavoidable however little had changed.
       const prefix = `autosave/documents/${document.id}`;
       const snapshotKey = `${prefix}/document.json`;
+      // Unchanged since the last successful save: keep what is on disk and touch nothing. The
+      // `#stored` checks are what makes this safe — a file that was pruned, or never landed,
+      // is not remembered as being there, so the document is written again rather than assumed.
+      const saved = this.#savedRevisions.get(document.id);
+      if (saved && saved.revision === document.revision && this.#stored.has(saved.snapshotKey) && saved.binaryKeys.every((key) => this.#stored.has(key))) {
+        keep.add(saved.snapshotKey);
+        for (const key of saved.binaryKeys) keep.add(key);
+        entries.push({ id: document.id, revision: document.revision, snapshotKey: saved.snapshotKey });
+        continue;
+      }
       const { envelope, binaries } = serializeDocument(document);
       const binaryKeys: string[] = [];
       for (const binary of binaries) {
@@ -207,16 +230,25 @@ export class DocumentSnapshotStore {
         keep.add(key);
       }
       await this.#adapter.set(snapshotKey, encoder.encode(JSON.stringify({ ...envelope, binaryKeys })));
+      this.#stored.add(snapshotKey);
+      this.#savedRevisions.set(document.id, { revision: document.revision, snapshotKey, binaryKeys });
       keep.add(snapshotKey);
       entries.push({ id: document.id, revision: document.revision, snapshotKey });
     }
     const manifest: SessionManifest = { schemaVersion: 1, savedAt: Date.now(), documents: entries };
     await this.#adapter.set(SESSION_KEY, encoder.encode(JSON.stringify(manifest)));
-    for (const key of await this.#adapter.list("autosave/")) {
+    // The pruning pass also re-grounds what this store believes is on disk. Storage can empty
+    // underneath it — a cleared site, a quota eviction, another tab wiping the namespace — and the
+    // revision shortcut above trusts `#stored`; a belief that is never checked against reality is
+    // how "the autosave says it saved" becomes "the session is gone".
+    const present = new Set(await this.#adapter.list("autosave/"));
+    for (const key of present) {
       if (keep.has(key)) continue;
       await this.#adapter.remove(key);
-      this.#stored.delete(key);
+      present.delete(key);
     }
+    this.#stored.clear();
+    for (const key of present) this.#stored.add(key);
   }
 
   async #loadDocument(snapshotKey: string): Promise<VravioDocument> {
@@ -237,6 +269,10 @@ export class DocumentSnapshotStore {
     // Remember where the restored buffers came from, so the first save after a
     // reload does not rewrite the whole document it just read.
     if (envelope.binaryKeys) rememberRestoredBinaries(document, envelope.binaryKeys, this.#binaryKeys, this.#contentKeys);
+    // Restored at exactly the revision the snapshot was written at, so the first autosave after a
+    // reload has nothing to do either — it used to rewrite every document that was open.
+    this.#stored.add(snapshotKey);
+    this.#savedRevisions.set(document.id, { revision: document.revision, snapshotKey, binaryKeys: envelope.binaryKeys ?? [] });
     this.#nextBinaryId = Math.max(this.#nextBinaryId, ...(envelope.binaryKeys ?? []).map(binaryIdOf), 0) + 1;
     return document;
   }

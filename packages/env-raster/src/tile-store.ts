@@ -303,16 +303,39 @@ export class TileStore {
     return toRgba8(this.readLocalRegionDeep(rect));
   }
 
-  /** `readLocalRegion` in this store's own format, for an operation that was taught precision. */
+  /**
+   * `readLocalRegion` in this store's own format, for an operation that was taught precision.
+   *
+   * Copied as spans, not pixel by pixel. The obvious loop calls `readPixel` per pixel, and
+   * `readPixel` allocates a small array for its return value — a million-pixel region meant a
+   * million short-lived arrays and a million tile lookups for data that lies contiguously in
+   * memory. It only started to matter when the deep adjustment and filter paths (§59.2a, §59.2b)
+   * began reading whole layers through here; `set(subarray)` on the run of pixels a tile row
+   * contributes is the same copy the browser does with `memcpy`.
+   *
+   * Pixels the rectangle reaches outside this store stay zero, which is what `allocatePixels`
+   * already gives and what `readPixel`'s own out-of-bounds convention says they should be.
+   */
   readLocalRegionDeep(rect: RasterRect): PixelBuffer {
     if (this.#evicted) throw new EvictedTileStoreError("readLocalRegion");
     const channels = this.channels;
     const out = allocatePixels(this.depth, rect.width * rect.height * channels);
-    for (let y = 0; y < rect.height; y += 1) {
-      for (let x = 0; x < rect.width; x += 1) {
-        const sample = this.readPixel(rect.x + x, rect.y + y);
-        const index = (y * rect.width + x) * channels;
-        for (let c = 0; c < channels; c += 1) out[index + c] = sample[c]!;
+    const left = Math.max(0, rect.x), top = Math.max(0, rect.y);
+    const right = Math.min(this.width, rect.x + rect.width), bottom = Math.min(this.height, rect.y + rect.height);
+    if (right <= left || bottom <= top) return out;
+    for (let y = top; y < bottom; y += 1) {
+      const row = y - rect.y;
+      let x = left;
+      while (x < right) {
+        const col = Math.floor(x / TILE_SIZE);
+        const tileArea = tileRect(col, Math.floor(y / TILE_SIZE), this.width, this.height);
+        const runEnd = Math.min(right, tileArea.x + tileArea.width);
+        const tile = this.#tiles.get(key(col, Math.floor(y / TILE_SIZE)));
+        if (tile) {
+          const from = ((y - tileArea.y) * tileArea.width + (x - tileArea.x)) * channels;
+          out.set(tile.subarray(from, from + (runEnd - x) * channels) as never, (row * rect.width + (x - rect.x)) * channels);
+        }
+        x = runEnd;
       }
     }
     return out;
