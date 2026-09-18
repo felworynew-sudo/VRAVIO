@@ -60,6 +60,7 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "audio.view.spectrumAnalyser|||View",
   "audio.view.tempoTools|||View",
   // Stage 11: copy/cut/paste, the first users of the platform's clipboard port.
+  "edit.contentAwareFill|||Edit", // master-plan §11: the selection filled by the existing inpainting model
   "edit.copy|Mod+C||Edit",
   "edit.cut|Mod+X||Edit",
   // Photoshop's Fill hotkeys, reported live by the owner: Alt/Ctrl+Delete

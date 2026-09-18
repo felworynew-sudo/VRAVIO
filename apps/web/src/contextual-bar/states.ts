@@ -7,6 +7,7 @@ import type { LocalizedText } from "../i18n";
 import { kernel } from "../kernel";
 import { applyPathfinderOp, groupActiveVectorShapes, ungroupActiveVectorGroup } from "../vector-commands";
 import type { EditSession } from "./sessions";
+import { CropAiFillToggle } from "./CropControls";
 import { TextControls } from "./TextControls";
 
 /**
@@ -151,7 +152,7 @@ export const contextualBarStates: readonly ContextualBarState[] = [
     id: "raster.crop",
     label: { en: "Crop", ru: "Кадрирование" },
     when: (context) => context.session?.kind === "crop",
-    actions: [cancelSession, commitSession],
+    actions: [{ kind: "widget", id: "crop.aiFill", label: { en: "Fill expanded area with AI", ru: "ИИ заливка границ" }, Component: CropAiFillToggle }, cancelSession, commitSession],
   },
   {
     // Photoshop: Modify selection ▸ Feather, Invert selection, Create mask,
@@ -161,7 +162,7 @@ export const contextualBarStates: readonly ContextualBarState[] = [
     when: (context) => Boolean(raster(context)?.selection),
     actions: [
       { kind: "menu", id: "select.modify", icon: "ПАРАМЕТРЫ.svg", label: { en: "Modify selection", ru: "Изменить выделение" }, items: [command("select.feather"), command("select.expand", { icon: "РАЗДУТИЕ.svg" }), command("select.contract", { icon: "СЖАТИЕ.svg" }), command("select.smooth", { icon: "СГЛАЖИВАНИЕ.svg" })] },
-      command("select.invert", { icon: "ИНВЕРСИЯ-КОРР.svg" }), command("select.transform", { icon: "УГОЛЬНИК.svg" }), command("layer.addMask", { icon: "МАСКА СЛОЯ.svg" }), command("edit.fillForeground", { icon: "Заливка.svg" }), command("select.none", { icon: "КРЕСТ.svg" }),
+      command("edit.contentAwareFill", { icon: "ИИ.svg" }), command("select.invert", { icon: "ИНВЕРСИЯ-КОРР.svg" }), command("select.transform", { icon: "УГОЛЬНИК.svg" }), command("layer.addMask", { icon: "МАСКА СЛОЯ.svg" }), command("edit.fillForeground", { icon: "Заливка.svg" }), command("select.none", { icon: "КРЕСТ.svg" }),
     ],
   },
   {
