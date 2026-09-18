@@ -7,7 +7,7 @@ import { create } from "zustand";
 import { kernel } from "./kernel";
 import { defaultTool, toolById } from "./tools";
 import { openModal } from "./modals/runtime";
-import type { RasterColorSpace } from "@vravio/env-raster";
+import type { RasterBitDepth, RasterColorSpace } from "@vravio/env-raster";
 
 export type Theme = "dark" | "light" | "contrast" | "ps-dark";
 export interface InterfacePalette {
@@ -48,6 +48,7 @@ export interface NewDocumentOptions {
   /** Raster only: the working colour space the document's numbers mean (master-plan §59). */
   colorSpace?: RasterColorSpace;
   colorModel?: "rgb" | "grayscale";
+  bitDepth?: RasterBitDepth;
   artboards?: boolean;
   frameRate?: number;
   sampleRate?: number;
@@ -240,7 +241,7 @@ export const useShellStore = create<ShellState>((set) => ({
   preferences: readPreferences(),
   openDocument: (kind, options) => set((state) => {
     const initialState = kind === "raster"
-      ? createRasterDocument(options?.width, options?.height, options ? { resolution: options.resolution, resolutionUnit: options.resolutionUnit, backgroundColor: options.backgroundColor, pixelAspectRatio: options.pixelAspectRatio, ...(options.colorSpace ? { colorSpace: options.colorSpace } : {}), ...(options.colorModel ? { colorModel: options.colorModel } : {}) } : {})
+      ? createRasterDocument(options?.width, options?.height, options ? { resolution: options.resolution, resolutionUnit: options.resolutionUnit, backgroundColor: options.backgroundColor, pixelAspectRatio: options.pixelAspectRatio, ...(options.colorSpace ? { colorSpace: options.colorSpace } : {}), ...(options.colorModel ? { colorModel: options.colorModel } : {}), ...(options.bitDepth ? { bitDepth: options.bitDepth } : {}) } : {})
       : kind === "vector"
       ? (() => {
           // The New Document dialog's "artboards" toggle is a boolean

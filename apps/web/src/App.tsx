@@ -536,6 +536,7 @@ export function App() {
   const selectedLayerIds = active ? store.selectedLayerIdsByDocument[active.id] ?? [] : [];
   const activeRasterState = active && isRasterDocumentState(active.state) ? active.state : null;
   const colorModel = activeRasterState?.colorModel ?? "rgb";
+  const bitDepth = activeRasterState?.bitDepth ?? 8;
   /** The tick Photoshop puts against the mode a document is already in. */
   const tick = (on: boolean) => on ? "✓ " : "";
   const editingMaskLayerId = active ? store.editingMaskLayerIdByDocument[active.id] ?? null : null;
@@ -1023,9 +1024,9 @@ export function App() {
             ["CMYK Color (CMYK)", "", () => {}, true, "Needs four-channel storage, compositing and an ICC profile (Нужно четырёхканальное хранение, композитинг и ICC-профиль)"],
             ["Lab Color (Lab)", "", () => {}, true, "Needs signed channels the 8-bit pipeline cannot hold (Нужны знаковые каналы, которых нет в 8-битном конвейере)"],
             ["Multichannel (Многоканальный)", "", () => {}, true, "Needs free-form spot channels (Нужны произвольные плашечные каналы)"],
-            ["✓ 8 Bits/Channel (✓ 8 бит/канал)", "", () => {}, true, "The document is already 8 bits per channel (Документ уже 8 бит на канал)"],
-            ["16 Bits/Channel (16 бит/канал)", "", () => {}, true, "Deep storage is not built yet — see master-plan §59.2 (Глубокое хранение ещё не сделано — см. мастер-план §59.2)"],
-            ["32 Bits/Channel (32 бита/канал)", "", () => {}, true, "Deep storage is not built yet — see master-plan §59.2 (Глубокое хранение ещё не сделано — см. мастер-план §59.2)"],
+            [`${tick(bitDepth === 8)}8 Bits/Channel (${tick(bitDepth === 8)}8 бит/канал)`, "", () => void kernel.commands.execute("image.depth.8", activeCommandContext()), !activeRasterState || bitDepth === 8],
+            [`${tick(bitDepth === 16)}16 Bits/Channel (${tick(bitDepth === 16)}16 бит/канал)`, "", () => void kernel.commands.execute("image.depth.16", activeCommandContext()), !activeRasterState || bitDepth === 16],
+            [`${tick(bitDepth === 32)}32 Bits/Channel (${tick(bitDepth === 32)}32 бита/канал)`, "", () => void kernel.commands.execute("image.depth.32", activeCommandContext()), !activeRasterState || bitDepth === 32],
             ["Color Table… (Таблица цветов…)", "", () => {}, true, "Only an indexed-colour document has a colour table (Таблица цветов есть только у индексированного документа)"],
             // Two separate operations, not one: Assign changes what the numbers mean, Convert
             // rewrites them so the colour stays put.
@@ -1301,7 +1302,7 @@ export function App() {
       {active ? <DockLayout /> : <HomeScreen language={store.language} requestNewDocument={store.requestNewDocument} openFile={openBridgeFile} openDocuments={documents} onOpenDocument={store.activateDocument} openConverter={() => setConverterOpen(true)} />}
       {active && <ContextualBar documentId={active.id} state={active.state} language={store.language} visible={store.preferences.contextualBar} />}
     </main>
-    {chromeSlots.bottom && active && createPortal(<footer className="status-bar"><span>{resolveLabel(environmentMeta[active.kind].label, store.language)}</span><span>{isAudioDocumentState(active.state) ? `${(active.state.sampleRate / 1000).toLocaleString()} kHz · ${active.state.channels === 1 ? text(store.language, "Mono", "Моно") : text(store.language, "Stereo", "Стерео")} · ${active.state.bitDepth} bit` : isVideoDocumentState(active.state) ? `${active.state.width}×${active.state.height} · ${active.state.frameRate} fps` : `${Math.round((store.viewports[active.id]?.zoom ?? 1) * 100)}% · ${isRasterDocumentState(active.state) ? `${active.state.colorModel === "grayscale" ? "Grayscale" : "RGB"}/8 · ${rasterColorSpaceById(active.state.colorSpace)?.label.en ?? active.state.colorSpace}` : "sRGB"} · ${renderBackend ?? "detecting"}`}</span></footer>, chromeSlots.bottom)}
+    {chromeSlots.bottom && active && createPortal(<footer className="status-bar"><span>{resolveLabel(environmentMeta[active.kind].label, store.language)}</span><span>{isAudioDocumentState(active.state) ? `${(active.state.sampleRate / 1000).toLocaleString()} kHz · ${active.state.channels === 1 ? text(store.language, "Mono", "Моно") : text(store.language, "Stereo", "Стерео")} · ${active.state.bitDepth} bit` : isVideoDocumentState(active.state) ? `${active.state.width}×${active.state.height} · ${active.state.frameRate} fps` : `${Math.round((store.viewports[active.id]?.zoom ?? 1) * 100)}% · ${isRasterDocumentState(active.state) ? `${active.state.colorModel === "grayscale" ? "Grayscale" : "RGB"}/${active.state.bitDepth} · ${rasterColorSpaceById(active.state.colorSpace)?.label.en ?? active.state.colorSpace}` : "sRGB"} · ${renderBackend ?? "detecting"}`}</span></footer>, chromeSlots.bottom)}
     {store.preferences.showPerformanceOverlay && <PerformanceOverlay documentId={active?.id ?? null} />}
 
     {store.paletteOpen && <ModalBackdrop onMouseDown={() => store.setPaletteOpen(false)}>

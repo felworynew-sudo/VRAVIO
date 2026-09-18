@@ -100,6 +100,10 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   // that changes what the numbers mean and one that rewrites them.
   "image.assignColorSpace|||Image",
   "image.convertColorSpace|||Image",
+  // master-plan §59.2: the document's bits per channel, one command per depth.
+  "image.depth.16|||Image",
+  "image.depth.32|||Image",
+  "image.depth.8|||Image",
   // master-plan §59: Image ▸ Mode's two colour models — the modes this engine can actually be in.
   "image.mode.grayscale|||Image",
   "image.mode.rgb|||Image",

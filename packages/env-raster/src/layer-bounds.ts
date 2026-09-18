@@ -1,5 +1,6 @@
 import { smartObjectTransform } from "./smart-object";
 import { TileStore } from "./tile-store";
+import type { RasterBitDepth } from "./pixel-format";
 import type { RasterLayer, RasterRect } from "./types";
 
 /** The rectangle outside which a buffer has nothing but transparency. */
@@ -294,12 +295,22 @@ export function documentToFrame(pixels: Uint8ClampedArray, documentWidth: number
 
 /** Stores a buffer laid out in `frame` on a layer, trimmed to what it holds — `setLayerPixels`
  * for a result that was computed outside the canvas's bounds rather than inside them. */
+/**
+ * The depth a layer's own storage is in, so that rebuilding it never silently demotes it.
+ *
+ * Every function below replaces `layer.tiles` wholesale (that is how a bounds change works — see
+ * `setLayerPixels`), and a plain `TileStore.fromPixels(pixels8, ...)` would hand back an 8-bit
+ * store no matter what the layer was. That is the quiet kind of wrong CLAUDE.md §4 is about: the
+ * picture would look identical and the document would have lost its precision (master-plan §59.2).
+ */
+const layerDepth = (layer: RasterLayer): RasterBitDepth => layer.tiles?.depth ?? 8;
+
 export function setLayerFramePixels(layer: RasterLayer, pixels: Uint8ClampedArray, frame: RasterRect): void {
   const inner = opaqueBoundsOf(pixels, frame.width, frame.height) ?? { x: 0, y: 0, width: 1, height: 1 };
   layer.bounds = { x: frame.x + inner.x, y: frame.y + inner.y, width: inner.width, height: inner.height };
   layer.width = inner.width;
   layer.height = inner.height;
-  layer.tiles = TileStore.fromPixels(cropToRect(pixels, frame.width, inner), inner.width, inner.height);
+  layer.tiles = TileStore.fromPixels(cropToRect(pixels, frame.width, inner), inner.width, inner.height, 4, layerDepth(layer));
   layer.pixelsRevision += 1;
 }
 
@@ -400,7 +411,7 @@ export function setLayerPixels(
       layer.bounds = bounds;
       layer.width = width;
       layer.height = height;
-      layer.tiles = TileStore.fromPixels(cropToRect(pixels, documentWidth, bounds), width, height);
+      layer.tiles = TileStore.fromPixels(cropToRect(pixels, documentWidth, bounds), width, height, 4, layerDepth(layer));
       layer.pixelsRevision += 1;
       return;
     }
@@ -412,7 +423,7 @@ export function setLayerPixels(
   layer.bounds = bounds;
   layer.width = bounds.width;
   layer.height = bounds.height;
-  layer.tiles = TileStore.fromPixels(trimmed, bounds.width, bounds.height);
+  layer.tiles = TileStore.fromPixels(trimmed, bounds.width, bounds.height, 4, layerDepth(layer));
   layer.pixelsRevision += 1;
 }
 
@@ -425,7 +436,7 @@ export function setLayerLocalPixels(layer: RasterLayer, pixels: Uint8ClampedArra
   layer.bounds = { ...bounds };
   layer.width = bounds.width;
   layer.height = bounds.height;
-  layer.tiles = TileStore.fromPixels(pixels, bounds.width, bounds.height);
+  layer.tiles = TileStore.fromPixels(pixels, bounds.width, bounds.height, 4, layerDepth(layer));
   layer.pixelsRevision += 1;
 }
 

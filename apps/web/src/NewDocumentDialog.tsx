@@ -5,7 +5,7 @@ import { environmentMeta } from "./environment";
 import { resolveLabel, text } from "./i18n";
 import { useShellStore } from "./store";
 import { ModalBackdrop } from "./modals/ModalBackdrop";
-import { rasterColorSpaces, type RasterColorSpace } from "@vravio/env-raster";
+import { rasterColorSpaces, type RasterBitDepth, type RasterColorSpace } from "@vravio/env-raster";
 
 type Unit = "px" | "mm" | "cm" | "in";
 type PresetCategory = "recent" | "photo" | "print" | "art" | "web" | "mobile" | "video" | "icon" | "social";
@@ -77,8 +77,7 @@ export function NewDocumentDialog({ initialKind, close }: { initialKind: Environ
   const [pixelAspectRatio, setPixelAspectRatio] = useState(1);
   const [colorSpace, setColorSpace] = useState<RasterColorSpace>("srgb");
   const [colorModel, setColorModel] = useState<"rgb" | "grayscale">("rgb");
-  // Only 8 is selectable today; the state exists so the control is real the moment §59.2 lands.
-  const [bitDepth, setBitDepth] = useState<8>(8);
+  const [bitDepth, setBitDepth] = useState<RasterBitDepth>(8);
   const [artboards, setArtboards] = useState(false);
   const [frameRate, setFrameRate] = useState(30);
   const [sampleRate, setSampleRate] = useState(48000);
@@ -103,7 +102,7 @@ export function NewDocumentDialog({ initialKind, close }: { initialKind: Environ
     setUnit(next); setWidth(Number(fromPixels(currentWidthPx, next, currentPpi).toFixed(next === "px" ? 0 : 3))); setHeight(Number(fromPixels(currentHeightPx, next, currentPpi).toFixed(next === "px" ? 0 : 3)));
   };
   const applyPreset = (preset: Preset) => { setUnit("px"); setWidth(preset.width); setHeight(preset.height); setResolution(preset.resolution); setResolutionUnit("ppi"); };
-  const create = () => { close(); store.openDocument(kind, { ...(name.trim() ? { name: name.trim() } : {}), width: widthPx, height: heightPx, resolution, resolutionUnit, backgroundColor, ...(kind === "raster" ? { colorSpace, colorModel } : {}), pixelAspectRatio, artboards, frameRate, sampleRate, channels, audioBitDepth }); };
+  const create = () => { close(); store.openDocument(kind, { ...(name.trim() ? { name: name.trim() } : {}), width: widthPx, height: heightPx, resolution, resolutionUnit, backgroundColor, ...(kind === "raster" ? { colorSpace, colorModel, bitDepth } : {}), pixelAspectRatio, artboards, frameRate, sampleRate, channels, audioBitDepth }); };
   const environmentKinds = ["raster", "vector", "audio", "video"] as const;
 
   const allCategories: readonly [PresetCategory, string][] = [
@@ -142,11 +141,11 @@ export function NewDocumentDialog({ initialKind, close }: { initialKind: Environ
                 colour mode and its bit depth side by side, the colour profile on its own line.
                 What the engine cannot carry is present but disabled and says so in the option
                 itself, rather than being offered and then quietly ignored (CLAUDE.md §3). */}
-            {kind === "raster" && <div className="parameter-pair"><label><span>{text(language, "Color mode", "Цветовой режим")}</span><select value={colorModel} onChange={(event) => setColorModel(event.target.value as "rgb" | "grayscale")}><option value="rgb">{text(language, "RGB Color", "Цвета RGB")}</option><option value="grayscale">{text(language, "Grayscale", "Градации серого")}</option><option disabled>{text(language, "Bitmap — 1-bit storage required", "Битовый формат — нужно однобитное хранение")}</option><option disabled>{text(language, "CMYK — colour pipeline required", "CMYK — нужен цветовой конвейер")}</option><option disabled>{text(language, "Lab — signed channels required", "Lab — нужны знаковые каналы")}</option></select></label><label><span>{text(language, "Bit depth", "Разрядность")}</span><select value={bitDepth} onChange={(event) => setBitDepth(Number(event.target.value) as 8)}><option value="8">{text(language, "8 bit/channel", "8 бит/канал")}</option><option value="16" disabled>{text(language, "16 bit — deep storage not built yet", "16 бит — глубокое хранение ещё не сделано")}</option><option value="32" disabled>{text(language, "32 bit — deep storage not built yet", "32 бита — глубокое хранение ещё не сделано")}</option></select></label></div>}
+            {kind === "raster" && <div className="parameter-pair"><label><span>{text(language, "Color mode", "Цветовой режим")}</span><select value={colorModel} onChange={(event) => setColorModel(event.target.value as "rgb" | "grayscale")}><option value="rgb">{text(language, "RGB Color", "Цвета RGB")}</option><option value="grayscale">{text(language, "Grayscale", "Градации серого")}</option><option disabled>{text(language, "Bitmap — 1-bit storage required", "Битовый формат — нужно однобитное хранение")}</option><option disabled>{text(language, "CMYK — colour pipeline required", "CMYK — нужен цветовой конвейер")}</option><option disabled>{text(language, "Lab — signed channels required", "Lab — нужны знаковые каналы")}</option></select></label><label><span>{text(language, "Bit depth", "Разрядность")}</span><select value={bitDepth} onChange={(event) => setBitDepth(Number(event.target.value) as RasterBitDepth)}><option value="8">{text(language, "8 bit/channel", "8 бит/канал")}</option><option value="16">{text(language, "16 bit/channel", "16 бит/канал")}</option><option value="32">{text(language, "32 bit/channel", "32 бита/канал")}</option></select></label></div>}
             {kind === "raster" && <div className="parameter-pair"><label><span>{text(language, "Color profile", "Цветовой профиль")}</span><select value={colorSpace} onChange={(event) => setColorSpace(event.target.value as RasterColorSpace)}>{rasterColorSpaces.map((space) => <option key={space.id} value={space.id}>{language === "ru" ? space.label.ru : space.label.en}</option>)}</select></label><label><span>{text(language, "Pixel aspect", "Пропорции пикселя")}</span><input type="number" min="0.1" max="10" step="0.001" value={pixelAspectRatio} onChange={(event) => setPixelAspectRatio(event.target.valueAsNumber)} /></label></div>}
             {(kind === "raster" || kind === "video") && <label className="wide"><span>{text(language, "Background", "Фон")}</span><span className="background-control"><select value={background} onChange={(event) => setBackground(event.target.value as typeof background)}><option value="transparent">{text(language, "Transparent", "Прозрачный")}</option><option value="white">{text(language, "White", "Белый")}</option><option value="black">{text(language, "Black", "Чёрный")}</option><option value="custom">{text(language, "Custom", "Свой")}</option></select>{background === "custom" && <input type="color" value={customBackground} onChange={(event) => setCustomBackground(event.target.value)} />}</span></label>}
             {kind === "vector" && <label className="artboards-check"><input type="checkbox" checked={artboards} onChange={(event) => setArtboards(event.target.checked)} />{text(language, "Enable artboards", "Включить монтажные области")}</label>}
-            <div className="document-summary">{valid ? <>{widthPx} × {heightPx} px · {colorModel === "grayscale" ? text(language, "Grayscale", "Градации серого") : "RGB"} · {bitDepth} {text(language, "bit", "бит")} · {(widthPx * heightPx * 4 / 1024 / 1024).toFixed(1)} MB {text(language, "base layer", "базовый слой")}</> : text(language, "Enter positive numeric values", "Введите положительные числовые значения")}</div>
+            <div className="document-summary">{valid ? <>{widthPx} × {heightPx} px · {colorModel === "grayscale" ? text(language, "Grayscale", "Градации серого") : "RGB"} · {bitDepth} {text(language, "bit", "бит")} · {(widthPx * heightPx * (bitDepth === 8 ? 4 : bitDepth === 16 ? 8 : 16) / 1024 / 1024).toFixed(1)} MB {text(language, "base layer", "базовый слой")}</> : text(language, "Enter positive numeric values", "Введите положительные числовые значения")}</div>
           </div>
         </>}
       </div>

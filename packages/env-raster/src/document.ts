@@ -1,20 +1,21 @@
 import { builtInLuts } from "./lut";
 import { parseHexColor } from "./color";
 import { TileStore } from "./tile-store";
+import type { RasterBitDepth } from "./pixel-format";
 import type { PixelSelection, RasterAdjustment, RasterDocumentOptions, RasterDocumentState, RasterLayer, RasterLayerMask } from "./types";
 
 export const makeLayerOrderKey = (index: number): string => Math.max(0, Math.floor(index)).toString(36).padStart(8, "0");
 
-export function createRasterLayer(width: number, height: number, name = "Layer (Слой)"): RasterLayer {
+export function createRasterLayer(width: number, height: number, name = "Layer (Слой)", depth: RasterBitDepth = 8): RasterLayer {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1) throw new RangeError("Raster layer dimensions must be positive integers");
   // Created at canvas size: a tool needs somewhere to paint before it knows
   // where the paint will land. What gets stored is trimmed when the edit is
   // committed, which is where the size actually matters.
-  return { id: crypto.randomUUID(), name, bounds: { x: 0, y: 0, width, height }, width, height, tiles: TileStore.empty(width, height), pixelsRevision: 0, visible: true, opacity: 1, fillOpacity: 1, blendMode: "normal", locked: false, kind: "pixel", effects: {}, parentId: null, orderKey: makeLayerOrderKey(0), clipping: false };
+  return { id: crypto.randomUUID(), name, bounds: { x: 0, y: 0, width, height }, width, height, tiles: TileStore.empty(width, height, 4, depth), pixelsRevision: 0, visible: true, opacity: 1, fillOpacity: 1, blendMode: "normal", locked: false, kind: "pixel", effects: {}, parentId: null, orderKey: makeLayerOrderKey(0), clipping: false };
 }
 
-export function createRasterGroup(width: number, height: number, name = "Group (Группа)"): RasterLayer {
-  return { ...createRasterLayer(width, height, name), kind: "group", expanded: true, groupMode: "passThrough" };
+export function createRasterGroup(width: number, height: number, name = "Group (Группа)", depth: RasterBitDepth = 8): RasterLayer {
+  return { ...createRasterLayer(width, height, name, depth), kind: "group", expanded: true, groupMode: "passThrough" };
 }
 
 export function createRasterLayerMask(width: number, height: number, reveal = true): RasterLayerMask {
@@ -63,16 +64,17 @@ export function createAdjustmentLayer(width: number, height: number, kind: Raste
 }
 
 export function createRasterDocument(width = 1280, height = 720, options: RasterDocumentOptions = {}): RasterDocumentState {
-  const layer = createRasterLayer(width, height, "Layer 1 (Слой 1)");
+  const bitDepth = options.bitDepth ?? 8;
+  const layer = createRasterLayer(width, height, "Layer 1 (Слой 1)", bitDepth);
   if (options.backgroundColor) {
     const color = parseHexColor(options.backgroundColor);
     const pixels = new Uint8ClampedArray(width * height * 4);
     for (let index = 0; index < pixels.length; index += 4) { pixels[index] = color.r; pixels[index + 1] = color.g; pixels[index + 2] = color.b; pixels[index + 3] = color.a; }
-    layer.tiles = TileStore.fromPixels(pixels, width, height);
+    layer.tiles = TileStore.fromPixels(pixels, width, height, 4, bitDepth);
   }
   return {
     kind: "raster", schemaVersion: 2, width, height, colorSpace: options.colorSpace ?? "srgb", colorModel: options.colorModel ?? "rgb",
-    resolution: options.resolution ?? 72, resolutionUnit: options.resolutionUnit ?? "ppi", bitDepth: options.bitDepth ?? 8,
+    resolution: options.resolution ?? 72, resolutionUnit: options.resolutionUnit ?? "ppi", bitDepth,
     pixelAspectRatio: options.pixelAspectRatio ?? 1, backgroundColor: options.backgroundColor ?? null,
     layers: [layer], activeLayerId: layer.id, selection: null, guides: [],
   };
@@ -90,6 +92,9 @@ export function isRasterDocumentState(value: unknown): value is RasterDocumentSt
 export function migrateRasterDocumentState(state: RasterDocumentState): RasterDocumentState {
   // Saves from before Image ▸ Mode existed are RGB: the only model the editor had (§59.1a).
   if (typeof state.colorModel === "undefined") state.colorModel = "rgb";
+  // Same for the depth: a save from before §59.2 is 8-bit, whatever its `bitDepth` field says,
+  // because 8-bit is all the storage could hold when it was written.
+  if (state.bitDepth !== 8 && state.bitDepth !== 16 && state.bitDepth !== 32) state.bitDepth = 8;
   state.layers.forEach((layer, index) => {
     if (typeof layer.parentId === "undefined") layer.parentId = null;
     if (!layer.orderKey) layer.orderKey = makeLayerOrderKey(index);

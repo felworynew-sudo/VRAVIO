@@ -600,7 +600,7 @@ export function cropRasterDocument(state: RasterDocumentState, crop: RasterRect,
         pixels.set(canvas.subarray(source, source + rowWidth * 4), dest);
       }
     }
-    return { ...layer, ...maskPatch, bounds: { x: 0, y: 0, width, height }, width, height, tiles: TileStore.fromPixels(pixels, width, height) };
+    return { ...layer, ...maskPatch, bounds: { x: 0, y: 0, width, height }, width, height, tiles: TileStore.fromPixels(pixels, width, height, 4, layer.tiles?.depth ?? 8) };
   });
   // A selection is drawn in the old canvas's own coordinates; extension moves the origin, and
   // `cropChannel` below assumes an in-bounds window the way the un-extended path always was.
