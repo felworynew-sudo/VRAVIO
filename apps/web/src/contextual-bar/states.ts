@@ -160,9 +160,15 @@ export const contextualBarStates: readonly ContextualBarState[] = [
     id: "raster.selection",
     label: { en: "Selection", ru: "Выделение" },
     when: (context) => Boolean(raster(context)?.selection),
+    // Photoshop's own order in this state (Adobe community / course write-ups,
+    // see master-plan §11): Generative Fill, Modify selection, Create mask from
+    // selection, Invert selection, Transform selection, Fill, More, Deselect.
+    // VRAVIO's first slot is Content-Aware Fill — the same "fill the selection
+    // from its surroundings" operation, run locally.
     actions: [
+      command("edit.contentAwareFill", { icon: "ИИ.svg" }),
       { kind: "menu", id: "select.modify", icon: "ПАРАМЕТРЫ.svg", label: { en: "Modify selection", ru: "Изменить выделение" }, items: [command("select.feather"), command("select.expand", { icon: "РАЗДУТИЕ.svg" }), command("select.contract", { icon: "СЖАТИЕ.svg" }), command("select.smooth", { icon: "СГЛАЖИВАНИЕ.svg" })] },
-      command("edit.contentAwareFill", { icon: "ИИ.svg" }), command("select.invert", { icon: "ИНВЕРСИЯ-КОРР.svg" }), command("select.transform", { icon: "УГОЛЬНИК.svg" }), command("layer.addMask", { icon: "МАСКА СЛОЯ.svg" }), command("edit.fillForeground", { icon: "Заливка.svg" }), command("select.none", { icon: "КРЕСТ.svg" }),
+      command("layer.addMask", { icon: "МАСКА СЛОЯ.svg" }), command("select.invert", { icon: "ИНВЕРСИЯ-КОРР.svg" }), command("select.transform", { icon: "УГОЛЬНИК.svg" }), command("edit.fillForeground", { icon: "Заливка.svg" }), command("select.none", { icon: "КРЕСТ.svg" }),
     ],
   },
   {
