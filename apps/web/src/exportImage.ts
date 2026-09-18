@@ -1,4 +1,5 @@
-import { compositeRasterDocument, type RasterDocumentState } from "@vravio/env-raster";
+import { buildIccProfile, compositeRasterDocument, type RasterColorSpace, type RasterDocumentState } from "@vravio/env-raster";
+import { embedIccInJpeg, embedIccInPng } from "./icc-container";
 import { encodeGif } from "./gifEncode";
 
 export type ExportFormat = "png" | "jpeg" | "webp" | "avif" | "tiff" | "bmp" | "gif" | "ico" | "pdf";
@@ -155,20 +156,23 @@ export function encodeBmpPixels(width: number, height: number, rgba: Uint8Clampe
 
 function encodeBmp(canvas: HTMLCanvasElement): Blob { return encodeBmpPixels(canvas.width, canvas.height, canvasPixels(canvas)); }
 
-export function encodeTiffPixels(width: number, height: number, pixels: Uint8ClampedArray): Blob {
-  const entries = 14;
-  const ifdOffset = 8, ifdSize = 2 + entries * 12 + 4, bitsOffset = ifdOffset + ifdSize, xResolutionOffset = bitsOffset + 8, yResolutionOffset = xResolutionOffset + 8, pixelOffset = yResolutionOffset + 8;
+export function encodeTiffPixels(width: number, height: number, pixels: Uint8ClampedArray, profile?: Uint8Array): Blob {
+  const entries = profile ? 15 : 14;
+  const ifdOffset = 8, ifdSize = 2 + entries * 12 + 4, bitsOffset = ifdOffset + ifdSize, xResolutionOffset = bitsOffset + 8, yResolutionOffset = xResolutionOffset + 8, profileOffset = yResolutionOffset + 8, pixelOffset = profileOffset + (profile ? profile.length + (profile.length % 2) : 0);
   const buffer = new ArrayBuffer(pixelOffset + pixels.length), view = new DataView(buffer), bytes = new Uint8Array(buffer);
   bytes[0] = 0x49; bytes[1] = 0x49; view.setUint16(2, 42, true); view.setUint32(4, ifdOffset, true); view.setUint16(ifdOffset, entries, true);
   let entry = ifdOffset + 2;
   const add = (tag: number, type: number, count: number, value: number) => { view.setUint16(entry, tag, true); view.setUint16(entry + 2, type, true); view.setUint32(entry + 4, count, true); if (type === 3 && count === 1) view.setUint16(entry + 8, value, true); else view.setUint32(entry + 8, value, true); entry += 12; };
+  if (profile) add(34675, 7, profile.length, profileOffset);
   add(256, 4, 1, width); add(257, 4, 1, height); add(258, 3, 4, bitsOffset); add(259, 3, 1, 1); add(262, 3, 1, 2); add(273, 4, 1, pixelOffset); add(277, 3, 1, 4); add(278, 4, 1, height); add(279, 4, 1, pixels.length); add(282, 5, 1, xResolutionOffset); add(283, 5, 1, yResolutionOffset); add(284, 3, 1, 1); add(296, 3, 1, 2); add(338, 3, 1, 2);
   view.setUint32(entry, 0, true); [8, 8, 8, 8].forEach((value, index) => view.setUint16(bitsOffset + index * 2, value, true));
-  view.setUint32(xResolutionOffset, 72, true); view.setUint32(xResolutionOffset + 4, 1, true); view.setUint32(yResolutionOffset, 72, true); view.setUint32(yResolutionOffset + 4, 1, true); bytes.set(pixels, pixelOffset);
+  view.setUint32(xResolutionOffset, 72, true); view.setUint32(xResolutionOffset + 4, 1, true); view.setUint32(yResolutionOffset, 72, true); view.setUint32(yResolutionOffset + 4, 1, true);
+  if (profile) bytes.set(profile, profileOffset);
+  bytes.set(pixels, pixelOffset);
   return new Blob([buffer], { type: "image/tiff" });
 }
 
-function encodeTiff(canvas: HTMLCanvasElement): Blob { return encodeTiffPixels(canvas.width, canvas.height, canvasPixels(canvas)); }
+function encodeTiff(canvas: HTMLCanvasElement, profile?: Uint8Array): Blob { return encodeTiffPixels(canvas.width, canvas.height, canvasPixels(canvas), profile); }
 
 async function encodeIco(canvas: HTMLCanvasElement): Promise<Blob> {
   if (canvas.width > 256 || canvas.height > 256) throw new RangeError("ICO dimensions cannot exceed 256 × 256 px");
@@ -181,10 +185,17 @@ async function encodeIco(canvas: HTMLCanvasElement): Promise<Blob> {
   return new Blob([buffer], { type: "image/x-icon" });
 }
 
-async function encodeCanvas(canvas: HTMLCanvasElement, format: ExportFormat, quality: number, paletteColors = 256, dither = false): Promise<Blob> {
+/**
+ * `profile` is the ICC profile of the document's working space, or undefined for "say nothing".
+ *
+ * The browser writes no profile of its own, so without this every exported file is read as sRGB by
+ * whatever opens it — right for an sRGB document and wrong for every other one (master-plan §59.3).
+ * Embedding never touches a pixel: it only makes the file say what its numbers already mean.
+ */
+async function encodeCanvas(canvas: HTMLCanvasElement, format: ExportFormat, quality: number, paletteColors = 256, dither = false, profile?: Uint8Array): Promise<Blob> {
   const info = exportFormatInfo(format);
   if (format === "bmp") return encodeBmp(canvas);
-  if (format === "tiff") return encodeTiff(canvas);
+  if (format === "tiff") return encodeTiff(canvas, profile);
   if (format === "gif") return encodeGif(canvas, paletteColors, dither);
   if (format === "ico") return encodeIco(canvas);
   if (format === "pdf") {
@@ -196,8 +207,16 @@ async function encodeCanvas(canvas: HTMLCanvasElement, format: ExportFormat, qua
   }
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, info.mime, info.lossy ? quality : undefined));
   if (!blob) throw new Error(`Failed to encode ${info.label}`);
-  return blob;
+  if (!profile || (format !== "png" && format !== "jpeg")) return blob;
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  const tagged = format === "png" ? await embedIccInPng(bytes, profile) : embedIccInJpeg(bytes, profile);
+  return new Blob([tagged as BlobPart], { type: info.mime });
 }
+
+/** The profile to embed for a document — nothing for a plain sRGB one, since sRGB is what every
+ *  reader assumes anyway and a 3 KB chunk on every screenshot is a cost with no buyer. */
+export const exportProfileFor = (colorSpace: RasterColorSpace): Uint8Array | undefined =>
+  colorSpace === "srgb" ? undefined : buildIccProfile(colorSpace);
 
 export interface EncodeResult {
   readonly blob: Blob;
@@ -212,29 +231,30 @@ export interface EncodeResult {
  * Lossless formats cannot trade quality for size, so they encode once and report
  * whether they overshot.
  */
-export async function encodeToTargetBytes(canvas: HTMLCanvasElement, format: ExportFormat, targetBytes: number, steps = 8, paletteColors = 256, dither = false): Promise<EncodeResult> {
+export async function encodeToTargetBytes(canvas: HTMLCanvasElement, format: ExportFormat, targetBytes: number, steps = 8, paletteColors = 256, dither = false, profile?: Uint8Array): Promise<EncodeResult> {
   const info = exportFormatInfo(format);
   if (!info.lossy) {
-    const blob = await encodeCanvas(canvas, format, 1, paletteColors, dither);
+    const blob = await encodeCanvas(canvas, format, 1, paletteColors, dither, profile);
     return blob.size <= targetBytes ? { blob, quality: 1 } : { blob, quality: 1, targetMissed: true };
   }
   let low = 0.02, high = 1, best: Blob | null = null, bestQuality = low;
-  const ceiling = await encodeCanvas(canvas, format, high);
+  const ceiling = await encodeCanvas(canvas, format, high, paletteColors, dither, profile);
   if (ceiling.size <= targetBytes) return { blob: ceiling, quality: high };
   for (let step = 0; step < steps; step += 1) {
     const middle = (low + high) / 2;
-    const blob = await encodeCanvas(canvas, format, middle);
+    const blob = await encodeCanvas(canvas, format, middle, paletteColors, dither, profile);
     if (blob.size <= targetBytes) { best = blob; bestQuality = middle; low = middle; } else high = middle;
   }
   if (best) return { blob: best, quality: bestQuality };
-  const floor = await encodeCanvas(canvas, format, 0.02);
+  const floor = await encodeCanvas(canvas, format, 0.02, paletteColors, dither, profile);
   return { blob: floor, quality: 0.02, targetMissed: true };
 }
 
 export async function encodeExport(state: RasterDocumentState, settings: ExportSettings, targetBytes?: number): Promise<EncodeResult> {
   const canvas = renderExportCanvas(state, settings);
-  if (targetBytes && targetBytes > 0) return encodeToTargetBytes(canvas, settings.format, targetBytes, 8, settings.paletteColors, settings.dither);
-  return { blob: await encodeCanvas(canvas, settings.format, settings.quality, settings.paletteColors, settings.dither), quality: settings.quality };
+  const profile = exportProfileFor(state.colorSpace);
+  if (targetBytes && targetBytes > 0) return encodeToTargetBytes(canvas, settings.format, targetBytes, 8, settings.paletteColors, settings.dither, profile);
+  return { blob: await encodeCanvas(canvas, settings.format, settings.quality, settings.paletteColors, settings.dither, profile), quality: settings.quality };
 }
 
 export function exportFileName(documentName: string, format: ExportFormat): string {

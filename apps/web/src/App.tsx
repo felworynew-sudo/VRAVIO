@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { WARP_PRESETS, adjustLayerPixelsDeep, applyRasterFilter, rasterFilterCatalog, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, compositeRasterRegion, computeAlignOffsets, rasterColorSpaceById, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerOrigin, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterLayer, type RasterRect } from "@vravio/env-raster";
+import { WARP_PRESETS, adjustLayerPixelsDeep, applyRasterFilter, rasterFilterCatalog, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, compositeRasterRegion, computeAlignOffsets, rasterColorSpaceById, parseIccProfile, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerOrigin, type AlignEdge, type RasterAdjustment, type RasterColorSpace, type RasterDocumentState, type RasterLayer, type RasterRect } from "@vravio/env-raster";
 import { maskToRgba, rgbaToMask } from "./raster-pixel-buffers";
 import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
 import { withBusy, withBusyPainted } from "./busy";
@@ -44,6 +44,7 @@ import { ImageConverterDialog } from "./ImageConverterDialog";
 import { PrintCenter } from "./printing/PrintCenter";
 import { ContextualBar } from "./ContextualBar";
 import { decodeImportedImage } from "./imageImport";
+import { readEmbeddedIcc } from "./icc-container";
 import { PerformanceOverlay } from "./PerformanceOverlay";
 import { renderTextLayerPixels } from "./textRender";
 import { AdjustmentDialog } from "./raster-adjustments/AdjustmentDialog";
@@ -281,7 +282,17 @@ export function App() {
       errorModal({ title: text(store.language, "Could not open the file", "Не удалось открыть файл"), message: text(store.language, `"${file.name}" is not an image this build can read.`, `«${file.name}» — не то изображение, которое эта сборка умеет читать.`) });
       return;
     }
-    store.openDocument("raster", { name: file.name, width: source.width, height: source.height, resolution: 72, resolutionUnit: "ppi", backgroundColor: null, pixelAspectRatio: 1 });
+    // What the file says its colours mean, when it says anything (master-plan §59.3). A file with
+    // no profile is sRGB — that is what every reader assumes and what the bytes were written for.
+    // A profile this parser cannot model is reported rather than silently treated as sRGB.
+    let colorSpace: RasterColorSpace = "srgb";
+    const embedded = await readEmbeddedIcc(new Uint8Array(await file.arrayBuffer())).catch(() => null);
+    if (embedded) {
+      const parsed = parseIccProfile(embedded);
+      if (parsed?.space) colorSpace = parsed.space;
+      else if (parsed) diagnostic("warn", "file.import", `${file.name}: ${parsed.unsupported ?? "unrecognised colour profile"} (${parsed.description}) — read as sRGB`);
+    }
+    store.openDocument("raster", { name: file.name, width: source.width, height: source.height, resolution: 72, resolutionUnit: "ppi", backgroundColor: null, pixelAspectRatio: 1, colorSpace });
     const id = useShellStore.getState().activeDocumentId; if (!id) return;
     const surface = window.document.createElement("canvas"); surface.width = source.width; surface.height = source.height; const context = surface.getContext("2d"); if (!context) return; context.drawImage(source.image, 0, 0, source.width, source.height); source.release();
     kernel.documents.update<RasterDocumentState>(id, (state) => { setLayerPixels(state.layers[0]!, context.getImageData(0, 0, state.width, state.height).data, state.width, state.height); });

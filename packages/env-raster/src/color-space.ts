@@ -40,9 +40,9 @@ export const rasterColorSpaceById = (id: string): RasterColorSpaceInfo | undefin
  *  for display (the browser has no wider canvas space than Display P3 today). */
 export const canvasColorSpaceFor = (space: RasterColorSpace): "srgb" | "display-p3" => space === "display-p3" ? "display-p3" : "srgb";
 
-type Matrix = readonly [number, number, number, number, number, number, number, number, number];
+export type Matrix = readonly [number, number, number, number, number, number, number, number, number];
 
-const multiply = (a: Matrix, b: Matrix): Matrix => [
+export const multiplyMatrix = (a: Matrix, b: Matrix): Matrix => [
   a[0] * b[0] + a[1] * b[3] + a[2] * b[6], a[0] * b[1] + a[1] * b[4] + a[2] * b[7], a[0] * b[2] + a[1] * b[5] + a[2] * b[8],
   a[3] * b[0] + a[4] * b[3] + a[5] * b[6], a[3] * b[1] + a[4] * b[4] + a[5] * b[7], a[3] * b[2] + a[4] * b[5] + a[5] * b[8],
   a[6] * b[0] + a[7] * b[3] + a[8] * b[6], a[6] * b[1] + a[7] * b[4] + a[8] * b[7], a[6] * b[2] + a[7] * b[5] + a[8] * b[8],
@@ -62,7 +62,7 @@ function invert(m: Matrix): Matrix {
 const xyzFromXy = ([x, y]: readonly [number, number]): readonly [number, number, number] => [x / y, 1, (1 - x - y) / y];
 
 /** Primaries and a white point to the RGB→XYZ matrix — the standard construction (Lindbloom). */
-function rgbToXyzMatrix(space: RasterColorSpaceInfo): Matrix {
+export function rgbToXyzMatrix(space: RasterColorSpaceInfo): Matrix {
   const [r, g, b] = space.primaries;
   const base: Matrix = [
     r[0] / r[1], g[0] / g[1], b[0] / b[1],
@@ -85,7 +85,7 @@ function rgbToXyzMatrix(space: RasterColorSpaceInfo): Matrix {
 
 /** Bradford chromatic adaptation — what to do when the two spaces have different white points
  *  (ProPhoto is D50, the rest D65). Relative colorimetric, as everything here is. */
-function adaptation(from: readonly [number, number], to: readonly [number, number]): Matrix {
+export function adaptation(from: readonly [number, number], to: readonly [number, number]): Matrix {
   if (from[0] === to[0] && from[1] === to[1]) return [1, 0, 0, 0, 1, 0, 0, 0, 1];
   const bradford: Matrix = [0.8951, 0.2664, -0.1614, -0.7502, 1.7135, 0.0367, 0.0389, -0.0685, 1.0296];
   const inverseBradford = invert(bradford);
@@ -97,17 +97,20 @@ function adaptation(from: readonly [number, number], to: readonly [number, numbe
   ];
   const [sr, sg, sb] = cone(source), [dr, dg, db] = cone(destination);
   const ratio: Matrix = [dr / sr, 0, 0, 0, dg / sg, 0, 0, 0, db / sb];
-  return multiply(inverseBradford, multiply(ratio, bradford));
+  return multiplyMatrix(inverseBradford, multiplyMatrix(ratio, bradford));
 }
 
-const toLinear = (value: number, transfer: RasterColorSpaceInfo["transfer"]): number => {
+/** The space's transfer function, device value → linear. Exported because an ICC profile's TRC
+ *  tag is exactly this curve sampled (see `icc.ts`). */
+export const toLinear = (value: number, transfer: RasterColorSpaceInfo["transfer"]): number => {
   if (transfer === "linear") return value;
   if (transfer === "gamma-2.2") return value < 0 ? -Math.pow(-value, 2.19921875) : Math.pow(value, 2.19921875);
   if (transfer === "prophoto") return value < 16 / 512 ? value / 16 : Math.pow(value, 1.8);
   return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
 };
 
-const fromLinear = (value: number, transfer: RasterColorSpaceInfo["transfer"]): number => {
+/** The inverse — linear → device value. */
+export const fromLinear = (value: number, transfer: RasterColorSpaceInfo["transfer"]): number => {
   if (transfer === "linear") return value;
   if (transfer === "gamma-2.2") return value < 0 ? -Math.pow(-value, 1 / 2.19921875) : Math.pow(value, 1 / 2.19921875);
   if (transfer === "prophoto") return value < 1 / 512 ? value * 16 : Math.pow(value, 1 / 1.8);
@@ -120,7 +123,7 @@ export function colorSpaceMatrix(from: RasterColorSpace, to: RasterColorSpace): 
   const destination = rasterColorSpaceById(to) ?? rasterColorSpaces[0]!;
   const toXyz = rgbToXyzMatrix(source);
   const fromXyz = invert(rgbToXyzMatrix(destination));
-  return multiply(fromXyz, multiply(adaptation(source.whitePoint, destination.whitePoint), toXyz));
+  return multiplyMatrix(fromXyz, multiplyMatrix(adaptation(source.whitePoint, destination.whitePoint), toXyz));
 }
 
 /**
