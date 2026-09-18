@@ -71,7 +71,7 @@ describe("TileStore.toJSON / fromJSON — the document-snapshot-store.ts round t
     const snapshot = store.toJSON();
     expect(ArrayBuffer.isView(snapshot.pixels)).toBe(true);
     expect(snapshot.pixels).toBeInstanceOf(Uint8ClampedArray);
-    expect(snapshot).toEqual({ width: TILE_SIZE, height: TILE_SIZE, channels: 4, pixels: store.toPixels() });
+    expect(snapshot).toEqual({ width: TILE_SIZE, height: TILE_SIZE, channels: 4, depth: 8, pixels: store.toPixels() });
   });
 
   it("plain JSON.stringify (no replacer) on a typed array is itself lossy in shape, not just on TileStore — confirming why a replacer is required downstream", () => {
@@ -553,7 +553,7 @@ describe("TileStore.placeholder — the swap-eviction marker", () => {
   it("toJSON()/fromJSON() round-trip an evicted store as still evicted, not as a crash", () => {
     const placeholder = TileStore.placeholder(12, 9, 4);
     const snapshot = placeholder.toJSON();
-    expect(snapshot).toEqual({ width: 12, height: 9, channels: 4, evicted: true });
+    expect(snapshot).toEqual({ width: 12, height: 9, channels: 4, depth: 8, evicted: true });
     expect("pixels" in snapshot).toBe(false);
 
     const restored = TileStore.fromJSON(snapshot);

@@ -1,3 +1,4 @@
+import { allocatePixels, bufferDepth, convertPixelDepth, toRgba8, type PixelBuffer, type RasterBitDepth } from "./pixel-format";
 import type { RasterRect } from "./types";
 
 /**
@@ -82,13 +83,23 @@ export class TileStore {
   readonly width: number;
   readonly height: number;
   readonly channels: number;
-  readonly #tiles: Map<number, Uint8ClampedArray>;
+  /**
+   * Bits per channel of the tiles this store actually holds (docs/master-plan.md §59.2).
+   *
+   * The 8-bit methods below (`toPixels`, `readLocalRegion`, `readPixel`) keep their contract at
+   * every depth by converting — babl's bargain, and the reason a 16-bit layer works with the
+   * hundreds of call sites written before depth existed. The `…Deep` pair speaks the store's own
+   * format, for the operations that were taught precision.
+   */
+  readonly depth: RasterBitDepth;
+  readonly #tiles: Map<number, PixelBuffer>;
   readonly #evicted: boolean;
 
-  private constructor(width: number, height: number, channels: number, tiles: Map<number, Uint8ClampedArray>, evicted = false) {
+  private constructor(width: number, height: number, channels: number, tiles: Map<number, PixelBuffer>, evicted = false, depth: RasterBitDepth = 8) {
     this.width = width;
     this.height = height;
     this.channels = channels;
+    this.depth = depth;
     this.#tiles = tiles;
     this.#evicted = evicted;
   }
@@ -106,50 +117,71 @@ export class TileStore {
    * real bytes throws `EvictedTileStoreError` instead of fabricating content — see that class's own
    * doc comment for why silence is the wrong choice here specifically.
    */
-  static placeholder(width: number, height: number, channels = 4): TileStore {
-    return new TileStore(width, height, channels, new Map(), true);
+  static placeholder(width: number, height: number, channels = 4, depth: RasterBitDepth = 8): TileStore {
+    return new TileStore(width, height, channels, new Map(), true, depth);
   }
 
   /** Builds a store from a flat, document/layer-shaped buffer — one crop per tile. */
-  static fromPixels(pixels: Uint8ClampedArray, width: number, height: number, channels = 4): TileStore {
+  static fromPixels(pixels: PixelBuffer, width: number, height: number, channels = 4, depth: RasterBitDepth = bufferDepth(pixels)): TileStore {
     if (pixels.length !== width * height * channels) throw new RangeError("TileStore.fromPixels: buffer length does not match width*height*channels");
-    const tiles = new Map<number, Uint8ClampedArray>();
+    // A buffer handed in at one depth for a store of another is converted once, here, rather than
+    // being trusted: the alternative is tiles whose type disagrees with `depth`, which nothing
+    // downstream would notice until the numbers came out wrong.
+    const source = bufferDepth(pixels) === depth ? pixels : convertPixelDepth(pixels, bufferDepth(pixels), depth);
+    const tiles = new Map<number, PixelBuffer>();
     const columns = Math.ceil(width / TILE_SIZE), rows = Math.ceil(height / TILE_SIZE);
     for (let row = 0; row < rows; row += 1) {
       for (let col = 0; col < columns; col += 1) {
         const rect = tileRect(col, row, width, height);
-        const tile = new Uint8ClampedArray(rect.width * rect.height * channels);
+        const tile = allocatePixels(depth, rect.width * rect.height * channels);
         for (let y = 0; y < rect.height; y += 1) {
           const from = ((rect.y + y) * width + rect.x) * channels;
-          tile.set(pixels.subarray(from, from + rect.width * channels), y * rect.width * channels);
+          tile.set(source.subarray(from, from + rect.width * channels) as never, y * rect.width * channels);
         }
         tiles.set(key(col, row), tile);
       }
     }
-    return new TileStore(width, height, channels, tiles);
+    return new TileStore(width, height, channels, tiles, false, depth);
   }
 
   /** An all-zero (transparent, for RGBA; black, for a mask) store of the given size — every tile
    *  allocated (not sparse), so a freshly created layer costs one real materialize either way;
    *  sparse-on-read is a later optimisation this constructor deliberately leaves for when a real
    *  caller needs it. */
-  static empty(width: number, height: number, channels = 4): TileStore {
-    return TileStore.fromPixels(new Uint8ClampedArray(width * height * channels), width, height, channels);
+  static empty(width: number, height: number, channels = 4, depth: RasterBitDepth = 8): TileStore {
+    return TileStore.fromPixels(allocatePixels(depth, width * height * channels), width, height, channels, depth);
   }
 
   /** O(tile count): copies the *map*, not the tiles it points to. The two stores diverge only
    *  where either one is actually written to afterward. An evicted store clones to another
    *  evicted store — cheap and harmless, since the next real read or write still throws. */
   clone(): TileStore {
-    return new TileStore(this.width, this.height, this.channels, new Map(this.#tiles), this.#evicted);
+    return new TileStore(this.width, this.height, this.channels, new Map(this.#tiles), this.#evicted, this.depth);
+  }
+
+  /** The same content held at another depth — what Image ▸ Mode ▸ 16 Bits/Channel does to every
+   *  layer. A conversion down clips and rounds (there is nowhere else for the values to go); a
+   *  conversion up is exact, so 8 → 16 → 8 returns the original bytes. */
+  withDepth(depth: RasterBitDepth): TileStore {
+    if (depth === this.depth) return this.clone();
+    if (this.#evicted) return TileStore.placeholder(this.width, this.height, this.channels, depth);
+    const tiles = new Map<number, PixelBuffer>();
+    for (const [id, tile] of this.#tiles) tiles.set(id, convertPixelDepth(tile, this.depth, depth));
+    return new TileStore(this.width, this.height, this.channels, tiles, false, depth);
   }
 
   /** Rebuilds one flat buffer — the escape hatch every existing consumer that still thinks in
    *  `Uint8ClampedArray` needs, the same role `layerDocumentPixels` already plays for
    *  bounds-cropped layers. */
   toPixels(): Uint8ClampedArray {
+    return toRgba8(this.toPixelsDeep());
+  }
+
+  /** `toPixels()` in this store's own format — the 32-bit highlights and 16-bit steps that the
+   *  8-bit view above necessarily loses. Identical to `toPixels()` for an 8-bit store. */
+  toPixelsDeep(): PixelBuffer {
     if (this.#evicted) throw new EvictedTileStoreError("toPixels");
-    const pixels = new Uint8ClampedArray(this.width * this.height * this.channels);
+    const pixels = allocatePixels(this.depth, this.width * this.height * this.channels);
     const columns = Math.ceil(this.width / TILE_SIZE), rows = Math.ceil(this.height / TILE_SIZE);
     for (let row = 0; row < rows; row += 1) {
       for (let col = 0; col < columns; col += 1) {
@@ -158,7 +190,7 @@ export class TileStore {
         const rect = tileRect(col, row, this.width, this.height);
         for (let y = 0; y < rect.height; y += 1) {
           const from = y * rect.width * this.channels;
-          pixels.set(tile.subarray(from, from + rect.width * this.channels), ((rect.y + y) * this.width + rect.x) * this.channels);
+          pixels.set(tile.subarray(from, from + rect.width * this.channels) as never, ((rect.y + y) * this.width + rect.x) * this.channels);
         }
       }
     }
@@ -188,17 +220,22 @@ export class TileStore {
    * still wherever the layer swap manager's own storage already has them, not duplicated into the
    * autosave snapshot a second time.
    */
-  toJSON(): { width: number; height: number; channels: number; pixels: Uint8ClampedArray } | { width: number; height: number; channels: number; evicted: true } {
-    if (this.#evicted) return { width: this.width, height: this.height, channels: this.channels, evicted: true };
-    return { width: this.width, height: this.height, channels: this.channels, pixels: this.toPixels() };
+  toJSON(): { width: number; height: number; channels: number; depth: RasterBitDepth; pixels: PixelBuffer } | { width: number; height: number; channels: number; depth: RasterBitDepth; evicted: true } {
+    if (this.#evicted) return { width: this.width, height: this.height, channels: this.channels, depth: this.depth, evicted: true };
+    // The store's own format, not the 8-bit view: a save that wrote `toPixels()` would quietly
+    // turn every 16-bit document into an 8-bit one the first time the session was restored.
+    return { width: this.width, height: this.height, channels: this.channels, depth: this.depth, pixels: this.toPixelsDeep() };
   }
 
   /** The other half of `toJSON()`'s round trip — rebuilds a real `TileStore` (tiled, with a
    *  working `#tiles` map) from the plain shape `toJSON()`/`JSON.parse` leave behind, or another
    *  placeholder from the `{ evicted: true }` shape a store evicted at save time leaves instead. */
-  static fromJSON(value: { width: number; height: number; channels: number; pixels: Uint8ClampedArray } | { width: number; height: number; channels: number; evicted: true }): TileStore {
-    if ("pixels" in value) return TileStore.fromPixels(value.pixels, value.width, value.height, value.channels);
-    return TileStore.placeholder(value.width, value.height, value.channels);
+  static fromJSON(value: { width: number; height: number; channels: number; depth?: RasterBitDepth; pixels: PixelBuffer } | { width: number; height: number; channels: number; depth?: RasterBitDepth; evicted: true }): TileStore {
+    // `depth` is optional on the way in: every save written before §59.2 is 8-bit, and the buffer
+    // that comes back from `JSON.parse` says so itself anyway.
+    const depth = value.depth ?? ("pixels" in value ? bufferDepth(value.pixels) : 8);
+    if ("pixels" in value) return TileStore.fromPixels(value.pixels, value.width, value.height, value.channels, depth);
+    return TileStore.placeholder(value.width, value.height, value.channels, depth);
   }
 
   /** One pixel's channel values, without materialising anything — `layerAlphaAt`'s reason to
@@ -227,9 +264,14 @@ export class TileStore {
    * `readPixel`'s convention for a plain out-of-bounds read.
    */
   readLocalRegion(rect: RasterRect): Uint8ClampedArray {
+    return toRgba8(this.readLocalRegionDeep(rect));
+  }
+
+  /** `readLocalRegion` in this store's own format, for an operation that was taught precision. */
+  readLocalRegionDeep(rect: RasterRect): PixelBuffer {
     if (this.#evicted) throw new EvictedTileStoreError("readLocalRegion");
     const channels = this.channels;
-    const out = new Uint8ClampedArray(rect.width * rect.height * channels);
+    const out = allocatePixels(this.depth, rect.width * rect.height * channels);
     for (let y = 0; y < rect.height; y += 1) {
       for (let x = 0; x < rect.width; x += 1) {
         const sample = this.readPixel(rect.x + x, rect.y + y);
@@ -253,8 +295,11 @@ export class TileStore {
    * that flat-buffer path can hand this the very same buffer and `edit.bounds`, with no crop
    * step of its own to write first.
    */
-  writeRegion(rect: RasterRect, source: Uint8ClampedArray, sourceWidth: number): void {
+  writeRegion(rect: RasterRect, source: PixelBuffer, sourceWidth: number): void {
     if (this.#evicted) throw new EvictedTileStoreError("writeRegion");
+    // A write at another depth is converted before it lands, so an 8-bit tool can keep writing
+    // into a 16-bit layer exactly as it did - the same boundary `toPixels()` holds on the way out.
+    if (bufferDepth(source) !== this.depth) source = convertPixelDepth(source, bufferDepth(source), this.depth);
     const left = Math.max(0, rect.x), top = Math.max(0, rect.y);
     const right = Math.min(this.width, rect.x + rect.width), bottom = Math.min(this.height, rect.y + rect.height);
     if (right <= left || bottom <= top) return;
@@ -265,13 +310,13 @@ export class TileStore {
       for (let col = firstCol; col <= lastCol; col += 1) {
         const tileArea = tileRect(col, row, this.width, this.height);
         const existing = this.#tiles.get(key(col, row));
-        const next = existing ? existing.slice() : new Uint8ClampedArray(tileArea.width * tileArea.height * channels);
+        const next = existing ? existing.slice() : allocatePixels(this.depth, tileArea.width * tileArea.height * channels);
         const writeLeft = Math.max(left, tileArea.x), writeTop = Math.max(top, tileArea.y);
         const writeRight = Math.min(right, tileArea.x + tileArea.width), writeBottom = Math.min(bottom, tileArea.y + tileArea.height);
         for (let y = writeTop; y < writeBottom; y += 1) {
           const fromSource = (y * sourceWidth + writeLeft) * channels;
           const toTile = ((y - tileArea.y) * tileArea.width + (writeLeft - tileArea.x)) * channels;
-          next.set(source.subarray(fromSource, fromSource + (writeRight - writeLeft) * channels), toTile);
+          next.set(source.subarray(fromSource, fromSource + (writeRight - writeLeft) * channels) as never, toTile);
         }
         this.#tiles.set(key(col, row), next);
       }
@@ -287,8 +332,9 @@ export class TileStore {
    * to hold a small edit. Requiring `writeRegion`'s wider contract here would force exactly that
    * allocation on every undo/redo, defeating the point for the sake of reusing one method.
    */
-  writeLocalRegion(rect: RasterRect, patch: Uint8ClampedArray): void {
+  writeLocalRegion(rect: RasterRect, patch: PixelBuffer): void {
     if (this.#evicted) throw new EvictedTileStoreError("writeLocalRegion");
+    if (bufferDepth(patch) !== this.depth) patch = convertPixelDepth(patch, bufferDepth(patch), this.depth);
     const left = Math.max(0, rect.x), top = Math.max(0, rect.y);
     const right = Math.min(this.width, rect.x + rect.width), bottom = Math.min(this.height, rect.y + rect.height);
     if (right <= left || bottom <= top) return;
@@ -299,13 +345,13 @@ export class TileStore {
       for (let col = firstCol; col <= lastCol; col += 1) {
         const tileArea = tileRect(col, row, this.width, this.height);
         const existing = this.#tiles.get(key(col, row));
-        const next = existing ? existing.slice() : new Uint8ClampedArray(tileArea.width * tileArea.height * channels);
+        const next = existing ? existing.slice() : allocatePixels(this.depth, tileArea.width * tileArea.height * channels);
         const writeLeft = Math.max(left, tileArea.x), writeTop = Math.max(top, tileArea.y);
         const writeRight = Math.min(right, tileArea.x + tileArea.width), writeBottom = Math.min(bottom, tileArea.y + tileArea.height);
         for (let y = writeTop; y < writeBottom; y += 1) {
           const fromPatch = ((y - rect.y) * rect.width + (writeLeft - rect.x)) * channels;
           const toTile = ((y - tileArea.y) * tileArea.width + (writeLeft - tileArea.x)) * channels;
-          next.set(patch.subarray(fromPatch, fromPatch + (writeRight - writeLeft) * channels), toTile);
+          next.set(patch.subarray(fromPatch, fromPatch + (writeRight - writeLeft) * channels) as never, toTile);
         }
         this.#tiles.set(key(col, row), next);
       }
@@ -333,7 +379,7 @@ export class TileStore {
   reframe(dx: number, dy: number, width: number, height: number): TileStore {
     if (this.#evicted) throw new EvictedTileStoreError("reframe");
     const channels = this.channels;
-    const tiles = new Map<number, Uint8ClampedArray>();
+    const tiles = new Map<number, PixelBuffer>();
     const columns = Math.ceil(width / TILE_SIZE), rows = Math.ceil(height / TILE_SIZE);
     const tileAligned = dx % TILE_SIZE === 0 && dy % TILE_SIZE === 0;
     for (let row = 0; row < rows; row += 1) {
@@ -345,7 +391,7 @@ export class TileStore {
             && tileRect(sourceCol, sourceRow, this.width, this.height).width === TILE_SIZE
             && tileRect(sourceCol, sourceRow, this.width, this.height).height === TILE_SIZE;
           if (sourceFullSize) {
-            tiles.set(key(col, row), this.#tiles.get(key(sourceCol, sourceRow)) ?? new Uint8ClampedArray(TILE_SIZE * TILE_SIZE * channels));
+            tiles.set(key(col, row), this.#tiles.get(key(sourceCol, sourceRow)) ?? allocatePixels(this.depth, TILE_SIZE * TILE_SIZE * channels));
             continue;
           }
         }
@@ -353,7 +399,7 @@ export class TileStore {
         // it is rebuilt pixel by pixel from wherever this store holds content at (x+dx, y+dy) —
         // `readPixel` already knows out-of-range means transparent, which is exactly what a
         // frame reaching past this store's own edge should read as.
-        const tile = new Uint8ClampedArray(destRect.width * destRect.height * channels);
+        const tile = allocatePixels(this.depth, destRect.width * destRect.height * channels);
         for (let y = 0; y < destRect.height; y += 1) {
           for (let x = 0; x < destRect.width; x += 1) {
             const sample = this.readPixel(destRect.x + x + dx, destRect.y + y + dy);
@@ -364,12 +410,12 @@ export class TileStore {
         tiles.set(key(col, row), tile);
       }
     }
-    return new TileStore(width, height, channels, tiles);
+    return new TileStore(width, height, channels, tiles, false, this.depth);
   }
 
   /** Bytes held by tiles unique to this store — `seen` lets a caller price several clones
    *  together the same way `accumulateUniquePixelBytes` prices layers sharing whole buffers. */
-  uniqueBytes(seen: Set<Uint8ClampedArray>): number {
+  uniqueBytes(seen: Set<PixelBuffer>): number {
     let bytes = 0;
     for (const tile of this.#tiles.values()) {
       if (seen.has(tile)) continue;
@@ -383,7 +429,7 @@ export class TileStore {
    *  buffer-identity accounting (`layer-bounds.ts`'s `visitPixelBuffers`) rather than the
    *  tile-store-specific `uniqueBytes` above — the two clones sharing a tile still visit the
    *  identical object, so a `Set`-based dedupe on the caller's side works the same as always. */
-  *tileBuffers(): IterableIterator<Uint8ClampedArray> {
+  *tileBuffers(): IterableIterator<PixelBuffer> {
     yield* this.#tiles.values();
   }
 }
