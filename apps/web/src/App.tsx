@@ -44,6 +44,7 @@ import { ImageConverterDialog } from "./ImageConverterDialog";
 import { PrintCenter } from "./printing/PrintCenter";
 import { ContextualBar } from "./ContextualBar";
 import { decodeImportedImage } from "./imageImport";
+import { useSoftProof } from "./soft-proof";
 import { readEmbeddedIcc } from "./icc-container";
 import { PerformanceOverlay } from "./PerformanceOverlay";
 import { renderTextLayerPixels } from "./textRender";
@@ -547,6 +548,7 @@ export function App() {
   const selectedLayerIds = active ? store.selectedLayerIdsByDocument[active.id] ?? [] : [];
   const activeRasterState = active && isRasterDocumentState(active.state) ? active.state : null;
   const colorModel = activeRasterState?.colorModel ?? "rgb";
+  const proof = useSoftProof();
   const bitDepth = activeRasterState?.bitDepth ?? 8;
   /** The tick Photoshop puts against the mode a document is already in. */
   const tick = (on: boolean) => on ? "✓ " : "";
@@ -1060,6 +1062,23 @@ export function App() {
           ] },
           ["Image Size… (Размер изображения…)", "Ctrl+Alt+I", () => {}, true],
           ["Canvas Size… (Размер холста…)", "Ctrl+Alt+C", () => {}, true],
+        ]}/>}
+        {active?.kind === "raster" && <Menu label="View (Просмотр)" language={store.language} open={openMenu === "raster-view"} onToggle={() => setOpenMenu(openMenu === "raster-view" ? null : "raster-view")} items={[
+          // Photoshop's own View block for colour management, with its shortcuts (master-plan §59.3).
+          // A tick shows what the screen is actually doing, since a proof changes nothing in the file.
+          [`${tick(Boolean(proof))}Proof Colors (${tick(Boolean(proof))}Цветопроба)`, "Ctrl+Y", () => void kernel.commands.execute("view.proofColors", activeCommandContext()), !activeRasterState],
+          [`${tick(Boolean(proof?.gamutWarning))}Gamut Warning (${tick(Boolean(proof?.gamutWarning))}Предупреждение о цветовом охвате)`, "Ctrl+Shift+Y", () => void kernel.commands.execute("view.gamutWarning", activeCommandContext()), !activeRasterState],
+          { label: "Proof Setup (Параметры цветопробы)", items: ([
+            ["cmyk", "Working CMYK (Рабочее CMYK)"],
+            ["display-p3", "Display P3"],
+            ["srgb", "sRGB"],
+            ["adobe-rgb", "Adobe RGB (1998)"],
+            ["prophoto-rgb", "ProPhoto RGB"],
+          ] as const).map(([destination, label]) => [
+            `${tick(proof?.destination === destination)}${label}`, "",
+            () => { void kernel.commands.execute("view.proofSetup", activeCommandContext(), { destination }); },
+            !activeRasterState,
+          ] as MainMenuItem) },
         ]}/>}
         {active?.kind === "raster" && <Menu label="Layer (Слой)" language={store.language} open={openMenu === "layer"} onToggle={() => setOpenMenu(openMenu === "layer" ? null : "layer")} items={[
           ["Duplicate Layer (Дублировать слой)", "Ctrl+J", () => void kernel.commands.execute("layer.duplicate", activeCommandContext()), !active || !isRasterDocumentState(active.state)],

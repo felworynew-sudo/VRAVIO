@@ -19,9 +19,10 @@ import type { CommandDefinition } from "../../../../commands/types";
  *   - **Lab**: layers are stored Lab-encoded (L·255/100, a+128, b+128 — Photoshop's own 8-bit Lab
  *     encoding). The compositor converts to RGB on the way to the screen, so a curve applied in
  *     this mode really does act on lightness and the two colour axes.
- *   - **CMYK**: pixels are limited to what a four-ink separation can reproduce, and exports carry
- *     the separation. The four plates are *derived*, not stored, so there is no per-plate curve —
- *     that needs four-channel storage the compositor does not have.
+ *   - **CMYK**: pixels are limited to what a four-ink separation can reproduce, and a TIFF export
+ *     writes the four ink planes (photometric 5). The plates are *derived*, not stored, so there is
+ *     no per-plate curve — that needs four-channel storage the compositor does not have, and PNG
+ *     cannot hold CMYK at all.
  *   - **Indexed**: the document gets a colour table, pixels are snapped onto it (median cut, with
  *     optional Floyd–Steinberg dithering), and the rule keeps them there.
  *

@@ -93,6 +93,25 @@ describe("embedding a profile in a container", () => {
     expect(await readEmbeddedIcc(rubbish)).toBeNull();
   });
 
+  it("writes a CMYK TIFF as four ink planes, not RGBA", async () => {
+    // Photometric 5 (Separated) and no alpha: what a prepress reader expects from a CMYK document.
+    const pixels = new Uint8ClampedArray([255, 0, 0, 255]);
+    const blob = encodeTiffPixels(1, 1, pixels, undefined, true);
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const view = new DataView(bytes.buffer);
+    const entries = view.getUint16(8, true);
+    const tags = new Map<number, number>();
+    for (let index = 0; index < entries; index += 1) {
+      const entry = 10 + index * 12;
+      tags.set(view.getUint16(entry, true), view.getUint16(entry + 8, true));
+    }
+    expect(tags.get(262)).toBe(5);       // photometric: separated
+    expect(tags.get(338)).toBe(0);       // extra samples: none, because CMYK has no alpha here
+    // Pure red separates to C=0, M=255, Y=255, K=0.
+    const offset = new DataView(bytes.buffer).getUint32(10 + [...tags.keys()].indexOf(273) * 12 + 8, true);
+    expect(Array.from(bytes.subarray(offset, offset + 4))).toEqual([0, 255, 255, 0]);
+  });
+
   it("writes the profile into a TIFF as tag 34675", () => {
     const profile = buildIccProfile("display-p3");
     const blob = encodeTiffPixels(2, 2, new Uint8ClampedArray(2 * 2 * 4), profile);

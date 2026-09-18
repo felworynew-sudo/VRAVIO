@@ -211,6 +211,10 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "view.commandPalette|Mod+K||Edit", // was Mod+F — collided with the browser's own find-in-page and didn't match the shell's own menu label ("Ctrl+K"), so the shortcut was silently unreachable either way; see edit.ts's own note.
   "view.contextualTaskBar|||View", // master-plan §11: Photoshop's Window ▸ Contextual Task Bar
   "view.fit|Mod+0||View",
+  // master-plan §59.3: soft proofing — a view setting, so it touches no pixels and no history.
+  "view.gamutWarning|Mod+Shift+Y||View",
+  "view.proofColors|Mod+Y||View",
+  "view.proofSetup|||View",
   "view.resetRotation|||View",
   "view.theme|||View",
   "view.toggleGuides|Mod+;||View",

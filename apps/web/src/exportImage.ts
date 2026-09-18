@@ -1,4 +1,4 @@
-import { buildIccProfile, compositeRasterDocument, type RasterColorSpace, type RasterDocumentState } from "@vravio/env-raster";
+import { buildIccProfile, cmykPlanes, compositeRasterDocument, type RasterColorSpace, type RasterDocumentState } from "@vravio/env-raster";
 import { embedIccInJpeg, embedIccInPng } from "./icc-container";
 import { encodeGif } from "./gifEncode";
 
@@ -156,7 +156,14 @@ export function encodeBmpPixels(width: number, height: number, rgba: Uint8Clampe
 
 function encodeBmp(canvas: HTMLCanvasElement): Blob { return encodeBmpPixels(canvas.width, canvas.height, canvasPixels(canvas)); }
 
-export function encodeTiffPixels(width: number, height: number, pixels: Uint8ClampedArray, profile?: Uint8Array): Blob {
+/**
+ * `cmyk` writes the four ink planes instead of RGBA — photometric 5 (Separated), four samples, no
+ * alpha, which is what a CMYK TIFF is and what a prepress workflow expects from a CMYK document
+ * (docs/master-plan.md §59.3). The separation is derived here because this editor stores RGBA and
+ * computes the plates; that is stated in the mode's own command, and this is where it happens.
+ */
+export function encodeTiffPixels(width: number, height: number, pixels: Uint8ClampedArray, profile?: Uint8Array, cmyk = false): Blob {
+  if (cmyk) pixels = cmykPlanes(pixels, width, height);
   const entries = profile ? 15 : 14;
   const ifdOffset = 8, ifdSize = 2 + entries * 12 + 4, bitsOffset = ifdOffset + ifdSize, xResolutionOffset = bitsOffset + 8, yResolutionOffset = xResolutionOffset + 8, profileOffset = yResolutionOffset + 8, pixelOffset = profileOffset + (profile ? profile.length + (profile.length % 2) : 0);
   const buffer = new ArrayBuffer(pixelOffset + pixels.length), view = new DataView(buffer), bytes = new Uint8Array(buffer);
@@ -164,7 +171,8 @@ export function encodeTiffPixels(width: number, height: number, pixels: Uint8Cla
   let entry = ifdOffset + 2;
   const add = (tag: number, type: number, count: number, value: number) => { view.setUint16(entry, tag, true); view.setUint16(entry + 2, type, true); view.setUint32(entry + 4, count, true); if (type === 3 && count === 1) view.setUint16(entry + 8, value, true); else view.setUint32(entry + 8, value, true); entry += 12; };
   if (profile) add(34675, 7, profile.length, profileOffset);
-  add(256, 4, 1, width); add(257, 4, 1, height); add(258, 3, 4, bitsOffset); add(259, 3, 1, 1); add(262, 3, 1, 2); add(273, 4, 1, pixelOffset); add(277, 3, 1, 4); add(278, 4, 1, height); add(279, 4, 1, pixels.length); add(282, 5, 1, xResolutionOffset); add(283, 5, 1, yResolutionOffset); add(284, 3, 1, 1); add(296, 3, 1, 2); add(338, 3, 1, 2);
+  // Photometric 2 is RGB, 5 is Separated (CMYK); a CMYK file has no alpha, so tag 338 says none.
+  add(256, 4, 1, width); add(257, 4, 1, height); add(258, 3, 4, bitsOffset); add(259, 3, 1, 1); add(262, 3, 1, cmyk ? 5 : 2); add(273, 4, 1, pixelOffset); add(277, 3, 1, 4); add(278, 4, 1, height); add(279, 4, 1, pixels.length); add(282, 5, 1, xResolutionOffset); add(283, 5, 1, yResolutionOffset); add(284, 3, 1, 1); add(296, 3, 1, 2); add(338, 3, 1, cmyk ? 0 : 2);
   view.setUint32(entry, 0, true); [8, 8, 8, 8].forEach((value, index) => view.setUint16(bitsOffset + index * 2, value, true));
   view.setUint32(xResolutionOffset, 72, true); view.setUint32(xResolutionOffset + 4, 1, true); view.setUint32(yResolutionOffset, 72, true); view.setUint32(yResolutionOffset + 4, 1, true);
   if (profile) bytes.set(profile, profileOffset);
@@ -172,7 +180,7 @@ export function encodeTiffPixels(width: number, height: number, pixels: Uint8Cla
   return new Blob([buffer], { type: "image/tiff" });
 }
 
-function encodeTiff(canvas: HTMLCanvasElement, profile?: Uint8Array): Blob { return encodeTiffPixels(canvas.width, canvas.height, canvasPixels(canvas), profile); }
+function encodeTiff(canvas: HTMLCanvasElement, profile?: Uint8Array, cmyk = false): Blob { return encodeTiffPixels(canvas.width, canvas.height, canvasPixels(canvas), profile, cmyk); }
 
 async function encodeIco(canvas: HTMLCanvasElement): Promise<Blob> {
   if (canvas.width > 256 || canvas.height > 256) throw new RangeError("ICO dimensions cannot exceed 256 × 256 px");
@@ -192,10 +200,10 @@ async function encodeIco(canvas: HTMLCanvasElement): Promise<Blob> {
  * whatever opens it — right for an sRGB document and wrong for every other one (master-plan §59.3).
  * Embedding never touches a pixel: it only makes the file say what its numbers already mean.
  */
-async function encodeCanvas(canvas: HTMLCanvasElement, format: ExportFormat, quality: number, paletteColors = 256, dither = false, profile?: Uint8Array): Promise<Blob> {
+async function encodeCanvas(canvas: HTMLCanvasElement, format: ExportFormat, quality: number, paletteColors = 256, dither = false, profile?: Uint8Array, cmyk = false): Promise<Blob> {
   const info = exportFormatInfo(format);
   if (format === "bmp") return encodeBmp(canvas);
-  if (format === "tiff") return encodeTiff(canvas, profile);
+  if (format === "tiff") return encodeTiff(canvas, profile, cmyk);
   if (format === "gif") return encodeGif(canvas, paletteColors, dither);
   if (format === "ico") return encodeIco(canvas);
   if (format === "pdf") {
@@ -231,10 +239,10 @@ export interface EncodeResult {
  * Lossless formats cannot trade quality for size, so they encode once and report
  * whether they overshot.
  */
-export async function encodeToTargetBytes(canvas: HTMLCanvasElement, format: ExportFormat, targetBytes: number, steps = 8, paletteColors = 256, dither = false, profile?: Uint8Array): Promise<EncodeResult> {
+export async function encodeToTargetBytes(canvas: HTMLCanvasElement, format: ExportFormat, targetBytes: number, steps = 8, paletteColors = 256, dither = false, profile?: Uint8Array, cmyk = false): Promise<EncodeResult> {
   const info = exportFormatInfo(format);
   if (!info.lossy) {
-    const blob = await encodeCanvas(canvas, format, 1, paletteColors, dither, profile);
+    const blob = await encodeCanvas(canvas, format, 1, paletteColors, dither, profile, cmyk);
     return blob.size <= targetBytes ? { blob, quality: 1 } : { blob, quality: 1, targetMissed: true };
   }
   let low = 0.02, high = 1, best: Blob | null = null, bestQuality = low;
@@ -253,8 +261,11 @@ export async function encodeToTargetBytes(canvas: HTMLCanvasElement, format: Exp
 export async function encodeExport(state: RasterDocumentState, settings: ExportSettings, targetBytes?: number): Promise<EncodeResult> {
   const canvas = renderExportCanvas(state, settings);
   const profile = exportProfileFor(state.colorSpace);
-  if (targetBytes && targetBytes > 0) return encodeToTargetBytes(canvas, settings.format, targetBytes, 8, settings.paletteColors, settings.dither, profile);
-  return { blob: await encodeCanvas(canvas, settings.format, settings.quality, settings.paletteColors, settings.dither, profile), quality: settings.quality };
+  // A CMYK document exports its separation where the format can hold one. Only TIFF can, here:
+  // PNG has no CMYK at all, and a CMYK JPEG needs an encoder the browser does not provide.
+  const cmyk = state.colorModel === "cmyk" && settings.format === "tiff";
+  if (targetBytes && targetBytes > 0) return encodeToTargetBytes(canvas, settings.format, targetBytes, 8, settings.paletteColors, settings.dither, profile, cmyk);
+  return { blob: await encodeCanvas(canvas, settings.format, settings.quality, settings.paletteColors, settings.dither, profile, cmyk), quality: settings.quality };
 }
 
 export function exportFileName(documentName: string, format: ExportFormat): string {

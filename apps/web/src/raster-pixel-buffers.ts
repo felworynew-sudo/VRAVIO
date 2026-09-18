@@ -1,5 +1,6 @@
 import { accumulateUniquePixelBytes, decodeRasterAsset, encodeRasterAsset, isRasterAsset, TileStore, visitPixelBuffers, type RasterDocumentState, type RasterLayer, type RasterLayerMask, type RasterRect } from "@vravio/env-raster";
 import { canvasColorSpaceFor, convertPixelsColorSpace, type RasterColorSpace } from "@vravio/env-raster";
+import { applySoftProof } from "./soft-proof";
 
 /**
  * Pure pixel-buffer plumbing shared by `RasterWorkspace.tsx`'s render and
@@ -43,9 +44,17 @@ export function displayContext(canvas: HTMLCanvasElement, space: RasterColorSpac
   return { context, colorSpace: actual === "display-p3" ? "display-p3" : "srgb" };
 }
 
-/** The document's pixels as the canvas's own space needs them, converted only when they differ. */
+/**
+ * The document's pixels as the canvas's own space needs them, converted only when they differ —
+ * and put through the soft proof first, when one is on (master-plan §59.3).
+ *
+ * The proof belongs here rather than at each caller for the reason CLAUDE.md §4 gives: this is the
+ * one door pixels take to the screen, so no drawing path can forget it, and export and storage —
+ * which take other doors — keep showing the document itself rather than a simulation of a printer.
+ */
 function forDisplay(pixels: Uint8ClampedArray, from: RasterColorSpace, to: "srgb" | "display-p3"): Uint8ClampedArray {
-  return from === to ? pixels : convertPixelsColorSpace(pixels, from, to);
+  const proofed = applySoftProof(pixels, from);
+  return from === to ? proofed : convertPixelsColorSpace(proofed, from, to);
 }
 
 export function putPixels(canvas: HTMLCanvasElement, pixels: Uint8ClampedArray, width: number, height: number, space: RasterColorSpace = "srgb"): void {
