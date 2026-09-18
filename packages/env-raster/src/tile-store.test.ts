@@ -71,7 +71,7 @@ describe("TileStore.toJSON / fromJSON — the document-snapshot-store.ts round t
     const snapshot = store.toJSON();
     expect(ArrayBuffer.isView(snapshot.pixels)).toBe(true);
     expect(snapshot.pixels).toBeInstanceOf(Uint8ClampedArray);
-    expect(snapshot).toEqual({ width: TILE_SIZE, height: TILE_SIZE, channels: 4, depth: 8, pixels: store.toPixels() });
+    expect(snapshot).toEqual({ width: TILE_SIZE, height: TILE_SIZE, channels: 4, depth: 8, contentKey: store.contentKey, pixels: store.toPixels() });
   });
 
   it("plain JSON.stringify (no replacer) on a typed array is itself lossy in shape, not just on TileStore — confirming why a replacer is required downstream", () => {
@@ -550,10 +550,44 @@ describe("TileStore.placeholder — the swap-eviction marker", () => {
    * any layer was evicted. `toJSON()` is describing state, not fabricating pixels to use — "I am
    * currently evicted" is a real, round-trippable answer.
    */
+  it("names its content, and only renames it when the content changes (docs/master-plan.md §60)", () => {
+    const store = TileStore.fromPixels(fixture(TILE_SIZE, TILE_SIZE), TILE_SIZE, TILE_SIZE);
+    const name = store.contentKey;
+
+    // Reading, serialising and cloning are not changes — and the autosave decides whether to
+    // rewrite megabytes from exactly this. `toJSON()` hands back a new buffer every time, which
+    // is why the buffer's own identity cannot be the answer.
+    store.toPixels();
+    expect(store.toJSON().contentKey).toBe(name);
+    expect(store.toPixels()).not.toBe(store.toPixels());
+    const copy = store.clone();
+    expect(copy.contentKey).toBe(name);
+
+    copy.writeLocalRegion({ x: 0, y: 0, width: 1, height: 1 }, new Uint8ClampedArray([1, 2, 3, 4]));
+    expect(copy.contentKey).not.toBe(name);
+    // The clone diverging must not rename the original, which still holds the old content.
+    expect(store.contentKey).toBe(name);
+
+    store.writeRegion({ x: 0, y: 0, width: 1, height: 1 }, new Uint8ClampedArray([5, 6, 7, 8]), 1);
+    expect(store.contentKey).not.toBe(name);
+    // Two stores that diverged from the same clone must never land on the same name.
+    expect(store.contentKey).not.toBe(copy.contentKey);
+  });
+
+  it("adopts the name a snapshot carried, so a restored session is not rewritten at once", () => {
+    const store = TileStore.fromPixels(fixture(TILE_SIZE, TILE_SIZE), TILE_SIZE, TILE_SIZE);
+    // The shape the snapshot store hands back: the same plain object, its buffer rebuilt.
+    const snapshot = store.toJSON() as { pixels: Uint8ClampedArray };
+    const restored = TileStore.fromJSON({ ...snapshot, pixels: snapshot.pixels.slice() } as never);
+
+    expect(restored.contentKey).toBe(store.contentKey);
+    expect(Array.from(restored.toPixels())).toEqual(Array.from(store.toPixels()));
+  });
+
   it("toJSON()/fromJSON() round-trip an evicted store as still evicted, not as a crash", () => {
     const placeholder = TileStore.placeholder(12, 9, 4);
     const snapshot = placeholder.toJSON();
-    expect(snapshot).toEqual({ width: 12, height: 9, channels: 4, depth: 8, evicted: true });
+    expect(snapshot).toEqual({ width: 12, height: 9, channels: 4, depth: 8, contentKey: placeholder.contentKey, evicted: true });
     expect("pixels" in snapshot).toBe(false);
 
     const restored = TileStore.fromJSON(snapshot);

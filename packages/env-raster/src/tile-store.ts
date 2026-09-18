@@ -26,6 +26,24 @@ export const TILE_SIZE = 64;
 const key = (col: number, row: number) => col * 0x10000 + row;
 
 /**
+ * Names for "this exact content", handed out fresh on every change.
+ *
+ * `document-snapshot-store.ts` skips rewriting a buffer it already has on disk, and it used to
+ * decide that by the buffer's own identity — correct while a layer held one `Uint8ClampedArray`
+ * that was replaced wholesale on every edit. Tiled storage broke that silently: `toJSON()`
+ * materialises a *new* flat buffer on every call, so nothing ever looked unchanged and every
+ * autosave rewrote every layer of every open document. Measured on a 3000x3000, six-layer
+ * document: 61.8 MB written per save with nothing edited at all (docs/master-plan.md §60).
+ *
+ * A counter rather than a hash: hashing megabytes to find out whether to write megabytes costs
+ * the same order as the write. A fresh name on every mutation is exact in the direction that
+ * matters — two stores with the same key always have the same content, because the only way to
+ * get the same key is to be a clone that nobody has written to since.
+ */
+let nextContentKey = 1;
+const freshContentKey = (): string => `t${nextContentKey++}`;
+
+/**
  * Thrown by any `TileStore` method that needs real pixel bytes when called on a store built by
  * `TileStore.placeholder()` — docs/master-plan.md §37.3 item 6's swap-out marker. A quiet
  * transparent-pixel fallback here (the same convention out-of-bounds reads already use) would be
@@ -92,6 +110,12 @@ export class TileStore {
    * format, for the operations that were taught precision.
    */
   readonly depth: RasterBitDepth;
+  /**
+   * What this store's current content is called, for anything that needs to know whether it has
+   * changed since it last looked (autosave, today). Changes on every write; survives `clone()`,
+   * because a clone nobody has written to holds the same bytes.
+   */
+  #contentKey: string = freshContentKey();
   readonly #tiles: Map<number, PixelBuffer>;
   readonly #evicted: boolean;
 
@@ -106,6 +130,13 @@ export class TileStore {
 
   /** Whether this store was built by `placeholder()` and holds no real tile bytes right now. */
   get evicted(): boolean { return this.#evicted; }
+
+  /** @see `#contentKey`. */
+  get contentKey(): string { return this.#contentKey; }
+
+  /** Adopts a content name a snapshot already knows this content by — the restore side of the
+   *  save above, so the first autosave after a session reload does not rewrite what it just read. */
+  adoptContentKey(value: string): void { this.#contentKey = value; }
 
   /**
    * A store shaped like a real `width`×`height`×`channels` `TileStore` but holding zero tiles —
@@ -156,7 +187,9 @@ export class TileStore {
    *  where either one is actually written to afterward. An evicted store clones to another
    *  evicted store — cheap and harmless, since the next real read or write still throws. */
   clone(): TileStore {
-    return new TileStore(this.width, this.height, this.channels, new Map(this.#tiles), this.#evicted, this.depth);
+    const copy = new TileStore(this.width, this.height, this.channels, new Map(this.#tiles), this.#evicted, this.depth);
+    copy.#contentKey = this.#contentKey;
+    return copy;
   }
 
   /** The same content held at another depth — what Image ▸ Mode ▸ 16 Bits/Channel does to every
@@ -220,22 +253,25 @@ export class TileStore {
    * still wherever the layer swap manager's own storage already has them, not duplicated into the
    * autosave snapshot a second time.
    */
-  toJSON(): { width: number; height: number; channels: number; depth: RasterBitDepth; pixels: PixelBuffer } | { width: number; height: number; channels: number; depth: RasterBitDepth; evicted: true } {
-    if (this.#evicted) return { width: this.width, height: this.height, channels: this.channels, depth: this.depth, evicted: true };
+  toJSON(): { width: number; height: number; channels: number; depth: RasterBitDepth; contentKey: string; pixels: PixelBuffer } | { width: number; height: number; channels: number; depth: RasterBitDepth; contentKey: string; evicted: true } {
+    if (this.#evicted) return { width: this.width, height: this.height, channels: this.channels, depth: this.depth, contentKey: this.#contentKey, evicted: true };
     // The store's own format, not the 8-bit view: a save that wrote `toPixels()` would quietly
     // turn every 16-bit document into an 8-bit one the first time the session was restored.
-    return { width: this.width, height: this.height, channels: this.channels, depth: this.depth, pixels: this.toPixelsDeep() };
+    return { width: this.width, height: this.height, channels: this.channels, depth: this.depth, contentKey: this.#contentKey, pixels: this.toPixelsDeep() };
   }
 
   /** The other half of `toJSON()`'s round trip — rebuilds a real `TileStore` (tiled, with a
    *  working `#tiles` map) from the plain shape `toJSON()`/`JSON.parse` leave behind, or another
    *  placeholder from the `{ evicted: true }` shape a store evicted at save time leaves instead. */
-  static fromJSON(value: { width: number; height: number; channels: number; depth?: RasterBitDepth; pixels: PixelBuffer } | { width: number; height: number; channels: number; depth?: RasterBitDepth; evicted: true }): TileStore {
+  static fromJSON(value: { width: number; height: number; channels: number; depth?: RasterBitDepth; contentKey?: string; pixels: PixelBuffer } | { width: number; height: number; channels: number; depth?: RasterBitDepth; contentKey?: string; evicted: true }): TileStore {
     // `depth` is optional on the way in: every save written before §59.2 is 8-bit, and the buffer
     // that comes back from `JSON.parse` says so itself anyway.
     const depth = value.depth ?? ("pixels" in value ? bufferDepth(value.pixels) : 8);
-    if ("pixels" in value) return TileStore.fromPixels(value.pixels, value.width, value.height, value.channels, depth);
-    return TileStore.placeholder(value.width, value.height, value.channels, depth);
+    const store = "pixels" in value
+      ? TileStore.fromPixels(value.pixels, value.width, value.height, value.channels, depth)
+      : TileStore.placeholder(value.width, value.height, value.channels, depth);
+    if (value.contentKey) store.adoptContentKey(value.contentKey);
+    return store;
   }
 
   /** One pixel's channel values, without materialising anything — `layerAlphaAt`'s reason to
@@ -297,6 +333,7 @@ export class TileStore {
    */
   writeRegion(rect: RasterRect, source: PixelBuffer, sourceWidth: number): void {
     if (this.#evicted) throw new EvictedTileStoreError("writeRegion");
+    this.#contentKey = freshContentKey();
     // A write at another depth is converted before it lands, so an 8-bit tool can keep writing
     // into a 16-bit layer exactly as it did - the same boundary `toPixels()` holds on the way out.
     if (bufferDepth(source) !== this.depth) source = convertPixelDepth(source, bufferDepth(source), this.depth);
@@ -334,6 +371,7 @@ export class TileStore {
    */
   writeLocalRegion(rect: RasterRect, patch: PixelBuffer): void {
     if (this.#evicted) throw new EvictedTileStoreError("writeLocalRegion");
+    this.#contentKey = freshContentKey();
     if (bufferDepth(patch) !== this.depth) patch = convertPixelDepth(patch, bufferDepth(patch), this.depth);
     const left = Math.max(0, rect.x), top = Math.max(0, rect.y);
     const right = Math.min(this.width, rect.x + rect.width), bottom = Math.min(this.height, rect.y + rect.height);

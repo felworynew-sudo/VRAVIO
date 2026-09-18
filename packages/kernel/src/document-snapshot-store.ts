@@ -12,6 +12,18 @@ interface SnapshotEnvelope {
 }
 
 type TypedArray = Uint8Array | Uint8ClampedArray | Uint16Array | Int16Array | Uint32Array | Int32Array | Float32Array | Float64Array;
+
+/**
+ * One buffer on its way to storage, and the name its owner knows its content by.
+ *
+ * `contentKey` comes from `TileStore.toJSON` and is the fix for the regression §60 measured: a
+ * tiled layer materialises a *fresh* flat buffer on every save, so deciding "has this changed?"
+ * from the buffer's own identity always answered yes, and every autosave rewrote every layer of
+ * every open document — 61.8 MB per save on a six-layer 3000x3000 file with nothing edited.
+ * Buffers with no owner to name them (a selection mask, an asset) keep the identity rule, which is
+ * still correct for them: they really are replaced wholesale when they change.
+ */
+interface SerializedBinary { readonly view: TypedArray; readonly contentKey?: string }
 const SESSION_KEY = "autosave/session.v1.json";
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -35,16 +47,19 @@ const typedArrayFactories: Record<string, (buffer: ArrayBuffer) => TypedArray> =
  * of a thirty-layer file, before a single byte was written; and it destroyed
  * the identity the caller needs to tell which buffers actually changed.
  */
-function serializeDocument(document: VravioDocument): { envelope: SnapshotEnvelope; binaries: TypedArray[] } {
-  const binaries: TypedArray[] = [];
-  const state = JSON.parse(JSON.stringify(document.state, (_key, value: unknown) => {
+function serializeDocument(document: VravioDocument): { envelope: SnapshotEnvelope; binaries: SerializedBinary[] } {
+  const binaries: SerializedBinary[] = [];
+  // A plain function, not an arrow: `this` is the object the value was read from, which is how a
+  // buffer's `contentKey` (written next to it by `TileStore.toJSON`) reaches the writer below.
+  const state = JSON.parse(JSON.stringify(document.state, function (this: Record<string, unknown>, _key: string, value: unknown) {
     if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
       const view = value as TypedArray;
-      const index = binaries.push(view) - 1;
+      const contentKey = typeof this?.contentKey === "string" ? this.contentKey : undefined;
+      const index = binaries.push({ view, ...(contentKey ? { contentKey } : {}) }) - 1;
       return { __vravio: "typed-array", index, arrayType: view.constructor.name };
     }
     if (value instanceof ArrayBuffer) {
-      const index = binaries.push(new Uint8Array(value)) - 1;
+      const index = binaries.push({ view: new Uint8Array(value) }) - 1;
       return { __vravio: "array-buffer", index };
     }
     if (value instanceof Set) return { __vravio: "set", values: [...value] };
@@ -84,14 +99,22 @@ const binaryIdOf = (key: string): number => {
   return match ? Number(match[1]) : -1;
 };
 
-/** Re-links restored buffers to the keys they were read from, in document order. */
-function rememberRestoredBinaries(document: VravioDocument, keys: readonly string[], into: WeakMap<ArrayBufferView, string>): void {
+/**
+ * Re-links restored buffers to the keys they were read from, in document order.
+ *
+ * Content-named buffers are re-linked by name instead: a restored `TileStore` adopts the name its
+ * snapshot carried, so the first autosave after a session reload recognises it and writes nothing.
+ * Without this the reload itself cost a full rewrite of every document that was open.
+ */
+function rememberRestoredBinaries(document: VravioDocument, keys: readonly string[], into: WeakMap<ArrayBufferView, string>, byContent: Map<string, string>): void {
   let index = 0;
-  JSON.stringify(document.state, (_key, value: unknown) => {
+  JSON.stringify(document.state, function (this: Record<string, unknown>, _key: string, value: unknown) {
     if (ArrayBuffer.isView(value) && !(value instanceof DataView)) {
       const key = keys[index];
       index += 1;
-      if (key) into.set(value as ArrayBufferView, key);
+      const contentKey = typeof this?.contentKey === "string" ? this.contentKey : undefined;
+      if (key && contentKey) byContent.set(contentKey, key);
+      else if (key) into.set(value as ArrayBufferView, key);
       return null;
     }
     if (value instanceof Set) return null;
@@ -112,6 +135,9 @@ export class DocumentSnapshotStore {
    * time, which is what the freezes during editing actually were.
    */
   readonly #binaryKeys = new WeakMap<ArrayBufferView, string>();
+  /** The same answer for buffers that are rebuilt on every save and therefore have no stable
+   *  identity to key on — see `SerializedBinary.contentKey`. */
+  readonly #contentKeys = new Map<string, string>();
   /** Keys the pruning pass has confirmed are still on disk. */
   readonly #stored = new Set<string>();
   #nextBinaryId = 0;
@@ -168,12 +194,13 @@ export class DocumentSnapshotStore {
       const snapshotKey = `${prefix}/document.json`;
       const { envelope, binaries } = serializeDocument(document);
       const binaryKeys: string[] = [];
-      for (const view of binaries) {
-        let key = this.#binaryKeys.get(view);
+      for (const binary of binaries) {
+        const { view, contentKey } = binary;
+        let key = contentKey ? this.#contentKeys.get(contentKey) : this.#binaryKeys.get(view);
         if (!key || !this.#stored.has(key)) {
           key ??= `${prefix}/binaries/${this.#nextBinaryId++}.bin`;
           await this.#adapter.set(key, new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
-          this.#binaryKeys.set(view, key);
+          if (contentKey) this.#contentKeys.set(contentKey, key); else this.#binaryKeys.set(view, key);
           this.#stored.add(key);
         }
         binaryKeys.push(key);
@@ -209,7 +236,7 @@ export class DocumentSnapshotStore {
     const document = deserializeDocument(envelope, binaries);
     // Remember where the restored buffers came from, so the first save after a
     // reload does not rewrite the whole document it just read.
-    if (envelope.binaryKeys) rememberRestoredBinaries(document, envelope.binaryKeys, this.#binaryKeys);
+    if (envelope.binaryKeys) rememberRestoredBinaries(document, envelope.binaryKeys, this.#binaryKeys, this.#contentKeys);
     this.#nextBinaryId = Math.max(this.#nextBinaryId, ...(envelope.binaryKeys ?? []).map(binaryIdOf), 0) + 1;
     return document;
   }

@@ -340,6 +340,52 @@ describe("DocumentSnapshotStore", () => {
     expect(writes.filter((key) => key.includes("/binaries/")).length).toBe(1);
   });
 
+  it("does not rewrite a buffer that is rebuilt on every save but says what its content is called", async () => {
+    // The regression this exists for (docs/master-plan.md §60): a tiled layer materialises a
+    // *fresh* flat buffer every time it is serialised, so "has this changed?" answered from the
+    // buffer's identity always said yes — every autosave rewrote every layer of every open
+    // document (61.8 MB per save, measured on a six-layer 3000x3000 file with nothing edited).
+    // The tests above all used plain buffers, which is exactly why nothing caught it. This one
+    // states the contract instead of the class: an owner that rebuilds its buffer names the
+    // content next to it, and the store trusts the name.
+    const writes: string[] = [];
+    const inner = new MemoryStorageAdapter();
+    const adapter = {
+      get: (key: string) => inner.get(key),
+      set: (key: string, value: Uint8Array) => { writes.push(key); return inner.set(key, value); },
+      remove: (key: string) => inner.remove(key),
+      list: (prefix?: string) => inner.list(prefix),
+      clear: () => inner.clear(),
+    };
+    const snapshots = new DocumentSnapshotStore(adapter);
+    const documents = new DocumentStore();
+    /** A stand-in for `TileStore`: a fresh buffer on every serialisation, plus a content name. */
+    class Rebuilt {
+      constructor(readonly bytes: readonly number[], public contentKey: string) {}
+      toJSON() { return { contentKey: this.contentKey, pixels: new Uint8ClampedArray(this.bytes) }; }
+    }
+    const tiles = new Rebuilt([1, 2, 3, 4], "t1");
+    const document = documents.create("raster", "Tiled", { tiles });
+
+    await snapshots.saveSession(documents.list());
+    const first = writes.filter((key) => key.includes("/binaries/")).length;
+    writes.length = 0;
+
+    // Nothing edited: a new buffer comes out of `toJSON`, but it is the same content.
+    documents.update<{ tiles: Rebuilt }>(document.id, (state) => { state.tiles = state.tiles; });
+    await snapshots.saveSession(documents.list());
+    const unchangedWrites = writes.filter((key) => key.includes("/binaries/")).length;
+    writes.length = 0;
+
+    // Edited: a new name, so it is written again.
+    documents.update<{ tiles: Rebuilt }>(document.id, (state) => { state.tiles = new Rebuilt([9, 9, 9, 9], "t2"); });
+    await snapshots.saveSession(documents.list());
+
+    expect(first).toBe(1);
+    expect(unchangedWrites).toBe(0);
+    expect(writes.filter((key) => key.includes("/binaries/")).length).toBe(1);
+  });
+
   it("does not rewrite a document it has just restored", async () => {
     const writes: string[] = [];
     const inner = new MemoryStorageAdapter();
