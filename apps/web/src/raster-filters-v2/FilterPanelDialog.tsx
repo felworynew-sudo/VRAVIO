@@ -3,6 +3,7 @@ import { text } from "../i18n";
 import type { Language } from "../store";
 import type { FilterPanelDefinition } from "./types";
 import { useModalPresence } from "../modals/ModalBackdrop";
+import { filterRunsAtDepth } from "@vravio/env-raster";
 
 /**
  * The compact standalone filter dialog docs/master-plan.md §51 found in the
@@ -17,10 +18,12 @@ import { useModalPresence } from "../modals/ModalBackdrop";
  * Gallery" surface and is untouched by this — the two are not one dialog
  * wearing two skins, they are genuinely different Photoshop surfaces.
  */
-export function FilterPanelDialog({ definition, initialSettings, language, onPreview, onCancel, onApply }: {
+export function FilterPanelDialog({ definition, initialSettings, language, documentDepth = 8, onPreview, onCancel, onApply }: {
   definition: FilterPanelDefinition;
   initialSettings: Record<string, number>;
   language: Language;
+  /** The active layer's bits per channel, so the dialog can say when this filter will not use them. */
+  documentDepth?: number;
   onPreview(settings: Record<string, number> | null): void;
   onCancel(): void;
   onApply(settings: Record<string, number>): void;
@@ -46,6 +49,10 @@ export function FilterPanelDialog({ definition, initialSettings, language, onPre
           <button className="primary" onClick={() => onApply(settings)}>{text(language, "Confirm", "Подтвердить")}</button>
           <button onClick={reset}>{text(language, "Reset", "Сбросить")}</button>
           <label><input type="checkbox" checked={preview} onChange={(event) => setPreview(event.target.checked)}/>{text(language, "Preview", "Просмотр")}</label>
+          {/* Said out loud rather than left to be assumed (master-plan §59.2b): in a 16- or 32-bit
+              document, a filter without a depth-aware implementation computes on an 8-bit view and
+              the result is written back deep. The picture is right; the precision is not kept. */}
+          {documentDepth > 8 && !filterRunsAtDepth(definition.id) && <p className="filter-panel-note">{text(language, `Computed at 8 bits; this document is ${documentDepth}-bit.`, `Считается в 8 битах; документ — ${documentDepth}-битный.`)}</p>}
         </aside>
       </div>
     </section>

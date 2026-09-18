@@ -74,7 +74,8 @@ import { addClipFromAsset as addVideoClipFromAsset } from "./video-commands";
 import { isVideoDocumentState } from "@vravio/env-video";
 import "./styles.css";
 import { isModalOpen, ModalBackdrop } from "./modals/ModalBackdrop";
-import { filterLayerPixels } from "./raster-filter-run";
+import { filterLayerPixels, type LayerFilterResult } from "./raster-filter-run";
+import { filterRunsAtDepth, type PixelBuffer } from "@vravio/env-raster";
 
 export function App() {
   ensureCommandsRegistered();
@@ -390,7 +391,33 @@ export function App() {
       saveInFlight.current.delete(active.id);
     }
   };
-  const applyFilter = (pixels: Uint8ClampedArray, label: string) => { if (!active || !isRasterDocumentState(active.state)) return; const id=active.id,layerId=active.state.activeLayerId,state0=active.state,target=state0.layers.find((item)=>item.id===layerId);if(!target)return;
+  const applyFilter = (pixels: Uint8ClampedArray, label: string, deep?: LayerFilterResult["deep"]) => { if (!active || !isRasterDocumentState(active.state)) return; const id=active.id,layerId=active.state.activeLayerId,state0=active.state,target=state0.layers.find((item)=>item.id===layerId);if(!target)return;
+    // A deep layer commits the filter's own deep buffers, in the layer's own frame (master-plan
+    // §59.2b). The selection still decides what lands — that rule does not care about depth — so it
+    // is applied here at the buffer's own precision rather than through the 8-bit pair.
+    if (deep) {
+      const { rect } = deep;
+      const mask = state0.selection?.mask ?? null;
+      const committed = deep.after.slice();
+      if (mask) {
+        for (let y = 0; y < rect.height; y += 1) {
+          const documentY = target.bounds.y + y;
+          for (let x = 0; x < rect.width; x += 1) {
+            const documentX = target.bounds.x + x;
+            const inside = documentX >= 0 && documentY >= 0 && documentX < state0.width && documentY < state0.height;
+            const coverage = inside ? mask[documentY * state0.width + documentX]! / 255 : 0;
+            if (coverage === 1) continue;
+            const index = (y * rect.width + x) * 4;
+            for (let channel = 0; channel < 4; channel += 1) committed[index + channel] = deep.before[index + channel]! + (deep.after[index + channel]! - deep.before[index + channel]!) * coverage;
+          }
+        }
+      }
+      const assignDeep = (value: PixelBuffer) => { kernel.documents.update<RasterDocumentState>(id, (state) => { const layer = state.layers.find((item) => item.id === layerId); if (layer?.tiles) { const tiles = layer.tiles.clone(); tiles.writeLocalRegion(rect, value); layer.tiles = tiles; layer.pixelsRevision += 1; } }); };
+      const deepHistory = kernel.historyByDocument.get(id);
+      if (deepHistory) void deepHistory.execute({ label: `Filter: ${label}`, memoryEstimate: deep.before.byteLength + committed.byteLength, redo: () => assignDeep(committed), undo: () => assignDeep(deep.before) });
+      else assignDeep(committed);
+      return;
+    }
     // Filters run over the layer's own buffer, but the selection mask is in
     // canvas coordinates, so both sides are brought into canvas space before
     // the rule is applied and trimmed again on the way in.
@@ -413,7 +440,7 @@ export function App() {
     if (!target) return;
     const last = lastFilter;
     void withBusy(text(store.language, "Applying filter", "Применение фильтра"), () => filterLayerPixels(state0, target, last.id, last.settings))
-      .then(({ after }) => applyFilter(after, last.label));
+      .then(({ after, deep }) => applyFilter(after, last.label, deep));
   };
   // A Filter-menu item for an already-implemented catalog filter opens that
   // filter's own small standalone panel (docs/master-plan.md §51), not the Gallery.
@@ -509,8 +536,11 @@ export function App() {
     const key = JSON.stringify([active.id, target.id, target.pixelsRevision, filterId, settings]);
     const ready = filterPanelResultRef.current?.key === key ? filterPanelResultRef.current.pixels : null;
     const label = definition?.name ?? filterId;
-    const filtered = ready ?? (await withBusy(text(store.language, "Applying filter", "Применение фильтра"), () => filterLayerPixels(state0, target, filterId, settings))).after;
-    applyFilter(filtered, label);
+    // The cached preview result is the 8-bit pair; a deep layer recomputes so the commit is the
+    // deep one. That costs one extra run on Confirm and keeps the depth the document paid for.
+    const deepLayer = (target.tiles?.depth ?? 8) !== 8 && filterRunsAtDepth(filterId);
+    const computed = ready && !deepLayer ? null : await withBusy(text(store.language, "Applying filter", "Применение фильтра"), () => filterLayerPixels(state0, target, filterId, settings));
+    applyFilter(computed ? computed.after : ready!, label, computed?.deep);
     setLastFilter({ id: filterId, settings, label });
     previewFilterPanel(null);
     setFilterPanelId(null);
@@ -529,7 +559,7 @@ export function App() {
     if (!target) return;
     const settings = Object.fromEntries(definition.parameters.map((parameter) => [parameter.id, parameter.value]));
     void withBusy(text(store.language, "Applying filter", "Применение фильтра"), () => filterLayerPixels(state0, target, id, settings))
-      .then(({ after }) => { applyFilter(after, definition.name); setLastFilter({ id, settings, label: definition.name }); });
+      .then(({ after, deep }) => { applyFilter(after, definition.name, deep); setLastFilter({ id, settings, label: definition.name }); });
   };
   const openCameraRawReprocess = async () => {
     if (!active) return;
@@ -1367,7 +1397,7 @@ export function App() {
     {filterPanelId && active && isRasterDocumentState(active.state) && (() => {
       const definition = filterPanelDefinitionFor(filterPanelId);
       if (!definition) return null;
-      return <FilterPanelDialog definition={definition} initialSettings={definition.defaults} language={store.language} onPreview={previewFilterPanel} onCancel={() => { previewFilterPanel(null); setFilterPanelId(null); }} onApply={applyFilterPanel}/>;
+      return <FilterPanelDialog definition={definition} initialSettings={definition.defaults} language={store.language} documentDepth={activeRasterState?.bitDepth ?? 8} onPreview={previewFilterPanel} onCancel={() => { previewFilterPanel(null); setFilterPanelId(null); }} onApply={applyFilterPanel}/>;
     })()}
     {liquifyOpen && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<LiquifyDialog layer={layer} language={store.language} onApply={applyFilter} onClose={()=>setLiquifyOpen(false)}/>:null;})()}
     {blurGalleryType && active && isRasterDocumentState(active.state) && (()=>{const state=active.state;if(!isRasterDocumentState(state))return null;const layer=state.layers.find((item)=>item.id===state.activeLayerId);return layer?<BlurGalleryDialog key={blurGalleryType} layer={layer} initialType={blurGalleryType} language={store.language} onApply={applyFilter} onClose={()=>setBlurGalleryType(null)}/>:null;})()}

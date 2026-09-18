@@ -1130,3 +1130,13 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
    intrinsic 150px height, leaving most of the canvas column blank. The
    explicit percentage follows the already-sized Dockview canvas instead. */
 .audiomass-workspace{position:relative;display:flex;width:100%;height:100%;min-width:0;min-height:0;background:var(--bg)}.audiomass-workspace iframe{display:block;flex:1;width:100%;height:100%;min-width:0;border:0;background:var(--surface)}.audiomass-notice{position:absolute;z-index:2;top:10px;left:50%;transform:translateX(-50%);max-width:min(620px,calc(100% - 32px));padding:9px 12px;border:1px solid color-mix(in srgb,var(--warning) 65%,var(--border));border-radius:6px;background:color-mix(in srgb,var(--surface) 94%,var(--warning));color:var(--text);box-shadow:0 8px 24px #0006;font-size:12px}.audiomass-notice small{display:block;margin-top:3px;color:var(--muted)}
+
+/* The filter panel's honesty note (master-plan §59.2b): a filter that computes at 8 bits in a deep
+   document says so here. Muted and small — it is a fact about the run, not a warning. */
+.filter-panel-dialog .filter-panel-note {
+  margin: 4px 0 0;
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--muted);
+  max-width: 150px;
+}
