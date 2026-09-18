@@ -1,3 +1,4 @@
+import { labEncodedToRgb } from "./color-models";
 import type { RasterDocumentState, RasterLayer, RasterLayerMask, RasterRect, RgbaColor } from "./types";
 import { renderLayerEffects, requiredSourceRegion } from "./effects";
 import { applyAdjustment } from "./adjustments";
@@ -922,7 +923,13 @@ export function compositeRasterRegionWithCheckpoint(
   // No checkpoint was passed in at all: there is no earlier-run signal for where a future edit is
   // likely to land, so the only sound default is "everything" — the very next call, if anything
   // changed, discovers the real boundary itself and narrows to it from there.
-  return { pixels: output, checkpoint: boundarySnapshot ?? { signatures, output, clippingBaseByParent, groupCheckpoints } };
+  // A Lab document stores Lab-encoded channels, and this is the one door every consumer of "the
+  // picture" comes through — screen, thumbnail, export, preview — so this is where Lab becomes RGB
+  // (docs/master-plan.md §59.3). The checkpoint keeps the Lab buffer, because a resumed composite
+  // must carry on in the document's own numbers; only what leaves this function is converted, and
+  // only for a Lab document, so every other document pays nothing.
+  const shown = state.colorModel === "lab" ? labEncodedToRgb(output, state.colorSpace) : output;
+  return { pixels: shown, checkpoint: boundarySnapshot ?? { signatures, output, clippingBaseByParent, groupCheckpoints } };
 }
 
 /**

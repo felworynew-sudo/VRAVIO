@@ -130,6 +130,26 @@ export function colorSpaceModal(props: { current: string; mode: "assign" | "conv
   });
 }
 
+/** Asks how many colours the indexed table should hold, and whether to dither (master-plan §59.3). */
+export function indexedColorModal(props: { colors: number }): Promise<{ colors: number; dither: boolean } | null> {
+  return new Promise((resolve) => {
+    const close = openModal("indexed-color", {
+      ...props,
+      onResolve: (answer: { colors: number; dither: boolean } | null) => { close(); resolve(answer); },
+    });
+  });
+}
+
+/** Shows the indexed document's colour table, and lets an entry be edited (Image ▸ Mode ▸ Color Table). */
+export function colorTableModal(props: { colors: readonly string[] }): Promise<readonly string[] | null> {
+  return new Promise((resolve) => {
+    const close = openModal("color-table", {
+      ...props,
+      onResolve: (answer: readonly string[] | null) => { close(); resolve(answer); },
+    });
+  });
+}
+
 /**
  * Shows an error to the user.
  *

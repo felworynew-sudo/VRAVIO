@@ -105,7 +105,11 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "image.depth.32|||Image",
   "image.depth.8|||Image",
   // master-plan §59: Image ▸ Mode's two colour models — the modes this engine can actually be in.
+  "image.mode.cmyk|||Image",
+  "image.mode.colorTable|||Image",
   "image.mode.grayscale|||Image",
+  "image.mode.indexed|||Image",
+  "image.mode.lab|||Image",
   "image.mode.rgb|||Image",
   "image.openElsewhereBranch|||Object",
   "image.openElsewhere|||Object",

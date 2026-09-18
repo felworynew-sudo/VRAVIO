@@ -1,6 +1,7 @@
 import type { ColorLookupTable } from "./lut";
 import type { TileStore } from "./tile-store";
 import type { RasterColorSpace } from "./color-space";
+import type { RasterColorModel } from "./color-models";
 
 export type RasterBlendMode = "normal" | "dissolve" | "darken" | "multiply" | "colorBurn" | "linearBurn" | "darkerColor" | "lighten" | "screen" | "colorDodge" | "linearDodge" | "lighterColor" | "overlay" | "softLight" | "hardLight" | "vividLight" | "linearLight" | "pinLight" | "hardMix" | "difference" | "exclusion" | "subtract" | "divide" | "hue" | "saturation" | "color" | "luminosity";
 export type RasterLayerKind = "pixel" | "text" | "adjustment" | "fill" | "group" | "smart" | "shape" | "3d";
@@ -400,15 +401,19 @@ export interface RasterDocumentState {
   /** The document's working colour space — what its numbers mean (docs/master-plan.md §59). */
   colorSpace: RasterColorSpace;
   /**
-   * The colour model the document is in — Photoshop's Image ▸ Mode (§59).
+   * The colour model the document is in — Photoshop's Image ▸ Mode (§59, §59.3).
    *
-   * Pixels are stored RGBA either way; "grayscale" means every layer holds only greys and the
-   * document is treated as one channel by anything that cares (export, the mode menu's own tick).
-   * CMYK, Lab, Indexed and Multichannel are not here: each needs its own storage and compositing,
-   * and a mode that only renamed the document would be exactly the "setting that does nothing"
-   * CLAUDE.md §3 is about.
+   * Pixels are stored RGBA in every model; what the model changes is which colours a pixel is
+   * *allowed* to be, and the rules engine holds each one to it (CLAUDE.md §4's single door):
+   * "grayscale" keeps every pixel grey, "cmyk" keeps every pixel inside a four-ink separation's
+   * gamut, "indexed" keeps every pixel on `palette`, and "lab" is stored as Lab-encoded channels.
+   * Each mode's own command says exactly what it stores and what it does not — in particular CMYK
+   * derives its plates on export rather than storing four of them, so there is no per-plate curve
+   * yet. Multichannel is still absent for that reason: it would be a rename and nothing else.
    */
-  colorModel: "rgb" | "grayscale";
+  colorModel: RasterColorModel;
+  /** Indexed mode's colour table, as hex strings — Photoshop's Image ▸ Mode ▸ Color Table. */
+  palette?: readonly string[];
   resolution: number;
   resolutionUnit: "ppi" | "ppcm";
   /** 16 and 32 bit force the precise compositing path; see composite-plan.ts. */
@@ -423,7 +428,7 @@ export interface RasterDocumentState {
 
 export interface RasterDocumentOptions {
   colorSpace?: RasterColorSpace;
-  colorModel?: "rgb" | "grayscale";
+  colorModel?: RasterColorModel;
   bitDepth?: 8 | 16 | 32;
   resolution?: number;
   resolutionUnit?: "ppi" | "ppcm";

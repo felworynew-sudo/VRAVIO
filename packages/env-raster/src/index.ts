@@ -4,6 +4,8 @@ export * from "./pixel-format";
 export * from "./bit-depth";
 export * from "./adjustments-deep";
 export * from "./icc";
+export * from "./color-models";
+export * from "./indexed-palette";
 export * from "./adjustments";
 export * from "./auto-levels";
 export * from "./clone";
