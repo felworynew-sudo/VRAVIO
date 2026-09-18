@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { WARP_PRESETS, applyRasterFilter, rasterFilterCatalog, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, compositeRasterRegion, computeAlignOffsets, rasterColorSpaceById, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerOrigin, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterLayer, type RasterRect } from "@vravio/env-raster";
+import { WARP_PRESETS, adjustLayerPixelsDeep, applyRasterFilter, rasterFilterCatalog, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, compositeRasterRegion, computeAlignOffsets, rasterColorSpaceById, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerOrigin, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterLayer, type RasterRect } from "@vravio/env-raster";
 import { maskToRgba, rgbaToMask } from "./raster-pixel-buffers";
 import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
 import { withBusy, withBusyPainted } from "./busy";
@@ -688,6 +688,20 @@ export function App() {
       return;
     }
     if (target.kind !== "pixel") return;
+    // A deep layer is adjusted in its own format and its own frame: the canvas-sized 8-bit buffer
+    // the path below materialises is lossless at 8 bits and is the narrow part at 16 or 32
+    // (master-plan §59.2a). Undo keeps the previous tiles, since the adjustment is not reversible
+    // by re-running it.
+    if ((target.tiles?.depth ?? 8) !== 8) {
+      const deep = adjustLayerPixelsDeep(target, value, document.state.selection, document.state.width, document.state.height);
+      if (deep) {
+        const assignDeep = (pixels: typeof deep.before) => { kernel.documents.update<RasterDocumentState>(document.id, (state) => { const layer = state.layers.find((item) => item.id === target.id); if (layer?.tiles) { const tiles = layer.tiles.clone(); tiles.writeLocalRegion(deep.rect, pixels); layer.tiles = tiles; layer.pixelsRevision += 1; } }); };
+        if (history) void history.execute({ label: `Adjustment: ${definition?.name.en ?? value.kind}`, memoryEstimate: deep.before.byteLength + deep.after.byteLength, redo: () => assignDeep(deep.after), undo: () => assignDeep(deep.before) });
+        else assignDeep(deep.after);
+        previewImageAdjustment(null); setAdjustmentDialog(null);
+        return;
+      }
+    }
     const before = layerDocumentPixels(target, document.state.width, document.state.height).slice(), confined = adjustedPixels(before, value, document.state.selection);
     const assign = (pixels: Uint8ClampedArray) => { kernel.documents.update<RasterDocumentState>(document.id, (state) => { const layer = state.layers.find((item) => item.id === target.id); if (layer) setLayerPixels(layer, pixels, state.width, state.height, null, { keepOutsideDocument: true }); }); };
     if (history) void history.execute({ label: `Adjustment: ${definition?.name.en ?? value.kind}`, memoryEstimate: before.byteLength + confined.byteLength, redo: () => assign(confined), undo: () => assign(before) }); else assign(confined);

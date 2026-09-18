@@ -4,10 +4,23 @@ import type { LevelsChannelPoints, RasterAdjustment, SelectiveColorRange } from 
 
 const byte = (value: number): number => Math.max(0, Math.min(255, Math.round(value)));
 
-/** Natural cubic spline LUT, adapted from Patchy (MIT), adjustment_layer.cpp. */
+/** Natural cubic spline LUT, adapted from Patchy (MIT), adjustment_layer.cpp — the 8-bit table
+ *  every existing caller indexes, built from `curveSpline` below so the two cannot drift. */
 export function buildCurveLut(points: Array<{ x: number; y: number }>): Uint8ClampedArray {
+  return mapLut(curveSpline(points));
+}
+
+/**
+ * The same spline as a continuous function of a 0…255 input, unrounded.
+ *
+ * Exists for the deep path (docs/master-plan.md §59.2a): a 256-entry byte table is exactly the
+ * quantisation 16-bit storage was chosen to avoid, so a 16- or 32-bit adjustment samples this at
+ * far finer steps instead. `buildCurveLut` is this function rounded into 256 slots, which keeps
+ * the 8-bit results byte-identical to what they were before the split.
+ */
+export function curveSpline(points: Array<{ x: number; y: number }>): (value: number) => number {
   const ordered = [...points].sort((a, b) => a.x - b.x);
-  if (ordered.length < 2) return Uint8ClampedArray.from({ length: 256 }, (_, index) => index);
+  if (ordered.length < 2) return (value: number) => value;
   const count = ordered.length, second = new Float64Array(count), work = new Float64Array(count - 1);
   for (let index = 1; index < count - 1; index += 1) {
     const span = Math.max(1e-9, ordered[index + 1]!.x - ordered[index - 1]!.x);
@@ -19,16 +32,14 @@ export function buildCurveLut(points: Array<{ x: number; y: number }>): Uint8Cla
     work[index] = (6 * (right - left) / span - sigma * work[index - 1]!) / pivot;
   }
   for (let index = count - 2; index >= 0; index -= 1) second[index] = second[index]! * second[index + 1]! + work[index]!;
-  const lut = new Uint8ClampedArray(256);
-  for (let value = 0; value < 256; value += 1) {
-    if (value <= ordered[0]!.x) { lut[value] = byte(ordered[0]!.y); continue; }
-    if (value >= ordered[count - 1]!.x) { lut[value] = byte(ordered[count - 1]!.y); continue; }
+  return (value: number): number => {
+    if (value <= ordered[0]!.x) return ordered[0]!.y;
+    if (value >= ordered[count - 1]!.x) return ordered[count - 1]!.y;
     let high = 1; while (ordered[high]!.x < value) high += 1;
     const low = high - 1, width = ordered[high]!.x - ordered[low]!.x;
     const a = (ordered[high]!.x - value) / width, b = (value - ordered[low]!.x) / width;
-    lut[value] = byte(a * ordered[low]!.y + b * ordered[high]!.y + ((a ** 3 - a) * second[low]! + (b ** 3 - b) * second[high]!) * width ** 2 / 6);
-  }
-  return lut;
+    return a * ordered[low]!.y + b * ordered[high]!.y + ((a ** 3 - a) * second[low]! + (b ** 3 - b) * second[high]!) * width ** 2 / 6;
+  };
 }
 
 export function rgbToHsl(r: number, g: number, b: number): [number, number, number] {
@@ -51,22 +62,33 @@ export function hslToRgb(h: number, s: number, l: number): [number, number, numb
  * channel's own input value. Shared between `adjustRgb` (one call, one value) and
  * `buildPointLut` (256 calls, once, then indexed) below — same formula, two speeds.
  */
-const levelsPoint = (points: LevelsChannelPoints) => (value: number): number => {
+const levelsPointRaw = (points: LevelsChannelPoints) => (value: number): number => {
   const normalized = Math.max(0, Math.min(1, (value - points.blackInput) / Math.max(1, points.whiteInput - points.blackInput)));
-  return byte(points.blackOutput + normalized ** (1 / Math.max(.01, points.gamma)) * (points.whiteOutput - points.blackOutput));
+  return points.blackOutput + normalized ** (1 / Math.max(.01, points.gamma)) * (points.whiteOutput - points.blackOutput);
 };
+/**
+ * Every point function comes in two forms: `…Raw`, the formula itself in a 0…255 domain with no
+ * rounding, and the `byte`-rounded wrapper the 8-bit path has always used. One formula, two
+ * precisions — the deep path (§59.2a) needs the unrounded one, and a second copy of the arithmetic
+ * is exactly the duplicate that would drift (CLAUDE.md §4).
+ */
+const rounded = (raw: (value: number) => number) => (value: number): number => byte(raw(value));
+const levelsPoint = (points: LevelsChannelPoints) => rounded(levelsPointRaw(points));
 /** The RGB ("master") points with any per-channel override laid over them —
  *  one channel's own entry in `adjustment.channels`, or the master fields
  *  when that channel has none. */
 const levelsChannelPoints = (adjustment: Extract<RasterAdjustment, { kind: "levels" }>, channel: "red" | "green" | "blue"): LevelsChannelPoints =>
   adjustment.channels?.[channel] ?? adjustment;
-const posterizePoint = (levels: number) => { const denominator = Math.max(1, Math.round(levels) - 1); return (value: number): number => byte(Math.round(value * denominator / 255) * 255 / denominator); };
-const brightnessContrastPoint = (adjustment: Extract<RasterAdjustment, { kind: "brightnessContrast" }>) => {
+const posterizePointRaw = (levels: number) => { const denominator = Math.max(1, Math.round(levels) - 1); return (value: number): number => Math.round(value * denominator / 255) * 255 / denominator; };
+const posterizePoint = (levels: number) => rounded(posterizePointRaw(levels));
+const brightnessContrastPointRaw = (adjustment: Extract<RasterAdjustment, { kind: "brightnessContrast" }>) => {
   const brightness = adjustment.brightness * 2.55, contrast = Math.max(-255, Math.min(255, adjustment.contrast * 2.55)), factor = (259 * (contrast + 255)) / (255 * (259 - contrast));
-  return (value: number): number => byte(factor * (value + brightness - 128) + 128);
+  return (value: number): number => factor * (value + brightness - 128) + 128;
 };
-const exposurePoint = (adjustment: Extract<RasterAdjustment, { kind: "exposure" }>) => (value: number): number =>
-  byte(Math.max(0, (value / 255 * 2 ** adjustment.exposure + adjustment.offset)) ** (1 / Math.max(.01, adjustment.gamma)) * 255);
+const brightnessContrastPoint = (adjustment: Extract<RasterAdjustment, { kind: "brightnessContrast" }>) => rounded(brightnessContrastPointRaw(adjustment));
+const exposurePointRaw = (adjustment: Extract<RasterAdjustment, { kind: "exposure" }>) => (value: number): number =>
+  Math.max(0, (value / 255 * 2 ** adjustment.exposure + adjustment.offset)) ** (1 / Math.max(.01, adjustment.gamma)) * 255;
+const exposurePoint = (adjustment: Extract<RasterAdjustment, { kind: "exposure" }>) => rounded(exposurePointRaw(adjustment));
 
 export function adjustRgb(r: number, g: number, b: number, adjustment: RasterAdjustment): [number, number, number] {
   if (adjustment.kind === "invert") return [255 - r, 255 - g, 255 - b];
@@ -143,17 +165,26 @@ function mapLut(apply: (value: number) => number): Uint8ClampedArray {
  * reason. Anything whose output genuinely mixes more than one input channel (hue/saturation,
  * channel mixer, selective color, ...) has no such reduction and stays per-pixel in `adjustRgb`.
  */
-function buildPointLut(adjustment: RasterAdjustment): readonly [Uint8ClampedArray, Uint8ClampedArray, Uint8ClampedArray] | null {
+type PointTriple = readonly [(value: number) => number, (value: number) => number, (value: number) => number];
+
+/** The three per-channel formulas, unrounded, for the adjustments that have them — the single
+ *  source both the 8-bit table and the deep path are built from. */
+export function pointFunctions(adjustment: RasterAdjustment): PointTriple | null {
   switch (adjustment.kind) {
-    case "invert": { const lut = mapLut((value) => 255 - value); return [lut, lut, lut]; }
-    case "curves": { const lut = buildCurveLut(adjustment.points); return [lut, lut, lut]; }
-    case "levels": return [mapLut(levelsPoint(levelsChannelPoints(adjustment, "red"))), mapLut(levelsPoint(levelsChannelPoints(adjustment, "green"))), mapLut(levelsPoint(levelsChannelPoints(adjustment, "blue")))];
-    case "posterize": { const lut = mapLut(posterizePoint(adjustment.levels)); return [lut, lut, lut]; }
-    case "brightnessContrast": { const lut = mapLut(brightnessContrastPoint(adjustment)); return [lut, lut, lut]; }
-    case "exposure": { const lut = mapLut(exposurePoint(adjustment)); return [lut, lut, lut]; }
-    case "colorBalance": return [mapLut((value) => byte(value + adjustment.cyanRed * 2.55)), mapLut((value) => byte(value + adjustment.magentaGreen * 2.55)), mapLut((value) => byte(value + adjustment.yellowBlue * 2.55))];
+    case "invert": { const point = (value: number) => 255 - value; return [point, point, point]; }
+    case "curves": { const point = curveSpline(adjustment.points); return [point, point, point]; }
+    case "levels": return [levelsPointRaw(levelsChannelPoints(adjustment, "red")), levelsPointRaw(levelsChannelPoints(adjustment, "green")), levelsPointRaw(levelsChannelPoints(adjustment, "blue"))];
+    case "posterize": { const point = posterizePointRaw(adjustment.levels); return [point, point, point]; }
+    case "brightnessContrast": { const point = brightnessContrastPointRaw(adjustment); return [point, point, point]; }
+    case "exposure": { const point = exposurePointRaw(adjustment); return [point, point, point]; }
+    case "colorBalance": return [(value) => value + adjustment.cyanRed * 2.55, (value) => value + adjustment.magentaGreen * 2.55, (value) => value + adjustment.yellowBlue * 2.55];
     default: return null;
   }
+}
+
+function buildPointLut(adjustment: RasterAdjustment): readonly [Uint8ClampedArray, Uint8ClampedArray, Uint8ClampedArray] | null {
+  const points = pointFunctions(adjustment);
+  return points ? [mapLut(rounded(points[0])), mapLut(rounded(points[1])), mapLut(rounded(points[2]))] : null;
 }
 
 export function applyAdjustment(pixels: Uint8ClampedArray, adjustment: RasterAdjustment, opacity = 1): void {

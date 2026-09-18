@@ -2,6 +2,7 @@ export * from "./color";
 export * from "./color-space";
 export * from "./pixel-format";
 export * from "./bit-depth";
+export * from "./adjustments-deep";
 export * from "./adjustments";
 export * from "./auto-levels";
 export * from "./clone";
