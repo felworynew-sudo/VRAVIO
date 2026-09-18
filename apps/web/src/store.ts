@@ -47,6 +47,7 @@ export interface NewDocumentOptions {
   pixelAspectRatio: number;
   /** Raster only: the working colour space the document's numbers mean (master-plan §59). */
   colorSpace?: RasterColorSpace;
+  colorModel?: "rgb" | "grayscale";
   artboards?: boolean;
   frameRate?: number;
   sampleRate?: number;
@@ -239,7 +240,7 @@ export const useShellStore = create<ShellState>((set) => ({
   preferences: readPreferences(),
   openDocument: (kind, options) => set((state) => {
     const initialState = kind === "raster"
-      ? createRasterDocument(options?.width, options?.height, options ? { resolution: options.resolution, resolutionUnit: options.resolutionUnit, backgroundColor: options.backgroundColor, pixelAspectRatio: options.pixelAspectRatio, ...(options.colorSpace ? { colorSpace: options.colorSpace } : {}) } : {})
+      ? createRasterDocument(options?.width, options?.height, options ? { resolution: options.resolution, resolutionUnit: options.resolutionUnit, backgroundColor: options.backgroundColor, pixelAspectRatio: options.pixelAspectRatio, ...(options.colorSpace ? { colorSpace: options.colorSpace } : {}), ...(options.colorModel ? { colorModel: options.colorModel } : {}) } : {})
       : kind === "vector"
       ? (() => {
           // The New Document dialog's "artboards" toggle is a boolean

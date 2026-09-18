@@ -4,7 +4,7 @@ import { calculatePrintPlacement, defaultPrintSettings, documentPpi, pageLayoutF
 
 function fixture(overrides: Partial<RasterDocumentState> = {}): RasterDocumentState {
   return {
-    kind: "raster", schemaVersion: 2, width: 900, height: 600, colorSpace: "srgb",
+    kind: "raster", schemaVersion: 2, width: 900, height: 600, colorSpace: "srgb", colorModel: "rgb",
     resolution: 300, resolutionUnit: "ppi", bitDepth: 8, pixelAspectRatio: 1, backgroundColor: null,
     layers: [], activeLayerId: "layer-1", selection: null, guides: [],
     ...overrides,

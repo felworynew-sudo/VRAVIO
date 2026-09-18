@@ -71,7 +71,7 @@ export function createRasterDocument(width = 1280, height = 720, options: Raster
     layer.tiles = TileStore.fromPixels(pixels, width, height);
   }
   return {
-    kind: "raster", schemaVersion: 2, width, height, colorSpace: options.colorSpace ?? "srgb",
+    kind: "raster", schemaVersion: 2, width, height, colorSpace: options.colorSpace ?? "srgb", colorModel: options.colorModel ?? "rgb",
     resolution: options.resolution ?? 72, resolutionUnit: options.resolutionUnit ?? "ppi", bitDepth: options.bitDepth ?? 8,
     pixelAspectRatio: options.pixelAspectRatio ?? 1, backgroundColor: options.backgroundColor ?? null,
     layers: [layer], activeLayerId: layer.id, selection: null, guides: [],
@@ -88,6 +88,8 @@ export function isRasterDocumentState(value: unknown): value is RasterDocumentSt
 
 /** In-place and idempotent so restored v1 sessions remain editable without a stop-the-world conversion. */
 export function migrateRasterDocumentState(state: RasterDocumentState): RasterDocumentState {
+  // Saves from before Image ▸ Mode existed are RGB: the only model the editor had (§59.1a).
+  if (typeof state.colorModel === "undefined") state.colorModel = "rgb";
   state.layers.forEach((layer, index) => {
     if (typeof layer.parentId === "undefined") layer.parentId = null;
     if (!layer.orderKey) layer.orderKey = makeLayerOrderKey(index);

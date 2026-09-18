@@ -291,7 +291,7 @@ export function decodePsd(bytes: Uint8Array): PsdImportResult {
   }
 
   const document: RasterDocumentState = {
-    kind: "raster", schemaVersion: 2, width, height, colorSpace: "srgb", resolution: 72, resolutionUnit: "ppi",
+    kind: "raster", schemaVersion: 2, width, height, colorSpace: "srgb", colorModel: colorMode === 1 ? "grayscale" : "rgb", resolution: 72, resolutionUnit: "ppi",
     bitDepth: 8, pixelAspectRatio: 1, backgroundColor: null, layers, activeLayerId: layers[layers.length - 1]!.id,
     selection: null, guides: [],
   };

@@ -90,6 +90,40 @@ describe("the engine sequences rules the way it promises", () => {
   });
 });
 
+describe("a Grayscale document stays grayscale", () => {
+  it("greys a coloured edit instead of refusing it (master-plan §59)", () => {
+    const { state, layer } = scene();
+    state.colorModel = "grayscale";
+    const outcome = applyRasterRules(editOf(filled(0, 0, 0, 255), filled(255, 0, 0, 255), layer.id), { document: state, layer });
+
+    // 0.30/0.59/0.11 of pure red — the same weights `applyRasterFilter`'s "grayscale" uses, so a
+    // stroke painted now matches what the mode conversion did to the pixels already there.
+    expect(outcome.edit).not.toBeNull();
+    expect(redAt(outcome.edit!.after, 0, 0)).toBe(77);
+    expect(outcome.edit!.after[1]).toBe(77);
+    expect(outcome.edit!.after[2]).toBe(77);
+    expect(outcome.edit!.after[3]).toBe(255);
+  });
+
+  it("leaves an RGB document's colours alone", () => {
+    const { state, layer } = scene();
+    const outcome = applyRasterRules(editOf(filled(0, 0, 0, 255), filled(255, 0, 0, 255), layer.id), { document: state, layer });
+
+    expect(redAt(outcome.edit!.after, 0, 0)).toBe(255);
+    expect(outcome.edit!.after[1]).toBe(0);
+  });
+
+  it("hands an already-grey edit straight on, without copying it", () => {
+    const { state, layer } = scene();
+    state.colorModel = "grayscale";
+    const after = filled(120, 120, 120, 255);
+    const outcome = applyRasterRules(editOf(filled(0, 0, 0, 255), after, layer.id), { document: state, layer });
+
+    // Identity, not equality: the common case must not allocate a second canvas-sized buffer.
+    expect(outcome.edit!.after).toBe(after);
+  });
+});
+
 describe("the rule catalogue", () => {
   it("has rules to check", () => {
     // Guards against the whole file passing because the glob matched nothing.

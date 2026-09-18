@@ -535,6 +535,9 @@ export function App() {
 
   const selectedLayerIds = active ? store.selectedLayerIdsByDocument[active.id] ?? [] : [];
   const activeRasterState = active && isRasterDocumentState(active.state) ? active.state : null;
+  const colorModel = activeRasterState?.colorModel ?? "rgb";
+  /** The tick Photoshop puts against the mode a document is already in. */
+  const tick = (on: boolean) => on ? "✓ " : "";
   const editingMaskLayerId = active ? store.editingMaskLayerIdByDocument[active.id] ?? null : null;
   const maskForegroundIsWhite = active ? store.maskForegroundIsWhiteByDocument[active.id] ?? false : false;
   // Dodge/Burn have no colour of their own — while one is active the wells
@@ -1004,10 +1007,31 @@ export function App() {
           // adding a fourth used to mean a fourth hand-wired menu line.
           { label: "Smart Crop (Умное кадрирование)", items: Object.keys(smartCropRatios).map((ratio) => [ratio, "", () => { void kernel.commands.execute("image.smartCrop", activeCommandContext(), { ratio }); }, !active || !isRasterDocumentState(active.state)] as MainMenuItem) },
           ["Generative Upscale… (Генеративное увеличение масштаба…)", "", () => setUpscaleDialogOpen(true), !active || !isRasterDocumentState(active.state)],
-          // The document's working colour space (master-plan §59). Two entries because they are two
-          // different operations: Assign changes what the numbers mean, Convert rewrites them.
-          ["Mode: Assign Profile… (Режим: назначить профиль…)", "", () => void kernel.commands.execute("image.assignColorSpace", activeCommandContext()), !active || !isRasterDocumentState(active.state)],
-          ["Mode: Convert to Profile… (Режим: преобразовать в профиль…)", "", () => void kernel.commands.execute("image.convertColorSpace", activeCommandContext()), !active || !isRasterDocumentState(active.state)],
+          // Image ▸ Mode, in Photoshop's own order and wording (master-plan §59): the colour model
+          // first, then the bit depth, then the profile. A tick marks what the document is in now.
+          // Everything this engine cannot actually carry is present but disabled and says why on
+          // hover — the same thing Photoshop does with the modes a document cannot enter, and the
+          // opposite of a control that pretends to work (CLAUDE.md §3).
+          // `localized` keeps only one side of "English (Русский)", so a tick has to be on both
+          // sides or it disappears in whichever language it was left out of.
+          { label: "Mode (Режим)", items: [
+            ["Bitmap (Битовый формат)", "", () => {}, true, "Needs 1-bit storage and its own dithering (Нужно однобитное хранение и собственный дизеринг)"],
+            [`${tick(colorModel === "grayscale")}Grayscale (${tick(colorModel === "grayscale")}Градации серого)`, "", () => void kernel.commands.execute("image.mode.grayscale", activeCommandContext()), !activeRasterState || colorModel === "grayscale"],
+            ["Duotone (Дуплекс)", "", () => {}, true, "Needs ink curves over a grayscale document (Нужны кривые красок поверх серого документа)"],
+            ["Indexed Color… (Индексированные цвета…)", "", () => {}, true, "Needs a palette and per-pixel indices instead of RGBA (Нужна палитра и индексы вместо RGBA)"],
+            [`${tick(colorModel === "rgb")}RGB Color (${tick(colorModel === "rgb")}RGB)`, "", () => void kernel.commands.execute("image.mode.rgb", activeCommandContext()), !activeRasterState || colorModel === "rgb"],
+            ["CMYK Color (CMYK)", "", () => {}, true, "Needs four-channel storage, compositing and an ICC profile (Нужно четырёхканальное хранение, композитинг и ICC-профиль)"],
+            ["Lab Color (Lab)", "", () => {}, true, "Needs signed channels the 8-bit pipeline cannot hold (Нужны знаковые каналы, которых нет в 8-битном конвейере)"],
+            ["Multichannel (Многоканальный)", "", () => {}, true, "Needs free-form spot channels (Нужны произвольные плашечные каналы)"],
+            ["✓ 8 Bits/Channel (✓ 8 бит/канал)", "", () => {}, true, "The document is already 8 bits per channel (Документ уже 8 бит на канал)"],
+            ["16 Bits/Channel (16 бит/канал)", "", () => {}, true, "Deep storage is not built yet — see master-plan §59.2 (Глубокое хранение ещё не сделано — см. мастер-план §59.2)"],
+            ["32 Bits/Channel (32 бита/канал)", "", () => {}, true, "Deep storage is not built yet — see master-plan §59.2 (Глубокое хранение ещё не сделано — см. мастер-план §59.2)"],
+            ["Color Table… (Таблица цветов…)", "", () => {}, true, "Only an indexed-colour document has a colour table (Таблица цветов есть только у индексированного документа)"],
+            // Two separate operations, not one: Assign changes what the numbers mean, Convert
+            // rewrites them so the colour stays put.
+            ["Assign Profile… (Назначить профиль…)", "", () => void kernel.commands.execute("image.assignColorSpace", activeCommandContext()), !activeRasterState],
+            ["Convert to Profile… (Преобразовать в профиль…)", "", () => void kernel.commands.execute("image.convertColorSpace", activeCommandContext()), !activeRasterState],
+          ] },
           ["Image Size… (Размер изображения…)", "Ctrl+Alt+I", () => {}, true],
           ["Canvas Size… (Размер холста…)", "Ctrl+Alt+C", () => {}, true],
         ]}/>}
@@ -1277,7 +1301,7 @@ export function App() {
       {active ? <DockLayout /> : <HomeScreen language={store.language} requestNewDocument={store.requestNewDocument} openFile={openBridgeFile} openDocuments={documents} onOpenDocument={store.activateDocument} openConverter={() => setConverterOpen(true)} />}
       {active && <ContextualBar documentId={active.id} state={active.state} language={store.language} visible={store.preferences.contextualBar} />}
     </main>
-    {chromeSlots.bottom && active && createPortal(<footer className="status-bar"><span>{resolveLabel(environmentMeta[active.kind].label, store.language)}</span><span>{isAudioDocumentState(active.state) ? `${(active.state.sampleRate / 1000).toLocaleString()} kHz · ${active.state.channels === 1 ? text(store.language, "Mono", "Моно") : text(store.language, "Stereo", "Стерео")} · ${active.state.bitDepth} bit` : isVideoDocumentState(active.state) ? `${active.state.width}×${active.state.height} · ${active.state.frameRate} fps` : `${Math.round((store.viewports[active.id]?.zoom ?? 1) * 100)}% · ${isRasterDocumentState(active.state) ? (rasterColorSpaceById(active.state.colorSpace)?.label.en ?? active.state.colorSpace) : "sRGB"} · ${renderBackend ?? "detecting"}`}</span></footer>, chromeSlots.bottom)}
+    {chromeSlots.bottom && active && createPortal(<footer className="status-bar"><span>{resolveLabel(environmentMeta[active.kind].label, store.language)}</span><span>{isAudioDocumentState(active.state) ? `${(active.state.sampleRate / 1000).toLocaleString()} kHz · ${active.state.channels === 1 ? text(store.language, "Mono", "Моно") : text(store.language, "Stereo", "Стерео")} · ${active.state.bitDepth} bit` : isVideoDocumentState(active.state) ? `${active.state.width}×${active.state.height} · ${active.state.frameRate} fps` : `${Math.round((store.viewports[active.id]?.zoom ?? 1) * 100)}% · ${isRasterDocumentState(active.state) ? `${active.state.colorModel === "grayscale" ? "Grayscale" : "RGB"}/8 · ${rasterColorSpaceById(active.state.colorSpace)?.label.en ?? active.state.colorSpace}` : "sRGB"} · ${renderBackend ?? "detecting"}`}</span></footer>, chromeSlots.bottom)}
     {store.preferences.showPerformanceOverlay && <PerformanceOverlay documentId={active?.id ?? null} />}
 
     {store.paletteOpen && <ModalBackdrop onMouseDown={() => store.setPaletteOpen(false)}>
@@ -1372,11 +1396,13 @@ function windowMenuItems(kind: string | undefined, language: Language): readonly
   ] as MainMenuItem);
 }
 
-type MainMenuItem = readonly [label: string, shortcut: string, action: () => void, disabled?: boolean];
+/** The fifth slot is the tooltip: a disabled entry has to be able to say why it is disabled, which
+ *  is the difference between Photoshop's greyed-out modes and a dead button (CLAUDE.md §3). */
+type MainMenuItem = readonly [label: string, shortcut: string, action: () => void, disabled?: boolean, title?: string];
 type MainMenuGroup = { label: string; items: readonly MainMenuItem[] };
 const isMainMenuItem = (item: MainMenuItem | MainMenuGroup): item is MainMenuItem => Array.isArray(item);
 function Menu({ className, label, language, open, onToggle, items }: { className?: string | undefined; label: string; language: Language; open: boolean; onToggle(): void; items: readonly (MainMenuItem | MainMenuGroup)[] }) {
-  return <div className={`main-menu${className ? ` ${className}` : ""}`}><button className={open ? "active" : ""} onClick={onToggle}>{localized(label, language)}</button>{open && <div className="main-menu-dropdown">{items.map((item) => isMainMenuItem(item) ? <button key={item[0]} disabled={item[3]} onClick={() => { item[2](); onToggle(); }}><span>{localized(item[0], language)}</span><kbd>{item[1]}</kbd></button> : <div className="main-menu-submenu" key={item.label}><button><span>{localized(item.label, language)}</span><kbd>›</kbd></button><div>{item.items.map(([itemLabel, shortcut, action, disabled]) => <button key={itemLabel} disabled={disabled} onClick={() => { action(); onToggle(); }}><span>{localized(itemLabel, language)}</span><kbd>{shortcut}</kbd></button>)}</div></div>)}</div>}</div>;
+  return <div className={`main-menu${className ? ` ${className}` : ""}`}><button className={open ? "active" : ""} onClick={onToggle}>{localized(label, language)}</button>{open && <div className="main-menu-dropdown">{items.map((item) => isMainMenuItem(item) ? <button key={item[0]} disabled={item[3]} title={item[4] ? localized(item[4], language) : undefined} onClick={() => { item[2](); onToggle(); }}><span>{localized(item[0], language)}</span><kbd>{item[1]}</kbd></button> : <div className="main-menu-submenu" key={item.label}><button><span>{localized(item.label, language)}</span><kbd>›</kbd></button><div>{item.items.map(([itemLabel, shortcut, action, disabled, title]) => <button key={itemLabel} disabled={disabled} title={title ? localized(title, language) : undefined} onClick={() => { action(); onToggle(); }}><span>{localized(itemLabel, language)}</span><kbd>{shortcut}</kbd></button>)}</div></div>)}</div>}</div>;
 }
 
 function ToolGlyph({ tool }: { tool: ToolDefinition }) {

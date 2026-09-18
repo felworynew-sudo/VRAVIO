@@ -399,6 +399,16 @@ export interface RasterDocumentState {
   height: number;
   /** The document's working colour space — what its numbers mean (docs/master-plan.md §59). */
   colorSpace: RasterColorSpace;
+  /**
+   * The colour model the document is in — Photoshop's Image ▸ Mode (§59).
+   *
+   * Pixels are stored RGBA either way; "grayscale" means every layer holds only greys and the
+   * document is treated as one channel by anything that cares (export, the mode menu's own tick).
+   * CMYK, Lab, Indexed and Multichannel are not here: each needs its own storage and compositing,
+   * and a mode that only renamed the document would be exactly the "setting that does nothing"
+   * CLAUDE.md §3 is about.
+   */
+  colorModel: "rgb" | "grayscale";
   resolution: number;
   resolutionUnit: "ppi" | "ppcm";
   /** 16 and 32 bit force the precise compositing path; see composite-plan.ts. */
@@ -413,6 +423,7 @@ export interface RasterDocumentState {
 
 export interface RasterDocumentOptions {
   colorSpace?: RasterColorSpace;
+  colorModel?: "rgb" | "grayscale";
   bitDepth?: 8 | 16 | 32;
   resolution?: number;
   resolutionUnit?: "ppi" | "ppcm";
