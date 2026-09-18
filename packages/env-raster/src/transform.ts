@@ -316,10 +316,18 @@ export function scaleSelection(selection: PixelSelection | null, width: number, 
  * centre — the order the frame itself implies. One inverse map per destination pixel, one
  * bilinear read.
  */
+/** Mirroring inside a transform frame, as Photoshop's Flip Horizontal/Vertical do: the content is
+ *  read from the far side of the source rectangle, so a flip is free — no second resample and no
+ *  new pass, it changes where each destination pixel looks (docs/master-plan.md §58.3). */
+export interface TransformMirror {
+  readonly flipX?: boolean;
+  readonly flipY?: boolean;
+}
+
 export function transformLayerPixels(
   pixels: Uint8ClampedArray, width: number, height: number,
   source: RasterRect, target: RasterRect, degrees: number,
-  selection: PixelSelection | null = null, interpolate = true,
+  selection: PixelSelection | null = null, interpolate = true, mirror: TransformMirror = {},
 ): Uint8ClampedArray {
   const output = pixels.slice();
   const sample: BilinearSample = bilinearSample();
@@ -353,8 +361,9 @@ export function transformLayerPixels(
       // rectangle onto the target — the inverse of the two steps, in the other order.
       const dx = x + .5 - centerX, dy = y + .5 - centerY;
       const unrotatedX = centerX + cosine * dx + sine * dy, unrotatedY = centerY - sine * dx + cosine * dy;
-      const sampleX = source.x + (unrotatedX - target.x) * scaleX;
-      const sampleY = source.y + (unrotatedY - target.y) * scaleY;
+      const offsetX = (unrotatedX - target.x) * scaleX, offsetY = (unrotatedY - target.y) * scaleY;
+      const sampleX = source.x + (mirror.flipX ? source.width - offsetX : offsetX);
+      const sampleY = source.y + (mirror.flipY ? source.height - offsetY : offsetY);
       const nearestX = Math.floor(sampleX), nearestY = Math.floor(sampleY);
       const maskAlpha = coverage(nearestX, nearestY); if (maskAlpha <= 0) continue;
       if (interpolate) {
@@ -777,12 +786,12 @@ function selectionInFrame(selection: PixelSelection | null, documentWidth: numbe
  */
 export function transformLayerInFrame(
   layer: RasterLayer, documentWidth: number, documentHeight: number,
-  source: RasterRect, target: RasterRect, degrees: number, selection: PixelSelection | null = null,
+  source: RasterRect, target: RasterRect, degrees: number, selection: PixelSelection | null = null, mirror: TransformMirror = {},
 ): { pixels: Uint8ClampedArray; frame: RasterRect } {
   const frame = transformFrame(documentWidth, documentHeight, layer.bounds, rotatedDestinationBounds(target, degrees));
   const pixels = transformLayerPixels(
     layerFramePixels(layer, frame), frame.width, frame.height,
-    shiftRect(source, frame), shiftRect(target, frame), degrees, selectionInFrame(selection, documentWidth, documentHeight, frame),
+    shiftRect(source, frame), shiftRect(target, frame), degrees, selectionInFrame(selection, documentWidth, documentHeight, frame), true, mirror,
   );
   return { pixels, frame };
 }

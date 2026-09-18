@@ -134,15 +134,16 @@ const commitSession = sessionAction("session.commit", { en: "Done", ru: "Гот�
 export const contextualBarStates: readonly ContextualBarState[] = [
   {
     // Photoshop's transform bar (owner's screenshot, master-plan §58.3): Rotate 90° CCW, Rotate
-    // 90° CW, Flip Horizontal, Flip Vertical, Cancel, Done. The flips are not here: VRAVIO's
-    // transform session (`PendingTransform.live`) has no mirror term, and the places that
-    // resample it at commit would all need one — see master-plan §11's note.
+    // 90° CW, Flip Horizontal, Flip Vertical, Cancel, Done — all six, since the transform session
+    // carries a mirror term now (`PendingTransform.live.flipX/flipY`).
     id: "raster.transform",
     label: { en: "Transform", ru: "Трансформирование" },
     when: (context) => context.session?.kind === "transform",
     actions: [
       sessionAction("transform.rotateCcw", { en: "Rotate 90° counter-clockwise", ru: "Повернуть на 90° против часовой" }, { icon: "ВРАЩЕНИЕ ВИДА.svg", mirror: true }, (session) => Boolean(session.rotate), (session) => session.rotate?.(-90)),
       sessionAction("transform.rotateCw", { en: "Rotate 90° clockwise", ru: "Повернуть на 90° по часовой" }, { icon: "ВРАЩЕНИЕ ВИДА.svg" }, (session) => Boolean(session.rotate), (session) => session.rotate?.(90)),
+      sessionAction("transform.flipHorizontal", { en: "Flip horizontal", ru: "Отразить по горизонтали" }, { icon: "ОТРАЗИТЬ ПО ГОР.svg" }, (session) => Boolean(session.flip), (session) => session.flip?.("x")),
+      sessionAction("transform.flipVertical", { en: "Flip vertical", ru: "Отразить по вертикали" }, { icon: "ОТРАЗИТЬ ПО ВЕРТ.svg" }, (session) => Boolean(session.flip), (session) => session.flip?.("y")),
       cancelSession,
       commitSession,
     ],

@@ -18,6 +18,8 @@ export interface EditSession {
   cancel(): void;
   /** Free Transform only: turn the frame by ±90°, like Photoshop's bar buttons. */
   rotate?(degrees: 90 | -90): void;
+  /** Free Transform only: mirror the frame's content, Photoshop's Flip Horizontal / Vertical. */
+  flip?(axis: "x" | "y"): void;
   /** The session's frame in document pixels, read when the bar places itself — the bar sits
    * outside the crop rectangle or transform frame, not the layer behind it. */
   frame?(): { x: number; y: number; width: number; height: number } | null;

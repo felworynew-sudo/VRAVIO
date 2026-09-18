@@ -98,6 +98,23 @@ describe("contextual task bar states", () => {
     expect(resolved(context(document, { session: { kind: "transform", commit: () => {}, cancel: () => {} } }))?.actions).toEqual(["session.cancel", "session.commit"]);
   });
 
+  it("adds Flip Horizontal / Vertical when the session can mirror (docs/master-plan.md §58.3)", () => {
+    const calls: string[] = [];
+    const session = {
+      kind: "transform" as const,
+      commit: () => {}, cancel: () => {},
+      rotate: () => {},
+      flip: (axis: "x" | "y") => { calls.push(`flip ${axis}`); },
+    };
+    const document = open(() => undefined);
+    const bar = resolveContextualBar(context(document, { session }))!;
+    expect(bar.actions.map((action) => action.id)).toEqual([
+      "transform.rotateCcw", "transform.rotateCw", "transform.flipHorizontal", "transform.flipVertical", "session.cancel", "session.commit",
+    ]);
+    bar.actions.filter((action) => action.id.startsWith("transform.flip")).forEach((action) => action.run());
+    expect(calls).toEqual(["flip x", "flip y"]);
+  });
+
   it("offers the AI border fill toggle, Cancel and Done while a crop is open", () => {
     const document = open();
     expect(resolved(context(document, { session: { kind: "crop", commit: () => {}, cancel: () => {} } }))).toEqual({ state: "raster.crop", actions: ["crop.aiFill", "session.cancel", "session.commit"] });

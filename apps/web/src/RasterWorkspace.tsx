@@ -12,7 +12,7 @@ import { Scene3DGroundPointsGizmo } from "./Scene3DGroundPointsGizmo";
 import { rasterToolById } from "./environments/raster/tools/registry";
 import type { PaintTarget, ToolContext, ToolPointer } from "./environments/raster/tools/types";
 import { applyWarpPreset, commitPending, empty as moveToolEmpty, pendingBounds, startPendingTransform, type MoveState, type PendingTransform } from "./environments/raster/tools/definitions/move";
-import { canQuickRotate, quickRotatePending } from "./environments/raster/tools/transform-quick-rotate";
+import { canQuickFlip, canQuickRotate, quickFlipPending, quickRotatePending } from "./environments/raster/tools/transform-quick-rotate";
 import { publishEditSession, touchEditSessions } from "./contextual-bar/sessions";
 import { TransformSelectionOverlay } from "./transform-selection/TransformSelectionOverlay";
 import { useTransformSelection } from "./transform-selection/session";
@@ -371,6 +371,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   ));
   const transformOpen = isRealTransform(barPending);
   const transformCanRotate = Boolean(barPending && canQuickRotate(barPending));
+  const transformCanFlip = Boolean(barPending && canQuickFlip(barPending));
   useEffect(() => {
     if (!transformOpen) return;
     return publishEditSession(document.id, {
@@ -381,6 +382,14 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
         const pending = (toolContextFor("raster.move", canvasRef.current) as ToolContext<MoveState>).state.pending;
         return pending ? pendingBounds(pending, state.width, state.height) : null;
       },
+      ...(transformCanFlip ? {
+        flip: (axis: "x" | "y") => {
+          const context = toolContextFor("raster.move", canvasRef.current) as ToolContext<MoveState>;
+          const pending = context.state.pending;
+          const next = pending ? quickFlipPending(pending, state.width, state.height, axis) : null;
+          if (next) { context.setState({ pending: next, drag: null }); touchEditSessions(); }
+        },
+      } : {}),
       ...(transformCanRotate ? {
         rotate: (degrees: 90 | -90) => {
           const context = toolContextFor("raster.move", canvasRef.current) as ToolContext<MoveState>;
@@ -391,7 +400,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       } : {}),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [transformOpen, transformCanRotate, document.id]);
+  }, [transformOpen, transformCanRotate, transformCanFlip, document.id]);
 
   // Edit ▸ Free Transform (Ctrl+T): the one way to open a pending transform without a canvas
   // gesture, so it has to reach into the Move tool's own state from outside any pointer handler.

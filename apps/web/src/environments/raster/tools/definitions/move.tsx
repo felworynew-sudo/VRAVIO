@@ -84,6 +84,11 @@ export interface PendingTransform {
     readonly target: RasterRect;
     /** Degrees about `target`'s centre — absolute for the session, not per gesture. */
     readonly rotation: number;
+    /** Mirrored inside the frame — Photoshop's Flip Horizontal / Vertical. Absolute for the session
+     * like `rotation` (flipping twice is not flipped), and nothing is resampled until commit
+     * (docs/master-plan.md §58.3). */
+    readonly flipX?: boolean;
+    readonly flipY?: boolean;
   };
   /**
    * Layer-local pixels for a whole-layer live Move. The document-sized
@@ -471,6 +476,7 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
   // its bounds instead; scale/rotation and selected-pixel transforms still
   // deliberately take the resampling path below.
   const storedTranslation = layer && pending.live && !pending.selection && pending.live.rotation === 0
+    && !pending.live.flipX && !pending.live.flipY
     && pending.live.source.width === pending.live.target.width
     && pending.live.source.height === pending.live.target.height;
   if (layer) {
@@ -481,7 +487,7 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
       const offsetY = Math.round(pending.live!.target.y - pending.live!.source.y);
       translateLayerOrigin(layer, offsetX, offsetY);
       isThere = layerOpaqueBounds(materialise(layer, after), after.width, after.height);
-    } else if (pending.live && transformSmartObject(layer, pending.live.source, pending.live.target, pending.live.rotation)) {
+    } else if (pending.live && transformSmartObject(layer, pending.live.source, pending.live.target, pending.live.rotation, { flipX: pending.live.flipX ?? false, flipY: pending.live.flipY ?? false })) {
       // Smart Object transform changes only its placement matrix. The raw
       // source remains untouched, so the next transform never starts from a
       // previously resampled preview.
@@ -499,7 +505,7 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
       const { width, height } = pending.before;
       const framed = sourceLayer && sourceLayer.kind === "pixel" && !smartObjectTransform(sourceLayer) && !pending.corners && !pending.mesh
         ? pending.live
-          ? transformLayerInFrame(sourceLayer, width, height, pending.live.source, pending.live.target, pending.live.rotation, pending.selection)
+          ? transformLayerInFrame(sourceLayer, width, height, pending.live.source, pending.live.target, pending.live.rotation, pending.selection, { flipX: pending.live.flipX ?? false, flipY: pending.live.flipY ?? false })
           : pending.float ? stampFloatingInFrame(sourceLayer, width, height, pending.float, pending.dx, pending.dy) : null
         : null;
       if (framed) {
@@ -509,7 +515,7 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
         isThere = right > left && bottom > top ? { x: left, y: top, width: right - left, height: bottom - top } : null;
       } else {
         const resolved = pending.live
-          ? transformLayerPixels(pending.pixels, width, height, pending.live.source, pending.live.target, pending.live.rotation, pending.selection)
+          ? transformLayerPixels(pending.pixels, width, height, pending.live.source, pending.live.target, pending.live.rotation, pending.selection, true, { flipX: pending.live.flipX ?? false, flipY: pending.live.flipY ?? false })
           : pending.pixels;
         isThere = layerOpaqueBounds(resolved, width, height);
         setLayerPixels(layer, resolved, width, height);
@@ -1126,7 +1132,7 @@ const move: RasterToolDefinition<MoveState> = {
       </svg>;
     }
     return <>
-      {live && <canvas ref={livePreviewRef} className="text-transform-preview" style={{ left: live.target.x, top: live.target.y, width: live.target.width, height: live.target.height, transform: `rotate(${live.rotation}deg)` }}/>}
+      {live && <canvas ref={livePreviewRef} className="text-transform-preview" style={{ left: live.target.x, top: live.target.y, width: live.target.width, height: live.target.height, transform: `rotate(${live.rotation}deg) scale(${live.flipX ? -1 : 1}, ${live.flipY ? -1 : 1})` }}/>}
       {/* Static (never itself rotated/moved) and sized to the whole document, not the dragged
           layer's own bounds — it stands in for whatever is stacked above that layer, which does
           not move just because the layer underneath it does. */}

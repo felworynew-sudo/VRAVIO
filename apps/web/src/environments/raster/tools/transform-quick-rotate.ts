@@ -30,3 +30,32 @@ export function quickRotatePending(pending: PendingTransform, documentWidth: num
   const rotation = normalise(session.rotation + degrees);
   return { ...pending, rotation, live: { source: session.source, target: session.target, rotation } };
 }
+
+/**
+ * Photoshop's "Flip Horizontal" / "Flip Vertical" on an open Free Transform — the bar buttons and
+ * the right-click menu (docs/master-plan.md §58.3).
+ *
+ * A flip is a term of the session's description, like its angle: `live.flipX`/`flipY` change where
+ * each destination pixel reads from, so flipping twice is not flipped and nothing is resampled
+ * until commit. Not offered for a type layer (its transform is described by its own bounds, with
+ * no mirror term) nor in Skew/Distort/Perspective/Warp, whose corners already say where every
+ * pixel goes.
+ */
+export function canQuickFlip(pending: PendingTransform): boolean {
+  return !pending.corners && !pending.mesh && !pending.text;
+}
+
+export function quickFlipPending(pending: PendingTransform, documentWidth: number, documentHeight: number, axis: "x" | "y"): PendingTransform | null {
+  if (!canQuickFlip(pending)) return null;
+  const bounds = pending.live ? null : pendingBounds(pending, documentWidth, documentHeight);
+  const session = pending.live ?? (bounds ? { source: { ...bounds }, target: { ...bounds }, rotation: pending.rotation } : null);
+  if (!session) return null;
+  return {
+    ...pending,
+    live: {
+      ...session,
+      flipX: axis === "x" ? !session.flipX : session.flipX ?? false,
+      flipY: axis === "y" ? !session.flipY : session.flipY ?? false,
+    },
+  };
+}

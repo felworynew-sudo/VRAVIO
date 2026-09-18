@@ -34,16 +34,21 @@ export function translateSmartObject(layer: RasterLayer, x: number, y: number): 
 }
 
 /** Applies the same document-space transform described by the Move tool without sampling pixels. */
-export function transformSmartObject(layer: RasterLayer, source: RasterRect, target: RasterRect, degrees: number): boolean {
+export function transformSmartObject(layer: RasterLayer, source: RasterRect, target: RasterRect, degrees: number, mirror: { flipX?: boolean; flipY?: boolean } = {}): boolean {
   const current = smartObjectTransform(layer); if (!current || !source.width || !source.height) return false;
-  const sx = target.width / source.width, sy = target.height / source.height;
+  // A mirror is a negative scale about the target's own centre — the placement matrix carries it
+  // the same way it carries a turn, with no resampling (docs/master-plan.md §58.3).
+  const sx = (target.width / source.width) * (mirror.flipX ? -1 : 1), sy = (target.height / source.height) * (mirror.flipY ? -1 : 1);
   const radians = degrees * Math.PI / 180, cos = Math.cos(radians), sin = Math.sin(radians);
   const cx = target.x + target.width / 2, cy = target.y + target.height / 2;
+  // With a negative scale the rectangle is filled from its far edge, so the origin moves there.
+  const targetLeft = mirror.flipX ? target.x + target.width : target.x;
+  const targetTop = mirror.flipY ? target.y + target.height : target.y;
   const a = cos * sx, b = sin * sx, c = -sin * sy, d = cos * sy;
   const delta: RasterSmartTransform = {
     a, b, c, d,
-    e: cx + cos * (target.x - cx) - sin * (target.y - cy) - a * source.x - c * source.y,
-    f: cy + sin * (target.x - cx) + cos * (target.y - cy) - b * source.x - d * source.y,
+    e: cx + cos * (targetLeft - cx) - sin * (targetTop - cy) - a * source.x - c * source.y,
+    f: cy + sin * (targetLeft - cx) + cos * (targetTop - cy) - b * source.x - d * source.y,
   };
   layer.smartTransform = multiply(delta, current);
   layer.bounds = smartObjectBounds(layer, layer.smartTransform);
