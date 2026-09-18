@@ -210,9 +210,14 @@ export function useRasterCommit(params: {
   // button commits one command; cancelling simply redraws the canonical state.
   useEffect(() => {
     const preview = (raw: Event) => {
-      const event = raw as CustomEvent<{ documentId: string; pixels: Uint8ClampedArray | null }>;
+      const event = raw as CustomEvent<{ documentId: string; pixels: Uint8ClampedArray | null; region?: RasterRect }>;
       if (event.detail.documentId !== document.id) return;
       const canvas = canvasRef.current; if (!canvas) return;
+      // A filter or an adjustment only changes the part of the canvas its layer covers, so the
+      // sender composites and sends just that rectangle (docs/master-plan.md §58.1) — the whole
+      // document was composited and blitted on every slider tick before.
+      const region = event.detail.region;
+      if (event.detail.pixels && region) { putRegionPixels(canvas, event.detail.pixels, region); return; }
       putPixels(canvas, event.detail.pixels ?? compositeRasterDocument(state), state.width, state.height);
     };
     window.addEventListener("vravio-raster-preview", preview);

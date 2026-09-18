@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { WARP_PRESETS, applyRasterFilter, rasterFilterCatalog, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerOrigin, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterLayer, type RasterRect } from "@vravio/env-raster";
+import { WARP_PRESETS, applyRasterFilter, rasterFilterCatalog, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, compositeRasterRegion, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerOrigin, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterLayer, type RasterRect } from "@vravio/env-raster";
 import { maskToRgba, rgbaToMask } from "./raster-pixel-buffers";
 import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
 import { withBusy, withBusyPainted } from "./busy";
@@ -460,14 +460,17 @@ export function App() {
     filterPanelPreviewAbortRef.current = controller;
     filterPanelResultRef.current = null;
     void filterLayerPixels(document.state, target, filterPanelId, settings, controller.signal)
-      .then(({ before, after: filtered }) => {
+      .then(({ before, after: filtered, changed }) => {
         if (filterPanelPreviewKeyRef.current !== key) return; // superseded by a real, later settings change
         filterPanelResultRef.current = { key, pixels: filtered };
         const selection = document.state.selection, confined = selection ? confineToSelection(before, filtered, selection.mask) : filtered;
         const layers = document.state.layers.map((layer) => layer.id === target.id ? { ...layer, effects: structuredClone(layer.effects) } : layer);
         const previewState = { ...document.state, layers }; const previewLayer = layers.find((layer) => layer.id === target.id)!;
-        setLayerPixels(previewLayer, confined, previewState.width, previewState.height);
-        window.dispatchEvent(new CustomEvent("vravio-raster-preview", { detail: { documentId: document.id, pixels: compositeRasterDocument(previewState) } }));
+        // Only the rectangle the filter wrote is recomposited and repainted; compositing the whole
+        // document here was the last full-canvas step left on the main thread per tick (§58.1).
+        setLayerPixels(previewLayer, confined, previewState.width, previewState.height, { bounds: changed, canShrink: false }, { keepOutsideDocument: true });
+        const region = changed.width && changed.height ? changed : { x: 0, y: 0, width: previewState.width, height: previewState.height };
+        window.dispatchEvent(new CustomEvent("vravio-raster-preview", { detail: { documentId: document.id, pixels: compositeRasterRegion(previewState, region), region } }));
       })
       .catch((error: unknown) => { if (!controller.signal.aborted) diagnostic("warn", "filter-panel.preview-failed", "Live filter preview failed", { filterId: filterPanelId, error: error instanceof Error ? error.message : String(error) }); });
   }, [filterPanelId, activeDocumentId]);
@@ -631,8 +634,20 @@ export function App() {
     }
     const before = layerDocumentPixels(target, document.state.width, document.state.height), confined = adjustedPixels(before, value, document.state.selection);
     const layers = document.state.layers.map((layer) => layer.id === target.id ? { ...layer, effects: structuredClone(layer.effects) } : layer);
-    const previewState = { ...document.state, layers }; const previewLayer = layers.find((layer) => layer.id === target.id)!; setLayerPixels(previewLayer, confined, previewState.width, previewState.height);
-    window.dispatchEvent(new CustomEvent("vravio-raster-preview", { detail: { documentId: document.id, pixels: compositeRasterDocument(previewState) } }));
+    const previewState = { ...document.state, layers }; const previewLayer = layers.find((layer) => layer.id === target.id)!;
+    // The adjustment reaches the layer's own extent, narrowed by the selection — not the canvas.
+    const left = Math.max(0, target.bounds.x), top = Math.max(0, target.bounds.y);
+    const right = Math.min(previewState.width, target.bounds.x + target.bounds.width), bottom = Math.min(previewState.height, target.bounds.y + target.bounds.height);
+    const selectionBounds = document.state.selection?.bounds;
+    const region = {
+      x: Math.max(left, selectionBounds?.x ?? left), y: Math.max(top, selectionBounds?.y ?? top),
+      width: 0, height: 0,
+    };
+    region.width = Math.max(0, Math.min(right, selectionBounds ? selectionBounds.x + selectionBounds.width : right) - region.x);
+    region.height = Math.max(0, Math.min(bottom, selectionBounds ? selectionBounds.y + selectionBounds.height : bottom) - region.y);
+    setLayerPixels(previewLayer, confined, previewState.width, previewState.height, region.width && region.height ? { bounds: region, canShrink: false } : undefined, { keepOutsideDocument: true });
+    const painted = region.width && region.height ? region : { x: 0, y: 0, width: previewState.width, height: previewState.height };
+    window.dispatchEvent(new CustomEvent("vravio-raster-preview", { detail: { documentId: document.id, pixels: compositeRasterRegion(previewState, painted), region: painted } }));
   };
   const previewImageAdjustment = (value: RasterAdjustment | null) => {
     // Clearing the preview (dialog closing/cancelling) is a discrete action,
