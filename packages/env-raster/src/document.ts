@@ -71,8 +71,8 @@ export function createRasterDocument(width = 1280, height = 720, options: Raster
     layer.tiles = TileStore.fromPixels(pixels, width, height);
   }
   return {
-    kind: "raster", schemaVersion: 2, width, height, colorSpace: "srgb",
-    resolution: options.resolution ?? 72, resolutionUnit: options.resolutionUnit ?? "ppi", bitDepth: 8,
+    kind: "raster", schemaVersion: 2, width, height, colorSpace: options.colorSpace ?? "srgb",
+    resolution: options.resolution ?? 72, resolutionUnit: options.resolutionUnit ?? "ppi", bitDepth: options.bitDepth ?? 8,
     pixelAspectRatio: options.pixelAspectRatio ?? 1, backgroundColor: options.backgroundColor ?? null,
     layers: [layer], activeLayerId: layer.id, selection: null, guides: [],
   };

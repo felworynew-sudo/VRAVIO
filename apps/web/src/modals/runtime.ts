@@ -120,6 +120,16 @@ export function selectModifyModal(props: {
   });
 }
 
+/** Asks which working colour space to assign to, or convert to (master-plan §59). */
+export function colorSpaceModal(props: { current: string; mode: "assign" | "convert" }): Promise<string | null> {
+  return new Promise((resolve) => {
+    const close = openModal("color-space", {
+      ...props,
+      onResolve: (space: string | null) => { close(); resolve(space); },
+    });
+  });
+}
+
 /**
  * Shows an error to the user.
  *

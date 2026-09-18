@@ -96,6 +96,10 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "image.adjustment.invert|Mod+I||Image",
   "image.adjustment.levels|Mod+L||Image",
   "image.adjustment.quickHarmonize|||Image",
+  // master-plan §59: the document's working colour space — Photoshop's own two operations, one
+  // that changes what the numbers mean and one that rewrites them.
+  "image.assignColorSpace|||Image",
+  "image.convertColorSpace|||Image",
   "image.openElsewhereBranch|||Object",
   "image.openElsewhere|||Object",
   // Added deliberately in stage 9: three hard-coded Smart Crop menu entries

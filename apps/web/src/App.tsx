@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { WARP_PRESETS, applyRasterFilter, rasterFilterCatalog, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, compositeRasterRegion, computeAlignOffsets, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerOrigin, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterLayer, type RasterRect } from "@vravio/env-raster";
+import { WARP_PRESETS, applyRasterFilter, rasterFilterCatalog, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, compositeRasterRegion, computeAlignOffsets, rasterColorSpaceById, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerOrigin, type AlignEdge, type RasterAdjustment, type RasterDocumentState, type RasterLayer, type RasterRect } from "@vravio/env-raster";
 import { maskToRgba, rgbaToMask } from "./raster-pixel-buffers";
 import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
 import { withBusy, withBusyPainted } from "./busy";
@@ -1004,6 +1004,10 @@ export function App() {
           // adding a fourth used to mean a fourth hand-wired menu line.
           { label: "Smart Crop (Умное кадрирование)", items: Object.keys(smartCropRatios).map((ratio) => [ratio, "", () => { void kernel.commands.execute("image.smartCrop", activeCommandContext(), { ratio }); }, !active || !isRasterDocumentState(active.state)] as MainMenuItem) },
           ["Generative Upscale… (Генеративное увеличение масштаба…)", "", () => setUpscaleDialogOpen(true), !active || !isRasterDocumentState(active.state)],
+          // The document's working colour space (master-plan §59). Two entries because they are two
+          // different operations: Assign changes what the numbers mean, Convert rewrites them.
+          ["Mode: Assign Profile… (Режим: назначить профиль…)", "", () => void kernel.commands.execute("image.assignColorSpace", activeCommandContext()), !active || !isRasterDocumentState(active.state)],
+          ["Mode: Convert to Profile… (Режим: преобразовать в профиль…)", "", () => void kernel.commands.execute("image.convertColorSpace", activeCommandContext()), !active || !isRasterDocumentState(active.state)],
           ["Image Size… (Размер изображения…)", "Ctrl+Alt+I", () => {}, true],
           ["Canvas Size… (Размер холста…)", "Ctrl+Alt+C", () => {}, true],
         ]}/>}
@@ -1273,7 +1277,7 @@ export function App() {
       {active ? <DockLayout /> : <HomeScreen language={store.language} requestNewDocument={store.requestNewDocument} openFile={openBridgeFile} openDocuments={documents} onOpenDocument={store.activateDocument} openConverter={() => setConverterOpen(true)} />}
       {active && <ContextualBar documentId={active.id} state={active.state} language={store.language} visible={store.preferences.contextualBar} />}
     </main>
-    {chromeSlots.bottom && active && createPortal(<footer className="status-bar"><span>{resolveLabel(environmentMeta[active.kind].label, store.language)}</span><span>{isAudioDocumentState(active.state) ? `${(active.state.sampleRate / 1000).toLocaleString()} kHz · ${active.state.channels === 1 ? text(store.language, "Mono", "Моно") : text(store.language, "Stereo", "Стерео")} · ${active.state.bitDepth} bit` : isVideoDocumentState(active.state) ? `${active.state.width}×${active.state.height} · ${active.state.frameRate} fps` : `${Math.round((store.viewports[active.id]?.zoom ?? 1) * 100)}% · sRGB · ${renderBackend ?? "detecting"}`}</span></footer>, chromeSlots.bottom)}
+    {chromeSlots.bottom && active && createPortal(<footer className="status-bar"><span>{resolveLabel(environmentMeta[active.kind].label, store.language)}</span><span>{isAudioDocumentState(active.state) ? `${(active.state.sampleRate / 1000).toLocaleString()} kHz · ${active.state.channels === 1 ? text(store.language, "Mono", "Моно") : text(store.language, "Stereo", "Стерео")} · ${active.state.bitDepth} bit` : isVideoDocumentState(active.state) ? `${active.state.width}×${active.state.height} · ${active.state.frameRate} fps` : `${Math.round((store.viewports[active.id]?.zoom ?? 1) * 100)}% · ${isRasterDocumentState(active.state) ? (rasterColorSpaceById(active.state.colorSpace)?.label.en ?? active.state.colorSpace) : "sRGB"} · ${renderBackend ?? "detecting"}`}</span></footer>, chromeSlots.bottom)}
     {store.preferences.showPerformanceOverlay && <PerformanceOverlay documentId={active?.id ?? null} />}
 
     {store.paletteOpen && <ModalBackdrop onMouseDown={() => store.setPaletteOpen(false)}>

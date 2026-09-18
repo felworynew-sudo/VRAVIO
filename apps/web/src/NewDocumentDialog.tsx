@@ -5,6 +5,7 @@ import { environmentMeta } from "./environment";
 import { resolveLabel, text } from "./i18n";
 import { useShellStore } from "./store";
 import { ModalBackdrop } from "./modals/ModalBackdrop";
+import { rasterColorSpaces, type RasterColorSpace } from "@vravio/env-raster";
 
 type Unit = "px" | "mm" | "cm" | "in";
 type PresetCategory = "recent" | "photo" | "print" | "art" | "web" | "mobile" | "video" | "icon" | "social";
@@ -74,6 +75,7 @@ export function NewDocumentDialog({ initialKind, close }: { initialKind: Environ
   const [background, setBackground] = useState<"transparent" | "white" | "black" | "custom">("transparent");
   const [customBackground, setCustomBackground] = useState("#ffffff");
   const [pixelAspectRatio, setPixelAspectRatio] = useState(1);
+  const [colorSpace, setColorSpace] = useState<RasterColorSpace>("srgb");
   const [artboards, setArtboards] = useState(false);
   const [frameRate, setFrameRate] = useState(30);
   const [sampleRate, setSampleRate] = useState(48000);
@@ -98,7 +100,7 @@ export function NewDocumentDialog({ initialKind, close }: { initialKind: Environ
     setUnit(next); setWidth(Number(fromPixels(currentWidthPx, next, currentPpi).toFixed(next === "px" ? 0 : 3))); setHeight(Number(fromPixels(currentHeightPx, next, currentPpi).toFixed(next === "px" ? 0 : 3)));
   };
   const applyPreset = (preset: Preset) => { setUnit("px"); setWidth(preset.width); setHeight(preset.height); setResolution(preset.resolution); setResolutionUnit("ppi"); };
-  const create = () => { close(); store.openDocument(kind, { ...(name.trim() ? { name: name.trim() } : {}), width: widthPx, height: heightPx, resolution, resolutionUnit, backgroundColor, pixelAspectRatio, artboards, frameRate, sampleRate, channels, audioBitDepth }); };
+  const create = () => { close(); store.openDocument(kind, { ...(name.trim() ? { name: name.trim() } : {}), width: widthPx, height: heightPx, resolution, resolutionUnit, backgroundColor, ...(kind === "raster" ? { colorSpace } : {}), pixelAspectRatio, artboards, frameRate, sampleRate, channels, audioBitDepth }); };
   const environmentKinds = ["raster", "vector", "audio", "video"] as const;
 
   const allCategories: readonly [PresetCategory, string][] = [
@@ -133,7 +135,7 @@ export function NewDocumentDialog({ initialKind, close }: { initialKind: Environ
             <div className="parameter-pair"><label><span>{text(language, "Units", "Единицы")}</span><select value={unit} onChange={(event) => changeUnit(event.target.value as Unit)}><option value="px">px</option><option value="mm">mm</option><option value="cm">cm</option><option value="in">in</option></select></label><label><span>{text(language, "Orientation", "Ориентация")}</span><button className="orientation-button" onClick={() => { setWidth(height); setHeight(width); }}>↔ {widthPx >= heightPx ? text(language, "Landscape", "Альбомная") : text(language, "Portrait", "Книжная")}</button></label></div>
             <div className="parameter-pair"><label><span>{text(language, "Resolution", "Разрешение")}</span><input type="number" min="1" max="2400" value={resolution} onChange={(event) => setResolution(event.target.valueAsNumber)} /></label><label><span>{text(language, "Resolution units", "Единицы разрешения")}</span><select value={resolutionUnit} onChange={(event) => setResolutionUnit(event.target.value as "ppi" | "ppcm")}><option value="ppi">ppi</option><option value="ppcm">ppcm</option></select></label></div>
             {kind === "video" && <div className="parameter-pair"><label><span>Frame rate (Частота кадров)</span><select value={frameRate} onChange={(event) => setFrameRate(Number(event.target.value))}><option value="23.976">23.976 fps</option><option value="24">24 fps</option><option value="25">25 fps</option><option value="30">30 fps</option><option value="60">60 fps</option></select></label><label><span>Timeline (Таймлайн)</span><output>{widthPx} × {heightPx} · {frameRate} fps</output></label></div>}
-            {kind === "raster" && <div className="parameter-pair"><label><span>{text(language, "Color mode", "Цветовой режим")}</span><select><option>RGB · sRGB · 8 bit</option><option disabled>RGB · 16 bit — planned</option><option disabled>RGB · 32 bit — planned</option><option disabled>CMYK — color pipeline required</option></select></label><label><span>{text(language, "Pixel aspect", "Пропорции пикселя")}</span><input type="number" min="0.1" max="10" step="0.001" value={pixelAspectRatio} onChange={(event) => setPixelAspectRatio(event.target.valueAsNumber)} /></label></div>}
+            {kind === "raster" && <div className="parameter-pair"><label><span>{text(language, "Color mode", "Цветовой режим")}</span><select value={colorSpace} onChange={(event) => setColorSpace(event.target.value as RasterColorSpace)}>{rasterColorSpaces.map((space) => <option key={space.id} value={space.id}>{`RGB · ${language === "ru" ? space.label.ru : space.label.en} · 8 bit`}</option>)}<option disabled>{text(language, "16 / 32 bit — storage not implemented yet", "16 / 32 бит — хранилище ещё не реализовано")}</option><option disabled>{text(language, "CMYK — colour pipeline required", "CMYK — нужен цветовой конвейер")}</option></select></label><label><span>{text(language, "Pixel aspect", "Пропорции пикселя")}</span><input type="number" min="0.1" max="10" step="0.001" value={pixelAspectRatio} onChange={(event) => setPixelAspectRatio(event.target.valueAsNumber)} /></label></div>}
             {(kind === "raster" || kind === "video") && <label className="wide"><span>{text(language, "Background", "Фон")}</span><span className="background-control"><select value={background} onChange={(event) => setBackground(event.target.value as typeof background)}><option value="transparent">{text(language, "Transparent", "Прозрачный")}</option><option value="white">{text(language, "White", "Белый")}</option><option value="black">{text(language, "Black", "Чёрный")}</option><option value="custom">{text(language, "Custom", "Свой")}</option></select>{background === "custom" && <input type="color" value={customBackground} onChange={(event) => setCustomBackground(event.target.value)} />}</span></label>}
             {kind === "vector" && <label className="artboards-check"><input type="checkbox" checked={artboards} onChange={(event) => setArtboards(event.target.checked)} />{text(language, "Enable artboards", "Включить монтажные области")}</label>}
             <div className="document-summary">{valid ? <>{widthPx} × {heightPx} px · {(widthPx * heightPx * 4 / 1024 / 1024).toFixed(1)} MB {text(language, "base layer", "базовый слой")}</> : text(language, "Enter positive numeric values", "Введите положительные числовые значения")}</div>

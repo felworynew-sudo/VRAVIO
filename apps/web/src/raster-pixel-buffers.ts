@@ -1,4 +1,5 @@
 import { accumulateUniquePixelBytes, decodeRasterAsset, encodeRasterAsset, isRasterAsset, TileStore, visitPixelBuffers, type RasterDocumentState, type RasterLayer, type RasterLayerMask, type RasterRect } from "@vravio/env-raster";
+import { canvasColorSpaceFor, convertPixelsColorSpace, type RasterColorSpace } from "@vravio/env-raster";
 
 /**
  * Pure pixel-buffer plumbing shared by `RasterWorkspace.tsx`'s render and
@@ -24,10 +25,33 @@ export const toBytes = (pixels: Uint8ClampedArray, width: number, height: number
 export const fromBytes = (bytes: Uint8Array): Uint8ClampedArray =>
   isRasterAsset(bytes) ? decodeRasterAsset(bytes).pixels : new Uint8ClampedArray(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
 
-export function putPixels(canvas: HTMLCanvasElement, pixels: Uint8ClampedArray, width: number, height: number): void {
-  const context = canvas.getContext("2d");
+/**
+ * The 2D context to draw a document of `space` into, and what that context's colour space actually
+ * turned out to be (docs/master-plan.md §59).
+ *
+ * The browser's canvas knows two spaces, sRGB and Display P3, and the *first* `getContext` call on
+ * a canvas decides which one it is — later calls ignore the options. So the space is asked for on
+ * every call (harmless when it is already right) and the answer is read back rather than assumed:
+ * an older browser silently gives an sRGB canvas, and the pixels then have to be converted rather
+ * than mislabelled.
+ */
+export function displayContext(canvas: HTMLCanvasElement, space: RasterColorSpace = "srgb"): { context: CanvasRenderingContext2D; colorSpace: "srgb" | "display-p3" } {
+  const wanted = canvasColorSpaceFor(space);
+  const context = canvas.getContext("2d", { colorSpace: wanted });
   if (!context) throw new Error("Canvas 2D is not available");
-  context.putImageData(new ImageData(pixels as Uint8ClampedArray<ArrayBuffer>, width, height), 0, 0);
+  const actual = context.getContextAttributes?.().colorSpace;
+  return { context, colorSpace: actual === "display-p3" ? "display-p3" : "srgb" };
+}
+
+/** The document's pixels as the canvas's own space needs them, converted only when they differ. */
+function forDisplay(pixels: Uint8ClampedArray, from: RasterColorSpace, to: "srgb" | "display-p3"): Uint8ClampedArray {
+  return from === to ? pixels : convertPixelsColorSpace(pixels, from, to);
+}
+
+export function putPixels(canvas: HTMLCanvasElement, pixels: Uint8ClampedArray, width: number, height: number, space: RasterColorSpace = "srgb"): void {
+  const { context, colorSpace } = displayContext(canvas, space);
+  const shown = forDisplay(pixels, space, colorSpace);
+  context.putImageData(new ImageData(shown as Uint8ClampedArray<ArrayBuffer>, width, height, { colorSpace }), 0, 0);
 }
 
 /**
@@ -40,8 +64,10 @@ export function putPixels(canvas: HTMLCanvasElement, pixels: Uint8ClampedArray, 
 const mipBlitCanvases = new Map<string, OffscreenCanvas>();
 const MAX_MIP_BLIT_CANVASES = 4;
 
-function mipBlitCanvas(width: number, height: number): OffscreenCanvas {
-  const key = `${width}x${height}`;
+function mipBlitCanvas(width: number, height: number, colorSpace: "srgb" | "display-p3"): OffscreenCanvas {
+  // Keyed by colour space too: drawing P3 pixels through an sRGB scratch canvas would convert them
+  // there and back for nothing (docs/master-plan.md §59).
+  const key = `${width}x${height}:${colorSpace}`;
   const cached = mipBlitCanvases.get(key);
   if (cached) {
     // Map insertion order is our LRU order.
@@ -59,21 +85,21 @@ function mipBlitCanvas(width: number, height: number): OffscreenCanvas {
 }
 
 /** Blits a region-sized buffer at its document offset, leaving the rest of the canvas untouched. */
-export function putRegionPixels(canvas: HTMLCanvasElement, pixels: Uint8ClampedArray, region: RasterRect, step = 1): void {
+export function putRegionPixels(canvas: HTMLCanvasElement, pixels: Uint8ClampedArray, region: RasterRect, step = 1, space: RasterColorSpace = "srgb"): void {
   if (!region.width || !region.height) return;
-  const context = canvas.getContext("2d");
-  if (!context) throw new Error("Canvas 2D is not available");
+  const { context, colorSpace } = displayContext(canvas, space);
+  const shown = forDisplay(pixels, space, colorSpace);
   if (step <= 1) {
-    context.putImageData(new ImageData(pixels as Uint8ClampedArray<ArrayBuffer>, region.width, region.height), region.x, region.y);
+    context.putImageData(new ImageData(shown as Uint8ClampedArray<ArrayBuffer>, region.width, region.height, { colorSpace }), region.x, region.y);
     return;
   }
   // A subsampled tile carries one pixel per `step`; the browser scales it back
   // up, which is what makes compositing at a mip level worth doing at all.
   const sampledWidth = Math.ceil(region.width / step), sampledHeight = Math.ceil(region.height / step);
-  const source = mipBlitCanvas(sampledWidth, sampledHeight);
-  const sourceContext = source.getContext("2d");
+  const source = mipBlitCanvas(sampledWidth, sampledHeight, colorSpace);
+  const sourceContext = source.getContext("2d", { colorSpace });
   if (!sourceContext) throw new Error("Canvas 2D is not available");
-  sourceContext.putImageData(new ImageData(pixels as Uint8ClampedArray<ArrayBuffer>, sampledWidth, sampledHeight), 0, 0);
+  sourceContext.putImageData(new ImageData(shown as Uint8ClampedArray<ArrayBuffer>, sampledWidth, sampledHeight, { colorSpace }), 0, 0);
   context.clearRect(region.x, region.y, region.width, region.height);
   context.drawImage(source, 0, 0, sampledWidth, sampledHeight, region.x, region.y, region.width, region.height);
 }

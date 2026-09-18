@@ -176,7 +176,7 @@ export function useRasterCommit(params: {
       // in the cache. It is absent from `repainted`, yet the canvas still
       // physically contains the low-resolution pixels from the zoomed-out
       // view. A mip change must therefore re-blit every visible valid tile.
-      for (const tile of tilesForCanvasPresentation(update, mipChanged)) putRegionPixels(canvas, tile.pixels, tile.rect, tile.step);
+      for (const tile of tilesForCanvasPresentation(update, mipChanged)) putRegionPixels(canvas, tile.pixels, tile.rect, tile.step, state.colorSpace);
       // A timer, not `requestAnimationFrame`: frames stop in a hidden window, and the first
       // version of this left the tail of a stroke unpainted for exactly that reason — the canvas
       // held the stale tiles until something else forced a render. Caught by comparing the visible
@@ -197,7 +197,7 @@ export function useRasterCommit(params: {
         if (cancelled) return;
         if (!ran) { drain(TILE_BUDGET_MS); return; }
         const update = tiles.current.update(state, visible, { mip, budgetMs: Infinity });
-        for (const tile of tilesForCanvasPresentation(update, mipChanged)) putRegionPixels(canvas, tile.pixels, tile.rect, tile.step);
+        for (const tile of tilesForCanvasPresentation(update, mipChanged)) putRegionPixels(canvas, tile.pixels, tile.rect, tile.step, state.colorSpace);
       });
     } else {
       drain(TILE_BUDGET_MS);
@@ -217,8 +217,8 @@ export function useRasterCommit(params: {
       // sender composites and sends just that rectangle (docs/master-plan.md §58.1) — the whole
       // document was composited and blitted on every slider tick before.
       const region = event.detail.region;
-      if (event.detail.pixels && region) { putRegionPixels(canvas, event.detail.pixels, region); return; }
-      putPixels(canvas, event.detail.pixels ?? compositeRasterDocument(state), state.width, state.height);
+      if (event.detail.pixels && region) { putRegionPixels(canvas, event.detail.pixels, region, 1, state.colorSpace); return; }
+      putPixels(canvas, event.detail.pixels ?? compositeRasterDocument(state), state.width, state.height, state.colorSpace);
     };
     window.addEventListener("vravio-raster-preview", preview);
     return () => window.removeEventListener("vravio-raster-preview", preview);
@@ -227,10 +227,10 @@ export function useRasterCommit(params: {
   const renderWorking = (pixels: Uint8ClampedArray, target: "pixels" | "mask" = "pixels", layerId = state.activeLayerId) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    if (target === "mask") { putPixels(canvas, compositeRasterDocument(withLayerMaskPixels(state, layerId, pixels)), state.width, state.height); return; }
+    if (target === "mask") { putPixels(canvas, compositeRasterDocument(withLayerMaskPixels(state, layerId, pixels)), state.width, state.height, state.colorSpace); return; }
     const layer = activeRasterLayer(state);
     const direct = canDirectRasterPreviewBlit(state, layer);
-    putPixels(canvas, direct ? pixels : compositeRasterDocument(withActiveLayerPixels(state, pixels)), state.width, state.height);
+    putPixels(canvas, direct ? pixels : compositeRasterDocument(withActiveLayerPixels(state, pixels)), state.width, state.height, state.colorSpace);
   };
 
   /** The multi-layer counterpart of `renderWorkingRegion`: one preview composite for every
@@ -242,10 +242,10 @@ export function useRasterCommit(params: {
     const region = dirty ? clampRegionToDocument(state, dirty) : null;
     const preview = withLayersPixels(state, updates, region);
     if (region?.width && region.height) {
-      putRegionPixels(canvas, compositeRasterRegion(preview, region), region);
+      putRegionPixels(canvas, compositeRasterRegion(preview, region), region, 1, state.colorSpace);
       return;
     }
-    putPixels(canvas, compositeRasterDocument(preview), state.width, state.height);
+    putPixels(canvas, compositeRasterDocument(preview), state.width, state.height, state.colorSpace);
   };
 
   /**
@@ -261,12 +261,12 @@ export function useRasterCommit(params: {
     if (target === "mask") {
       // A mask has no "one visible layer" shortcut — what is on screen is always the composite —
       // but it can still be composited a band at a time, which is the whole point.
-      putRegionPixels(canvas, compositeRasterRegion(withLayerMaskRegion(state, layerId, pixels, region), region), region);
+      putRegionPixels(canvas, compositeRasterRegion(withLayerMaskRegion(state, layerId, pixels, region), region), region, 1, state.colorSpace);
       return;
     }
     const layer = activeRasterLayer(state);
     const direct = canDirectRasterPreviewBlit(state, layer);
-    putRegionPixels(canvas, direct ? cropPixels(pixels, state.width, region) : compositeRasterRegion(withActiveLayerPixels(state, pixels, region), region), region);
+    putRegionPixels(canvas, direct ? cropPixels(pixels, state.width, region) : compositeRasterRegion(withActiveLayerPixels(state, pixels, region), region), region, 1, state.colorSpace);
   };
 
   /**
@@ -306,7 +306,7 @@ export function useRasterCommit(params: {
         composited[at + 2] = Math.round(composited[at + 2]! * (1 - alpha) + 40 * alpha);
       }
     }
-    putRegionPixels(canvas, composited, region);
+    putRegionPixels(canvas, composited, region, 1, state.colorSpace);
   };
 
   /**
@@ -360,7 +360,7 @@ export function useRasterCommit(params: {
         composited[at + 3] = Math.round(outA * 255);
       }
     }
-    putRegionPixels(canvas, composited, region);
+    putRegionPixels(canvas, composited, region, 1, state.colorSpace);
   };
 
   /** Binds a layer buffer to an asset on first edit, seeding it with the pre-edit bytes. */
@@ -423,7 +423,7 @@ export function useRasterCommit(params: {
       // Recompositing from `state` here is what makes the screen agree with
       // the document it was just told to disagree with.
       const canvas = canvasRef.current;
-      if (canvas) putPixels(canvas, compositeRasterDocument(state), state.width, state.height);
+      if (canvas) putPixels(canvas, compositeRasterDocument(state), state.width, state.height, state.colorSpace);
       return;
     }
     const edit = outcome.edit;

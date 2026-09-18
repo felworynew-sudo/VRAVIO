@@ -1,5 +1,6 @@
 import type { ColorLookupTable } from "./lut";
 import type { TileStore } from "./tile-store";
+import type { RasterColorSpace } from "./color-space";
 
 export type RasterBlendMode = "normal" | "dissolve" | "darken" | "multiply" | "colorBurn" | "linearBurn" | "darkerColor" | "lighten" | "screen" | "colorDodge" | "linearDodge" | "lighterColor" | "overlay" | "softLight" | "hardLight" | "vividLight" | "linearLight" | "pinLight" | "hardMix" | "difference" | "exclusion" | "subtract" | "divide" | "hue" | "saturation" | "color" | "luminosity";
 export type RasterLayerKind = "pixel" | "text" | "adjustment" | "fill" | "group" | "smart" | "shape" | "3d";
@@ -396,7 +397,8 @@ export interface RasterDocumentState {
   schemaVersion: 1 | 2;
   width: number;
   height: number;
-  colorSpace: "srgb";
+  /** The document's working colour space — what its numbers mean (docs/master-plan.md §59). */
+  colorSpace: RasterColorSpace;
   resolution: number;
   resolutionUnit: "ppi" | "ppcm";
   /** 16 and 32 bit force the precise compositing path; see composite-plan.ts. */
@@ -410,6 +412,8 @@ export interface RasterDocumentState {
 }
 
 export interface RasterDocumentOptions {
+  colorSpace?: RasterColorSpace;
+  bitDepth?: 8 | 16 | 32;
   resolution?: number;
   resolutionUnit?: "ppi" | "ppcm";
   pixelAspectRatio?: number;
