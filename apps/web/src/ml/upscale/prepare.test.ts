@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cropRgba, placeTileOutput, planTiles } from "./prepare";
+import { accumulateTileOutput, createTileAccumulator, cropRgba, finishTileAccumulator, placeTileOutput, planTiles } from "./prepare";
 import { upscaleModelById, upscaleModels } from "./registry";
 
 /**
@@ -143,5 +143,49 @@ describe("placeTileOutput", () => {
       }
     }
     expect(touched.every((value) => value === 1)).toBe(true);
+  });
+});
+
+describe("blended tiles (docs/master-plan.md §58.1)", () => {
+  const width = 64, height = 8;
+
+  /** One tile's output, a flat colour — two neighbours answering differently is exactly the case a
+   *  hard join turns into a visible edge. */
+  const flatTile = (plan: { padWidth: number; padHeight: number }, value: number) => {
+    const pixels = new Uint8ClampedArray(plan.padWidth * plan.padHeight * 4);
+    for (let index = 0; index < pixels.length; index += 4) { pixels[index] = value; pixels[index + 1] = value; pixels[index + 2] = value; pixels[index + 3] = 255; }
+    return pixels;
+  };
+  const worstStepAlongRow = (pixels: Uint8ClampedArray, row: number) => {
+    let worst = 0;
+    for (let x = 1; x < width; x += 1) worst = Math.max(worst, Math.abs(pixels[(row * width + x) * 4]! - pixels[(row * width + x - 1) * 4]!));
+    return worst;
+  };
+
+  it("removes the step two disagreeing tiles leave at their join", () => {
+    const plans = planTiles(width, height, { size: 32, overlap: 8 });
+    expect(plans).toHaveLength(2);
+    const accumulator = createTileAccumulator(width, height);
+    const hard = new Uint8ClampedArray(width * height * 4);
+    plans.forEach((plan, index) => {
+      const tile = flatTile(plan, index === 0 ? 100 : 200);
+      accumulateTileOutput(accumulator, tile, plan, 1);
+      placeTileOutput(hard, width, height, tile, plan, 1);
+    });
+    const blended = finishTileAccumulator(accumulator);
+    expect(worstStepAlongRow(hard, 4)).toBe(100);
+    expect(worstStepAlongRow(blended, 4)).toBeLessThan(20);
+    // The far ends are still each tile's own answer, untouched by the blend.
+    expect(blended[(4 * width + 0) * 4]).toBe(100);
+    expect(blended[(4 * width + width - 1) * 4]).toBe(200);
+  });
+
+  it("a single tile covering the whole image comes back unchanged", () => {
+    const plans = planTiles(20, 8, { size: 32, overlap: 8 });
+    expect(plans).toHaveLength(1);
+    const accumulator = createTileAccumulator(20, 8);
+    const tile = flatTile({ padWidth: 20, padHeight: 8 }, 137);
+    accumulateTileOutput(accumulator, tile, plans[0]!, 1);
+    expect([...finishTileAccumulator(accumulator)]).toEqual([...tile]);
   });
 });

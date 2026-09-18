@@ -2,6 +2,7 @@ import { useState } from "react";
 import { cloneRasterState, layerDocumentPixels, setLayerPixels, type RasterDocumentState, type RasterLayer } from "@vravio/env-raster";
 import { kernel } from "./kernel";
 import { beginBusy } from "./busy";
+import { cropRgba } from "./ml/upscale/prepare";
 import { confirmModal, errorModal } from "./modals/runtime";
 import { neuralFilterById, neuralFilters } from "./ml/neural-filters/registry";
 import type { NeuralFilterDefinition } from "./ml/neural-filters/types";
@@ -64,7 +65,25 @@ export function NeuralFiltersDialog({ documentId, document, layer, language, onC
       }
 
       done = beginBusy(t(language, "Running filter", "Применение фильтра"));
-      const outcome = await filter.run(before, document.width, document.height, {});
+      // Over the layer's own extent, not the whole canvas: these models are fully convolutional, so
+      // the empty canvas around a small layer costs inference time and gives nothing back (the same
+      // finding as the ordinary filters, docs/master-plan.md §58.1).
+      const left = Math.max(0, layer.bounds.x), top = Math.max(0, layer.bounds.y);
+      const right = Math.min(document.width, layer.bounds.x + layer.bounds.width), bottom = Math.min(document.height, layer.bounds.y + layer.bounds.height);
+      const region = { x: left, y: top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+      const whole = region.x === 0 && region.y === 0 && region.width === document.width && region.height === document.height;
+      const source = whole ? before : cropRgba(before, document.width, region);
+      const outcome = await filter.run(source, region.width || document.width, region.height || document.height, {});
+      if (!whole && outcome.pixels) {
+        const placed = before.slice();
+        for (let y = 0; y < region.height; y += 1) {
+          const from = y * region.width * 4, to = ((region.y + y) * document.width + region.x) * 4;
+          placed.set(outcome.pixels.subarray(from, from + region.width * 4), to);
+        }
+        setPreview({ pixels: placed, filterId: filter.id });
+        setShowBefore(false);
+        return;
+      }
       if (!outcome.pixels) { if (outcome.error) errorModal({ title: t(language, "Filter failed", "Не удалось применить фильтр"), message: outcome.error }); return; }
       setPreview({ pixels: outcome.pixels, filterId: filter.id });
       setShowBefore(false);

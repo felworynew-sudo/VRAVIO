@@ -2,7 +2,7 @@ import { imageToTensor, tensorToImage } from "@vravio/env-raster";
 import { throwIfAborted, type MLSession } from "@vravio/kernel";
 import { kernel } from "../../kernel";
 import { diagnostic } from "../../diagnostics";
-import { cropRgba, placeTileOutput, planTiles } from "../upscale/prepare";
+import { accumulateTileOutput, createTileAccumulator, cropRgba, finishTileAccumulator, planTiles } from "../upscale/prepare";
 import type { DenoiseModelDefinition } from "./types";
 
 /**
@@ -63,7 +63,9 @@ export async function runDenoise(
   try {
     const tile = model.spec.tile ?? { size: Math.max(width, height), overlap: 0 };
     const plans = planTiles(width, height, tile);
-    const output = new Uint8ClampedArray(width * height * 4);
+    // Blended over the overlap rather than butted together: this network looks further than its
+    // context margin, so a hard join showed as a grid (see `accumulateTileOutput`).
+    const accumulator = createTileAccumulator(width, height);
     for (const plan of plans) {
       throwIfAborted(options.signal);
       const cropped = cropRgba(pixels, width, { x: plan.padX, y: plan.padY, width: plan.padWidth, height: plan.padHeight });
@@ -76,8 +78,9 @@ export async function runDenoise(
         return { pixels: null, error: `${model.id} returned ${outTileWidth}×${outTileHeight} for a ${plan.padWidth}×${plan.padHeight} tile — expected the same size back` };
       }
       const tileImage = tensorToImage(outTensor, plan.padWidth, plan.padHeight, { channels: 3 });
-      placeTileOutput(output, width, height, tileImage, plan, 1);
+      accumulateTileOutput(accumulator, tileImage, plan, 1);
     }
+    const output = finishTileAccumulator(accumulator);
     for (let pixel = 0; pixel < width * height; pixel += 1) output[pixel * 4 + 3] = pixels[pixel * 4 + 3]!;
     return { pixels: output, error: null };
   } catch (error) {
