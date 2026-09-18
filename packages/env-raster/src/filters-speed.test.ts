@@ -173,6 +173,65 @@ function reference_pointillizeFilter(source: Uint8ClampedArray, width: number, h
   return output;
 }
 
+function reference_sampleBilinear(source: Uint8ClampedArray, width: number, height: number, x: number, y: number): [number, number, number, number] {
+  const cx = Math.max(0, Math.min(width - 1.001, x)), cy = Math.max(0, Math.min(height - 1.001, y));
+  const x0 = Math.floor(cx), y0 = Math.floor(cy), x1 = Math.min(width - 1, x0 + 1), y1 = Math.min(height - 1, y0 + 1), fx = cx - x0, fy = cy - y0;
+  const i00 = (y0 * width + x0) * 4, i10 = (y0 * width + x1) * 4, i01 = (y1 * width + x0) * 4, i11 = (y1 * width + x1) * 4, out: [number, number, number, number] = [0, 0, 0, 0];
+  for (let c = 0; c < 4; c += 1) { const top = source[i00 + c]! * (1 - fx) + source[i10 + c]! * fx, bottom = source[i01 + c]! * (1 - fx) + source[i11 + c]! * fx; out[c] = top * (1 - fy) + bottom * fy; }
+  return out;
+}
+
+function reference_motionBlurFilter(source: Uint8ClampedArray, width: number, height: number, distance: number, angleDeg: number): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(source.length), theta = angleDeg * Math.PI / 180, length = Math.max(1, distance);
+  const steps = Math.ceil(length) + 1, offsetX = length * Math.cos(theta), offsetY = length * Math.sin(theta);
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const sum = [0, 0, 0, 0];
+    for (let step = 0; step < steps; step += 1) {
+      const t = steps === 1 ? 0 : step / (steps - 1) - 0.5;
+      const [r, g, b, a] = reference_sampleBilinear(source, width, height, x + offsetX * t, y + offsetY * t);
+      sum[0] = sum[0]! + r; sum[1] = sum[1]! + g; sum[2] = sum[2]! + b; sum[3] = sum[3]! + a;
+    }
+    const i = (y * width + x) * 4;
+    for (let c = 0; c < 4; c += 1) output[i + c] = byte(sum[c]! / steps);
+  }
+  return output;
+}
+
+function reference_radialBlurFilter(source: Uint8ClampedArray, width: number, height: number, amountPercent: number, method: number): Uint8ClampedArray {
+  const output = new Uint8ClampedArray(source.length), cx = width / 2, cy = height / 2;
+  if (method >= 1) {
+    const factor = Math.max(0, Math.min(100, amountPercent)) / 100 * 0.5;
+    for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+      const endX = x + (cx - x) * factor, endY = y + (cy - y) * factor;
+      const steps = Math.max(3, Math.min(64, Math.ceil(Math.hypot(endX - x, endY - y)) + 1));
+      const sum = [0, 0, 0, 0];
+      for (let step = 0; step < steps; step += 1) {
+        const t = step / (steps - 1);
+        const [r, g, b, a] = reference_sampleBilinear(source, width, height, x + (endX - x) * t, y + (endY - y) * t);
+        sum[0] = sum[0]! + r; sum[1] = sum[1]! + g; sum[2] = sum[2]! + b; sum[3] = sum[3]! + a;
+      }
+      const i = (y * width + x) * 4;
+      for (let c = 0; c < 4; c += 1) output[i + c] = byte(sum[c]! / steps);
+    }
+    return output;
+  }
+  const angle = Math.max(0, Math.min(100, amountPercent)) / 100 * Math.PI / 6;
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const dx = x - cx, dy = y - cy, r = Math.hypot(dx, dy);
+    const steps = Math.max(3, Math.min(64, Math.ceil(r * angle * 1.41)));
+    const phiBase = Math.atan2(dy, dx), phiStart = phiBase + angle / 2, phiStep = angle / steps;
+    const sum = [0, 0, 0, 0];
+    for (let step = 0; step < steps; step += 1) {
+      const phi = phiStart - step * phiStep;
+      const [sr, sg, sb, sa] = reference_sampleBilinear(source, width, height, cx + r * Math.cos(phi), cy + r * Math.sin(phi));
+      sum[0] = sum[0]! + sr; sum[1] = sum[1]! + sg; sum[2] = sum[2]! + sb; sum[3] = sum[3]! + sa;
+    }
+    const i = (y * width + x) * 4;
+    for (let c = 0; c < 4; c += 1) output[i + c] = byte(sum[c]! / steps);
+  }
+  return output;
+}
+
 function randomImage(width: number, height: number, seed: number): Uint8ClampedArray {
   const pixels = new Uint8ClampedArray(width * height * 4);
   let state = seed;
@@ -196,6 +255,10 @@ const cases: [string, Record<string, number>, (source: Uint8ClampedArray, width:
   ["pointillize", { cellSize: 3 }, (s, w, h, p) => reference_pointillizeFilter(s, w, h, p.cellSize!)],
   ["pointillize", { cellSize: 12 }, (s, w, h, p) => reference_pointillizeFilter(s, w, h, p.cellSize!)],
   ["pointillize", { cellSize: 40 }, (s, w, h, p) => reference_pointillizeFilter(s, w, h, p.cellSize!)],
+  ["motion_blur", { distance: 20, angle: 35 }, (s, w, h, p) => reference_motionBlurFilter(s, w, h, p.distance!, p.angle!)],
+  ["motion_blur", { distance: 1, angle: 0 }, (s, w, h, p) => reference_motionBlurFilter(s, w, h, p.distance!, p.angle!)],
+  ["radial_blur", { amount: 60, method: 0 }, (s, w, h, p) => reference_radialBlurFilter(s, w, h, p.amount!, p.method!)],
+  ["radial_blur", { amount: 60, method: 1 }, (s, w, h, p) => reference_radialBlurFilter(s, w, h, p.amount!, p.method!)],
 ];
 
 describe("rewritten slow filters reproduce their first versions exactly", () => {

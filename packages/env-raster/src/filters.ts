@@ -373,6 +373,19 @@ function dustAndScratchesFilter(source: Uint8ClampedArray, width: number, height
   return output;
 }
 
+/** `sampleBilinear`'s arithmetic, written into a reused scratch array — the accumulating blurs
+ *  below take one sample per step per pixel, and a fresh tuple for each was most of their cost
+ *  (docs/master-plan.md §58.1). */
+function sampleBilinearInto4(source: Uint8ClampedArray, width: number, height: number, x: number, y: number, out: Float64Array): void {
+  const cx = Math.max(0, Math.min(width - 1.001, x)), cy = Math.max(0, Math.min(height - 1.001, y));
+  const x0 = Math.floor(cx), y0 = Math.floor(cy), x1 = Math.min(width - 1, x0 + 1), y1 = Math.min(height - 1, y0 + 1), fx = cx - x0, fy = cy - y0;
+  const i00 = (y0 * width + x0) * 4, i10 = (y0 * width + x1) * 4, i01 = (y1 * width + x0) * 4, i11 = (y1 * width + x1) * 4;
+  for (let c = 0; c < 4; c += 1) {
+    const top = source[i00 + c]! * (1 - fx) + source[i10 + c]! * fx, bottom = source[i01 + c]! * (1 - fx) + source[i11 + c]! * fx;
+    out[c] = top * (1 - fy) + bottom * fy;
+  }
+}
+
 function sampleBilinear(source: Uint8ClampedArray, width: number, height: number, x: number, y: number): [number, number, number, number] {
   const cx = Math.max(0, Math.min(width - 1.001, x)), cy = Math.max(0, Math.min(height - 1.001, y));
   const x0 = Math.floor(cx), y0 = Math.floor(cy), x1 = Math.min(width - 1, x0 + 1), y1 = Math.min(height - 1, y0 + 1), fx = cx - x0, fy = cy - y0;
@@ -601,15 +614,16 @@ function averageFilter(source: Uint8ClampedArray, width: number, height: number)
 function motionBlurFilter(source: Uint8ClampedArray, width: number, height: number, distance: number, angleDeg: number): Uint8ClampedArray {
   const output = new Uint8ClampedArray(source.length), theta = angleDeg * Math.PI / 180, length = Math.max(1, distance);
   const steps = Math.ceil(length) + 1, offsetX = length * Math.cos(theta), offsetY = length * Math.sin(theta);
+  const sample = new Float64Array(4);
   for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
-    const sum = [0, 0, 0, 0];
+    let sum0 = 0, sum1 = 0, sum2 = 0, sum3 = 0;
     for (let step = 0; step < steps; step += 1) {
       const t = steps === 1 ? 0 : step / (steps - 1) - 0.5;
-      const [r, g, b, a] = sampleBilinear(source, width, height, x + offsetX * t, y + offsetY * t);
-      sum[0] = sum[0]! + r; sum[1] = sum[1]! + g; sum[2] = sum[2]! + b; sum[3] = sum[3]! + a;
+      sampleBilinearInto4(source, width, height, x + offsetX * t, y + offsetY * t, sample);
+      sum0 += sample[0]!; sum1 += sample[1]!; sum2 += sample[2]!; sum3 += sample[3]!;
     }
     const i = (y * width + x) * 4;
-    for (let c = 0; c < 4; c += 1) output[i + c] = byte(sum[c]! / steps);
+    output[i] = byte(sum0 / steps); output[i + 1] = byte(sum1 / steps); output[i + 2] = byte(sum2 / steps); output[i + 3] = byte(sum3 / steps);
   }
   return output;
 }
@@ -625,33 +639,35 @@ function radialBlurFilter(source: Uint8ClampedArray, width: number, height: numb
   const output = new Uint8ClampedArray(source.length), cx = width / 2, cy = height / 2;
   if (method >= 1) {
     const factor = Math.max(0, Math.min(100, amountPercent)) / 100 * 0.5;
+    const sample = new Float64Array(4);
     for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
       const endX = x + (cx - x) * factor, endY = y + (cy - y) * factor;
       const steps = Math.max(3, Math.min(64, Math.ceil(Math.hypot(endX - x, endY - y)) + 1));
-      const sum = [0, 0, 0, 0];
+      let sum0 = 0, sum1 = 0, sum2 = 0, sum3 = 0;
       for (let step = 0; step < steps; step += 1) {
         const t = step / (steps - 1);
-        const [r, g, b, a] = sampleBilinear(source, width, height, x + (endX - x) * t, y + (endY - y) * t);
-        sum[0] = sum[0]! + r; sum[1] = sum[1]! + g; sum[2] = sum[2]! + b; sum[3] = sum[3]! + a;
+        sampleBilinearInto4(source, width, height, x + (endX - x) * t, y + (endY - y) * t, sample);
+        sum0 += sample[0]!; sum1 += sample[1]!; sum2 += sample[2]!; sum3 += sample[3]!;
       }
       const i = (y * width + x) * 4;
-      for (let c = 0; c < 4; c += 1) output[i + c] = byte(sum[c]! / steps);
+      output[i] = byte(sum0 / steps); output[i + 1] = byte(sum1 / steps); output[i + 2] = byte(sum2 / steps); output[i + 3] = byte(sum3 / steps);
     }
     return output;
   }
   const angle = Math.max(0, Math.min(100, amountPercent)) / 100 * Math.PI / 6;
+  const spinSample = new Float64Array(4);
   for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
     const dx = x - cx, dy = y - cy, r = Math.hypot(dx, dy);
     const steps = Math.max(3, Math.min(64, Math.ceil(r * angle * 1.41)));
     const phiBase = Math.atan2(dy, dx), phiStart = phiBase + angle / 2, phiStep = angle / steps;
-    const sum = [0, 0, 0, 0];
+    let sum0 = 0, sum1 = 0, sum2 = 0, sum3 = 0;
     for (let step = 0; step < steps; step += 1) {
       const phi = phiStart - step * phiStep;
-      const [sr, sg, sb, sa] = sampleBilinear(source, width, height, cx + r * Math.cos(phi), cy + r * Math.sin(phi));
-      sum[0] = sum[0]! + sr; sum[1] = sum[1]! + sg; sum[2] = sum[2]! + sb; sum[3] = sum[3]! + sa;
+      sampleBilinearInto4(source, width, height, cx + r * Math.cos(phi), cy + r * Math.sin(phi), spinSample);
+      sum0 += spinSample[0]!; sum1 += spinSample[1]!; sum2 += spinSample[2]!; sum3 += spinSample[3]!;
     }
     const i = (y * width + x) * 4;
-    for (let c = 0; c < 4; c += 1) output[i + c] = byte(sum[c]! / steps);
+    output[i] = byte(sum0 / steps); output[i + 1] = byte(sum1 / steps); output[i + 2] = byte(sum2 / steps); output[i + 3] = byte(sum3 / steps);
   }
   return output;
 }
