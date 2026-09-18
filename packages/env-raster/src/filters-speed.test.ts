@@ -232,6 +232,67 @@ function reference_radialBlurFilter(source: Uint8ClampedArray, width: number, he
   return output;
 }
 
+function reference_lensFlareFilter(source: Uint8ClampedArray, width: number, height: number, brightnessPercent: number, lensType: number, positionXPercent: number, positionYPercent: number): Uint8ClampedArray {
+  const output = source.slice();
+  const centerX = (positionXPercent / 100) * width, centerY = (positionYPercent / 100) * height;
+  const lensPresets = [
+    { matteScale: 1, reflectionStrength: 1, anamorphic: false },
+    { matteScale: 0.6, reflectionStrength: 0.65, anamorphic: false },
+    { matteScale: 0.85, reflectionStrength: 1.15, anamorphic: false },
+    { matteScale: 0.9, reflectionStrength: 0.45, anamorphic: true },
+  ];
+  const preset = lensPresets[Math.round(lensType)] ?? lensPresets[0]!;
+  const matte = width * preset.matteScale, brightness = Math.max(0, brightnessPercent) / 100;
+  const colorSize = matte * 0.0375, glowSize = matte * 0.078125, innerSize = matte * 0.1796875, outerSize = matte * 0.3359375, haloSize = matte * 0.084375;
+  const color = [0.937255, 0.937255, 0.937255], glow = [0.960784, 0.960784, 0.960784], inner = [1, 0.14902, 0.168627], outer = [0.270588, 0.231373, 0.25098], halo = [0.313726, 0.058824, 0.015686];
+  const xh = width / 2, yh = height / 2, dx = xh - centerX, dy = yh - centerY;
+  const reflections: { size: number; xp: number; yp: number; type: number; color: number[] }[] = [
+    { f: 0.6699, size: 0.027, type: 1, color: [0, 0.054902, 0.443137] },
+    { f: 0.2692, size: 0.01, type: 1, color: [0.352941, 0.709804, 0.556863] },
+    { f: -0.0112, size: 0.005, type: 1, color: [0.219608, 0.54902, 0.415686] },
+    { f: 0.649, size: 0.031, type: 2, color: [0.035294, 0.113725, 0.07451] },
+    { f: 0.4696, size: 0.015, type: 2, color: [0.094118, 0.054902, 0] },
+    { f: 0.4087, size: 0.037, type: 2, color: [0.094118, 0.054902, 0] },
+    { f: -0.2003, size: 0.022, type: 2, color: [0.164706, 0.07451, 0] },
+    { f: -0.4103, size: 0.025, type: 2, color: [0, 0.035294, 0.066667] },
+    { f: -0.4503, size: 0.058, type: 2, color: [0, 0.015686, 0.039216] },
+    { f: -0.5112, size: 0.017, type: 2, color: [0.019608, 0.019608, 0.054902] },
+    { f: -1.496, size: 0.2, type: 2, color: [0.035294, 0.015686, 0] },
+    { f: -1.496, size: 0.5, type: 2, color: [0.035294, 0.015686, 0] },
+    { f: 0.4487, size: 0.075, type: 3, color: [0.133333, 0.07451, 0] },
+    { f: 1, size: 0.1, type: 3, color: [0.054902, 0.101961, 0] },
+    { f: -1.301, size: 0.039, type: 3, color: [0.039216, 0.098039, 0.05098] },
+    { f: 1.309, size: 0.19, type: 4, color: [0.035294, 0, 0.066667] },
+    { f: 1.309, size: 0.195, type: 4, color: [0.035294, 0.062745, 0.019608] },
+    { f: 1.309, size: 0.2, type: 4, color: [0.066667, 0.015686, 0] },
+    { f: -1.301, size: 0.038, type: 4, color: [0.066667, 0.015686, 0] },
+  ].map((r) => ({ size: matte * r.size, xp: r.f * dx + xh, yp: r.f * dy + yh, type: r.type, color: r.color }));
+  const fixPixel = (pixel: number[], percent: number, colorProportion: number[]) => { for (let c = 0; c < 3; c += 1) pixel[c]! += (1 - pixel[c]!) * percent * colorProportion[c]! * brightness; };
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    const i = (y * width + x) * 4;
+    const pixel = [source[i]! / 255, source[i + 1]! / 255, source[i + 2]! / 255];
+    const hyp = Math.hypot(x - centerX, y - centerY);
+    let percent = (colorSize - hyp) / colorSize; if (percent > 0) fixPixel(pixel, percent * percent, color);
+    percent = (glowSize - hyp) / glowSize; if (percent > 0) fixPixel(pixel, percent * percent, glow);
+    percent = (innerSize - hyp) / innerSize; if (percent > 0) fixPixel(pixel, percent * percent, inner);
+    percent = (outerSize - hyp) / outerSize; if (percent > 0) fixPixel(pixel, percent, outer);
+    percent = Math.abs((hyp - haloSize) / (haloSize * 0.07)); if (percent < 1) fixPixel(pixel, 1 - percent, halo);
+    for (const reflection of reflections) {
+      const rhyp = Math.hypot(x - reflection.xp, y - reflection.yp);
+      if (reflection.type === 1) { const p = (reflection.size - rhyp) / reflection.size; if (p > 0) fixPixel(pixel, p * p * preset.reflectionStrength, reflection.color); }
+      else if (reflection.type === 2) { const p = Math.min(1, (reflection.size - rhyp) / (reflection.size * 0.15)); if (p > 0) fixPixel(pixel, p * preset.reflectionStrength, reflection.color); }
+      else if (reflection.type === 3) { let p = (reflection.size - rhyp) / (reflection.size * 0.12); if (p > 0) { if (p > 1) p = 1 - p * 0.12; fixPixel(pixel, p * preset.reflectionStrength, reflection.color); } }
+      else { const p = Math.abs((rhyp - reflection.size) / (reflection.size * 0.04)); if (p < 1) fixPixel(pixel, (1 - p) * preset.reflectionStrength, reflection.color); }
+    }
+    if (preset.anamorphic) {
+      const bandHalf = height * 0.006 + 1.5, distY = Math.abs(y - centerY);
+      if (distY < bandHalf) fixPixel(pixel, (1 - distY / bandHalf) * Math.max(0, 1 - Math.abs(x - centerX) / (width * 0.6)) * 0.85, [0.6, 0.75, 1]);
+    }
+    output[i] = byte(pixel[0]! * 255); output[i + 1] = byte(pixel[1]! * 255); output[i + 2] = byte(pixel[2]! * 255); output[i + 3] = source[i + 3]!;
+  }
+  return output;
+}
+
 function randomImage(width: number, height: number, seed: number): Uint8ClampedArray {
   const pixels = new Uint8ClampedArray(width * height * 4);
   let state = seed;
@@ -259,6 +320,8 @@ const cases: [string, Record<string, number>, (source: Uint8ClampedArray, width:
   ["motion_blur", { distance: 1, angle: 0 }, (s, w, h, p) => reference_motionBlurFilter(s, w, h, p.distance!, p.angle!)],
   ["radial_blur", { amount: 60, method: 0 }, (s, w, h, p) => reference_radialBlurFilter(s, w, h, p.amount!, p.method!)],
   ["radial_blur", { amount: 60, method: 1 }, (s, w, h, p) => reference_radialBlurFilter(s, w, h, p.amount!, p.method!)],
+  ["lens_flare", { brightness: 100, lensType: 0, positionX: 50, positionY: 50 }, (s, w, h, p) => reference_lensFlareFilter(s, w, h, p.brightness!, p.lensType!, p.positionX!, p.positionY!)],
+  ["lens_flare", { brightness: 160, lensType: 3, positionX: 20, positionY: 80 }, (s, w, h, p) => reference_lensFlareFilter(s, w, h, p.brightness!, p.lensType!, p.positionX!, p.positionY!)],
 ];
 
 describe("rewritten slow filters reproduce their first versions exactly", () => {

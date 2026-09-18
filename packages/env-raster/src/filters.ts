@@ -310,8 +310,19 @@ function medianBlur(source: Uint8ClampedArray, width: number, height: number, ra
   const windowSize = (2 * r + 1) * (2 * r + 1);
   const target = windowSize >> 1; // 0-indexed rank of the median in a sorted, always-odd-length window
   const histogram = new Int32Array(256);
+  // A channel that holds one value everywhere — alpha on any fully opaque layer, and that is most
+  // of them — has that same value as the median of every window, so it is filled once instead of
+  // slid over (docs/master-plan.md §58.1). Exact, not an approximation.
+  const constant = new Int32Array(4).fill(-1);
+  for (let channel = 0; channel < 4; channel += 1) {
+    const first = source[channel]!;
+    let uniform = true;
+    for (let at = channel; at < source.length; at += 4) if (source[at] !== first) { uniform = false; break; }
+    if (uniform) { constant[channel] = first; for (let at = channel; at < output.length; at += 4) output[at] = first; }
+  }
   for (let y = 0; y < height; y += 1) {
     for (let channel = 0; channel < 4; channel += 1) {
+      if (constant[channel]! >= 0) continue;
       histogram.fill(0);
       // Seed the histogram for this row's x=0 window (logical columns -r..r; clamped at the read).
       for (let dx = -r; dx <= r; dx += 1) {
@@ -1262,16 +1273,33 @@ function lensFlareFilter(source: Uint8ClampedArray, width: number, height: numbe
     { f: -1.301, size: 0.038, type: 4, color: [0.066667, 0.015686, 0] },
   ].map((r) => ({ size: matte * r.size, xp: r.f * dx + xh, yp: r.f * dy + yh, type: r.type, color: r.color }));
   const fixPixel = (pixel: number[], percent: number, colorProportion: number[]) => { for (let c = 0; c < 3; c += 1) pixel[c]! += (1 - pixel[c]!) * percent * colorProportion[c]! * brightness; };
-  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+  // Every reflection reaches at most `size * 1.04` from its own centre (the ring type is the widest
+  // of the four), so a pixel outside that box cannot be touched by it. Testing the box first —
+  // per row, then per pixel — skips the distance for nearly every pixel/reflection pair without
+  // changing the order the reflections are applied in, which `fixPixel` is not commutative in
+  // (docs/master-plan.md §58.1: this filter projected to ~2.6 s at 2048×2048).
+  const reach = reflections.map((reflection) => reflection.size * 1.04);
+  const rowReflections: typeof reflections = [];
+  const rowReach: number[] = [];
+  const pixel = [0, 0, 0];
+  for (let y = 0; y < height; y += 1) {
+    rowReflections.length = 0; rowReach.length = 0;
+    for (let index = 0; index < reflections.length; index += 1) {
+      const reflection = reflections[index]!, radius = reach[index]!;
+      if (y >= reflection.yp - radius && y <= reflection.yp + radius) { rowReflections.push(reflection); rowReach.push(radius); }
+    }
+    for (let x = 0; x < width; x += 1) {
     const i = (y * width + x) * 4;
-    const pixel = [source[i]! / 255, source[i + 1]! / 255, source[i + 2]! / 255];
+    pixel[0] = source[i]! / 255; pixel[1] = source[i + 1]! / 255; pixel[2] = source[i + 2]! / 255;
     const hyp = Math.hypot(x - centerX, y - centerY);
     let percent = (colorSize - hyp) / colorSize; if (percent > 0) fixPixel(pixel, percent * percent, color);
     percent = (glowSize - hyp) / glowSize; if (percent > 0) fixPixel(pixel, percent * percent, glow);
     percent = (innerSize - hyp) / innerSize; if (percent > 0) fixPixel(pixel, percent * percent, inner);
     percent = (outerSize - hyp) / outerSize; if (percent > 0) fixPixel(pixel, percent, outer);
     percent = Math.abs((hyp - haloSize) / (haloSize * 0.07)); if (percent < 1) fixPixel(pixel, 1 - percent, halo);
-    for (const reflection of reflections) {
+    for (let index = 0; index < rowReflections.length; index += 1) {
+      const reflection = rowReflections[index]!, radius = rowReach[index]!;
+      if (x < reflection.xp - radius || x > reflection.xp + radius) continue;
       const rhyp = Math.hypot(x - reflection.xp, y - reflection.yp);
       if (reflection.type === 1) { const p = (reflection.size - rhyp) / reflection.size; if (p > 0) fixPixel(pixel, p * p * preset.reflectionStrength, reflection.color); }
       else if (reflection.type === 2) { const p = Math.min(1, (reflection.size - rhyp) / (reflection.size * 0.15)); if (p > 0) fixPixel(pixel, p * preset.reflectionStrength, reflection.color); }
@@ -1283,6 +1311,7 @@ function lensFlareFilter(source: Uint8ClampedArray, width: number, height: numbe
       if (distY < bandHalf) fixPixel(pixel, (1 - distY / bandHalf) * Math.max(0, 1 - Math.abs(x - centerX) / (width * 0.6)) * 0.85, [0.6, 0.75, 1]);
     }
     output[i] = byte(pixel[0]! * 255); output[i + 1] = byte(pixel[1]! * 255); output[i + 2] = byte(pixel[2]! * 255); output[i + 3] = source[i + 3]!;
+    }
   }
   return output;
 }
