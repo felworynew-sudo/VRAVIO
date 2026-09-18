@@ -418,7 +418,10 @@ describe("DocumentSnapshotStore", () => {
   it("writes a document again when its files have been pruned from under it", async () => {
     // The revision shortcut must not trust itself blindly: a cleared storage has to be noticed.
     const inner = new MemoryStorageAdapter();
-    const snapshots = new DocumentSnapshotStore(inner);
+    // Enumerating storage is expensive on a real backend (OPFS walks entry by entry, master-plan
+    // §63), so the store normally prunes from what it knows and reconciles on a slow clock. Zero
+    // here means "every save", which is what makes the wipe observable inside a test.
+    const snapshots = new DocumentSnapshotStore(inner, { reconcileIntervalMs: 0 });
     const documents = new DocumentStore();
     documents.create("raster", "Doc", { pixels: new Uint8ClampedArray([1, 2, 3, 4]) });
 

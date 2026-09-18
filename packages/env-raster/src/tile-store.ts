@@ -23,6 +23,24 @@ import type { RasterRect } from "./types";
  *  itself stays cheap relative to what a tile holds (64*64*4 = 16KB per full RGBA tile). */
 export const TILE_SIZE = 64;
 
+/** One chunk on its way into a snapshot: named, placed, and not yet materialised. */
+export interface TileChunkHandle {
+  readonly __vravioChunk: true;
+  readonly contentKey: string;
+  readonly rect: RasterRect;
+  readonly arrayType: string;
+  readonly bytes: () => PixelBuffer;
+}
+
+interface TileStoreShape { width: number; height: number; channels: number; depth: RasterBitDepth; contentKey: string }
+export type TileStoreSnapshot = (TileStoreShape & { chunks: readonly TileChunkHandle[] }) | (TileStoreShape & { evicted: true });
+/** What comes back from a snapshot after the writer has replaced the handles with real buffers —
+ *  plus the two older shapes still on disk in existing sessions. */
+export type RestoredTileStoreSnapshot =
+  | { width: number; height: number; channels: number; depth?: RasterBitDepth; contentKey?: string; chunks: readonly { contentKey?: string; rect: RasterRect; pixels?: PixelBuffer; bytes?: () => PixelBuffer }[] }
+  | { width: number; height: number; channels: number; depth?: RasterBitDepth; contentKey?: string; pixels: PixelBuffer }
+  | { width: number; height: number; channels: number; depth?: RasterBitDepth; contentKey?: string; evicted: true };
+
 const key = (col: number, row: number) => col * 0x10000 + row;
 
 /**
@@ -41,7 +59,32 @@ const key = (col: number, row: number) => col * 0x10000 + row;
  * get the same key is to be a clone that nobody has written to since.
  */
 let nextContentKey = 1;
-const freshContentKey = (): string => `t${nextContentKey++}`;
+/**
+ * A name only this run of the program hands out.
+ *
+ * Without it the counter alone was a correctness bug, not just a weak name: a restored store
+ * *adopts* the name its snapshot carried (`t57`), the counter starts again at 1 in the new run,
+ * and sooner or later it issues `t57` to a completely different chunk — which the autosave then
+ * recognises as "already on disk" and does not write. Found by reloading a session and reading the
+ * pixels back: one edited chunk had survived and another had silently reverted (master-plan §63).
+ */
+const RUN_ID = Math.random().toString(36).slice(2, 10);
+const freshContentKey = (): string => `${RUN_ID}-${nextContentKey++}`;
+
+/**
+ * How many tiles across a persistence chunk is — 16x16 tiles, or 1024x1024 pixels, 4 MB of RGBA.
+ *
+ * Chosen against three measured costs, not two (docs/master-plan.md §63):
+ *   - writing a 34 MB layer as one blob is ~160 ms, a 4 MB chunk ~30 ms, a 1 MB chunk ~9 ms;
+ *   - each separate write carries ~4 ms of its own overhead, so very small chunks make a
+ *     whole-layer change *slower* than it was;
+ *   - and the one that decided it: **the number of files matters more than their size**. OPFS
+ *     enumerates a directory an entry at a time, and at 512x512 chunks a six-layer 3000x3000
+ *     document became ~500 files, whose directory walk measured 10.7 s. 1024x1024 makes that
+ *     document ~60 files.
+ */
+export const SNAPSHOT_CHUNK_TILES = 16;
+const CHUNK_SIZE = TILE_SIZE * SNAPSHOT_CHUNK_TILES;
 
 /**
  * Thrown by any `TileStore` method that needs real pixel bytes when called on a store built by
@@ -116,6 +159,8 @@ export class TileStore {
    * because a clone nobody has written to holds the same bytes.
    */
   #contentKey: string = freshContentKey();
+  /** The same idea per persistence chunk, so a save rewrites only the chunks a stroke touched. */
+  #chunkKeys = new Map<number, string>();
   readonly #tiles: Map<number, PixelBuffer>;
   readonly #evicted: boolean;
 
@@ -189,7 +234,67 @@ export class TileStore {
   clone(): TileStore {
     const copy = new TileStore(this.width, this.height, this.channels, new Map(this.#tiles), this.#evicted, this.depth);
     copy.#contentKey = this.#contentKey;
+    copy.#chunkKeys = new Map(this.#chunkKeys);
     return copy;
+  }
+
+  /** Renames the chunks a rectangle of *store* coordinates overlaps — every write goes through here
+   *  so that "which chunks changed" is bookkeeping, never a comparison of megabytes. */
+  #renameChunks(rect: RasterRect): void {
+    const left = Math.max(0, rect.x), top = Math.max(0, rect.y);
+    const right = Math.min(this.width, rect.x + rect.width), bottom = Math.min(this.height, rect.y + rect.height);
+    if (right <= left || bottom <= top) return;
+    for (let row = Math.floor(top / CHUNK_SIZE); row <= Math.floor((bottom - 1) / CHUNK_SIZE); row += 1) {
+      for (let col = Math.floor(left / CHUNK_SIZE); col <= Math.floor((right - 1) / CHUNK_SIZE); col += 1) {
+        this.#chunkKeys.set(key(col, row), freshContentKey());
+      }
+    }
+  }
+
+  /**
+   * This store as the pieces a snapshot writes: one entry per chunk, each with a name for its
+   * content and a thunk for its bytes.
+   *
+   * The thunk is the point. A caller that already has this chunk's name on disk never calls it, so
+   * an unchanged chunk costs nothing at all — no copy, no allocation. Before this, saving a
+   * document materialised every layer in full just to discover there was nothing to write
+   * (docs/master-plan.md §63).
+   */
+  snapshotChunks(): readonly { readonly contentKey: string; readonly rect: RasterRect; readonly bytes: () => PixelBuffer }[] {
+    if (this.#evicted) throw new EvictedTileStoreError("snapshotChunks");
+    const chunks: { contentKey: string; rect: RasterRect; bytes: () => PixelBuffer }[] = [];
+    const columns = Math.ceil(this.width / CHUNK_SIZE), rows = Math.ceil(this.height / CHUNK_SIZE);
+    for (let row = 0; row < rows; row += 1) {
+      for (let col = 0; col < columns; col += 1) {
+        const x = col * CHUNK_SIZE, y = row * CHUNK_SIZE;
+        const rect: RasterRect = { x, y, width: Math.min(CHUNK_SIZE, this.width - x), height: Math.min(CHUNK_SIZE, this.height - y) };
+        const id = key(col, row);
+        let name = this.#chunkKeys.get(id);
+        if (!name) { name = freshContentKey(); this.#chunkKeys.set(id, name); }
+        chunks.push({ contentKey: name, rect, bytes: () => this.readLocalRegionDeep(rect) });
+      }
+    }
+    return chunks;
+  }
+
+  /** Rebuilds a store from `snapshotChunks()`'s pieces — the other half of that round trip. */
+  static fromChunks(
+    width: number, height: number, channels: number, depth: RasterBitDepth,
+    chunks: readonly { readonly contentKey?: string; readonly rect: RasterRect; readonly pixels?: PixelBuffer; readonly bytes?: () => PixelBuffer }[],
+    contentKey?: string,
+  ): TileStore {
+    const store = TileStore.empty(width, height, channels, depth);
+    for (const chunk of chunks) {
+      // Either the bytes a writer already put back, or a handle that has not been asked yet — a
+      // snapshot rebuilt in memory (a test, a copy that never went to storage) still holds thunks,
+      // and refusing that would be a trap with no upside.
+      const pixels = chunk.pixels ?? chunk.bytes?.();
+      if (!pixels) continue;
+      store.writeLocalRegion(chunk.rect, pixels);
+      if (chunk.contentKey) store.#chunkKeys.set(key(Math.floor(chunk.rect.x / CHUNK_SIZE), Math.floor(chunk.rect.y / CHUNK_SIZE)), chunk.contentKey);
+    }
+    if (contentKey) store.#contentKey = contentKey;
+    return store;
   }
 
   /** The same content held at another depth — what Image ▸ Mode ▸ 16 Bits/Channel does to every
@@ -253,19 +358,31 @@ export class TileStore {
    * still wherever the layer swap manager's own storage already has them, not duplicated into the
    * autosave snapshot a second time.
    */
-  toJSON(): { width: number; height: number; channels: number; depth: RasterBitDepth; contentKey: string; pixels: PixelBuffer } | { width: number; height: number; channels: number; depth: RasterBitDepth; contentKey: string; evicted: true } {
+  toJSON(): TileStoreSnapshot {
     if (this.#evicted) return { width: this.width, height: this.height, channels: this.channels, depth: this.depth, contentKey: this.#contentKey, evicted: true };
-    // The store's own format, not the 8-bit view: a save that wrote `toPixels()` would quietly
-    // turn every 16-bit document into an 8-bit one the first time the session was restored.
-    return { width: this.width, height: this.height, channels: this.channels, depth: this.depth, contentKey: this.#contentKey, pixels: this.toPixelsDeep() };
+    // Chunks, not one flat buffer, and each one lazy: a writer that already has a chunk's content
+    // never asks for its bytes, so an unchanged layer costs nothing to save (master-plan §63). The
+    // depth travels with it — a save that wrote the 8-bit view would quietly turn every 16-bit
+    // document into an 8-bit one the first time the session was restored.
+    return {
+      width: this.width, height: this.height, channels: this.channels, depth: this.depth, contentKey: this.#contentKey,
+      chunks: this.snapshotChunks().map((chunk) => ({ __vravioChunk: true as const, contentKey: chunk.contentKey, rect: chunk.rect, arrayType: allocatePixels(this.depth, 0).constructor.name, bytes: chunk.bytes })),
+    };
   }
 
   /** The other half of `toJSON()`'s round trip — rebuilds a real `TileStore` (tiled, with a
    *  working `#tiles` map) from the plain shape `toJSON()`/`JSON.parse` leave behind, or another
    *  placeholder from the `{ evicted: true }` shape a store evicted at save time leaves instead. */
-  static fromJSON(value: { width: number; height: number; channels: number; depth?: RasterBitDepth; contentKey?: string; pixels: PixelBuffer } | { width: number; height: number; channels: number; depth?: RasterBitDepth; contentKey?: string; evicted: true }): TileStore {
-    // `depth` is optional on the way in: every save written before §59.2 is 8-bit, and the buffer
+  static fromJSON(value: RestoredTileStoreSnapshot): TileStore {
+    // Three shapes, because three eras of this file are still readable: chunks (now), one flat
+    // `pixels` buffer (§59.2), and a store that was evicted when the snapshot was taken.
+    // `depth` is optional on the way in — every save written before §59.2 is 8-bit, and the buffer
     // that comes back from `JSON.parse` says so itself anyway.
+    if ("chunks" in value && Array.isArray(value.chunks)) {
+      const first = value.chunks[0]?.pixels ?? value.chunks[0]?.bytes?.();
+      const depth = value.depth ?? (first ? bufferDepth(first) : 8);
+      return TileStore.fromChunks(value.width, value.height, value.channels, depth, value.chunks, value.contentKey);
+    }
     const depth = value.depth ?? ("pixels" in value ? bufferDepth(value.pixels) : 8);
     const store = "pixels" in value
       ? TileStore.fromPixels(value.pixels, value.width, value.height, value.channels, depth)
@@ -357,6 +474,7 @@ export class TileStore {
   writeRegion(rect: RasterRect, source: PixelBuffer, sourceWidth: number): void {
     if (this.#evicted) throw new EvictedTileStoreError("writeRegion");
     this.#contentKey = freshContentKey();
+    this.#renameChunks(rect);
     // A write at another depth is converted before it lands, so an 8-bit tool can keep writing
     // into a 16-bit layer exactly as it did - the same boundary `toPixels()` holds on the way out.
     if (bufferDepth(source) !== this.depth) source = convertPixelDepth(source, bufferDepth(source), this.depth);
@@ -395,6 +513,7 @@ export class TileStore {
   writeLocalRegion(rect: RasterRect, patch: PixelBuffer): void {
     if (this.#evicted) throw new EvictedTileStoreError("writeLocalRegion");
     this.#contentKey = freshContentKey();
+    this.#renameChunks(rect);
     if (bufferDepth(patch) !== this.depth) patch = convertPixelDepth(patch, bufferDepth(patch), this.depth);
     const left = Math.max(0, rect.x), top = Math.max(0, rect.y);
     const right = Math.min(this.width, rect.x + rect.width), bottom = Math.min(this.height, rect.y + rect.height);

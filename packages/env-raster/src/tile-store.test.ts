@@ -52,6 +52,15 @@ describe("TileStore.fromPixels / toPixels", () => {
   });
 });
 
+/**
+ * What `document-snapshot-store.ts` does with a snapshot: each chunk handle is written (or found
+ * already on disk) and comes back as its bytes, in place. Written here so every round-trip test
+ * below exercises the real path rather than a shape invented for the test.
+ */
+const throughStorage = (snapshot: ReturnType<TileStore["toJSON"]>) => "chunks" in snapshot
+  ? { ...snapshot, chunks: snapshot.chunks.map((chunk) => ({ contentKey: chunk.contentKey, rect: chunk.rect, pixels: chunk.bytes() })) }
+  : snapshot;
+
 describe("TileStore.toJSON / fromJSON — the document-snapshot-store.ts round trip", () => {
   it("a bare instance, JSON.stringified without toJSON, would lose every tile silently", () => {
     // Not testing TileStore's real toJSON here — testing the failure mode it exists to prevent.
@@ -62,16 +71,39 @@ describe("TileStore.toJSON / fromJSON — the document-snapshot-store.ts round t
     expect(JSON.parse(JSON.stringify(new Bare()))).toEqual({ width: 10, height: 10, channels: 4 });
   });
 
-  it("toJSON()'s pixels field is a real typed array, the shape document-snapshot-store.ts's replacer already knows how to serialize", () => {
-    // document-snapshot-store.ts's own replacer intercepts `ArrayBuffer.isView(value)` *before*
-    // JSON.stringify's default (and lossy, for a typed array — see the sibling test below)
-    // per-index serialization ever runs. toJSON() only has to hand back that shape; the actual
-    // typed-array-safe encoding is the kernel's job, downstream of this method, not this file's.
+  it("toJSON() hands over named, placed, *unmaterialised* chunks — nothing is copied until asked", () => {
+    // The shape `document-snapshot-store.ts` consumes (master-plan §63): a chunk it already has on
+    // disk is recognised by name and its `bytes()` is never called, which is what makes saving an
+    // untouched layer free. Materialising here would defeat the whole mechanism, so this asserts
+    // the thunk is a thunk.
     const store = TileStore.fromPixels(fixture(TILE_SIZE, TILE_SIZE), TILE_SIZE, TILE_SIZE);
     const snapshot = store.toJSON();
-    expect(ArrayBuffer.isView(snapshot.pixels)).toBe(true);
-    expect(snapshot.pixels).toBeInstanceOf(Uint8ClampedArray);
-    expect(snapshot).toEqual({ width: TILE_SIZE, height: TILE_SIZE, channels: 4, depth: 8, contentKey: store.contentKey, pixels: store.toPixels() });
+    if (!("chunks" in snapshot)) throw new Error("expected a chunked snapshot");
+
+    expect(snapshot.width).toBe(TILE_SIZE);
+    expect(snapshot.depth).toBe(8);
+    expect(snapshot.contentKey).toBe(store.contentKey);
+    expect(snapshot.chunks.length).toBe(1);                    // 64x64 fits in one 512x512 chunk
+    expect(typeof snapshot.chunks[0]!.bytes).toBe("function");
+    expect(snapshot.chunks[0]!.rect).toEqual({ x: 0, y: 0, width: TILE_SIZE, height: TILE_SIZE });
+    expect(snapshot.chunks[0]!.arrayType).toBe("Uint8ClampedArray");
+    // And when asked, the bytes are real and are this store's own.
+    expect([...(snapshot.chunks[0]!.bytes() as Uint8ClampedArray)]).toEqual([...store.toPixels()]);
+  });
+
+  it("names each chunk separately, so a small edit renames one chunk and not the layer's others", () => {
+    // The point of the whole slice: a brush stroke must not make every chunk look changed.
+    const width = 1024 * 3, height = 1024;
+    const store = TileStore.fromPixels(fixture(width, height), width, height);
+    const before = (store.toJSON() as { chunks: readonly { contentKey: string }[] }).chunks.map((chunk) => chunk.contentKey);
+
+    store.writeLocalRegion({ x: 4, y: 4, width: 2, height: 2 }, new Uint8ClampedArray(16).fill(9));
+    const after = (store.toJSON() as { chunks: readonly { contentKey: string }[] }).chunks.map((chunk) => chunk.contentKey);
+
+    expect(after.length).toBe(3);
+    expect(after[0]).not.toBe(before[0]);
+    expect(after[1]).toBe(before[1]);
+    expect(after[2]).toBe(before[2]);
   });
 
   it("plain JSON.stringify (no replacer) on a typed array is itself lossy in shape, not just on TileStore — confirming why a replacer is required downstream", () => {
@@ -89,7 +121,7 @@ describe("TileStore.toJSON / fromJSON — the document-snapshot-store.ts round t
     const w = TILE_SIZE + 9, h = TILE_SIZE * 2 + 3;
     const source = fixture(w, h);
     const store = TileStore.fromPixels(source, w, h);
-    const rebuilt = TileStore.fromJSON(store.toJSON());
+    const rebuilt = TileStore.fromJSON(throughStorage(store.toJSON()) as never);
     expect(rebuilt.width).toBe(w);
     expect(rebuilt.height).toBe(h);
     expect(rebuilt.channels).toBe(4);
@@ -105,7 +137,7 @@ describe("TileStore.toJSON / fromJSON — the document-snapshot-store.ts round t
     const source = new Uint8ClampedArray(w * h);
     for (let i = 0; i < source.length; i += 1) source[i] = (i * 41 + 5) % 256;
     const store = TileStore.fromPixels(source, w, h, 1);
-    const rebuilt = TileStore.fromJSON(store.toJSON());
+    const rebuilt = TileStore.fromJSON(throughStorage(store.toJSON()) as never);
     expect(rebuilt.channels).toBe(1);
     expect([...rebuilt.toPixels()]).toEqual([...source]);
   });
@@ -113,7 +145,7 @@ describe("TileStore.toJSON / fromJSON — the document-snapshot-store.ts round t
   it("the round trip is a real, independent copy, not a shared reference back to the original store", () => {
     const w = TILE_SIZE, h = TILE_SIZE;
     const store = TileStore.fromPixels(fixture(w, h), w, h);
-    const rebuilt = TileStore.fromJSON(store.toJSON());
+    const rebuilt = TileStore.fromJSON(throughStorage(store.toJSON()) as never);
     store.writeRegion({ x: 0, y: 0, width: 5, height: 5 }, new Uint8ClampedArray(w * h * 4).fill(255), w);
     expect(rebuilt.readPixel(2, 2)).not.toEqual([255, 255, 255, 255]);
   });
@@ -576,9 +608,9 @@ describe("TileStore.placeholder — the swap-eviction marker", () => {
 
   it("adopts the name a snapshot carried, so a restored session is not rewritten at once", () => {
     const store = TileStore.fromPixels(fixture(TILE_SIZE, TILE_SIZE), TILE_SIZE, TILE_SIZE);
-    // The shape the snapshot store hands back: the same plain object, its buffer rebuilt.
-    const snapshot = store.toJSON() as { pixels: Uint8ClampedArray };
-    const restored = TileStore.fromJSON({ ...snapshot, pixels: snapshot.pixels.slice() } as never);
+    // The shape the snapshot store hands back: the same object, its chunk handles replaced by the
+    // bytes that were written (or were already on disk).
+    const restored = TileStore.fromJSON(throughStorage(store.toJSON()) as never);
 
     expect(restored.contentKey).toBe(store.contentKey);
     expect(Array.from(restored.toPixels())).toEqual(Array.from(store.toPixels()));
@@ -597,10 +629,11 @@ describe("TileStore.placeholder — the swap-eviction marker", () => {
     expect(restored.channels).toBe(4);
   });
 
-  it("toJSON() on a real (non-evicted) store is unaffected — still the plain pixels shape", () => {
+  it("toJSON() on a real (non-evicted) store carries chunks, not the eviction marker", () => {
     const source = new Uint8ClampedArray([1, 2, 3, 4]);
     const snapshot = TileStore.fromPixels(source, 1, 1).toJSON();
     expect("evicted" in snapshot).toBe(false);
-    expect([...(snapshot as { pixels: Uint8ClampedArray }).pixels]).toEqual([1, 2, 3, 4]);
+    const chunks = (snapshot as { chunks: readonly { bytes: () => Uint8ClampedArray }[] }).chunks;
+    expect([...chunks[0]!.bytes()]).toEqual([1, 2, 3, 4]);
   });
 });
