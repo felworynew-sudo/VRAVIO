@@ -2,6 +2,8 @@ import { useEffect, useRef } from "react";
 import { selectionBounds, type PixelSelection, type Point } from "@vravio/env-raster";
 import { beginBusy } from "../../../../busy";
 import { errorModal } from "../../../../modals/runtime";
+import { text } from "../../../../i18n";
+import { useShellStore } from "../../../../store";
 import { decodeMask, encodeImage, loadInteractiveSelectSessions, type EncodedImage, type InteractiveSelectSessions } from "../../../../ml/interactive-select/run";
 import { defaultInteractiveSelectModelId, interactiveSelectModelById } from "../../../../ml/interactive-select/registry";
 import type { SamPoint } from "../../../../ml/interactive-select/types";
@@ -97,12 +99,12 @@ function updatePrompt(context: ToolContext<SelectObjectState>, points: readonly 
   void (async () => {
     try {
       const sessions = await currentSessions(context);
-      if ("error" in sessions) { errorModal({ title: "Object selection failed (Не удалось выделить объект)", message: sessions.error }); return; }
+      if ("error" in sessions) { errorModal({ title: text(useShellStore.getState().language, "Object selection failed", "Не удалось выделить объект"), error: sessions.error }); return; }
       const encoded = await encoding;
-      if ("error" in encoded) { if (encoded.error) errorModal({ title: "Object selection failed (Не удалось выделить объект)", message: encoded.error }); return; }
+      if ("error" in encoded) { if (encoded.error) errorModal({ title: text(useShellStore.getState().language, "Object selection failed", "Не удалось выделить объект"), error: encoded.error }); return; }
       if (request !== latestRequest) return; // a newer click/box already started its own decode
       const outcome = await decodeMask(sessions, model, encoded, nextPoints);
-      if ("error" in outcome) { if (outcome.error) errorModal({ title: "Object selection failed (Не удалось выделить объект)", message: outcome.error }); return; }
+      if ("error" in outcome) { if (outcome.error) errorModal({ title: text(useShellStore.getState().language, "Object selection failed", "Не удалось выделить объект"), error: outcome.error }); return; }
       if (request !== latestRequest) return;
       // Not `{...context.state, ...}` — `context.state` is the same pre-gesture snapshot the
       // comment above warns about, and spreading it here would silently resurrect whatever

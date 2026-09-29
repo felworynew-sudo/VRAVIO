@@ -68,7 +68,7 @@ export async function runContentAwareFill(documentId: string): Promise<void> {
     for (let pixel = 0; pixel < mask.length; pixel += 1) mask[pixel] = state.selection.mask[pixel] ? 255 : 0;
 
     const outcome = await runInpaint(model, composite, state.width, state.height, mask);
-    if (outcome.error) { errorModal({ title: t("Fill failed", "Не удалось заполнить"), message: `${model.id}: ${outcome.error}` }); return; }
+    if (outcome.error) { errorModal({ title: t("Fill failed", "Не удалось заполнить"), error: outcome.error, detail: model.id }); return; }
     if (!outcome.pixels) return;
 
     const isolated = new Uint8ClampedArray(outcome.pixels.length);
@@ -93,7 +93,7 @@ export async function runContentAwareFill(documentId: string): Promise<void> {
       undo: () => { kernel.documents.update<RasterDocumentState>(documentId, (current) => { Object.assign(current, cloneRasterState(before)); }); },
     });
   } catch (error) {
-    errorModal({ title: t("Fill failed", "Не удалось заполнить"), message: error instanceof Error ? error.message : String(error) });
+    errorModal({ title: t("Fill failed", "Не удалось заполнить"), error });
   } finally {
     done();
     running = false;

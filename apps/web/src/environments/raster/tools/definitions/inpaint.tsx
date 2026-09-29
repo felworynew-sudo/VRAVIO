@@ -2,6 +2,8 @@ import { spotHealDab } from "@vravio/env-raster";
 import { beginBusy } from "../../../../busy";
 import { diagnostic } from "../../../../diagnostics";
 import { errorModal } from "../../../../modals/runtime";
+import { text } from "../../../../i18n";
+import { useShellStore } from "../../../../store";
 import { defaultInpaintModelId, inpaintModelById } from "../../../../ml/inpaint/registry";
 import { runInpaint } from "../../../../ml/inpaint/run";
 import type { RasterToolDefinition, ToolContext } from "../types";
@@ -87,8 +89,9 @@ function fill(context: ToolContext<InpaintState>, stroke: Stroke): void {
       const outcome = await runInpaint(model, before, width, height, mask);
       if (outcome.error) {
         errorModal({
-          title: "Inpainting failed (Не удалось заполнить)",
-          message: `${model.id}: ${outcome.error}`,
+          title: text(useShellStore.getState().language, "Inpainting failed", "Не удалось заполнить"),
+          error: outcome.error,
+          detail: model.id,
         });
         return;
       }

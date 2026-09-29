@@ -158,6 +158,6 @@ export function colorTableModal(props: { colors: readonly string[] }): Promise<r
  * the window did nothing whatsoever and the only trace was in a log the user
  * has to know to open. Recording and telling are both wanted; this is telling.
  */
-export function errorModal(props: { title: string; message: string; detail?: string }): void {
+export function errorModal(props: { title: string; message?: string; error?: unknown; detail?: string }): void {
   openModal("error", props);
 }

@@ -1140,3 +1140,4 @@ button:focus-visible,input:focus-visible { outline:2px solid var(--focus); outli
   color: var(--muted);
   max-width: 150px;
 }
+.rasterize-confirm>p.error-reason{color:var(--text)}.error-lists{display:grid;gap:4px;font-size:12px;color:var(--muted)}.error-lists b{color:var(--text);font-weight:600}.error-lists ul{margin:0 0 4px;padding-left:18px;line-height:1.45}.modal-detail-fold>summary{cursor:pointer;color:var(--muted);font-size:11px;margin-bottom:6px}

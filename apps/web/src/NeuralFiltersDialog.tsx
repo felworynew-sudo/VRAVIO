@@ -84,11 +84,11 @@ export function NeuralFiltersDialog({ documentId, document, layer, language, onC
         setShowBefore(false);
         return;
       }
-      if (!outcome.pixels) { if (outcome.error) errorModal({ title: t(language, "Filter failed", "Не удалось применить фильтр"), message: outcome.error }); return; }
+      if (!outcome.pixels) { if (outcome.error) errorModal({ title: t(language, "Filter failed", "Не удалось применить фильтр"), error: outcome.error }); return; }
       setPreview({ pixels: outcome.pixels, filterId: filter.id });
       setShowBefore(false);
     } catch (error) {
-      errorModal({ title: t(language, "Filter failed", "Не удалось применить фильтр"), message: error instanceof Error ? error.message : String(error) });
+      errorModal({ title: t(language, "Filter failed", "Не удалось применить фильтр"), error });
     } finally {
       done?.();
       setRunning(false);

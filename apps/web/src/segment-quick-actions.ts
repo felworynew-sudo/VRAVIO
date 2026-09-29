@@ -105,7 +105,7 @@ export async function runSegmentQuickAction(documentId: string, kind: SegmentQui
   const done = beginBusy(kind === "remove" ? t("Removing background", "Удаление фона") : t("Selecting subject", "Выделение объекта"));
   try {
     const outcome = await runSegmentation(model, layerPixelsView(layer), layer.bounds.width, layer.bounds.height);
-    if (outcome.error) { errorModal({ title: t("Segmentation failed", "Сегментация не удалась"), message: outcome.error }); return; }
+    if (outcome.error) { errorModal({ title: t("Segmentation failed", "Сегментация не удалась"), error: outcome.error }); return; }
     if (!outcome.mask) return;
 
     // Read again: the model run is long enough for the document to have moved on.
@@ -124,7 +124,7 @@ export async function runSegmentQuickAction(documentId: string, kind: SegmentQui
       await commitLayerMask(documentId, layer.id, current.mask, nextMask, t("Remove Background", "Удалить фон"));
     }
   } catch (error) {
-    errorModal({ title: t("Segmentation failed", "Сегментация не удалась"), message: error instanceof Error ? error.message : String(error) });
+    errorModal({ title: t("Segmentation failed", "Сегментация не удалась"), error });
   } finally {
     done();
     running = null;

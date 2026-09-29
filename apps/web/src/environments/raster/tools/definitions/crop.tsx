@@ -4,6 +4,8 @@ import { appendLayer, cloneRasterState, compositeRasterDocument, createRasterLay
 import { kernel } from "../../../../kernel";
 import { beginBusy } from "../../../../busy";
 import { errorModal } from "../../../../modals/runtime";
+import { text } from "../../../../i18n";
+import { useShellStore } from "../../../../store";
 import { defaultInpaintModelId, inpaintModelById } from "../../../../ml/inpaint/registry";
 import { runInpaint } from "../../../../ml/inpaint/run";
 import type { RasterToolDefinition, ToolContext } from "../types";
@@ -174,7 +176,7 @@ async function fillExtendedBorder(documentId: string, oldWidth: number, oldHeigh
     // than only the border at full detail, so a big canvas fills at lower fidelity than a small
     // one. Correct and complete beats sharp and half-missing.
     const outcome = await runInpaint(model, composite, state.width, state.height, mask, { region: { x: 0, y: 0, width: state.width, height: state.height } });
-    if (outcome.error) { errorModal({ title: "AI border fill failed (Не удалось заполнить границы)", message: `${model.id}: ${outcome.error}` }); return; }
+    if (outcome.error) { errorModal({ title: text(useShellStore.getState().language, "AI border fill failed", "Не удалось заполнить границы"), error: outcome.error, detail: model.id }); return; }
     if (!outcome.pixels) return;
 
     const isolated = new Uint8ClampedArray(outcome.pixels.length);
@@ -200,7 +202,7 @@ async function fillExtendedBorder(documentId: string, oldWidth: number, oldHeigh
       undo: () => { kernel.documents.update<RasterDocumentState>(documentId, (current) => { Object.assign(current, clone(before)); }); },
     });
   } catch (error) {
-    errorModal({ title: "AI border fill failed (Не удалось заполнить границы)", message: error instanceof Error ? error.message : String(error) });
+    errorModal({ title: text(useShellStore.getState().language, "AI border fill failed", "Не удалось заполнить границы"), error });
   } finally {
     done();
   }

@@ -55,7 +55,8 @@ export function usePluginRuns(kind: EnvironmentKind | string | undefined, state:
         diagnostic("error", "plugin.run", `${entry.manifest.id}: ${message}`);
         errorModal({
           title: text(currentLanguage, "The plugin could not finish", "Плагин не смог завершить работу"),
-          message: `${name}: ${message}`,
+          message: name,
+          error: message,
         });
       };
 

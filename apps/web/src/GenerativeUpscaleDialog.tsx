@@ -52,7 +52,7 @@ export function GenerativeUpscaleDialog({ documentId, document, language, onClos
     try {
       const composite = compositeRasterDocument(document);
       const outcome = await runUpscale(model, composite, document.width, document.height);
-      if (outcome.error) { errorModal({ title: t(language, "Upscale failed", "Не удалось увеличить разрешение"), message: outcome.error }); return; }
+      if (outcome.error) { errorModal({ title: t(language, "Upscale failed", "Не удалось увеличить разрешение"), error: outcome.error }); return; }
       if (!outcome.pixels) return;
 
       const sourceName = kernel.documents.get(documentId)?.name ?? "";
@@ -70,7 +70,7 @@ export function GenerativeUpscaleDialog({ documentId, document, language, onClos
       }
       onClose();
     } catch (error) {
-      errorModal({ title: t(language, "Upscale failed", "Не удалось увеличить разрешение"), message: error instanceof Error ? error.message : String(error) });
+      errorModal({ title: t(language, "Upscale failed", "Не удалось увеличить разрешение"), error });
     } finally {
       done();
       setRunning(false);
