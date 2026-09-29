@@ -454,6 +454,41 @@ export function rotateSelection(selection: PixelSelection | null, width: number,
   const rotatedBounds = selectionBounds(mask, width, height); return rotatedBounds.width && rotatedBounds.height ? { mask, bounds: rotatedBounds } : null;
 }
 
+/**
+ * Selection counterpart of {@link transformLayerPixels}: scale and rotate through the same
+ * source→target rectangle, degrees and mirror in one pass, so a Free Transform's outline lands
+ * exactly where its pixels do. `rotateSelection`/`scaleSelection` only cover one operation each —
+ * a gesture that does both (the common case, and Free Transform's move.tsx never called either of
+ * them before this) needs their combined inverse mapping, not two separately-composed passes that
+ * could round differently and drift the outline off the pixels it is supposed to outline.
+ */
+export function transformSelection(selection: PixelSelection | null, width: number, height: number, source: RasterRect, target: RasterRect, degrees: number, mirror: TransformMirror = {}): PixelSelection | null {
+  if (!selection) return null;
+  const mask = new Uint8ClampedArray(width * height);
+  const radians = degrees * Math.PI / 180, cosine = Math.cos(radians), sine = Math.sin(radians);
+  const centerX = target.x + target.width / 2, centerY = target.y + target.height / 2;
+  const scaleX = target.width === 0 ? 0 : source.width / target.width;
+  const scaleY = target.height === 0 ? 0 : source.height / target.height;
+  const destination = rotatedDestinationBounds(target, degrees);
+  const fromY = Math.max(0, Math.floor(destination.y)), toY = Math.min(height, Math.ceil(destination.y + destination.height));
+  const fromX = Math.max(0, Math.floor(destination.x)), toX = Math.min(width, Math.ceil(destination.x + destination.width));
+  for (let y = fromY; y < toY; y += 1) {
+    for (let x = fromX; x < toX; x += 1) {
+      // Same inverse mapping as `transformLayerPixels`: undo the rotation about the target's
+      // centre, then undo the scale that carried the source rectangle onto the target.
+      const dx = x + .5 - centerX, dy = y + .5 - centerY;
+      const unrotatedX = centerX + cosine * dx + sine * dy, unrotatedY = centerY - sine * dx + cosine * dy;
+      const offsetX = (unrotatedX - target.x) * scaleX, offsetY = (unrotatedY - target.y) * scaleY;
+      const sampleX = source.x + (mirror.flipX ? source.width - offsetX : offsetX);
+      const sampleY = source.y + (mirror.flipY ? source.height - offsetY : offsetY);
+      const sourceX = Math.floor(sampleX), sourceY = Math.floor(sampleY);
+      if (sourceX >= 0 && sourceX < width && sourceY >= 0 && sourceY < height) mask[y * width + x] = selection.mask[sourceY * width + sourceX]!;
+    }
+  }
+  const bounds = selectionBounds(mask, width, height);
+  return bounds.width && bounds.height ? { mask, bounds } : null;
+}
+
 /** Bounding box of non-transparent pixels; falls back to the full canvas for an empty layer. */
 export function layerContentBounds(pixels: Uint8ClampedArray, width: number, height: number): RasterRect {
   let left = width, top = height, right = -1, bottom = -1;

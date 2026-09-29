@@ -1,8 +1,8 @@
 import { useEffect, useRef } from "react";
 import {
   cloneRasterState, compositeRasterDocument, flattenRasterLayers, layerAccepts, layerDocumentPixels, layerLockReason, layerOpaqueBounds, layerPixelsView, liftSelection, linkedLayers, meshLayerPixels, meshSelection,
-  pickLayerAt, quadLayerPixels, quadSelection, regularMesh, restrictSelectionToContent, rotateLayerPixels, rotateSelection,
-  rotatedDestinationBounds, scaleLayerPixels, scaleSelection, setLayerFramePixels, setLayerPixels, smartObjectTransform, stampFloating, stampFloatingInFrame, transformLayerInFrame, transformLayerPixels, transformSmartObject, translateLayerOrigin, translateLayerPixels, translateSelection, unionRect, WARP_GRID, warpPresetMesh,
+  pickLayerAt, quadLayerPixels, quadSelection, regularMesh, restrictSelectionToContent,
+  rotatedDestinationBounds, setLayerFramePixels, setLayerPixels, smartObjectTransform, stampFloating, stampFloatingInFrame, transformLayerInFrame, transformLayerPixels, transformSelection, transformSmartObject, translateLayerOrigin, translateLayerPixels, translateSelection, unionRect, WARP_GRID, warpPresetMesh,
   type WarpPresetId,
   type FloatingPixels, type PixelSelection, type Point, type RasterDocumentState, type RasterLayer, type RasterRect, type RasterTextData, type TransformDragCache,
 } from "@vravio/env-raster";
@@ -371,8 +371,18 @@ function resizeCursorFor([hx, hy]: readonly [-1 | 0 | 1, -1 | 0 | 1]): string {
  */
 export function transformControlsFrame(context: ToolContext<MoveState>): RasterRect | null {
   const document = context.document;
-  if (document.selection) return document.selection.bounds;
   const layer = context.activeLayer;
+  if (document.selection) {
+    // The same frame `startPendingTransform` opens with, not the raw selection: a selection looser
+    // than the layer's opaque content made this rectangle bigger than the one the transform then
+    // used, so a press just outside the visible object — meant for the rotate zone — landed
+    // "inside" here and started a plain move instead (docs/master-plan.md §65.1).
+    if (layer && layer.kind !== "group" && layer.kind !== "smart") {
+      const restricted = restrictSelectionToContent(document.selection, materialise(layer, document), document.width, document.height);
+      if (restricted) return restricted.bounds;
+    }
+    return document.selection.bounds;
+  }
   if (!layer || layer.kind === "group") return null;
   const left = Math.max(0, layer.bounds.x), top = Math.max(0, layer.bounds.y);
   const right = Math.min(document.width, layer.bounds.x + layer.bounds.width), bottom = Math.min(document.height, layer.bounds.y + layer.bounds.height);
@@ -541,7 +551,13 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
     // preview — document-sized, it has already lost whatever the drag carried past an edge.
     translateLayerOrigin(partner, entry.dx, entry.dy);
   }
-  after.selection = cloneSelection(pending.selection);
+  // `pending.selection` stays the *original* mask all through a described scale/turn — it is what
+  // the resample above reads as its coverage — so the outline that goes into the document has to
+  // be carried through the same source→target and angle here, or it stays where the pixels were
+  // (docs/master-plan.md §65.1). Quad/warp keep theirs current during the drag and have no `live`.
+  after.selection = pending.live
+    ? transformSelection(pending.selection, after.width, after.height, pending.live.source, pending.live.target, pending.live.rotation, { flipX: pending.live.flipX ?? false, flipY: pending.live.flipY ?? false })
+    : cloneSelection(pending.selection);
   if (nextActiveLayerId) after.activeLayerId = nextActiveLayerId;
   // Undo returns to the document as it was a moment ago, not to how it looked
   // when the frame opened: an edit made while the transform was up is its own
