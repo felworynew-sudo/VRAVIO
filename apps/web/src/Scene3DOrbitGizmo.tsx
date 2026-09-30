@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { Box3, Vector3, type Object3D } from "three";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import type { RasterDocumentState, RasterLayer } from "@vravio/env-raster";
 import { beginLiveScene3D, type LiveScene3DSession } from "./scene3d-live";
@@ -43,8 +44,19 @@ import { beginLiveScene3D, type LiveScene3DSession } from "./scene3d-live";
  * condition in `RasterWorkspace.tsx` and unmount. One commit per session
  * removes the race outright, not just the symptom.
  */
+export interface OrbitGizmoState {
+  readonly rotation: { x: number; y: number; z: number };
+  /** Document pixels the object has been dragged by during this session. */
+  readonly move: { x: number; y: number };
+}
+
+/** Rings this many screen pixels in radius at any zoom — interface never scales with the document
+ * (CLAUDE.md §1). TransformControls sizes its handles from camera distance × tan(fov), which with
+ * the document camera comes to 0.95 × document height world units per `size` quarter. */
+const RING_RADIUS_PX = 80;
+
 export function Scene3DOrbitGizmo({
-  documentId, document, layer, zoom, documentOriginX, documentOriginY, onLiveChange, onAccept, onCancel,
+  documentId, document, layer, zoom, documentOriginX, documentOriginY, workspaceWidth, workspaceHeight, onLiveChange, onAccept, onCancel,
 }: {
   documentId: string;
   document: RasterDocumentState;
@@ -52,7 +64,9 @@ export function Scene3DOrbitGizmo({
   zoom: number;
   documentOriginX: number;
   documentOriginY: number;
-  onLiveChange(rotation: { x: number; y: number; z: number }): void;
+  workspaceWidth: number;
+  workspaceHeight: number;
+  onLiveChange(state: OrbitGizmoState): void;
   onAccept(): void;
   onCancel(): void;
 }) {
@@ -63,42 +77,125 @@ export function Scene3DOrbitGizmo({
   onAcceptRef.current = onAccept;
   const onCancelRef = useRef(onCancel);
   onCancelRef.current = onCancel;
+  const sessionRef = useRef<LiveScene3DSession | null>(null);
+  const controlsRef = useRef<TransformControls | null>(null);
+  const moveRef = useRef({ x: 0, y: 0 });
+
+  // Where the object's centre sits relative to the canvas centre: the committed offset (recovered
+  // the same way `updateScene3DLayer` does, from `placement` and wherever Move left the layer)
+  // plus whatever this session has dragged it by.
+  const placement = layer.scene3d?.placement ?? { offsetX: 0, offsetY: 0, renderedCenterX: document.width / 2, renderedCenterY: document.height / 2 };
+  const baseOffset = {
+    x: placement.offsetX + layer.bounds.x + layer.bounds.width / 2 - placement.renderedCenterX,
+    y: placement.offsetY + layer.bounds.y + layer.bounds.height / 2 - placement.renderedCenterY,
+  };
+  const viewRef = useRef({ zoom, documentOriginX, documentOriginY, workspaceWidth, workspaceHeight, baseOffset });
+  viewRef.current = { zoom, documentOriginX, documentOriginY, workspaceWidth, workspaceHeight, baseOffset };
+
+  const applyView = () => {
+    const session = sessionRef.current, view = viewRef.current;
+    if (!session) return;
+    controlsRef.current?.setSize(RING_RADIUS_PX * 8 / (0.95 * document.height * view.zoom));
+    session.setViewport({
+      width: view.workspaceWidth, height: view.workspaceHeight, originX: view.documentOriginX, originY: view.documentOriginY, zoom: view.zoom,
+      offsetX: view.baseOffset.x + moveRef.current.x, offsetY: view.baseOffset.y + moveRef.current.y,
+    });
+  };
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     let cancelled = false;
-    let session: LiveScene3DSession | null = null;
     let controls: TransformControls | null = null;
+    moveRef.current = { x: 0, y: 0 };
+    const report = () => {
+      const session = sessionRef.current;
+      if (!session) return;
+      const rotation = session.rig.rotation;
+      onLiveChangeRef.current({ rotation: { x: rotation.x * 180 / Math.PI, y: rotation.y * 180 / Math.PI, z: rotation.z * 180 / Math.PI }, move: { ...moveRef.current } });
+    };
 
-    void beginLiveScene3D(canvas, layer.scene3d!, document, () => cancelled).then((liveSession) => {
+    void beginLiveScene3D(canvas, layer.scene3d!, document, () => cancelled, "document").then((liveSession) => {
       if (!liveSession) return;
       if (cancelled) { liveSession.dispose(); return; }
-      session = liveSession;
+      sessionRef.current = liveSession;
       controls = new TransformControls(liveSession.camera, canvas);
+      controlsRef.current = controls;
       controls.setMode("rotate");
-      controls.setSize(1.1);
+      // The rotate gizmo's invisible trackball ("XYZE", a sphere half the rings' radius) takes every
+      // press inside the rings — exactly where the object is — so dragging the object was
+      // impossible (§65.11). Free rotation stays on the outer ring ("E") and the three axis rings.
+      // Internal to TransformControls, hence the guarded reach; absent, nothing is removed.
+      const rotatePicker = (controls as unknown as { _gizmo?: { picker?: Record<string, Object3D> } })._gizmo?.picker?.rotate;
+      for (const trackball of rotatePicker?.children.filter((child) => child.name === "XYZE") ?? []) rotatePicker!.remove(trackball);
       controls.attach(liveSession.rig);
       liveSession.scene.add(controls.getHelper());
-      const reportRotation = () => {
-        const rotation = liveSession.rig.rotation;
-        onLiveChangeRef.current({ x: rotation.x * 180 / Math.PI, y: rotation.y * 180 / Math.PI, z: rotation.z * 180 / Math.PI });
-      };
-      controls.addEventListener("change", () => { liveSession.render(); reportRotation(); });
-      liveSession.render();
-      // The starting pose, reported once up front — otherwise the options bar's own X/Y/Z readout
-      // (and RasterWorkspace's own pending-rotation ref, read back on commit) would stay empty
-      // until the very first drag tick, the same way Free Transform's own X/Y/W/H appear the
-      // instant it starts rather than only once something has actually moved.
-      reportRotation();
+      controls.addEventListener("change", () => { liveSession.render(); report(); });
+      // Only now: TransformControls' own pointerdown has to run before this component's, so a
+      // press on a ring has already become its drag by the time `onPointerDown` asks. Registered
+      // at effect time, before the async session resolved, this ran first and read every ring
+      // press as "empty space — apply" (found live).
+      canvas.addEventListener("pointerdown", onPointerDown);
+      canvas.addEventListener("pointermove", onPointerMove);
+      canvas.addEventListener("pointerup", onPointerUp);
+      canvas.addEventListener("pointercancel", onPointerUp);
+      applyView();
+      // The starting pose, reported once up front, so the options bar's X/Y/Z show the instant
+      // the session opens rather than after the first drag tick.
+      report();
     });
 
+    // A press on a ring is TransformControls' own (registered first, so `dragging` is already set
+    // by the time this runs). A press on the object drags it — the owner's "во время поворота
+    // объекта должна быть возможность перетаскивать его"; a press on empty space applies, the way
+    // a click outside Free Transform's frame does.
+    // Inside the object's on-screen rectangle, not only on its exact surface: letters and thin
+    // shapes are mostly gaps, and a press that just missed a stroke was read as "empty space —
+    // apply" (found live). Free Transform's frame is the grab area for the same reason.
+    const corner = new Vector3();
+    const hitsObject = (event: PointerEvent) => {
+      const session = sessionRef.current;
+      if (!session) return false;
+      const rect = canvas.getBoundingClientRect();
+      const x = (event.clientX - rect.left) / rect.width * 2 - 1, y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+      session.rig.updateMatrixWorld(true);
+      const box = new Box3().setFromObject(session.rig);
+      if (box.isEmpty()) return false;
+      let left = Infinity, right = -Infinity, bottom = Infinity, top = -Infinity;
+      for (let index = 0; index < 8; index += 1) {
+        corner.set(index & 1 ? box.max.x : box.min.x, index & 2 ? box.max.y : box.min.y, index & 4 ? box.max.z : box.min.z).project(session.camera);
+        left = Math.min(left, corner.x); right = Math.max(right, corner.x); bottom = Math.min(bottom, corner.y); top = Math.max(top, corner.y);
+      }
+      return x >= left && x <= right && y >= bottom && y <= top;
+    };
+    let drag: { pointerId: number; x: number; y: number; from: { x: number; y: number } } | null = null;
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.button !== 0 || controls?.dragging) return;
+      if (hitsObject(event)) {
+        drag = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, from: { ...moveRef.current } };
+        canvas.setPointerCapture(event.pointerId);
+        return;
+      }
+      onAcceptRef.current();
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (drag && event.pointerId === drag.pointerId) {
+        const scale = viewRef.current.zoom;
+        moveRef.current = { x: drag.from.x + (event.clientX - drag.x) / scale, y: drag.from.y + (event.clientY - drag.y) / scale };
+        applyView();
+        report();
+        return;
+      }
+      if (!controls?.dragging && !controls?.axis) canvas.style.cursor = hitsObject(event) ? "move" : "";
+    };
+    const onPointerUp = (event: PointerEvent) => {
+      if (drag && event.pointerId === drag.pointerId) drag = null;
+    };
+
     // Enter accepts, Escape discards — the same pair every settled-but-uncommitted edit in this
-    // project uses (move.tsx's own pending transform). Both ignored while the gizmo's own drag is
-    // in progress, matching `PendingTransform`'s convention of not letting a global key handler
-    // race an active gesture.
+    // project uses. Ignored mid-drag, so a key cannot race an active gesture.
     const onKeyDown = (event: KeyboardEvent) => {
-      if (controls?.dragging) return;
+      if (controls?.dragging || drag) return;
       if (event.key === "Enter") { event.preventDefault(); onAcceptRef.current(); }
       else if (event.key === "Escape") { event.preventDefault(); onCancelRef.current(); }
     };
@@ -107,32 +204,24 @@ export function Scene3DOrbitGizmo({
     return () => {
       cancelled = true;
       window.removeEventListener("keydown", onKeyDown, true);
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointermove", onPointerMove);
+      canvas.removeEventListener("pointerup", onPointerUp);
+      canvas.removeEventListener("pointercancel", onPointerUp);
       controls?.dispose();
-      session?.dispose();
+      controlsRef.current = null;
+      sessionRef.current?.dispose();
+      sessionRef.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [layer.id, documentId]);
 
-  // `beginLiveScene3D` always renders the object at `centerAndFit`'s own centered pose — see
-  // `renderScene3DLayerPixels`'s own doc comment on `offset` — so a layer already moved off-centre
-  // with the Move tool would otherwise visibly jump back to the middle for the whole time this
-  // gizmo is open, snapping back to its real position only once `onAccept` re-renders. Screen-space
-  // CSS shift instead (the live scene itself still renders centered) puts it back where it already
-  // was for the entire session, matching what the commit is actually going to produce.
-  //
-  // Not read straight off `layer.bounds`: the same reconciliation `updateScene3DLayer`
-  // (`scene3d-commands.ts`) does against `layer.scene3d.placement`, for the same reason — once a
-  // ground shadow is enabled, `layer.bounds`'s own center is the *aggregate* object-plus-shadow
-  // box, which shifts with lighting/tilt alone, not with where the object itself sits. Using it
-  // directly here made the object appear to jump (and, since this gizmo's canvas has no shadow of
-  // its own to offset by, look larger relative to the frame) the instant "Rotate 3D Object" was
-  // opened on a layer that had a shadow enabled — found live, reported as "the object grows when
-  // entering rotate mode". `placement`'s own doc comment (types.ts) has the full contract.
-  const placement = layer.scene3d?.placement ?? { offsetX: 0, offsetY: 0, renderedCenterX: document.width / 2, renderedCenterY: document.height / 2 };
-  const currentCenter = { x: layer.bounds.x + layer.bounds.width / 2, y: layer.bounds.y + layer.bounds.height / 2 };
-  const moveDelta = { x: currentCenter.x - placement.renderedCenterX, y: currentCenter.y - placement.renderedCenterY };
-  const offsetX = (placement.offsetX + moveDelta.x) * zoom;
-  const offsetY = (placement.offsetY + moveDelta.y) * zoom;
-  return <canvas ref={canvasRef} className="scene3d-live-canvas" width={document.width} height={document.height}
-    style={{ left: documentOriginX, top: documentOriginY, width: document.width * zoom, height: document.height * zoom, pointerEvents: "auto", transform: `translate(${offsetX}px, ${offsetY}px)` }} />;
+  // Pan, zoom and a resized workspace only move the view window; nothing is rebuilt.
+  useEffect(applyView, [zoom, documentOriginX, documentOriginY, workspaceWidth, workspaceHeight, baseOffset.x, baseOffset.y]);
+
+  // The whole workspace, not the canvas: an object turned or dragged past the canvas edge, and
+  // the rings around it, stay visible (§65.11). It used to be a canvas-sized element, which cut
+  // both off at the edge.
+  return <canvas ref={canvasRef} className="scene3d-live-canvas"
+    style={{ left: 0, top: 0, width: workspaceWidth, height: workspaceHeight, pointerEvents: "auto" }} />;
 }

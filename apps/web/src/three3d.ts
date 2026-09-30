@@ -63,6 +63,34 @@ export function readPixelsRgba(renderer: THREE.WebGLRenderer, scene: THREE.Scene
   return out;
 }
 
+/**
+ * Moves `object` so its bounding-box centre sits at its parent's origin — the pivot a rotation of
+ * that parent then turns it about. The object, not its rig: moving the rig instead left the rig's
+ * own origin (the rotation pivot, and where TransformControls draws its rings) off to one side of
+ * the object, so it orbited that point instead of turning in place (§65.11).
+ */
+export function centerInParent(object: THREE.Object3D): void {
+  object.updateMatrixWorld(true);
+  const center = new THREE.Box3().setFromObject(object).getCenter(new THREE.Vector3());
+  object.position.sub(center);
+  object.updateMatrixWorld(true);
+}
+
+/**
+ * Places a camera so that one world unit at the origin's depth is one document pixel, with the
+ * document filling the camera's full view. A 3D layer is sized in document pixels (`data.size`)
+ * and keeps that size whatever way it faces — the fit-to-frame camera it replaced re-framed every
+ * object to ~62% of the canvas height, so a converted layer never kept its own size (§65.11).
+ */
+export function placeCameraForDocument(camera: THREE.PerspectiveCamera, documentWidth: number, documentHeight: number): void {
+  const distance = documentHeight / 2 / Math.tan(camera.fov * Math.PI / 360);
+  camera.aspect = documentWidth / documentHeight;
+  camera.position.set(0, 0, distance);
+  camera.near = Math.max(0.01, distance / 100);
+  camera.far = distance * 20;
+  camera.updateProjectionMatrix();
+}
+
 export function centerAndFit(object: THREE.Object3D, camera: THREE.PerspectiveCamera, targetFraction = 0.62): void {
   const box = new THREE.Box3().setFromObject(object), size = box.getSize(new THREE.Vector3()), center = box.getCenter(new THREE.Vector3());
   object.position.sub(center);

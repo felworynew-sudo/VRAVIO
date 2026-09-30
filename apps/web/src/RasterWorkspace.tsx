@@ -7,7 +7,7 @@ import {
 import type { VravioDocument } from "@vravio/kernel";
 import { kernel } from "./kernel";
 import { convertLayerToScene3D, importModelAsLayer, updateScene3DLayer } from "./scene3d-commands";
-import { Scene3DOrbitGizmo } from "./Scene3DOrbitGizmo";
+import { Scene3DOrbitGizmo, type OrbitGizmoState } from "./Scene3DOrbitGizmo";
 import { Scene3DGroundPointsGizmo } from "./Scene3DGroundPointsGizmo";
 import { rasterToolById } from "./environments/raster/tools/registry";
 import type { PaintTarget, ToolContext, ToolPointer } from "./environments/raster/tools/types";
@@ -646,9 +646,10 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   // tick (`onOrbitLiveChange`, forwarded to the options bar's live X/Y/Z readout through a window
   // event the same way `vravio-transform-state` already broadcasts the 2D pending transform) and
   // only ever *read* imperatively, at the one moment a commit actually happens.
-  const pendingOrbitRotationRef = useRef<{ x: number; y: number; z: number } | null>(null);
-  const onOrbitLiveChange = (rotation: { x: number; y: number; z: number }) => {
-    pendingOrbitRotationRef.current = rotation;
+  const pendingOrbitRef = useRef<OrbitGizmoState | null>(null);
+  const onOrbitLiveChange = (orbit: OrbitGizmoState) => {
+    pendingOrbitRef.current = orbit;
+    const { rotation } = orbit;
     window.dispatchEvent(new CustomEvent("vravio-scene3d-transform-state", { detail: { active: true, rotationX: rotation.x, rotationY: rotation.y, rotationZ: rotation.z } }));
   };
   // The gizmo's one door for ending a session, committed or not — used by Enter/the options bar's
@@ -656,17 +657,17 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
   // owner's own request, matching Free Transform's own "click outside the frame commits" habit)
   // and an explicit Commit button are the same code path, not two.
   const commitOrbitGizmo = async () => {
-    const rotation = pendingOrbitRotationRef.current, layerId = orbitGizmoLayerId;
-    pendingOrbitRotationRef.current = null;
+    const orbit = pendingOrbitRef.current, layerId = orbitGizmoLayerId;
+    pendingOrbitRef.current = null;
     // Awaited before closing: `updateScene3DLayer` re-renders the layer's own baked pixels, and
     // closing the gizmo restores that layer's ordinary visibility (see the hide/restore effect
     // below) — closing first would flash the *old*, pre-rotation pixels for a frame while the new
     // render is still in flight.
-    if (layerId && rotation) await updateScene3DLayer(document.id, layerId, { rotationX: rotation.x, rotationY: rotation.y, rotationZ: rotation.z });
+    if (layerId && orbit) await updateScene3DLayer(document.id, layerId, { rotationX: orbit.rotation.x, rotationY: orbit.rotation.y, rotationZ: orbit.rotation.z }, orbit.move);
     setScene3DOrbitLayer(document.id, null);
   };
   const cancelOrbitGizmo = () => {
-    pendingOrbitRotationRef.current = null;
+    pendingOrbitRef.current = null;
     setScene3DOrbitLayer(document.id, null);
   };
   // Nothing in the document changes while the gizmo drags — only its own live Three.js session
@@ -788,7 +789,9 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
     <div className="raster-stage" style={stageStyle}>
       <canvas ref={canvasRef} className={brushLike ? "brush-cursor-canvas" : ""} width={state.width} height={state.height} />
       {/* Whatever the active catalogue tool draws over the canvas. */}
-      {catalogueTool?.Overlay && <catalogueTool.Overlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>} context={toolContextFor(catalogueTool.id, canvasRef.current)}/>}
+      {/* The 3D rotate session owns the object while it is open; Move's own frame around the same
+          layer would be a second, stale set of handles over it (§65.11). */}
+      {catalogueTool?.Overlay && !orbitGizmoLayerId && <catalogueTool.Overlay state={toolStates[catalogueTool.id] ?? catalogueTool.createState()} document={state} options={(toolOptions[catalogueTool.id] ?? {}) as Readonly<Record<string, string | number | boolean>>} context={toolContextFor(catalogueTool.id, canvasRef.current)}/>}
       {committedSelectionPath && <svg className="selection-overlay committed-selection" viewBox={`0 0 ${state.width} ${state.height}`} preserveAspectRatio="none" aria-hidden="true"><MarchingAnts zoom={viewport.zoom}><path d={committedSelectionPath} /></MarchingAnts></svg>}
       {/* Document coordinates as the screen sees them: the Contextual Task Bar reads this
           element's `getScreenCTM()` to place itself beside a selection, through pan, zoom and a
@@ -816,7 +819,7 @@ export function RasterWorkspace({ document }: { document: VravioDocument }) {
       default (the owner tried the earlier always-on linear-slider version
       live and asked for it to come off).
     */}
-    {activeToolId === "raster.move" && activeLayer3D && orbitGizmoLayerId === activeLayer3D.id && <Scene3DOrbitGizmo documentId={document.id} document={state} layer={activeLayer3D} zoom={viewport.zoom} documentOriginX={documentOriginX} documentOriginY={documentOriginY} onLiveChange={onOrbitLiveChange} onAccept={() => void commitOrbitGizmo()} onCancel={cancelOrbitGizmo}/>}
+    {activeToolId === "raster.move" && activeLayer3D && orbitGizmoLayerId === activeLayer3D.id && <Scene3DOrbitGizmo documentId={document.id} document={state} layer={activeLayer3D} zoom={viewport.zoom} documentOriginX={documentOriginX} documentOriginY={documentOriginY} workspaceWidth={workspaceSize.width} workspaceHeight={workspaceSize.height} onLiveChange={onOrbitLiveChange} onAccept={() => void commitOrbitGizmo()} onCancel={cancelOrbitGizmo}/>}
     {/* Scene3DGroundPointsGizmo: click 3-4 points to place "Cast Shadow"'s ground plane — same entry door as the orbit gizmo above, mutually exclusive with it. */}
     {activeToolId === "raster.move" && activeLayer3D && groundGizmoLayerId === activeLayer3D.id && <Scene3DGroundPointsGizmo documentId={document.id} document={state} layer={activeLayer3D} zoom={viewport.zoom} documentOriginX={documentOriginX} documentOriginY={documentOriginY} onPointsChange={onGroundPointsChange} onAccept={() => void commitGroundGizmo()} onCancel={cancelGroundGizmo}/>}
     {preferences.showGuides && guideOverlay}

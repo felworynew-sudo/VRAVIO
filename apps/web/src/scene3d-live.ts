@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import type { RasterDocumentState, Scene3DGround, Scene3DLayerData } from "@vravio/env-raster";
-import { applyLighting, centerAndFit, createScene3D, type LightingSettings, type Scene3D } from "./three3d";
+import { applyLighting, centerAndFit, centerInParent, createScene3D, placeCameraForDocument, type LightingSettings, type Scene3D } from "./three3d";
 import { buildGeometrySource } from "./scene3d-render";
 import { applyGroundPlane } from "./scene3d-ground";
 
@@ -46,8 +46,31 @@ export interface LiveScene3DSession {
    * mid-session) has to actually remove the shadow, not leave a zero-opacity plane still
    * consuming a shadow-map render pass every frame. */
   setGround(ground: Scene3DGround | undefined): void;
+  /** Document framing only: draws the part of document space a screen rectangle shows — the
+   * whole workspace, not just the canvas — at screen resolution. `origin` is where the canvas's
+   * top-left sits in that rectangle, `offset` where the object's centre sits relative to the
+   * canvas centre, in document pixels (the same `offset` a bake takes). */
+  setViewport(view: LiveViewport): void;
   dispose(): void;
 }
+
+export interface LiveViewport {
+  readonly width: number;
+  readonly height: number;
+  readonly originX: number;
+  readonly originY: number;
+  readonly zoom: number;
+  readonly offsetX: number;
+  readonly offsetY: number;
+}
+
+/**
+ * `"fit"` frames the object in the session's own canvas (the Properties panel's small preview).
+ * `"document"` is the bake's own camera — one world unit per document pixel, the object turning
+ * about its centre — so what the rotate gizmo shows is exactly what the commit will store, drawn
+ * over the whole workspace so neither the object nor its rings stop at the canvas edge (§65.11).
+ */
+export type LiveFraming = "fit" | "document";
 
 /**
  * `isCancelled`, checked right after the async geometry build and before touching the canvas at
@@ -66,7 +89,7 @@ export interface LiveScene3DSession {
  * Checking before creating the renderer at all — not merely disposing sooner afterward — is what
  * keeps two renderers from ever touching the same canvas in the first place.
  */
-export async function beginLiveScene3D(canvas: HTMLCanvasElement, data: Scene3DLayerData, document: RasterDocumentState, isCancelled: () => boolean = () => false): Promise<LiveScene3DSession | null> {
+export async function beginLiveScene3D(canvas: HTMLCanvasElement, data: Scene3DLayerData, document: RasterDocumentState, isCancelled: () => boolean = () => false, framing: LiveFraming = "fit"): Promise<LiveScene3DSession | null> {
   const object = await buildGeometrySource(data, document);
   if (isCancelled()) return null;
   const scene3d: Scene3D = createScene3D(canvas, document.width, document.height);
@@ -82,8 +105,16 @@ export async function beginLiveScene3D(canvas: HTMLCanvasElement, data: Scene3DL
   // of whatever the user was actually doing. `renderScene3DLayerPixels`'s own commit path (this
   // session's one-frame counterpart) fits at the same stable pose, for the same reason — see its
   // own comment.
-  centerAndFit(rig, scene3d.camera);
-  applyLighting(scene3d, data.lighting, 500);
+  // The object is centred inside the rig, not the rig moved: the rig's origin is the rotation pivot
+  // and where TransformControls draws, so it has to be the object's own centre (§65.11).
+  if (framing === "document") {
+    centerInParent(object);
+    placeCameraForDocument(scene3d.camera, document.width, document.height);
+  } else {
+    centerAndFit(object, scene3d.camera);
+  }
+  const lightDistance = framing === "document" ? Math.max(document.width, document.height) : 500;
+  applyLighting(scene3d, data.lighting, lightDistance);
   let disposed = false;
   let groundPlane: THREE.Mesh | null = null;
   const render = () => {
@@ -97,7 +128,7 @@ export async function beginLiveScene3D(canvas: HTMLCanvasElement, data: Scene3DL
   };
   const setLighting = (lighting: LightingSettings) => {
     if (disposed) return;
-    applyLighting(scene3d, lighting, 500);
+    applyLighting(scene3d, lighting, lightDistance);
     render();
   };
   const setGround = (ground: Scene3DGround | undefined) => {
@@ -106,10 +137,17 @@ export async function beginLiveScene3D(canvas: HTMLCanvasElement, data: Scene3DL
     groundPlane = applyGroundPlane(scene3d, rig, ground);
     render();
   };
+  const setViewport = (view: LiveViewport) => {
+    if (disposed || framing !== "document") return;
+    scene3d.renderer.setPixelRatio(globalThis.devicePixelRatio || 1);
+    scene3d.renderer.setSize(Math.max(1, Math.round(view.width)), Math.max(1, Math.round(view.height)), false);
+    scene3d.camera.setViewOffset(document.width, document.height, -view.originX / view.zoom - view.offsetX, -view.originY / view.zoom - view.offsetY, view.width / view.zoom, view.height / view.zoom);
+    render();
+  };
   setRotation(data.rotationX, data.rotationY, data.rotationZ);
   return {
     scene: scene3d.scene, camera: scene3d.camera, renderer: scene3d.renderer, rig,
-    render, setRotation, setLighting, setGround,
+    render, setRotation, setLighting, setGround, setViewport,
     dispose: () => { disposed = true; scene3d.dispose(); },
   };
 }

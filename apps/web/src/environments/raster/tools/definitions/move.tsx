@@ -414,10 +414,11 @@ export function transformControlsFrame(context: ToolContext<MoveState>): RasterR
     return document.selection.bounds;
   }
   if (!layer || layer.kind === "group") return null;
-  const left = Math.max(0, layer.bounds.x), top = Math.max(0, layer.bounds.y);
-  const right = Math.min(document.width, layer.bounds.x + layer.bounds.width), bottom = Math.min(document.height, layer.bounds.y + layer.bounds.height);
-  if (right - left < 1 || bottom - top < 1) return null;
-  return { x: left, y: top, width: right - left, height: bottom - top };
+  // The whole layer, past the canvas edge too — what `pendingBounds` frames once the transform
+  // opens (§57.1). Clamping here drew a smaller frame at rest than the one a grab then worked
+  // with, the same two-frames mismatch as the selection case above (§65.11).
+  if (layer.bounds.width < 1 || layer.bounds.height < 1) return null;
+  return { ...layer.bounds };
 }
 
 function rotateCursorFor([hx, hy]: readonly [-1 | 1, -1 | 1]): string {

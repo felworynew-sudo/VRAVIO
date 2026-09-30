@@ -1,6 +1,6 @@
-import { createRasterLayer, isRasterDocumentState, layerContentBounds, layerDocumentPixels, setLayerPixels, type RasterDocumentState, type RasterLayer, type Scene3DLayerData } from "@vravio/env-raster";
+import { createRasterLayer, isRasterDocumentState, layerPixelsView, setLayerFramePixels, setLayerLocalPixels, type RasterDocumentState, type RasterLayer, type Scene3DLayerData } from "@vravio/env-raster";
 import { kernel } from "./kernel";
-import { defaultScene3DLayer, renderScene3DLayerPixels } from "./scene3d-render";
+import { defaultScene3DLayer, renderScene3DLayer, type Scene3DRender } from "./scene3d-render";
 import { mergeableEdit } from "./history-helpers";
 
 type LayerSnapshot = { layers: RasterLayer[]; activeLayerId: string };
@@ -20,6 +20,30 @@ async function addLayer(documentId: string, label: string, build: (state: Raster
   else assign(after);
 }
 
+/**
+ * The one door a 3D bake goes through into a layer — creation, conversion and every edit. Stores
+ * the render in its own frame (it may reach past the canvas; the layer keeps all of it) and
+ * records `placement` from what was actually stored, so the next edit can tell a Move-tool drag
+ * apart from anything else. Creation paths used to write through `setLayerPixels` at canvas size
+ * and never recorded `placement` at all, which left the first edit guessing (§65.11).
+ */
+function applyScene3DRender(layer: RasterLayer, data: Scene3DLayerData, render: Scene3DRender, offset: { x: number; y: number }): void {
+  setLayerFramePixels(layer, render.pixels, render.frame);
+  layer.scene3d = {
+    ...data,
+    placement: {
+      offsetX: Math.round(offset.x), offsetY: Math.round(offset.y),
+      renderedCenterX: layer.bounds.x + layer.bounds.width / 2, renderedCenterY: layer.bounds.y + layer.bounds.height / 2,
+    },
+  };
+}
+
+/** Where a layer's opaque content is centred, relative to the canvas centre — the offset that puts
+ * a 3D object converted from it right where it was. */
+function offsetOfLayer(layer: RasterLayer, state: RasterDocumentState): { x: number; y: number } {
+  return { x: layer.bounds.x + layer.bounds.width / 2 - state.width / 2, y: layer.bounds.y + layer.bounds.height / 2 - state.height / 2 };
+}
+
 /** Adds a new persistent 3D layer with an editable text mesh — Photoshop's "New 3D Extrusion
  * from Text", except the result stays editable afterward (rotation, lighting, depth) rather than
  * baking once into flat pixels. */
@@ -27,8 +51,8 @@ export async function createScene3DTextLayer(documentId: string): Promise<void> 
   await addLayer(documentId, "New 3D Text Layer (Новый объёмный текстовый слой)", async (state) => {
     const layer = createRasterLayer(state.width, state.height, `3D Text ${state.layers.length + 1} (Объёмный текст ${state.layers.length + 1})`);
     layer.kind = "3d";
-    layer.scene3d = defaultScene3DLayer(layer);
-    setLayerPixels(layer, await renderScene3DLayerPixels(layer.scene3d, state), state.width, state.height);
+    const data = defaultScene3DLayer(layer);
+    applyScene3DRender(layer, data, await renderScene3DLayer(data, state), { x: 0, y: 0 });
     return layer;
   });
 }
@@ -41,8 +65,11 @@ export async function createScene3DExtrudeLayer(documentId: string, sourceLayerI
     const layer = createRasterLayer(state.width, state.height, `${source?.name ?? "Layer"} 3D (${source?.name ?? "Слой"} 3D)`);
     layer.kind = "3d";
     const base = defaultScene3DLayer(layer);
-    layer.scene3d = { ...base, source: { kind: "extrude", sourceLayerId, depth: 40 }, size: 200 };
-    setLayerPixels(layer, await renderScene3DLayerPixels(layer.scene3d, state), state.width, state.height);
+    // The solid takes its source's own size and place (§65.11); a missing source still gets a
+    // sensible default rather than nothing.
+    const data: Scene3DLayerData = { ...base, source: { kind: "extrude", sourceLayerId, depth: 40 }, size: source ? Math.max(source.bounds.width, source.bounds.height) : 200 };
+    const offset = source ? offsetOfLayer(source, state) : { x: 0, y: 0 };
+    applyScene3DRender(layer, data, await renderScene3DLayer(data, state, offset), offset);
     return layer;
   });
 }
@@ -57,8 +84,9 @@ export async function importModelAsLayer(documentId: string, file: File): Promis
     const layer = createRasterLayer(state.width, state.height, file.name.replace(/\.[a-z0-9]+$/i, ""));
     layer.kind = "3d";
     const lighting = defaultScene3DLayer(layer).lighting;
-    layer.scene3d = { source: { kind: "model", assetId, fileName: file.name }, size: 100, color: "#ffffff", metalness: 0, roughness: 1, rotationX: -12, rotationY: 22, rotationZ: 0, lighting };
-    setLayerPixels(layer, await renderScene3DLayerPixels(layer.scene3d, state), state.width, state.height);
+    // Sized to half the canvas's shorter side — a model file's own units carry no pixel size.
+    const data: Scene3DLayerData = { source: { kind: "model", assetId, fileName: file.name }, size: Math.round(Math.min(state.width, state.height) / 2), color: "#ffffff", metalness: 0, roughness: 1, rotationX: -12, rotationY: 22, rotationZ: 0, lighting };
+    applyScene3DRender(layer, data, await renderScene3DLayer(data, state), { x: 0, y: 0 });
     return layer;
   });
   kernel.documents.addAssetRef(documentId, assetId);
@@ -93,8 +121,12 @@ export async function convertLayerToScene3D(documentId: string, sourceLayerId: s
   const layer = createRasterLayer(state.width, state.height, `${source.name} 3D (${source.name} 3D)`);
   layer.kind = "3d";
   const base = defaultScene3DLayer(layer);
-  layer.scene3d = { ...base, source: { kind: "extrude", sourceLayerId, depth: 40 }, size: 200 };
-  setLayerPixels(layer, await renderScene3DLayerPixels(layer.scene3d, state), state.width, state.height);
+  // Converted in place: the solid is as large as the layer's own content and centred on it, the
+  // way Photoshop's conversion leaves the object where the layer was (§65.11) — it used to be
+  // re-framed to a fixed size in the middle of the canvas.
+  const data: Scene3DLayerData = { ...base, source: { kind: "extrude", sourceLayerId, depth: 40 }, size: Math.max(source.bounds.width, source.bounds.height) };
+  const offset = offsetOfLayer(source, state);
+  applyScene3DRender(layer, data, await renderScene3DLayer(data, state, offset), offset);
 
   const sourceIndex = before.layers.findIndex((item) => item.id === sourceLayerId);
   const afterLayers = before.layers.map((item) => item.id === sourceLayerId ? { ...item, visible: false } : item);
@@ -111,46 +143,34 @@ export async function convertLayerToScene3D(documentId: string, sourceLayerId: s
  * every control in the Properties panel goes through. Re-renders (not just re-composites) because
  * a 3D layer's stored pixels are its only representation on screen; there is no live WebGL canvas
  * sitting behind it the way there is while a dialog is open. */
-export async function updateScene3DLayer(documentId: string, layerId: string, patch: Partial<Scene3DLayerData>): Promise<void> {
+export async function updateScene3DLayer(documentId: string, layerId: string, patch: Partial<Scene3DLayerData>, moveBy: { x: number; y: number } = { x: 0, y: 0 }): Promise<void> {
   const document = kernel.documents.get<RasterDocumentState>(documentId);
   if (!document || !isRasterDocumentState(document.state)) return;
   const state = document.state;
   const layer = state.layers.find((item) => item.id === layerId);
   if (!layer?.scene3d) return;
-  // layer.tiles is stored trimmed to its opaque bounds, not full-canvas-sized — setLayerPixels
-  // needs a full document-sized buffer to trim from, so the "before" snapshot has to go through
-  // layerDocumentPixels rather than reusing the trimmed buffer directly (that silently corrupted
-  // the restored image on undo: the trimmed bytes got reinterpreted at the wrong stride).
-  const before = layer.scene3d, beforePixels = layerDocumentPixels(layer, state.width, state.height);
-  const next: Scene3DLayerData = { ...before, ...patch };
-  // Wherever the layer's own bounds currently sit is wherever the Move tool (or an earlier edit
-  // through this same function) last put it — the only place a 3D layer's position durably lives,
-  // see `renderScene3DLayerPixels`'s own doc comment on why. But `layer.bounds`'s own center is not
-  // by itself a safe stand-in for "where the user put it": once a ground shadow is enabled, that
-  // center is the *aggregate* object-plus-shadow bounding box, and the shadow's own footprint
-  // shifts and skews with lighting/tilt alone — found live, toggling Cast Shadow (or even just
-  // Ambient Light while a shadow was already on) walked the object itself sideways on every single
-  // edit, because the previous version of this function fed that shadow-skewed center back in as
-  // if it were an intentional Move. `placement` (types.ts's own doc comment has the full contract)
-  // is what lets this diff out only the part Move actually contributed: both `currentCenter` and
-  // `placement.renderedCenter` are the *same* aggregate measurement, so the shadow's own
-  // contribution is identical in each and cancels out in the subtraction, leaving exactly the
-  // Move-tool delta (zero, most of the time — a plain property edit does not move anything).
-  const placement = before.placement ?? { offsetX: 0, offsetY: 0, renderedCenterX: state.width / 2, renderedCenterY: state.height / 2 };
+  // The layer's own frame, not a canvas-sized copy: a 3D layer can reach past the canvas now, and
+  // an undo through `layerDocumentPixels` would have cut that part off (§65.11).
+  const before = { data: layer.scene3d, pixels: layerPixelsView(layer).slice(), bounds: { ...layer.bounds } };
+  const next: Scene3DLayerData = { ...before.data, ...patch };
+  // Wherever the layer's bounds sit now is wherever the Move tool (or an earlier edit here) last
+  // put it. `placement` (types.ts has the contract) lets this diff out only what Move contributed:
+  // `currentCenter` and `renderedCenter` are the same kind of measurement of the same render, so
+  // anything but a real move cancels out — a property edit never moves the object.
+  const placement = before.data.placement ?? { offsetX: 0, offsetY: 0, renderedCenterX: state.width / 2, renderedCenterY: state.height / 2 };
   const currentCenter = { x: layer.bounds.x + layer.bounds.width / 2, y: layer.bounds.y + layer.bounds.height / 2 };
-  const moveDelta = { x: currentCenter.x - placement.renderedCenterX, y: currentCenter.y - placement.renderedCenterY };
-  const offset = { x: placement.offsetX + moveDelta.x, y: placement.offsetY + moveDelta.y };
-  const nextPixels = await renderScene3DLayerPixels(next, state, offset);
-  const nextBounds = layerContentBounds(nextPixels, state.width, state.height);
-  next.placement = {
-    offsetX: offset.x, offsetY: offset.y,
-    renderedCenterX: nextBounds.x + nextBounds.width / 2, renderedCenterY: nextBounds.y + nextBounds.height / 2,
+  const offset = {
+    x: placement.offsetX + currentCenter.x - placement.renderedCenterX + moveBy.x,
+    y: placement.offsetY + currentCenter.y - placement.renderedCenterY + moveBy.y,
   };
-  const write = (data: Scene3DLayerData, pixels: Uint8ClampedArray) => kernel.documents.update<RasterDocumentState>(documentId, (current) => {
+  const render = await renderScene3DLayer(next, state, offset);
+  const write = (apply: (target: RasterLayer) => void) => kernel.documents.update<RasterDocumentState>(documentId, (current) => {
     const target = current.layers.find((item) => item.id === layerId);
-    if (target) { target.scene3d = data; setLayerPixels(target, pixels, current.width, current.height); }
+    if (target) apply(target);
   });
-  write(next, nextPixels);
+  const redo = () => write((target) => applyScene3DRender(target, next, render, offset));
+  const undo = () => write((target) => { target.scene3d = before.data; setLayerLocalPixels(target, before.pixels, before.bounds); });
+  redo();
   const history = kernel.historyByDocument.get(documentId);
-  if (history) void history.record(mergeableEdit("3D Layer (3D-слой)", () => write(before, beforePixels), () => write(next, nextPixels)), true);
+  if (history) void history.record(mergeableEdit("3D Layer (3D-слой)", undo, redo), true);
 }

@@ -3,9 +3,9 @@ import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { FontLoader } from "three/addons/loaders/FontLoader.js";
 import { TextGeometry } from "three/addons/geometries/TextGeometry.js";
-import { layerContentBounds, layerDocumentPixels, translateLayerPixels, type RasterDocumentState, type RasterLayer, type Scene3DLayerData } from "@vravio/env-raster";
+import { layerContentBounds, layerPixelsView, type RasterDocumentState, type RasterLayer, type RasterRect, type Scene3DLayerData } from "@vravio/env-raster";
 import type { AssetId } from "@vravio/kernel";
-import { applyLighting, centerAndFit, createScene3D, readPixelsRgba } from "./three3d";
+import { applyLighting, centerInParent, createScene3D, placeCameraForDocument, readPixelsRgba } from "./three3d";
 import { applyGroundPlane } from "./scene3d-ground";
 import { kernel } from "./kernel";
 
@@ -200,9 +200,11 @@ export async function buildGeometrySource(data: Scene3DLayerData, document: Rast
   if (source.kind === "extrude") {
     const layer = document.layers.find((item) => item.id === source.sourceLayerId);
     if (!layer) return new THREE.Group();
-    const pixels = layerDocumentPixels(layer, document.width, document.height);
-    const bounds = layerContentBounds(pixels, document.width, document.height);
-    const outlines = traceAlphaOutlines(pixels, document.width, document.height);
+    // The layer's own buffer, not its canvas-sized view: a source reaching past the canvas
+    // extrudes whole (§65.11). Coordinates below are layer-local, which is all the shape needs.
+    const pixels = layerPixelsView(layer);
+    const bounds = layerContentBounds(pixels, layer.width, layer.height);
+    const outlines = traceAlphaOutlines(pixels, layer.width, layer.height);
     if (!outlines.length) return new THREE.Group();
     // Smoothed before it ever becomes a THREE.Shape — a raw trace only ever
     // walks whole pixel steps, so any diagonal or curved edge in the source
@@ -224,81 +226,86 @@ export async function buildGeometrySource(data: Scene3DLayerData, document: Rast
   if (!record) return new THREE.Group();
   const bytes = await kernel.assets.read(source.assetId as AssetId);
   if (!bytes) return new THREE.Group();
-  const model = await loadModel(source.assetId, record.head, source.fileName, bytes);
-  return model.clone();
+  const model = (await loadModel(source.assetId, record.head, source.fileName, bytes)).clone();
+  // A model file's own units mean nothing here: it is sized to `data.size` document pixels across
+  // its largest side, the same way an extruded layer is (§65.11).
+  const extent = new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3());
+  model.scale.multiplyScalar(data.size / Math.max(extent.x, extent.y, extent.z, 1e-6));
+  return model;
+}
+
+/** What a 3D layer bake produces: pixels for exactly the rectangle the object covers, and where
+ * that rectangle sits in document coordinates — which may reach past the canvas on any side. */
+export interface Scene3DRender {
+  readonly pixels: Uint8ClampedArray;
+  readonly frame: RasterRect;
 }
 
 /**
- * Renders a 3D layer's current data to a document-sized RGBA buffer — the non-destructive
- * "re-render on every property change" the layer needs to behave like a text layer that happens
- * to be a mesh instead of glyphs.
- *
- * `offset` shifts the result away from `centerAndFit`'s own centered pose, in document pixels.
- * A 3D layer has no stored position of its own — its `bounds` (`RasterLayer`'s, the same field
- * every layer's Move-tool drag already writes to) is the one place "where the user last put it"
- * lives — so `offset` is always *derived* from the layer's own current bounds by the caller that
- * knows them (`updateScene3DLayer`), not carried in `Scene3DLayerData` itself: a field there could
- * only ever go stale the moment Move changed `bounds` without knowing to update it too. Omitted
- * (or `{x:0,y:0}`) reproduces a *truly* centered pose — this function measures and cancels its own
- * centering bias internally (see the `naturalBounds`/`bias` comment below) before `offset` is ever
- * applied, so a caller passing `{x:0,y:0}` is guaranteed the alpha-trimmed content actually lands
- * on the frame center, not merely that the 3D bounding box does.
+ * Where a rotated object lands on screen, in the document camera's full-view pixels — the 8
+ * corners of its world bounding box, projected. Conservative (an axis-aligned box around a turned
+ * object is larger than its silhouette), which only costs a few transparent pixels that
+ * `setLayerFramePixels` trims away. Null when a corner is behind the camera: the object is then
+ * too close to bound this way, and the caller falls back to a generous fixed frame.
  */
-export async function renderScene3DLayerPixels(data: Scene3DLayerData, document: RasterDocumentState, offset: { x: number; y: number } = { x: 0, y: 0 }): Promise<Uint8ClampedArray> {
+function projectedRect(object: THREE.Object3D, camera: THREE.PerspectiveCamera, width: number, height: number): RasterRect | null {
+  object.updateMatrixWorld(true);
+  camera.updateMatrixWorld();
+  const box = new THREE.Box3().setFromObject(object);
+  if (box.isEmpty()) return null;
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+  const corner = new THREE.Vector3();
+  for (let index = 0; index < 8; index += 1) {
+    corner.set(index & 1 ? box.max.x : box.min.x, index & 2 ? box.max.y : box.min.y, index & 4 ? box.max.z : box.min.z);
+    const inView = corner.clone().applyMatrix4(camera.matrixWorldInverse);
+    if (inView.z >= -camera.near) return null;
+    corner.project(camera);
+    const x = (corner.x + 1) / 2 * width, y = (1 - corner.y) / 2 * height;
+    left = Math.min(left, x); right = Math.max(right, x); top = Math.min(top, y); bottom = Math.max(bottom, y);
+  }
+  const x = Math.floor(left) - 2, y = Math.floor(top) - 2;
+  return { x, y, width: Math.ceil(right) - x + 2, height: Math.ceil(bottom) - y + 2 };
+}
+
+/**
+ * Renders a 3D layer — the non-destructive "re-render on every property change" a 3D layer needs
+ * to behave like a text layer that happens to be a mesh.
+ *
+ * The object turns about its own centre (`centerInParent`), is sized in document pixels
+ * (`placeCameraForDocument`), and `offset` is where that centre sits relative to the canvas
+ * centre. Only the rectangle the object covers is rendered, through the camera's view offset, so
+ * it never depends on the canvas: an object turned or moved past the edge keeps every pixel, and
+ * the caller stores the result in the layer's own frame (§65.11). What this replaced rendered a
+ * canvas-sized buffer and then shifted it, which dropped whatever left the canvas for good, and
+ * re-centred the 2D silhouette on every bake — so an asymmetric object visibly jumped on commit
+ * away from where the live rotate view had shown it.
+ */
+export async function renderScene3DLayer(data: Scene3DLayerData, document: RasterDocumentState, offset: { x: number; y: number } = { x: 0, y: 0 }): Promise<Scene3DRender> {
   const object = await buildGeometrySource(data, document);
   const scene3d = createScene3D(window.document.createElement("canvas"), document.width, document.height);
-  // `dispose()` moved into `finally`: every rotate/shadow edit spins up a fresh WebGLRenderer here
-  // and threw it away undisposed if anything between construction and the end of this function
-  // (lighting, the ground plane, the actual `readPixels` call) ever threw — a real way to leak
-  // toward the browser's own concurrent-WebGL-context limit over a session with many edits, which
-  // reads on screen as some *other*, unrelated live 3D context silently losing its own.
+  // `dispose()` in `finally`: a renderer left undisposed after a throw leaks toward the browser's
+  // own limit on live WebGL contexts, which shows up as some other 3D view losing its context.
   try {
     const rig = new THREE.Group();
     rig.add(object);
     scene3d.scene.add(rig);
-    // Fit computed at the object's own intrinsic (unrotated) pose, *before* `rig.rotation` is
-    // set — not after, which is what this used to do. Fitting against the rotated box instead
-    // re-frames (and re-zooms, since the camera distance below follows the box's own radius)
-    // every single rotation, since a diagonal view's axis-aligned box is bigger than a face-on
-    // one of the same object — the reported "the object zooms/shifts on its own" and "transforms
-    // to fit its own frame instead of the frame fitting it". Centering (inside `centerAndFit`)
-    // also then happens on this same stable box, so the rotation pivot is the object's own
-    // natural centroid regardless of which way it currently faces.
-    centerAndFit(rig, scene3d.camera);
+    centerInParent(object);
+    placeCameraForDocument(scene3d.camera, document.width, document.height);
     rig.rotation.set(data.rotationX * Math.PI / 180, data.rotationY * Math.PI / 180, data.rotationZ * Math.PI / 180);
-    applyLighting(scene3d, data.lighting, 500);
-
-    // `centerAndFit` only guarantees the object's 3D *bounding-box* center projects to the exact
-    // frame center — not that the alpha-trimmed 2D *silhouette*'s own bounding-rectangle midpoint
-    // does. For an asymmetric mesh (this project's camera-rig/bracket import, any extruded logo,
-    // any off-center text) those are different points, and `layer.bounds` — what
-    // `updateScene3DLayer`'s own `offset` argument is derived from — is measured the second way.
-    // Re-deriving `offset` from `layer.bounds` on every edit therefore fed this render's own fixed
-    // asymmetry bias back in as if the user had intentionally moved the layer, and the *next* edit
-    // did it again on top of that: found live as lighting/shadow-only edits (nothing touching
-    // position) walking the object steadily off-frame, one fixed increment per edit, exactly the
-    // "checkbox moves the layer" symptom that should never happen — position is the Move tool's
-    // job alone. Measured fresh on every render (an extra cheap `readPixels` before the shadow-
-    // casting ground plane exists, not trusting the previous render's own already-biased bounds) and
-    // cancelled out below, so a non-positional edit can no longer accumulate any drift at all.
-    const naturalPixels = readPixelsRgba(scene3d.renderer, scene3d.scene, scene3d.camera, document.width, document.height);
-    const naturalBounds = layerContentBounds(naturalPixels, document.width, document.height);
-    const bias = {
-      x: naturalBounds.x + naturalBounds.width / 2 - document.width / 2,
-      y: naturalBounds.y + naturalBounds.height / 2 - document.height / 2,
-    };
-
-    // After centerAndFit, not before: the ground plane sits at the rig's own
-    // bounding-box bottom, which centerAndFit is what actually settles.
-    applyGroundPlane(scene3d, rig, data.ground);
-    const rendered = readPixelsRgba(scene3d.renderer, scene3d.scene, scene3d.camera, document.width, document.height);
-    // Combines the caller's own requested shift with the bias correction above into one move —
-    // applied after the render, on the finished bytes, rather than moving the object or camera
-    // before it: every other step above already assumes "centered" (the ground plane sits under
-    // the centered bounding box, the fit distance is measured from it), and a post-render shift is
-    // the one change that touches none of that.
-    const shiftX = offset.x - bias.x, shiftY = offset.y - bias.y;
-    return shiftX || shiftY ? translateLayerPixels(rendered, document.width, document.height, shiftX, shiftY) : rendered;
+    applyLighting(scene3d, data.lighting, Math.max(document.width, document.height));
+    const ground = applyGroundPlane(scene3d, rig, data.ground);
+    const shiftX = Math.round(offset.x), shiftY = Math.round(offset.y);
+    // A shadow plane reaches well past the object; the canvas is the frame it always had.
+    let rect = ground ? null : projectedRect(rig, scene3d.camera, document.width, document.height);
+    if (!rect) rect = { x: 0, y: 0, width: document.width, height: document.height };
+    // Bounded by what the GPU can render in one pass, around the object's own centre.
+    const limit = Math.min(scene3d.renderer.capabilities.maxTextureSize, 8192);
+    if (rect.width > limit) { rect = { ...rect, x: Math.round(document.width / 2 - limit / 2), width: limit }; }
+    if (rect.height > limit) { rect = { ...rect, y: Math.round(document.height / 2 - limit / 2), height: limit }; }
+    scene3d.renderer.setSize(rect.width, rect.height, false);
+    scene3d.camera.setViewOffset(document.width, document.height, rect.x, rect.y, rect.width, rect.height);
+    const pixels = readPixelsRgba(scene3d.renderer, scene3d.scene, scene3d.camera, rect.width, rect.height);
+    return { pixels, frame: { x: rect.x + shiftX, y: rect.y + shiftY, width: rect.width, height: rect.height } };
   } finally {
     scene3d.dispose();
   }
