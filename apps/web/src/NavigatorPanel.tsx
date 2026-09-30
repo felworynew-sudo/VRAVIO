@@ -16,9 +16,25 @@ export function NavigatorPanel() {
   const setViewport = useShellStore((state) => state.setViewport);
   const viewport = useShellStore((state) => (activeDocumentId ? state.viewports[activeDocumentId] : undefined) ?? defaultViewport);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // The preview fits the panel rather than a fixed 240px: a fixed stage was what overflowed a
+  // narrow panel (§65.7). The canvas stays rendered at `THUMBNAIL_MAX` and CSS scales it down.
+  const [available, setAvailable] = useState(THUMBNAIL_MAX);
   const [metrics, setMetrics] = useState<ViewportMetrics | null>(null);
   const active = documents.find((item) => item.id === activeDocumentId) ?? null;
   const state = active && isRasterDocumentState(active.state) ? active.state : null;
+
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    const observer = new ResizeObserver(() => {
+      const style = getComputedStyle(body);
+      setAvailable(Math.max(40, Math.floor(body.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - 2)));
+    });
+    observer.observe(body);
+    return () => observer.disconnect();
+    // The body only exists once a raster document is shown (the early returns render no ref).
+  }, [Boolean(state)]);
 
   useEffect(() => {
     const onMetrics = (event: Event) => setMetrics((event as CustomEvent<ViewportMetrics>).detail);
@@ -52,7 +68,8 @@ export function NavigatorPanel() {
   if (!active) return <div className="dock-panel-body"><div className="empty-row">{text(language, "No document", "Нет документа")}</div></div>;
   if (!state) return <div className="dock-panel-body"><div className="empty-row">{text(language, "Not available for this environment", "Недоступно для этой среды")}</div></div>;
 
-  const thumbScale = Math.min(THUMBNAIL_MAX / state.width, THUMBNAIL_MAX / state.height);
+  const side = Math.min(THUMBNAIL_MAX, available);
+  const thumbScale = Math.min(side / state.width, THUMBNAIL_MAX / state.height);
   const thumbWidth = Math.max(1, Math.round(state.width * thumbScale)), thumbHeight = Math.max(1, Math.round(state.height * thumbScale));
   // The workspace centres the document, so pan offsets the centre; convert that into the
   // visible rectangle in document space and then into thumbnail space.
@@ -72,7 +89,7 @@ export function NavigatorPanel() {
     setViewport(active.id, { mode: "custom", panX: (state.width / 2 - documentX) * viewport.zoom, panY: (state.height / 2 - documentY) * viewport.zoom });
   };
 
-  return <div className="dock-panel-body navigator-panel">
+  return <div ref={bodyRef} className="dock-panel-body navigator-panel">
     <div className="navigator-stage" style={{ width: thumbWidth, height: thumbHeight }} onPointerDown={(event) => { event.currentTarget.setPointerCapture(event.pointerId); panTo(event); }} onPointerMove={panTo}>
       <canvas ref={canvasRef} />
       {frame && <i className="navigator-frame" style={{ left: frame.left, top: frame.top, width: frame.width, height: frame.height }} />}

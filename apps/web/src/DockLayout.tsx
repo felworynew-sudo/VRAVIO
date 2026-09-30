@@ -112,6 +112,20 @@ const MAX_PANELS_PER_GROUP = Math.floor(GRID_EXPANDED_MIN_WIDTH / TAB_ICON_ONLY_
 const GRID_DRAG_MIN_WIDTH = 60;
 const GRID_EXPANDED_MIN_WIDTH_CONSTRAINTS = { minimumWidth: GRID_DRAG_MIN_WIDTH, maximumWidth: Number.MAX_SAFE_INTEGER };
 const EMPTY_LAYER_SELECTION: string[] = [];
+
+// Dockview marks nothing while its sash is being dragged, and a group being narrowed by a drag
+// (collapse it) has to be told apart from one narrowed by the window (give it its width back).
+let sashDragging = false;
+if (typeof document !== "undefined") {
+  document.addEventListener("pointerdown", (event) => { if ((event.target as Element | null)?.closest?.(".dv-sash")) sashDragging = true; }, true);
+  const release = () => { sashDragging = false; };
+  document.addEventListener("pointerup", release, true);
+  document.addEventListener("pointercancel", release, true);
+}
+const sashDragActive = () => sashDragging;
+// The same floor for floating panels, which Dockview sizes with inline styles the constraints
+// above never reach — published from the one constant so CSS cannot drift from it (§65.7).
+if (typeof document !== "undefined") document.documentElement.style.setProperty("--panel-min-width", `${GRID_EXPANDED_MIN_WIDTH}px`);
 /** The shell owns the Tab shortcut; DockLayout owns the actual edge dock. */
 export const CLEAN_CANVAS_EVENT = "vravio-clean-canvas";
 
@@ -1820,13 +1834,25 @@ function PanelHeaderActions({ api, containerApi, activePanel, group, panels }: I
     // follow-up `setSize`, not synchronous with mount) when this fired, reading a transient
     // narrower width and auto-collapsing every fresh document on open. Only reacts from the
     // second callback on — the first is that guaranteed initial report, never a real resize.
-    let skippedInitial = false;
+    //
+    // Only a drag of the sash is "collapse me". Anything else that leaves the group under its
+    // floor — a narrow window, the window being shrunk, Dockview's first proportional layout —
+    // gets the floor back instead, taken from the canvas: panels are never squeezed below the
+    // width their content is built to fit (§65.7, "обрезания недопустимы, лучше ограничить
+    // минимальный размер панели"). Measured live before this: a 1024px window gave the Layers and
+    // Navigator column 150px against content that needs 220+, and nothing ever corrected it,
+    // because the only reaction to "too narrow" was collapsing and the first report was skipped.
+    let settle = 0;
     const observer = new ResizeObserver(() => {
-      if (!skippedInitial) { skippedInitial = true; return; }
-      if (group.element.getBoundingClientRect().width < GRID_EXPANDED_MIN_WIDTH) collapseToRail();
+      if (group.element.getBoundingClientRect().width >= GRID_EXPANDED_MIN_WIDTH) return;
+      if (sashDragActive()) { collapseToRail(); return; }
+      cancelAnimationFrame(settle);
+      settle = requestAnimationFrame(() => {
+        if (group.element.getBoundingClientRect().width < GRID_EXPANDED_MIN_WIDTH) api.setSize({ width: GRID_EXPANDED_MIN_WIDTH });
+      });
     });
     observer.observe(group.element);
-    return () => observer.disconnect();
+    return () => { observer.disconnect(); cancelAnimationFrame(settle); };
   }, [api, api.location.type, collapsed, group]);
   // Order matches the Photoshop reference (информация.txt point 2): the collapse chevron
   // (>>) sits directly after the tab strip, then a divider, then the panel's own ☰ menu —
