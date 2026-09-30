@@ -670,7 +670,18 @@ export function cropRasterDocument(state: RasterDocumentState, crop: RasterRect,
     const bounds = selectionBounds(mask, width, height);
     if (bounds.width && bounds.height) selection = { mask, bounds };
   }
-  return { ...state, width, height, layers, selection };
+  // Guides are document coordinates too: left where they were, every guide pointed at the wrong
+  // place after a crop or a Canvas Size (§65.13).
+  const guides = state.guides.map((guide) => ({ ...guide, position: guide.position - (guide.orientation === "vertical" ? left : top) }));
+  // Text draws through its transform in document space, so it has to move with the canvas the
+  // same way the layer's bounds just did — otherwise the next re-render (an edit, a transform)
+  // put the glyphs back at their pre-crop coordinates.
+  const moved = layers.map((layer) => {
+    if (!layer.text) return layer;
+    const transform = layer.text.transform ?? { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+    return { ...layer, text: { ...layer.text, transform: { ...transform, e: transform.e - left, f: transform.f - top } } };
+  });
+  return { ...state, width, height, layers: moved, selection, guides };
 }
 
 export interface FloatingPixels {

@@ -1,5 +1,7 @@
 import { create } from "zustand";
 import { useShellStore } from "../store";
+import type { ImageSizeAnswer } from "./definitions/image-size";
+import type { CanvasSizeAnswer } from "./definitions/canvas-size";
 
 interface OpenModal {
   readonly key: number;
@@ -100,6 +102,20 @@ export function artboardSizeModal(props: { width: number; height: number }): Pro
       ...props,
       onResolve: (size: { width: number; height: number } | null) => { close(); resolve(size); },
     });
+  });
+}
+
+/** Image ▸ Image Size — resolves to the answer, or null when cancelled. */
+export function imageSizeModal(props: { width: number; height: number; resolution: number; resolutionUnit: "ppi" | "ppcm"; bytesPerPixel: number }): Promise<ImageSizeAnswer | null> {
+  return new Promise((resolve) => {
+    const close = openModal("image-size", { ...props, onResolve: (answer: ImageSizeAnswer | null) => { close(); resolve(answer); } });
+  });
+}
+
+/** Image ▸ Canvas Size — resolves to the answer, or null when cancelled. */
+export function canvasSizeModal(props: { width: number; height: number; resolution: number; resolutionUnit: "ppi" | "ppcm" }): Promise<CanvasSizeAnswer | null> {
+  return new Promise((resolve) => {
+    const close = openModal("canvas-size", { ...props, onResolve: (answer: CanvasSizeAnswer | null) => { close(); resolve(answer); } });
   });
 }
 

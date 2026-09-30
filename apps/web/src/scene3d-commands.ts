@@ -38,6 +38,25 @@ function applyScene3DRender(layer: RasterLayer, data: Scene3DLayerData, render: 
   };
 }
 
+/**
+ * Where a 3D layer's object sits now, relative to the canvas centre: its committed offset plus
+ * whatever the Move tool has done since. `placement` (types.ts has the contract) lets this diff
+ * out only what Move contributed — `currentCenter` and `renderedCenter` are the same kind of
+ * measurement of the same render, so anything but a real move cancels out.
+ */
+export function scene3dOffset(layer: RasterLayer, state: RasterDocumentState): { x: number; y: number } {
+  const placement = layer.scene3d?.placement ?? { offsetX: 0, offsetY: 0, renderedCenterX: state.width / 2, renderedCenterY: state.height / 2 };
+  return {
+    x: placement.offsetX + layer.bounds.x + layer.bounds.width / 2 - placement.renderedCenterX,
+    y: placement.offsetY + layer.bounds.y + layer.bounds.height / 2 - placement.renderedCenterY,
+  };
+}
+
+/** Re-renders a 3D layer in place, on a document being rebuilt (Image Size). */
+export async function rebakeScene3DLayer(layer: RasterLayer, data: Scene3DLayerData, state: RasterDocumentState, offset: { x: number; y: number }): Promise<void> {
+  applyScene3DRender(layer, data, await renderScene3DLayer(data, state, offset), offset);
+}
+
 /** Where a layer's opaque content is centred, relative to the canvas centre — the offset that puts
  * a 3D object converted from it right where it was. */
 function offsetOfLayer(layer: RasterLayer, state: RasterDocumentState): { x: number; y: number } {
@@ -153,16 +172,9 @@ export async function updateScene3DLayer(documentId: string, layerId: string, pa
   // an undo through `layerDocumentPixels` would have cut that part off (§65.11).
   const before = { data: layer.scene3d, pixels: layerPixelsView(layer).slice(), bounds: { ...layer.bounds } };
   const next: Scene3DLayerData = { ...before.data, ...patch };
-  // Wherever the layer's bounds sit now is wherever the Move tool (or an earlier edit here) last
-  // put it. `placement` (types.ts has the contract) lets this diff out only what Move contributed:
-  // `currentCenter` and `renderedCenter` are the same kind of measurement of the same render, so
-  // anything but a real move cancels out — a property edit never moves the object.
-  const placement = before.data.placement ?? { offsetX: 0, offsetY: 0, renderedCenterX: state.width / 2, renderedCenterY: state.height / 2 };
-  const currentCenter = { x: layer.bounds.x + layer.bounds.width / 2, y: layer.bounds.y + layer.bounds.height / 2 };
-  const offset = {
-    x: placement.offsetX + currentCenter.x - placement.renderedCenterX + moveBy.x,
-    y: placement.offsetY + currentCenter.y - placement.renderedCenterY + moveBy.y,
-  };
+  // A property edit never moves the object — see `scene3dOffset`.
+  const current = scene3dOffset(layer, state);
+  const offset = { x: current.x + moveBy.x, y: current.y + moveBy.y };
   const render = await renderScene3DLayer(next, state, offset);
   const write = (apply: (target: RasterLayer) => void) => kernel.documents.update<RasterDocumentState>(documentId, (current) => {
     const target = current.layers.find((item) => item.id === layerId);

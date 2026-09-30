@@ -1090,8 +1090,8 @@ export function App() {
             ["Assign Profile… (Назначить профиль…)", "", () => void kernel.commands.execute("image.assignColorSpace", activeCommandContext()), !activeRasterState],
             ["Convert to Profile… (Преобразовать в профиль…)", "", () => void kernel.commands.execute("image.convertColorSpace", activeCommandContext()), !activeRasterState],
           ] },
-          ["Image Size… (Размер изображения…)", "Ctrl+Alt+I", () => {}, true],
-          ["Canvas Size… (Размер холста…)", "Ctrl+Alt+C", () => {}, true],
+          ["Image Size… (Размер изображения…)", "Ctrl+Alt+I", () => void kernel.commands.execute("image.imageSize", activeCommandContext()), !activeRasterState],
+          ["Canvas Size… (Размер холста…)", "Ctrl+Alt+C", () => void kernel.commands.execute("image.canvasSize", activeCommandContext()), !activeRasterState],
         ]}/>}
         {active?.kind === "raster" && <Menu label="View (Просмотр)" language={store.language} open={openMenu === "raster-view"} onToggle={() => setOpenMenu(openMenu === "raster-view" ? null : "raster-view")} items={[
           // Photoshop's own View block for colour management, with its shortcuts (master-plan §59.3).

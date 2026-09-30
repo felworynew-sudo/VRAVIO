@@ -99,11 +99,14 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   // master-plan §59: the document's working colour space — Photoshop's own two operations, one
   // that changes what the numbers mean and one that rewrites them.
   "image.assignColorSpace|||Image",
+  // master-plan §65.13: Image Size and Canvas Size, the two Image-menu entries that were disabled.
+  "image.canvasSize|Mod+Alt+C||Image",
   "image.convertColorSpace|||Image",
   // master-plan §59.2: the document's bits per channel, one command per depth.
   "image.depth.16|||Image",
   "image.depth.32|||Image",
   "image.depth.8|||Image",
+  "image.imageSize|Mod+Alt+I||Image",
   // master-plan §59: Image ▸ Mode's two colour models — the modes this engine can actually be in.
   "image.mode.cmyk|||Image",
   "image.mode.colorTable|||Image",

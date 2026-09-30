@@ -3,6 +3,7 @@ import { Box3, Vector3, type Object3D } from "three";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import type { RasterDocumentState, RasterLayer } from "@vravio/env-raster";
 import { beginLiveScene3D, type LiveScene3DSession } from "./scene3d-live";
+import { scene3dOffset } from "./scene3d-commands";
 
 /**
  * Blender-style rotation manipulators for a 3D layer — the owner tried the
@@ -84,11 +85,7 @@ export function Scene3DOrbitGizmo({
   // Where the object's centre sits relative to the canvas centre: the committed offset (recovered
   // the same way `updateScene3DLayer` does, from `placement` and wherever Move left the layer)
   // plus whatever this session has dragged it by.
-  const placement = layer.scene3d?.placement ?? { offsetX: 0, offsetY: 0, renderedCenterX: document.width / 2, renderedCenterY: document.height / 2 };
-  const baseOffset = {
-    x: placement.offsetX + layer.bounds.x + layer.bounds.width / 2 - placement.renderedCenterX,
-    y: placement.offsetY + layer.bounds.y + layer.bounds.height / 2 - placement.renderedCenterY,
-  };
+  const baseOffset = scene3dOffset(layer, document);
   const viewRef = useRef({ zoom, documentOriginX, documentOriginY, workspaceWidth, workspaceHeight, baseOffset });
   viewRef.current = { zoom, documentOriginX, documentOriginY, workspaceWidth, workspaceHeight, baseOffset };
 
