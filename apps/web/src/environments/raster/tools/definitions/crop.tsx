@@ -61,16 +61,9 @@ function ratioFor(value: string, documentWidth: number, documentHeight: number):
   }
 }
 
-/** Keeps the rect entirely within the canvas, unless "AI Border Fill" is on — dragging a handle
- * past the edge then means "grow the canvas here", not "stop at the edge" (docs/master-plan.md
- * §52.8's own "Allow Canvas Extension" gap, closed by the same option that fills what it exposes). */
-function clampToCanvas(rect: RasterRect, width: number, height: number, allowExtension: boolean): RasterRect {
-  if (allowExtension) return rect;
-  const w = Math.min(rect.width, width), h = Math.min(rect.height, height);
-  const x = Math.max(0, Math.min(rect.x, width - w));
-  const y = Math.max(0, Math.min(rect.y, height - h));
-  return { x, y, width: w, height: h };
-}
+// No clamp to the canvas: a frame dragged past an edge is how the canvas grows, whatever fills
+// the new border (`commitCrop`). It used to stop at the edge unless "AI Border Fill" was on,
+// which left "extend the canvas" reachable only through the AI (§65.8).
 
 function rectFromDragOut(anchor: Point, current: Point, ratio: number | undefined): RasterRect {
   let dx = current.x - anchor.x, dy = current.y - anchor.y;
@@ -119,15 +112,13 @@ function applyHandleDrag(start: RasterRect, handle: HandleId, point: Point, rati
  * `scheduleWork`): a fast pointer-up can land before the last scheduled RAF runs, so
  * gesture end has to compute the true final rect itself rather than trust whatever
  * pending already happens to hold. */
-function rectForDrag(drag: CropDrag, point: Point, width: number, height: number, ratio: number | undefined, allowExtension: boolean): RasterRect {
-  if (drag.kind === "out") return clampToCanvas(rectFromDragOut(drag.anchor, point, ratio), width, height, allowExtension);
+function rectForDrag(drag: CropDrag, point: Point, ratio: number | undefined): RasterRect {
+  if (drag.kind === "out") return rectFromDragOut(drag.anchor, point, ratio);
   if (drag.kind === "move") {
     const dx = point.x - drag.startPoint.x, dy = point.y - drag.startPoint.y;
-    const x = allowExtension ? drag.startRect.x + dx : Math.max(0, Math.min(drag.startRect.x + dx, width - drag.startRect.width));
-    const y = allowExtension ? drag.startRect.y + dy : Math.max(0, Math.min(drag.startRect.y + dy, height - drag.startRect.height));
-    return { x, y, width: drag.startRect.width, height: drag.startRect.height };
+    return { x: drag.startRect.x + dx, y: drag.startRect.y + dy, width: drag.startRect.width, height: drag.startRect.height };
   }
-  return clampToCanvas(applyHandleDrag(drag.startRect, drag.handle, point, ratio), width, height, allowExtension);
+  return applyHandleDrag(drag.startRect, drag.handle, point, ratio);
 }
 
 /**
@@ -214,7 +205,10 @@ function commitCrop(context: ToolContext<CropState>, pending: PendingCrop): void
   const oldWidth = before.width, oldHeight = before.height;
   const extendsBeyondCanvas = pending.rect.x < 0 || pending.rect.y < 0 || pending.rect.x + pending.rect.width > oldWidth || pending.rect.y + pending.rect.height > oldHeight;
   const aiBorderFill = Boolean(context.options.aiBorderFill) && extendsBeyondCanvas;
-  const after = cropRasterDocument(before, pending.rect, deleteCroppedPixels, aiBorderFill);
+  // A frame past the edge always grows the canvas; the AI option only decides what fills the new
+  // border (transparent without it), as in Photoshop, where the crop box always reaches outside
+  // and Content-Aware only changes the fill (§65.8).
+  const after = cropRasterDocument(before, pending.rect, deleteCroppedPixels, extendsBeyondCanvas);
   const documentId = context.documentId, modelId = String(context.options.aiFillModel ?? defaultInpaintModelId);
   // Awaited before the fill reads the document back: `commitDocument` records the crop through
   // `history.execute`, which is itself async (`ReversibleOperation.redo` may be awaited), so the
@@ -269,7 +263,6 @@ const crop: RasterToolDefinition<CropState> = {
     if (!drag || drag.pointerId !== pointer.pointerId) return;
     const { width, height } = context.document;
     const ratio = ratioFor(String(context.options.ratio ?? "unconstrained"), width, height);
-    const allowExtension = Boolean(context.options.aiBorderFill);
     // Native pointermove can fire well above the display's own frame rate — computing and
     // committing a new React state on every single one of them (a full RasterWorkspace +
     // Overlay re-render, plus this component's own keydown-listener effect re-subscribing,
@@ -279,7 +272,7 @@ const crop: RasterToolDefinition<CropState> = {
     // matching move.tsx's identical use of it for its own (heavier) per-frame resample.
     const point = pointer.point;
     context.scheduleWork(() => {
-      context.setState({ pending: { rect: rectForDrag(drag, point, width, height, ratio, allowExtension) }, drag });
+      context.setState({ pending: { rect: rectForDrag(drag, point, ratio) }, drag });
     });
   },
 
@@ -288,10 +281,9 @@ const crop: RasterToolDefinition<CropState> = {
     if (!drag || drag.pointerId !== pointer.pointerId) { context.setState({ pending: context.state.pending, drag: null }); return; }
     const { width, height } = context.document;
     const ratio = ratioFor(String(context.options.ratio ?? "unconstrained"), width, height);
-    const allowExtension = Boolean(context.options.aiBorderFill);
     // Synchronous, not the scheduled frame above: a fast pointer-up can land before the last
     // scheduleWork callback runs, and the release position is the one the user actually meant.
-    const pending: PendingCrop = { rect: rectForDrag(drag, pointer.point, width, height, ratio, allowExtension) };
+    const pending: PendingCrop = { rect: rectForDrag(drag, pointer.point, ratio) };
     if (drag.kind === "out" && (pending.rect.width < 2 || pending.rect.height < 2)) { context.setState(empty); return; }
     context.setState({ pending, drag: null });
   },
