@@ -1,4 +1,4 @@
-import { activeRasterLayer, appendLayer, clearSelectedPixels, createRasterLayer, isRasterDocumentState, layerDocumentPixels, setLayerPixels, type RasterDocumentState } from "@vravio/env-raster";
+import { activeRasterLayer, appendLayer, clearSelectedPixels, createRasterLayer, isRasterDocumentState, layerDocumentPixels, setLayerLocalPixels, setLayerPixels, type RasterDocumentState, type RasterLayer } from "@vravio/env-raster";
 import { cloneRasterState } from "@vravio/env-raster";
 import { kernel } from "../../../../kernel";
 import { diagnostic } from "../../../../diagnostics";
@@ -27,32 +27,21 @@ import { changeRasterDocument } from "../document-edits";
  */
 
 /**
- * Copies a decoded `sourceWidth × sourceHeight` RGBA image onto a fresh
- * `documentWidth × documentHeight` buffer at `(originX, originY)`, clipping
- * whatever falls outside the document rather than wrapping or throwing.
+ * The layer a paste creates: the image at its own size, with its top-left at `(originX, originY)`
+ * — which may be off the canvas, and the part past the edge is kept in the layer, not cut away.
  *
- * Exported (unlike the rest of this file's helpers) so the placement
- * arithmetic — the part that actually differs between Paste and Paste in
- * Place — has a test that doesn't need a real clipboard round-trip, which
- * a browser will only grant to a genuine user gesture, not a script. See
- * this file's own paste-in-place.test.ts.
+ * This used to copy the image into a canvas-sized buffer first (`blitAtOrigin`), so whatever
+ * reached past the edge was dropped before the layer even existed and could never be moved back
+ * in (§65.10). Place already stored an image in its own frame through `setLayerLocalPixels`;
+ * paste now goes through the same call.
+ *
+ * Exported so the placement — the part that differs between Paste and Paste in Place — has a test
+ * that does not need a real clipboard, which a browser grants only to a genuine user gesture.
  */
-export function blitAtOrigin(source: Uint8ClampedArray | Uint8Array, sourceWidth: number, sourceHeight: number, documentWidth: number, documentHeight: number, originX: number, originY: number): Uint8ClampedArray {
-  const output = new Uint8ClampedArray(documentWidth * documentHeight * 4);
-  for (let y = 0; y < sourceHeight; y += 1) {
-    const targetY = originY + y;
-    if (targetY < 0 || targetY >= documentHeight) continue;
-    for (let x = 0; x < sourceWidth; x += 1) {
-      const targetX = originX + x;
-      if (targetX < 0 || targetX >= documentWidth) continue;
-      const from = (y * sourceWidth + x) * 4, to = (targetY * documentWidth + targetX) * 4;
-      output[to] = source[from]!;
-      output[to + 1] = source[from + 1]!;
-      output[to + 2] = source[from + 2]!;
-      output[to + 3] = source[from + 3]!;
-    }
-  }
-  return output;
+export function pastedImageLayer(pixels: Uint8ClampedArray, width: number, height: number, originX: number, originY: number, documentWidth: number, documentHeight: number): RasterLayer {
+  const layer = createRasterLayer(documentWidth, documentHeight, "Pasted (Вставленное)");
+  setLayerLocalPixels(layer, pixels, { x: Math.round(originX), y: Math.round(originY), width, height });
+  return layer;
 }
 
 /** The selection's bounds, or the whole canvas when nothing is selected. */
@@ -154,15 +143,13 @@ async function pasteImageAt(activeDocumentId: string, document: { state: RasterD
   const context = surface.getContext("2d");
   if (!context) { decoded.release(); return; }
   context.drawImage(decoded.image, 0, 0);
-  const pasted = context.getImageData(0, 0, decoded.width, decoded.height).data;
+  const pasted = new Uint8ClampedArray(context.getImageData(0, 0, decoded.width, decoded.height).data);
+  const { width: pastedWidth, height: pastedHeight } = decoded;
   decoded.release();
-
-  const canvasSized = blitAtOrigin(pasted, decoded.width, decoded.height, state.width, state.height, originX, originY);
 
   const before = cloneRasterState(state);
   const after = cloneRasterState(state);
-  const layer = createRasterLayer(after.width, after.height, `Pasted (Вставленное)`);
-  setLayerPixels(layer, canvasSized, after.width, after.height);
+  const layer = pastedImageLayer(pasted, pastedWidth, pastedHeight, originX, originY, after.width, after.height);
   appendLayer(after, layer);
   after.activeLayerId = layer.id;
 
