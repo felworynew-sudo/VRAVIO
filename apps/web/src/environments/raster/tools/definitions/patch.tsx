@@ -311,14 +311,18 @@ const patch: RasterToolDefinition<PatchState> = {
     // has the full reasoning).
     stroke.previewAbort?.abort();
     applyPatch(context, stroke, pointer.point, true);
-    // The changed region is the selection itself, translated by the drag —
-    // not a brush-stroke bounding box, which is what this tool has no use
-    // for in the first place.
+    // The changed region is wherever the patch *wrote*, which is the selection's own footprint in
+    // Source mode (the default — the selected area is replaced) and the drop point only in
+    // Destination mode (`createPatchRegion` shifts the write there). This used to be the
+    // translated rectangle in both modes, so in Source mode the tile cache repainted the drop
+    // point, where nothing changed, and left the healed area showing its old tiles until something
+    // else invalidated them — "the patch does nothing until I move the layer" (§65.4).
     const selection = context.selection;
     const pad = Number(context.options.feather ?? 0) + 2;
+    const shift = context.options.mode === "destination";
     const bounds = selection ? {
-      x: selection.bounds.x + (stroke.pending.x - stroke.curveStart.x) - pad,
-      y: selection.bounds.y + (stroke.pending.y - stroke.curveStart.y) - pad,
+      x: selection.bounds.x + (shift ? stroke.pending.x - stroke.curveStart.x : 0) - pad,
+      y: selection.bounds.y + (shift ? stroke.pending.y - stroke.curveStart.y : 0) - pad,
       width: selection.bounds.width + pad * 2,
       height: selection.bounds.height + pad * 2,
     } : null;

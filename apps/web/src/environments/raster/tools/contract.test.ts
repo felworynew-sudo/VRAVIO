@@ -438,6 +438,26 @@ describe("every tool in the catalogue keeps the contract", () => {
         }
       });
 
+      it("names a dirty region that covers every pixel it changed", () => {
+        // `bounds` is the only region the tile cache repaints and the only region undo swaps
+        // back. A pixel changed outside it is on the document but not on screen until something
+        // else invalidates it, and survives Undo — Patch in Source mode named the drop point
+        // instead of the selection it rewrote, "nothing happens until I move the layer" (§65.4).
+        const { effects, untouched } = drive(tool, options, (context) => fullGesture(context, tool));
+        const { width, height } = untouched;
+        for (const commit of effects.commits) {
+          const bounds = commit.bounds as { x: number; y: number; width: number; height: number } | null;
+          if (!bounds || commit.before.length !== width * height * 4) continue;
+          for (let index = 0; index < width * height; index += 1) {
+            const at = index * 4;
+            if (commit.before[at] === commit.after[at] && commit.before[at + 1] === commit.after[at + 1] && commit.before[at + 2] === commit.after[at + 2] && commit.before[at + 3] === commit.after[at + 3]) continue;
+            const x = index % width, y = Math.floor(index / width);
+            const inside = x >= Math.floor(bounds.x) && y >= Math.floor(bounds.y) && x < Math.ceil(bounds.x + bounds.width) && y < Math.ceil(bounds.y + bounds.height);
+            expect(inside, `${tool.id}: pixel ${x},${y} changed outside the committed bounds ${JSON.stringify(bounds)}`).toBe(true);
+          }
+        }
+      });
+
       it("cannot reach past commit to escape the selection", () => {
         // Not a check on the tool so much as a statement of where the rule
         // lives: `commit` routes to the workspace's commitPixels, which is

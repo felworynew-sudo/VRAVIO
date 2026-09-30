@@ -987,6 +987,13 @@ const move: RasterToolDefinition<MoveState> = {
    * a scale handle used to sit (before the drag moved the frame's own on-screen position) flipped
    * the cursor to a resize arrow mid-rotate, even though the drag itself kept rotating correctly
    * — the cursor and the gesture actually running had silently come apart. */
+  /** The committed outline is the document's, and it only moves on commit — while a transform is
+   * open it sits where the content used to be, beside a frame that says otherwise. Photoshop hides
+   * the ants for the length of a Free Transform; they come back, carried along, on commit (§65.1). */
+  hidesCommittedSelection(state) {
+    return Boolean(state.pending);
+  },
+
   cursorFor(context, pointer) {
     const drag = context.state.drag;
     if (drag) {

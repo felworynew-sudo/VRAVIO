@@ -210,3 +210,50 @@ describe("patch tool: history", () => {
     expect(pixels).toEqual(edit.after);
   });
 });
+
+describe("patch tool: the committed dirty region is where the patch wrote (§65.4)", () => {
+  it.each(["source", "destination"] as const)("covers every changed pixel in %s mode", (mode) => {
+    const selection = createEllipseSelection(WIDTH, HEIGHT, 6, 20, 20, 34, 0);
+    // Textured on the right: a heal carries gradients, and a flat source has none to carry.
+    const pixels = new Uint8ClampedArray(WIDTH * HEIGHT * 4);
+    for (let y = 0; y < HEIGHT; y += 1) for (let x = 0; x < WIDTH; x += 1) pixels.set(x < 28 ? [220, 30, 30, 255] : [((x * 37) ^ (y * 53)) & 255, (x * 11 + y * 7) & 255, 200, 255], (y * WIDTH + x) * 4);
+    const commits: { before: Uint8ClampedArray; after: Uint8ClampedArray; bounds: { x: number; y: number; width: number; height: number } | null }[] = [];
+    let state: PatchState = patch.createState!() as PatchState;
+    const context = {
+      documentId: "test-document",
+      document: { width: WIDTH, height: HEIGHT },
+      viewport: { zoom: 1, rotation: 0, panX: 0, panY: 0, mode: "actual" },
+      options: { mode },
+      paintTarget: { kind: "pixels", layerId: "layer-1" },
+      paintMask: selection.mask,
+      selection,
+      get state() { return state; },
+      setState: (next: PatchState) => { state = next; },
+      capturePointer: () => {},
+      layerPixels: () => pixels.slice(),
+      compositePixels: () => pixels.slice(),
+      schedulePreview: () => {},
+      scheduleWork: () => {},
+      commit: async (before: Uint8ClampedArray, after: Uint8ClampedArray, _label: string, _target: string, _layer: string, bounds: typeof commits[number]["bounds"]) => { commits.push({ before, after, bounds }); },
+      commitSelection: async () => {},
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any as ToolContext<PatchState>;
+
+    patch.onPointerDown!(context, pointerAt(13, 27));
+    patch.onPointerMove!(context, pointerAt(43, 27));
+    patch.onGestureEnd!(context, pointerAt(43, 27));
+
+    expect(commits).toHaveLength(1);
+    const { before, after, bounds } = commits[0]!;
+    expect(bounds).not.toBeNull();
+    let changed = 0;
+    for (let index = 0; index < WIDTH * HEIGHT; index += 1) {
+      const at = index * 4;
+      if (before[at] === after[at] && before[at + 1] === after[at + 1] && before[at + 2] === after[at + 2] && before[at + 3] === after[at + 3]) continue;
+      changed += 1;
+      const x = index % WIDTH, y = Math.floor(index / WIDTH);
+      expect(x >= Math.floor(bounds!.x) && y >= Math.floor(bounds!.y) && x < Math.ceil(bounds!.x + bounds!.width) && y < Math.ceil(bounds!.y + bounds!.height), `${mode}: ${x},${y} outside ${JSON.stringify(bounds)}`).toBe(true);
+    }
+    expect(changed, "the patch has to change something for this to test anything").toBeGreaterThan(0);
+  });
+});
