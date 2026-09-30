@@ -1,4 +1,4 @@
-import { cloneRasterState, createPuppetSolverCache, layerOpaqueBounds, nearestVertex, puppetMesh, puppetWarpPixels, setLayerPixels, solvePuppetMesh, unionRect, type PuppetMesh, type PuppetPin, type PuppetSolverCache, type RasterRect } from "@vravio/env-raster";
+import { cloneRasterState, createPuppetSolverCache, layerPixelsView, nearestVertex, puppetMeshFromAlpha, renderPuppetWarp, setLayerFramePixels, solvePuppetMesh, unionRect, type PuppetDensity, type PuppetMesh, type PuppetPin, type PuppetSolverCache, type RasterRect } from "@vravio/env-raster";
 import { useEffect } from "react";
 import type { RasterToolDefinition, ToolContext } from "../types";
 
@@ -38,17 +38,26 @@ interface Pin {
 interface Rotating { readonly pin: number; readonly startAngle: number; readonly startRotation: number }
 
 export interface PuppetWarpState {
-  /** Built the first time the tool is used on a layer, from that layer's own
-   * opaque extent — a mesh over the whole canvas would spend its triangles on
-   * emptiness. */
+  /** Built the first time the tool is used on a layer, from that layer's own pixels — its own
+   * buffer, so content already past the canvas is part of the mesh too. */
   readonly session: {
     readonly layerId: string;
     readonly mesh: PuppetMesh;
+    /** The layer's own pixels and where they sit, as they were when the session began. */
     readonly basePixels: Uint8ClampedArray;
-    readonly bounds: RasterRect;
+    readonly baseBounds: RasterRect;
     /** Carries the solve's factorisation across frames — see `PuppetSolverCache`. Lives on the
      * session because that is exactly as long as one mesh does. */
     readonly solver: PuppetSolverCache;
+    /** The canvas-sized preview buffer, reused every frame: only the rectangle the previous frame
+     * drew is cleared and only the new one drawn (§65.15). A fresh document-sized copy per frame
+     * was most of what made a drag stutter. */
+    readonly working: Uint8ClampedArray;
+    /** What the previous frame covered — the part the next frame has to clear and repaint. */
+    lastDrawn: RasterRect | null;
+    /** The options the mesh was built with. */
+    readonly density: PuppetDensity;
+    readonly expansion: number;
   } | null;
   readonly pins: readonly Pin[];
   readonly draggingPin: number | null;
@@ -77,61 +86,62 @@ const solverPins = (pins: readonly Pin[]): PuppetPin[] => pins.map((pin) => ({
   vertex: pin.vertex, at: pin.at, ...(pin.rotation ? { rotation: pin.rotation } : {}),
 }));
 
-/**
- * Whether `cell` (a document-space rectangle) covers any non-transparent pixel of `pixels` —
- * `puppetMesh`'s `hasContent` predicate, this tool's own reason for existing per docs/master-plan.md
- * §52.2: the owner's own comparison against Photoshop, where the mesh follows the shape's alpha,
- * not the rectangle around it. Rounds outward (`Math.floor`/`Math.ceil`) rather than to the nearest
- * pixel, so a cell whose edge lands mid-pixel never silently drops the one row/column of opaque
- * pixels that would have made it "content" — the same direction `clampRegionToDocument` and every
- * other region-rounding helper in this package already rounds for the identical reason.
- */
-function cellHasOpaquePixel(pixels: Uint8ClampedArray, documentWidth: number, documentHeight: number, cell: { x: number; y: number; width: number; height: number }): boolean {
-  const left = Math.max(0, Math.floor(cell.x)), top = Math.max(0, Math.floor(cell.y));
-  const right = Math.min(documentWidth, Math.ceil(cell.x + cell.width)), bottom = Math.min(documentHeight, Math.ceil(cell.y + cell.height));
-  for (let y = top; y < bottom; y += 1) {
-    const row = y * documentWidth;
-    for (let x = left; x < right; x += 1) if (pixels[(row + x) * 4 + 3]! > 0) return true;
-  }
-  return false;
-}
+const densityOf = (value: unknown): PuppetDensity => value === "fewer" || value === "more" ? value : "normal";
+const expansionOf = (value: unknown): number => Math.max(1, Math.min(100, Math.round(Number(value ?? 2)) || 2));
 
+/**
+ * The mesh is laid on the layer's own outline (`puppetMeshFromAlpha`, §65.15) — Photoshop's
+ * behaviour — from the layer's own buffer at its own position, so it follows the shape and reaches
+ * whatever the layer holds past the canvas. It used to be an 8×8 grid of squares over the opaque
+ * bounding box, cut to cells with any content: square cells overhanging a round shape, a staircase
+ * along every edge.
+ */
 function beginSession(context: ToolContext<PuppetWarpState>): PuppetWarpState["session"] {
   const layer = context.activeLayer;
   if (!layer) return null;
-  const pixels = context.layerPixels();
-  const bounds = layerOpaqueBounds(pixels, context.document.width, context.document.height);
-  if (!bounds || bounds.width < 2 || bounds.height < 2) return null;
-  const mesh = puppetMesh(bounds, 8, (cell) => cellHasOpaquePixel(pixels, context.document.width, context.document.height, cell));
-  return { layerId: layer.id, mesh, basePixels: pixels, bounds, solver: createPuppetSolverCache() };
+  const density = densityOf(context.options.density), expansion = expansionOf(context.options.expansion);
+  const basePixels = layerPixelsView(layer).slice();
+  const baseBounds = { ...layer.bounds };
+  const mesh = puppetMeshFromAlpha(basePixels, baseBounds.width, baseBounds.height, baseBounds.x, baseBounds.y, density, expansion);
+  if (!mesh) return null;
+  const { width, height } = context.document;
+  return {
+    layerId: layer.id, mesh, basePixels, baseBounds, solver: createPuppetSolverCache(),
+    working: new Uint8ClampedArray(width * height * 4),
+    // The first frame has to clear the layer's own, unwarped look off the screen.
+    lastDrawn: clipToCanvas(baseBounds, width, height),
+    density, expansion,
+  };
+}
+
+function clipToCanvas(rect: RasterRect, width: number, height: number): RasterRect | null {
+  const left = Math.max(0, Math.floor(rect.x)), top = Math.max(0, Math.floor(rect.y));
+  const right = Math.min(width, Math.ceil(rect.x + rect.width)), bottom = Math.min(height, Math.ceil(rect.y + rect.height));
+  return right > left && bottom > top ? { x: left, y: top, width: right - left, height: bottom - top } : null;
 }
 
 /**
  * Re-solves and previews. Called on every frame of a pin drag.
  *
- * `dirty` — the union of the mesh's own bounds (where the content *was*) and the deformed
- * vertices' own extent (where it went) — used to cost nothing before docs/master-plan.md §52.2's
- * live measurement found this tool passing `null` here, forcing `schedulePreview` to recomposite
- * the *whole document* every single drag frame regardless of how small the actual puppet warp
- * region is (`move.tsx`'s quad/warp transforms already learned this exact lesson,
- * docs/master-plan.md §37.3 item 5 — this tool simply never got the same fix, having been written
- * before it). On a multi-layer document this recomposite can cost far more than the warp itself.
+ * The preview buffer is the session's own, canvas-sized and reused: the rectangle the previous
+ * frame drew is cleared, the warp drawn straight into it, and the screen told to repaint the
+ * union of both — the one region that changed. Nothing document-sized is copied per frame.
  */
 function preview(context: ToolContext<PuppetWarpState>, state: PuppetWarpState): readonly { x: number; y: number }[] | null {
   const session = state.session;
   if (!session) return null;
+  const { width, height } = context.document;
   const deformed = solvePuppetMesh(session.mesh, solverPins(state.pins), session.solver);
-  const pixels = puppetWarpPixels(session.basePixels, context.document.width, context.document.height, session.mesh, deformed, null);
-  let deformedLeft = Infinity, deformedTop = Infinity, deformedRight = -Infinity, deformedBottom = -Infinity;
-  for (const point of deformed) {
-    deformedLeft = Math.min(deformedLeft, point.x); deformedTop = Math.min(deformedTop, point.y);
-    deformedRight = Math.max(deformedRight, point.x); deformedBottom = Math.max(deformedBottom, point.y);
-  }
-  const dirty = unionRect(
-    { x: session.bounds.x, y: session.bounds.y, width: session.bounds.width, height: session.bounds.height },
-    deformedLeft, deformedTop, deformedRight, deformedBottom, 0,
-  );
-  context.schedulePreview(pixels, "pixels", session.layerId, dirty);
+  const previous = session.lastDrawn;
+  if (previous) for (let y = previous.y; y < previous.y + previous.height; y += 1) session.working.fill(0, (y * width + previous.x) * 4, (y * width + previous.x + previous.width) * 4);
+  // Krita's Instant Preview: while the view is zoomed out, a frame at full resolution is mostly
+  // thrown away by the display, so the preview is drawn at the power-of-two detail the zoom can
+  // show (half at 50%, a quarter at 25%) and the commit alone pays for every pixel.
+  const detail = Math.max(1, Math.min(4, 2 ** Math.floor(Math.log2(1 / Math.max(context.viewport.zoom, 1e-3)))));
+  const drawn = renderPuppetWarp(session.basePixels, session.baseBounds.width, session.baseBounds.height, session.baseBounds.x, session.baseBounds.y, session.mesh, deformed, session.working, width, height, 0, 0, detail);
+  session.lastDrawn = drawn ? clipToCanvas(drawn, width, height) : null;
+  const dirty = previous && drawn ? unionRect(previous, drawn.x, drawn.y, drawn.x + drawn.width, drawn.y + drawn.height, 0) : previous ?? drawn;
+  context.schedulePreview(session.working, "pixels", session.layerId, dirty ?? undefined);
   return deformed;
 }
 
@@ -139,32 +149,22 @@ function commit(context: ToolContext<PuppetWarpState>, state: PuppetWarpState): 
   const session = state.session;
   if (!session || !state.pins.length) return;
   const deformed = solvePuppetMesh(session.mesh, solverPins(state.pins), session.solver);
-  const pixels = puppetWarpPixels(session.basePixels, context.document.width, context.document.height, session.mesh, deformed, null);
+  // Rendered into a frame around wherever the warp carried the layer — past the canvas too, and
+  // stored that way (`setLayerFramePixels`): a warp that pushed part of the layer over an edge used
+  // to render into a canvas-sized buffer and lose that part for good (§65.15).
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
+  for (const point of deformed) { left = Math.min(left, point.x); top = Math.min(top, point.y); right = Math.max(right, point.x); bottom = Math.max(bottom, point.y); }
+  const frame = { x: Math.floor(left) - 1, y: Math.floor(top) - 1, width: Math.ceil(right) - Math.floor(left) + 2, height: Math.ceil(bottom) - Math.floor(top) + 2 };
+  const pixels = new Uint8ClampedArray(frame.width * frame.height * 4);
+  renderPuppetWarp(session.basePixels, session.baseBounds.width, session.baseBounds.height, session.baseBounds.x, session.baseBounds.y, session.mesh, deformed, pixels, frame.width, frame.height, frame.x, frame.y);
   // Cloned, not the bare `context.document` reference: `commitDocument` stores this as the
-  // undo step's own "before" in a closure, and `context.document` is the same live object
-  // `DocumentStore.update()`'s mutator writes through — sharing it here means the step's own
-  // `redo()` mutates "before" into "after" the instant it runs, the same bug move.tsx's
-  // `commitPending` had (see that fix's own comment for the full mechanism).
-  //
-  // `cloneRasterState`, not `structuredClone` — `structuredClone` cannot carry a class
-  // instance's prototype across the clone, and a layer's `tiles` is a `TileStore` with its
-  // own methods (`tileBuffers()` among them). The clone came back a plain object wearing
-  // `TileStore`'s data but none of its methods, and the very first thing downstream
-  // (`setLayerPixels` → `layer-bounds.ts`'s bounds scan) that called `.tileBuffers()` on it
-  // threw — silently, since `commitDocument` is called with `void` and nothing awaited the
-  // rejection. Found live: Enter/tool-switch visibly cleared the pin overlay (the tool's own
-  // `onDeactivate`/keydown handler had run) but the canvas kept showing the last preview frame
-  // forever after, and `history.canUndo` stayed `false` — the commit had thrown before it ever
-  // reached `commitDocument`'s `history.execute`. `shape.tsx`/`text.tsx` already use
-  // `cloneRasterState` for exactly this pair; this tool just never got the memo.
+  // undo step's own "before", and `context.document` is the live object the store writes through.
+  // `cloneRasterState`, not `structuredClone`, which cannot carry `TileStore`'s methods (§52.2).
   const before = cloneRasterState(context.document);
   const after = cloneRasterState(context.document);
   const layer = after.layers.find((item) => item.id === session.layerId);
   if (!layer) return;
-  // Through `setLayerPixels`, which is the one function that keeps a layer's
-  // buffer and its bounds agreed — CLAUDE.md §2 records what writing
-  // `layer.pixels` directly costs.
-  setLayerPixels(layer, pixels, after.width, after.height);
+  setLayerFramePixels(layer, pixels, frame);
   void context.commitDocument(before, after, "Puppet Warp (Марионеточная деформация)", null);
 }
 
@@ -175,7 +175,10 @@ const puppetWarp: RasterToolDefinition<PuppetWarpState> = {
 
   onPointerDown(context, pointer) {
     const state = context.state;
-    const session = state.session ?? beginSession(context);
+    // Density and Expansion shape the mesh; changed before the first pin, they rebuild it.
+    const stale = state.session && !state.pins.length
+      && (state.session.density !== densityOf(context.options.density) || state.session.expansion !== expansionOf(context.options.expansion));
+    const session = (!stale && state.session) || beginSession(context);
     if (!session) return;
     context.capturePointer(pointer.pointerId);
 
@@ -276,7 +279,7 @@ const puppetWarp: RasterToolDefinition<PuppetWarpState> = {
     // Screen measurements divided by the zoom, the rule this project enforces
     // with a test (zoom-invariant-ui.test.ts).
     return <svg className="puppet-overlay" viewBox={`0 0 ${context.document.width} ${context.document.height}`} preserveAspectRatio="none" aria-hidden="true">
-      <path className="puppet-mesh" d={lines.join("")} strokeWidth={0.6 / zoom}/>
+      <path className="puppet-mesh" d={lines.join("")} strokeWidth={1 / zoom}/>
       {state.pins.map((pin, index) => {
         // A pin carrying an angle wears its ring, so a rotation is visible as a state of the
         // pin and not only as its effect on the artwork — the same reason Photoshop leaves the

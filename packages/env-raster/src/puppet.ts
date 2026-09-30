@@ -1,4 +1,4 @@
-import type { PixelSelection, Point, RasterRect } from "./types";
+import type { Point, RasterRect } from "./types";
 
 /**
  * Puppet Warp: pin a few points of a layer, drag one, and the rest of the
@@ -200,21 +200,26 @@ function choleskySolve(lower: Float64Array, size: number, rhs: Float64Array): Fl
  * full A never has to exist. */
 class NormalEquations {
   readonly size: number;
-  readonly matrix: Float64Array;
+  /** Null when the factorisation is being reused: every frame of a drag only needs Aᵀb, and
+   * building AᵀA anyway — a dense size² array, twice per frame — was most of what a frame cost
+   * once the factorisation itself was cached (§65.15). */
+  readonly matrix: Float64Array | null;
   readonly rhs: Float64Array;
 
-  constructor(size: number) {
+  constructor(size: number, withMatrix = true) {
     this.size = size;
-    this.matrix = new Float64Array(size * size);
+    this.matrix = withMatrix ? new Float64Array(size * size) : null;
     this.rhs = new Float64Array(size);
   }
 
   /** One row: `sum(coefficient * unknown) = value`, weighted. */
   addRow(terms: readonly { readonly index: number; readonly value: number }[], value: number, weight = 1): void {
+    const matrix = this.matrix;
     for (const a of terms) {
       this.rhs[a.index] = this.rhs[a.index]! + weight * a.value * value;
+      if (!matrix) continue;
       for (const b of terms) {
-        this.matrix[a.index * this.size + b.index] = this.matrix[a.index * this.size + b.index]! + weight * a.value * b.value;
+        matrix[a.index * this.size + b.index] = matrix[a.index * this.size + b.index]! + weight * a.value * b.value;
       }
     }
   }
@@ -297,7 +302,7 @@ export function solvePuppetMesh(mesh: PuppetMesh, pins: readonly PuppetPin[], ca
   const xIndex = (vertex: number) => vertex * 2, yIndex = (vertex: number) => vertex * 2 + 1;
 
   // Step 1: rotation and uniform scale are free, everything else is penalised.
-  const similar = new NormalEquations(size);
+  const similar = new NormalEquations(size, !(reusable && cache!.similarFactor));
   for (let t = 0; t < mesh.triangles.length; t += 3) {
     const corner = [mesh.triangles[t]!, mesh.triangles[t + 1]!, mesh.triangles[t + 2]!];
     for (let which = 0; which < 3; which += 1) {
@@ -322,7 +327,7 @@ export function solvePuppetMesh(mesh: PuppetMesh, pins: readonly PuppetPin[], ca
   addRotationRows(similar, mesh, pins, xIndex, yIndex);
   let similarFactor = reusable ? cache!.similarFactor : null;
   if (!similarFactor) {
-    similarFactor = cholesky(similar.matrix, size);
+    similarFactor = similar.matrix ? cholesky(similar.matrix, size) : null;
     if (cache) {
       // A new epoch: the fitted factor from the old signature must not survive it, even by
       // accident, so it is cleared together with the signature it belonged to.
@@ -338,7 +343,7 @@ export function solvePuppetMesh(mesh: PuppetMesh, pins: readonly PuppetPin[], ca
   // Step 2: take each triangle's rotation from step 1, apply it to the
   // triangle's original edges, and ask the mesh to match those — which is what
   // gives the original size back.
-  const fitted = new NormalEquations(size);
+  const fitted = new NormalEquations(size, !(reusable && cache!.fittedFactor));
   for (let t = 0; t < mesh.triangles.length; t += 3) {
     const corner = [mesh.triangles[t]!, mesh.triangles[t + 1]!, mesh.triangles[t + 2]!];
     for (let which = 0; which < 3; which += 1) {
@@ -365,7 +370,7 @@ export function solvePuppetMesh(mesh: PuppetMesh, pins: readonly PuppetPin[], ca
   addRotationRows(fitted, mesh, pins, xIndex, yIndex);
   let fittedFactor = reusable ? cache!.fittedFactor : null;
   if (!fittedFactor) {
-    fittedFactor = cholesky(fitted.matrix, size);
+    fittedFactor = fitted.matrix ? cholesky(fitted.matrix, size) : null;
     if (cache) cache.fittedFactor = fittedFactor;
   }
   if (!fittedFactor) return stage1;
@@ -373,108 +378,118 @@ export function solvePuppetMesh(mesh: PuppetMesh, pins: readonly PuppetPin[], ca
   return Array.from({ length: count }, (_, index) => ({ x: final[xIndex(index)]!, y: final[yIndex(index)]! }));
 }
 
-/** Barycentric coordinates of a point in a triangle. */
-function barycentric(px: number, py: number, a: Point, b: Point, c: Point): { u: number; v: number; w: number } | null {
-  const v0x = b.x - a.x, v0y = b.y - a.y, v1x = c.x - a.x, v1y = c.y - a.y;
-  const denominator = v0x * v1y - v1x * v0y;
-  if (Math.abs(denominator) < 1e-12) return null;
-  const v2x = px - a.x, v2y = py - a.y;
-  const v = (v2x * v1y - v1x * v2y) / denominator;
-  const w = (v0x * v2y - v2x * v0y) / denominator;
-  return { u: 1 - v - w, v, w };
-}
-
-function sampleBilinear(pixels: Uint8ClampedArray, width: number, height: number, x: number, y: number): [number, number, number, number] {
-  const cx = Math.max(0, Math.min(width - 1, x)), cy = Math.max(0, Math.min(height - 1, y));
-  const x0 = Math.floor(cx), y0 = Math.floor(cy);
-  const x1 = Math.min(width - 1, x0 + 1), y1 = Math.min(height - 1, y0 + 1);
-  const fx = cx - x0, fy = cy - y0;
-  const corners = [(y0 * width + x0) * 4, (y0 * width + x1) * 4, (y1 * width + x0) * 4, (y1 * width + x1) * 4];
-  const weights = [(1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy];
-  let alpha = 0, red = 0, green = 0, blue = 0;
-  for (let corner = 0; corner < 4; corner += 1) {
-    const at = corners[corner]!, weight = weights[corner]!, cornerAlpha = pixels[at + 3]! / 255;
-    alpha += cornerAlpha * weight;
-    red += pixels[at]! * cornerAlpha * weight;
-    green += pixels[at + 1]! * cornerAlpha * weight;
-    blue += pixels[at + 2]! * cornerAlpha * weight;
-  }
-  if (alpha <= 0) return [0, 0, 0, 0];
-  return [red / alpha, green / alpha, blue / alpha, alpha * 255];
-}
-
 /**
- * Draws the layer through the deformed mesh — the donor's `graph_defined_warp`:
- * every destination pixel inside a deformed triangle is mapped back to the same
- * barycentric spot in that triangle's original, and sampled there.
+ * Draws a layer through its deformed mesh — the donor's `graph_defined_warp`: every destination
+ * pixel inside a deformed triangle is mapped back to the same barycentric spot in that triangle's
+ * original, and sampled there. Reads only the pristine source, so a warp never resamples its own
+ * output (the Warp mesh next door learned why).
  *
- * One pass over the destination, reading only the pristine source, for the same
- * reason the Warp mesh next door had to be rewritten that way: a warp that
- * resamples its own output smears.
+ * `source` is `sourceWidth`×`sourceHeight` straight RGBA with its top-left at document
+ * `sourceX/Y`; `target` likewise at `targetX/Y`; mesh and deformed points are document space. The
+ * result is composited over `target` and the document rectangle drawn into is returned.
+ *
+ * Written for a frame per pointer move (§65.15): each triangle's destination→source map is one
+ * affine precomputed before its pixels, the inside test is three incrementally-updated edge
+ * values, and the bilinear sample is inline. The version it replaced called a function returning
+ * a fresh object per pixel and a sampler allocating two arrays per pixel, over a document-sized
+ * copy of the layer, every frame.
  */
-export function puppetWarpPixels(
-  source: Uint8ClampedArray, width: number, height: number,
-  mesh: PuppetMesh, deformed: readonly Point[], selection: PixelSelection | null,
-): Uint8ClampedArray {
-  const output = source.slice();
-  // The mesh's own vertex extent, not `mesh.bounds` — a content-aware mesh (docs/master-plan.md
-  // §52.2's `hasContent` culling) keeps only the vertices its surviving triangles reference, which
-  // for a shape that does not fill its bounding box is a real, often much smaller, rectangle.
-  // `mesh.bounds` still names the full original bbox (`puppetMesh`'s own contract, used elsewhere
-  // to place the mesh), but the clearing pass just below — the other O(bbox area) cost this
-  // function has, found live alongside the triangle-count one it shares with `solvePuppetMesh` —
-  // only ever needs to erase pixels a kept triangle could actually have covered. Every vertex is
-  // guaranteed to already sit inside `mesh.bounds` (`puppetMesh` never places one outside it), so
-  // this box is always a subset of the old one, never wider — this shrinks the clear, it cannot
-  // silently leave a stale pixel unclearable.
-  let vertexLeft = Infinity, vertexTop = Infinity, vertexRight = -Infinity, vertexBottom = -Infinity;
-  for (const vertex of mesh.vertices) {
-    vertexLeft = Math.min(vertexLeft, vertex.x); vertexTop = Math.min(vertexTop, vertex.y);
-    vertexRight = Math.max(vertexRight, vertex.x); vertexBottom = Math.max(vertexBottom, vertex.y);
-  }
-  const left = Math.max(0, Math.floor(vertexLeft)), top = Math.max(0, Math.floor(vertexTop));
-  const right = Math.min(width, Math.ceil(vertexRight));
-  const bottom = Math.min(height, Math.ceil(vertexBottom));
-  const coverage = (index: number) => selection
-    ? selection.mask[index]! / 255
-    : (index % width >= left && index % width < right && Math.floor(index / width) >= top && Math.floor(index / width) < bottom ? 1 : 0);
-
-  for (let y = top; y < bottom; y += 1) for (let x = left; x < right; x += 1) {
-    const index = y * width + x, alpha = coverage(index);
-    if (alpha <= 0) continue;
-    const pixel = index * 4, remaining = 1 - alpha;
-    output[pixel] = Math.round(output[pixel]! * remaining);
-    output[pixel + 1] = Math.round(output[pixel + 1]! * remaining);
-    output[pixel + 2] = Math.round(output[pixel + 2]! * remaining);
-    output[pixel + 3] = Math.round(output[pixel + 3]! * remaining);
-  }
-
-  for (let t = 0; t < mesh.triangles.length; t += 3) {
-    const i0 = mesh.triangles[t]!, i1 = mesh.triangles[t + 1]!, i2 = mesh.triangles[t + 2]!;
+export function renderPuppetWarp(
+  source: Uint8ClampedArray, sourceWidth: number, sourceHeight: number, sourceX: number, sourceY: number,
+  mesh: PuppetMesh, deformed: readonly Point[],
+  target: Uint8ClampedArray, targetWidth: number, targetHeight: number, targetX: number, targetY: number,
+  step = 1,
+): RasterRect | null {
+  // `step` > 1 is a live preview at reduced detail — Krita's Instant Preview: one sample per
+  // step×step block on a grid shared by every triangle (so blocks meet without gaps), the full
+  // resolution kept for the commit.
+  const block = Math.max(1, Math.floor(step));
+  let drawnLeft = Infinity, drawnTop = Infinity, drawnRight = -Infinity, drawnBottom = -Infinity;
+  const triangles = mesh.triangles;
+  for (let t = 0; t < triangles.length; t += 3) {
+    const i0 = triangles[t]!, i1 = triangles[t + 1]!, i2 = triangles[t + 2]!;
     const a = deformed[i0]!, b = deformed[i1]!, c = deformed[i2]!;
+    const ax = a.x - targetX, ay = a.y - targetY, bx = b.x - targetX, by = b.y - targetY, cx = c.x - targetX, cy = c.y - targetY;
+    const den = (bx - ax) * (cy - ay) - (cx - ax) * (by - ay);
+    if (Math.abs(den) < 1e-9) continue;
+    const minX = Math.max(0, Math.floor(Math.min(ax, bx, cx))), maxX = Math.min(targetWidth, Math.ceil(Math.max(ax, bx, cx)));
+    const minY = Math.max(0, Math.floor(Math.min(ay, by, cy))), maxY = Math.min(targetHeight, Math.ceil(Math.max(ay, by, cy)));
+    if (maxX <= minX || maxY <= minY) continue;
     const sa = mesh.vertices[i0]!, sb = mesh.vertices[i1]!, sc = mesh.vertices[i2]!;
+    const sax = sa.x - sourceX, say = sa.y - sourceY;
+    const ubx = sb.x - sa.x, uby = sb.y - sa.y, ucx = sc.x - sa.x, ucy = sc.y - sa.y;
+    // v, w as linear functions of the pixel centre (px, py).
+    const vdx = (cy - ay) / den * block, wdx = -(by - ay) / den * block;
+    const firstX = minX - minX % block, firstY = minY - minY % block, half = block / 2;
+    for (let y = firstY; y < maxY; y += block) {
+      const py = y + half;
+      let v = ((firstX + half - ax) * (cy - ay) - (py - ay) * (cx - ax)) / den;
+      let w = ((bx - ax) * (py - ay) - (by - ay) * (firstX + half - ax)) / den;
+      for (let x = firstX; x < maxX; x += block, v += vdx, w += wdx) {
+        if (v < -1e-7 || w < -1e-7 || v + w > 1 + 1e-7) continue;
+        // Source position, then a bilinear sample around it (pixel centres at +0.5).
+        const fx = sax + v * ubx + w * ucx - 0.5, fy = say + v * uby + w * ucy - 0.5;
+        const x0 = Math.floor(fx), y0 = Math.floor(fy), tx = fx - x0, ty = fy - y0;
+        let sr = 0, sg = 0, sbl = 0, salpha = 0;
+        for (let corner = 0; corner < 4; corner += 1) {
+          const sx = x0 + (corner & 1), sy = y0 + (corner >> 1);
+          if (sx < 0 || sy < 0 || sx >= sourceWidth || sy >= sourceHeight) continue;
+          const weight = ((corner & 1) ? tx : 1 - tx) * ((corner >> 1) ? ty : 1 - ty);
+          const at = (sy * sourceWidth + sx) * 4, alpha = source[at + 3]! * weight;
+          if (alpha === 0) continue;
+          sr += source[at]! * alpha; sg += source[at + 1]! * alpha; sbl += source[at + 2]! * alpha; salpha += alpha;
+        }
+        if (salpha <= 0) continue;
+        const sourceAlpha = salpha / 255;
+        // Over transparency — nearly every pixel, since the preview buffer and a commit frame both
+        // start empty — "over" is a plain store of the sample's own straight colour.
+        const plainR = Math.round(sr / salpha), plainG = Math.round(sg / salpha), plainB = Math.round(sbl / salpha), plainA = Math.round(salpha);
+        const rowEnd = Math.min(targetHeight, y + block), columnEnd = Math.min(targetWidth, x + block);
+        for (let by2 = Math.max(0, y); by2 < rowEnd; by2 += 1) for (let bx2 = Math.max(0, x); bx2 < columnEnd; bx2 += 1) {
+          const to = (by2 * targetWidth + bx2) * 4;
+          if (target[to + 3] === 0) { target[to] = plainR; target[to + 1] = plainG; target[to + 2] = plainB; target[to + 3] = plainA; continue; }
+          const destinationAlpha = target[to + 3]! / 255;
+          const outAlpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha);
+          const keep = destinationAlpha * (1 - sourceAlpha);
+          target[to] = Math.round((sr / 255 + target[to]! * keep) / outAlpha);
+          target[to + 1] = Math.round((sg / 255 + target[to + 1]! * keep) / outAlpha);
+          target[to + 2] = Math.round((sbl / 255 + target[to + 2]! * keep) / outAlpha);
+          target[to + 3] = Math.round(outAlpha * 255);
+        }
+      }
+    }
+    // Whole blocks: the last one can reach past the triangle's own box.
+    const blockRight = Math.min(targetWidth, maxX + block - 1), blockBottom = Math.min(targetHeight, maxY + block - 1);
+    if (firstX < drawnLeft) drawnLeft = firstX; if (firstY < drawnTop) drawnTop = firstY;
+    if (blockRight > drawnRight) drawnRight = blockRight; if (blockBottom > drawnBottom) drawnBottom = blockBottom;
+  }
+  return drawnRight > drawnLeft ? { x: drawnLeft + targetX, y: drawnTop + targetY, width: drawnRight - drawnLeft, height: drawnBottom - drawnTop } : null;
+}
+
+/** Every pixel centre a set of triangles covers, in a `width`×`height` buffer at the origin. */
+export function forEachMeshPixel(vertices: readonly Point[], triangles: readonly number[], width: number, height: number, visit: (index: number) => void): void {
+  for (let t = 0; t < triangles.length; t += 3) {
+    const a = vertices[triangles[t]!]!, b = vertices[triangles[t + 1]!]!, c = vertices[triangles[t + 2]!]!;
+    const den = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
+    if (Math.abs(den) < 1e-9) continue;
     const minX = Math.max(0, Math.floor(Math.min(a.x, b.x, c.x))), maxX = Math.min(width, Math.ceil(Math.max(a.x, b.x, c.x)));
     const minY = Math.max(0, Math.floor(Math.min(a.y, b.y, c.y))), maxY = Math.min(height, Math.ceil(Math.max(a.y, b.y, c.y)));
     for (let y = minY; y < maxY; y += 1) for (let x = minX; x < maxX; x += 1) {
-      const bary = barycentric(x + 0.5, y + 0.5, a, b, c);
-      // A hair of tolerance so the seam between two triangles is covered by one
-      // of them rather than falling between both.
-      if (!bary || bary.u < -0.0001 || bary.v < -0.0001 || bary.w < -0.0001) continue;
-      const sampleX = sa.x * bary.u + sb.x * bary.v + sc.x * bary.w - 0.5;
-      const sampleY = sa.y * bary.u + sb.y * bary.v + sc.y * bary.w - 0.5;
-      const nearest = Math.max(top, Math.min(bottom - 1, Math.round(sampleY))) * width + Math.max(left, Math.min(right - 1, Math.round(sampleX)));
-      const maskAlpha = coverage(nearest);
-      if (maskAlpha <= 0) continue;
-      const sample = sampleBilinear(source, width, height, sampleX, sampleY);
-      const to = (y * width + x) * 4;
-      const sourceAlpha = sample[3] / 255 * maskAlpha, destinationAlpha = output[to + 3]! / 255;
-      const alpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha);
-      if (alpha <= 0) continue;
-      output[to] = Math.round((sample[0] * sourceAlpha + output[to]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
-      output[to + 1] = Math.round((sample[1] * sourceAlpha + output[to + 1]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
-      output[to + 2] = Math.round((sample[2] * sourceAlpha + output[to + 2]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
-      output[to + 3] = Math.round(alpha * 255);
+      const px = x + 0.5, py = y + 0.5;
+      const v = ((px - a.x) * (c.y - a.y) - (py - a.y) * (c.x - a.x)) / den;
+      const w = ((b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x)) / den;
+      if (v >= -1e-7 && w >= -1e-7 && v + w <= 1 + 1e-7) visit(y * width + x);
     }
   }
+}
+
+/**
+ * A document-sized warp: what the mesh covered is lifted out, and drawn back through the deformed
+ * mesh over what is left.
+ */
+export function puppetWarpPixels(source: Uint8ClampedArray, width: number, height: number, mesh: PuppetMesh, deformed: readonly Point[]): Uint8ClampedArray {
+  const output = source.slice();
+  forEachMeshPixel(mesh.vertices, mesh.triangles, width, height, (index) => { output.fill(0, index * 4, index * 4 + 4); });
+  renderPuppetWarp(source, width, height, 0, 0, mesh, deformed, output, width, height, 0, 0);
   return output;
 }

@@ -103,7 +103,7 @@ describe("drawing through the mesh", () => {
   it("reproduces the picture when the mesh has not moved", () => {
     const source = block();
     const mesh = puppetMesh(BOUNDS, 4);
-    const output = puppetWarpPixels(source, WIDTH, HEIGHT, mesh, mesh.vertices, null);
+    const output = puppetWarpPixels(source, WIDTH, HEIGHT, mesh, mesh.vertices);
     let worst = 0;
     for (let y = 35; y < 85; y += 1) for (let x = 35; x < 85; x += 1) {
       worst = Math.max(worst, Math.abs(alphaAt(output, x, y) - alphaAt(source, x, y)));
@@ -115,7 +115,7 @@ describe("drawing through the mesh", () => {
     const source = block();
     const mesh = puppetMesh(BOUNDS, 4);
     const moved = mesh.vertices.map((vertex) => ({ x: vertex.x + 10, y: vertex.y }));
-    const output = puppetWarpPixels(source, WIDTH, HEIGHT, mesh, moved, null);
+    const output = puppetWarpPixels(source, WIDTH, HEIGHT, mesh, moved);
     // Where the block was and is not any more.
     expect(alphaAt(output, 34, 60)).toBe(0);
     // Where it landed.
@@ -131,7 +131,7 @@ describe("drawing through the mesh", () => {
       { vertex: 4, at: mesh.vertices[4]! },
       { vertex: 24, at: { x: mesh.vertices[24]!.x + 12, y: mesh.vertices[24]!.y + 12 } },
     ]);
-    const output = puppetWarpPixels(source, WIDTH, HEIGHT, mesh, solved, null);
+    const output = puppetWarpPixels(source, WIDTH, HEIGHT, mesh, solved);
     // The middle of the block stays covered — triangles that dropped their
     // seams would show as a lattice of transparent lines through it.
     let transparent = 0;
@@ -343,6 +343,6 @@ describe("puppet mesh's content-aware culling", () => {
     for (let y = BOUNDS.y; y < BOUNDS.y + BOUNDS.height; y += 1) for (let x = BOUNDS.x; x < BOUNDS.x + BOUNDS.width; x += 1) {
       const i = (y * WIDTH + x) * 4; pixels[i] = 200; pixels[i + 1] = 100; pixels[i + 2] = 50; pixels[i + 3] = 255;
     }
-    expect(() => puppetWarpPixels(pixels, WIDTH, HEIGHT, mesh, solved, null)).not.toThrow();
+    expect(() => puppetWarpPixels(pixels, WIDTH, HEIGHT, mesh, solved)).not.toThrow();
   });
 });

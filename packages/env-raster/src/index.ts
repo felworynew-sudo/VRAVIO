@@ -56,3 +56,5 @@ export * from "./selection-modify";
 export * from "./selection-transform";
 export * from "./resample";
 export * from "./image-size";
+export * from "./outline";
+export * from "./puppet-mesh";

@@ -160,7 +160,12 @@ export const tools: readonly ToolDefinition[] = [
   // No `iconFile`, for the reason given just above: nothing in icons/ depicts
   // this, and that folder is off-limits to add to. The glyph is a placeholder
   // an icon can replace without touching anything else.
-  { id: "raster.puppetWarp", kind: "raster", icon: "✲", label: { en: "Puppet Warp", ru: "Марионеточная деформация" }, shortcut: "", options: [] },
+  // Photoshop's Density and Expansion (§65.15): how many mesh points, and how far past the layer's
+  // outline the mesh reaches. Read when a session starts, from the layer's own pixels.
+  { id: "raster.puppetWarp", kind: "raster", icon: "✲", label: { en: "Puppet Warp", ru: "Марионеточная деформация" }, shortcut: "", options: [
+    { id: "density", label: { en: "Density", ru: "Плотность" }, type: "select", defaultValue: "normal", values: [{ value: "fewer", label: { en: "Fewer Points", ru: "Меньше точек" } }, { value: "normal", label: { en: "Normal", ru: "Нормальная" } }, { value: "more", label: { en: "More Points", ru: "Больше точек" } }] },
+    { id: "expansion", label: { en: "Expansion", ru: "Расширение" }, type: "number", min: 1, max: 100, step: 1, defaultValue: 2, unit: "px" },
+  ] },
   { id: "vector.artboard", kind: "vector", icon: "▭", label: { en: "Artboard Tool", ru: "Монтажная область" }, shortcut: "B", options: [{ id: "moveArtwork", label: { en: "Move/Copy Artwork with Artboard", ru: "Двигать артворк вместе с артбордом" }, type: "boolean", defaultValue: false }] },
 ];
 
