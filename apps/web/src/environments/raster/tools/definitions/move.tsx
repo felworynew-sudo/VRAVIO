@@ -165,6 +165,36 @@ function cropPixels(pixels: Uint8ClampedArray, width: number, region: RasterRect
   return output;
 }
 
+/** The layer as it stands while its selected pixels are lifted out — what stays behind, drawn in
+ * the layer's own place in the stack during a live transform (§65.6). Alpha only, scaled by how
+ * much of each pixel the selection takes, so a feathered edge leaves the matching remainder. */
+function withoutSelectedPixels(pixels: Uint8ClampedArray, selection: PixelSelection, width: number, height: number): Uint8ClampedArray {
+  const output = pixels.slice();
+  const { bounds, mask } = selection;
+  for (let y = Math.max(0, Math.floor(bounds.y)); y < Math.min(height, Math.ceil(bounds.y + bounds.height)); y += 1) {
+    for (let x = Math.max(0, Math.floor(bounds.x)); x < Math.min(width, Math.ceil(bounds.x + bounds.width)); x += 1) {
+      const taken = mask[y * width + x]!; if (!taken) continue;
+      const at = (y * width + x) * 4 + 3;
+      output[at] = Math.round(output[at]! * (255 - taken) / 255);
+    }
+  }
+  return output;
+}
+
+/** A crop of `region`, keeping only what the selection takes — the counterpart of
+ * {@link withoutSelectedPixels}: the floating preview carries the selected pixels and nothing of
+ * the rectangle around them (an ellipse's corners stay with the layer). */
+function cropSelectedPixels(pixels: Uint8ClampedArray, width: number, height: number, region: RasterRect, selection: PixelSelection): Uint8ClampedArray {
+  const output = cropPixels(pixels, width, region);
+  for (let row = 0; row < region.height; row += 1) for (let column = 0; column < region.width; column += 1) {
+    const x = region.x + column, y = region.y + row;
+    const taken = x >= 0 && y >= 0 && x < width && y < height ? selection.mask[y * width + x]! : 0;
+    const at = (row * region.width + column) * 4 + 3;
+    output[at] = Math.round(output[at]! * taken / 255);
+  }
+  return output;
+}
+
 /** Which corner (0-3, TL/TR/BR/BL) or, for Skew, which edge-midpoint (4-7, top/right/bottom/left) a quad handle index refers to. */
 export function quadHandlePoints(corners: readonly [Point, Point, Point, Point], mode: QuadTransformMode): { index: number; point: Point }[] {
   const [tl, tr, br, bl] = corners;
@@ -1075,12 +1105,16 @@ const move: RasterToolDefinition<MoveState> = {
     const live = pending?.live;
     useEffect(() => {
       if (!live || !pending) return;
-      context.previewWithLayerHidden(pending.layerId);
+      // With a selection only the selected pixels travel; the rest of the layer stays where it is,
+      // with the hole they left. Hiding the whole layer here blanked everything outside the
+      // selection for as long as the transform was open (§65.6).
+      if (pending.selection) context.schedulePreview(withoutSelectedPixels(pending.pixels, pending.selection, document.width, document.height), "pixels", pending.layerId, null);
+      else context.previewWithLayerHidden(pending.layerId);
       // Put the real layer back the moment the drag stops describing itself; the resampled
       // result is already in the document by then, and leaving it hidden would blank the layer.
       return () => context.previewWithLayerHidden(null);
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [Boolean(live), pending?.layerId]);
+    }, [Boolean(live), pending?.layerId, pending?.selection]);
     // What sits *above* the transforming layer in the stack has to stay above its live preview
     // too, or a lower layer being rotated/scaled would paint over layers stacked on top of it —
     // `livePreviewRef` is one DOM element floating over the whole canvas by construction, with no
@@ -1118,11 +1152,12 @@ const move: RasterToolDefinition<MoveState> = {
       // layer sits beyond an edge, the latter contains transparent pixels
       // there, but the former is exactly what must become visible while the
       // user drags it back in.
+      const region = { x: Math.round(source.x), y: Math.round(source.y), width, height };
       const previewPixels = pending.livePixels
-        ?? cropPixels(pending.pixels, document.width, { x: Math.round(source.x), y: Math.round(source.y), width, height });
+        ?? (pending.selection ? cropSelectedPixels(pending.pixels, document.width, document.height, region, pending.selection) : cropPixels(pending.pixels, document.width, region));
       if (ctx2d) ctx2d.putImageData(new ImageData(previewPixels as Uint8ClampedArray<ArrayBuffer>, width, height), 0, 0);
       // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [live?.source.x, live?.source.y, live?.source.width, live?.source.height, pending?.pixels, pending?.livePixels, document.width]);
+    }, [live?.source.x, live?.source.y, live?.source.width, live?.source.height, pending?.pixels, pending?.livePixels, pending?.selection, document.width, document.height]);
 
     const zoom = context.viewport.zoom;
     if (!pending) {
