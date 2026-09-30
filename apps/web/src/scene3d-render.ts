@@ -39,36 +39,118 @@ async function parseModel(fileName: string, bytes: Uint8Array): Promise<THREE.Ob
   return gltf.scene;
 }
 
-/** Boundary of a layer's opaque pixels, as a polygon in the layer's own local coordinates — the
- * "extrude another layer" source. Moore-neighbor tracing, outer contour only (a shape with holes
- * extrudes as if the holes were filled, which is a fair simplification for this one source kind
- * given everything else a 3D layer can already do). */
-export function traceAlphaContour(pixels: Uint8ClampedArray, width: number, height: number): { x: number; y: number }[] {
+export interface AlphaOutline {
+  /** Clockwise in document (y-down) space. */
+  readonly outer: { x: number; y: number }[];
+  readonly holes: { x: number; y: number }[][];
+}
+
+/**
+ * Every boundary of a layer's opaque pixels — each separate part, each with its holes — as
+ * polygons on pixel corners, in document coordinates: the "extrude another layer" source.
+ *
+ * Potrace's path decomposition (Selinger, "Potrace: a polygon-based tracing algorithm", §2.1),
+ * the step Inkscape's Trace Bitmap runs first: every edge between an opaque and a transparent
+ * pixel becomes a directed edge with the opaque side on its right, the edges are linked into
+ * closed paths, and a path's orientation says what it is — clockwise (in y-down space) around
+ * filled pixels, anticlockwise around a hole. At a corner where two pixels touch only diagonally
+ * the path always turns right, so they stay separate parts and no path touches itself (a pinched
+ * polygon is what triangulation handles worst). Each hole then goes to the smallest outline that
+ * contains it — three.js's own `SVGLoader.createShapes` groups holes the same way.
+ *
+ * What this replaced walked one Moore-neighbour contour from the first opaque pixel it found: a
+ * layer of separate letters extruded only its first letter, and every letter's hole was filled
+ * in (§65.9).
+ */
+export function traceAlphaOutlines(pixels: Uint8ClampedArray, width: number, height: number, minArea = 4): AlphaOutline[] {
   const opaque = (x: number, y: number) => x >= 0 && x < width && y >= 0 && y < height && pixels[(y * width + x) * 4 + 3]! > 16;
-  let startX = -1, startY = -1;
-  outer: for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) if (opaque(x, y)) { startX = x; startY = y; break outer; }
-  if (startX < 0) return [];
-  const directions = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
-  const points: { x: number; y: number }[] = [];
-  let x = startX, y = startY, direction = 6, steps = 0;
-  const maxSteps = width * height;
-  do {
-    points.push({ x, y });
-    let found = false;
-    for (let turn = 0; turn < 8; turn += 1) {
-      const candidate = (direction + 6 + turn) % 8;
-      const [dx, dy] = directions[candidate]! as [number, number];
-      if (opaque(x + dx, y + dy)) { x += dx; y += dy; direction = candidate; found = true; break; }
+  const stride = width + 1;
+  // Directed boundary edges keyed by their start vertex. A vertex starts at most two edges (the
+  // diagonal case), so two slots per vertex; direction 0..3 = east, south, west, north.
+  const first = new Int8Array(stride * (height + 1)).fill(-1);
+  const second = new Int8Array(stride * (height + 1)).fill(-1);
+  const add = (vx: number, vy: number, direction: number) => {
+    const at = vy * stride + vx;
+    if (first[at] === -1) first[at] = direction; else second[at] = direction;
+  };
+  let edges = 0;
+  for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
+    if (!opaque(x, y)) continue;
+    // Clockwise around the pixel in y-down space, so the opaque pixel is always on the right.
+    if (!opaque(x, y - 1)) { add(x, y, 0); edges += 1; }
+    if (!opaque(x + 1, y)) { add(x + 1, y, 1); edges += 1; }
+    if (!opaque(x, y + 1)) { add(x + 1, y + 1, 2); edges += 1; }
+    if (!opaque(x - 1, y)) { add(x, y + 1, 3); edges += 1; }
+  }
+  if (edges === 0) return [];
+  const step = [[1, 0], [0, 1], [-1, 0], [0, -1]] as const;
+  const take = (at: number, incoming: number): number => {
+    const a = first[at]!, b = second[at]!;
+    if (b === -1) { first[at] = -1; return a; }
+    // Two ways on: prefer the right turn (incoming + 1), keeping diagonal neighbours apart.
+    const right = (incoming + 1) % 4;
+    if (a === right) { first[at] = b; second[at] = -1; return a; }
+    second[at] = -1; return b;
+  };
+  const loops: { x: number; y: number }[][] = [];
+  for (let start = 0; start < first.length; start += 1) {
+    while (first[start] !== -1) {
+      const points: { x: number; y: number }[] = [];
+      let vx = start % stride, vy = Math.floor(start / stride);
+      const startX = vx, startY = vy;
+      // The loop's first edge: no incoming direction yet, so either slot will do.
+      let direction = first[start]!;
+      if (second[start] !== -1) { first[start] = second[start]!; second[start] = -1; } else first[start] = -1;
+      let previous = -1;
+      for (let guard = 0; guard <= edges; guard += 1) {
+        // Only corners are kept: a run of edges in one direction is one straight side.
+        if (direction !== previous) points.push({ x: vx, y: vy });
+        previous = direction;
+        vx += step[direction]![0]; vy += step[direction]![1];
+        if (vx === startX && vy === startY) break;
+        const at = vy * stride + vx;
+        if (first[at] === -1) break;
+        direction = take(at, direction);
+      }
+      if (points.length >= 3) loops.push(points);
     }
-    if (!found) break;
-    steps += 1;
-  } while ((x !== startX || y !== startY) && steps < maxSteps);
-  return points;
+  }
+  const signedArea = (loop: readonly { x: number; y: number }[]) => {
+    let sum = 0;
+    for (let index = 0; index < loop.length; index += 1) { const p = loop[index]!, q = loop[(index + 1) % loop.length]!; sum += p.x * q.y - q.x * p.y; }
+    return sum / 2;
+  };
+  const inside = (point: { x: number; y: number }, loop: readonly { x: number; y: number }[]) => {
+    let hit = false;
+    for (let index = 0, previousIndex = loop.length - 1; index < loop.length; previousIndex = index, index += 1) {
+      const a = loop[index]!, b = loop[previousIndex]!;
+      if ((a.y > point.y) !== (b.y > point.y) && point.x < (b.x - a.x) * (point.y - a.y) / (b.y - a.y) + a.x) hit = !hit;
+    }
+    return hit;
+  };
+  const outlines: { outer: { x: number; y: number }[]; holes: { x: number; y: number }[][]; area: number }[] = [];
+  const holes: { loop: { x: number; y: number }[]; area: number }[] = [];
+  for (const loop of loops) {
+    const area = signedArea(loop);
+    if (Math.abs(area) < minArea) continue;
+    if (area > 0) outlines.push({ outer: loop, holes: [], area }); else holes.push({ loop, area: -area });
+  }
+  for (const hole of holes) {
+    // A point just inside the hole: the middle of its first edge, a quarter pixel to the left of
+    // travel — the transparent side, since opaque is always on the right.
+    const a = hole.loop[0]!, b = hole.loop[1]!;
+    const length = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    const probe = { x: (a.x + b.x) / 2 + (b.y - a.y) / length * 0.25, y: (a.y + b.y) / 2 - (b.x - a.x) / length * 0.25 };
+    let owner: (typeof outlines)[number] | undefined;
+    for (const candidate of outlines) if (candidate.area > hole.area && inside(probe, candidate.outer) && (!owner || candidate.area < owner.area)) owner = candidate;
+    owner?.holes.push(hole.loop);
+  }
+  return outlines.map(({ outer, holes: ownHoles }) => ({ outer, holes: ownHoles }));
 }
 
 /**
  * Rounds off the pixel-grid staircase a raw alpha-contour trace leaves along
- * any diagonal or curved edge — `traceAlphaContour` walks pixel corners one
+ * any diagonal or curved edge — `traceAlphaOutlines` walks pixel corners one
  * unit step at a time, so a 30°-diagonal silhouette boundary comes out as a
  * literal staircase of 90° corners, and `ExtrudeGeometry` extrudes exactly
  * that: a visibly stepped side wall instead of a smooth slope.
@@ -120,15 +202,19 @@ export async function buildGeometrySource(data: Scene3DLayerData, document: Rast
     if (!layer) return new THREE.Group();
     const pixels = layerDocumentPixels(layer, document.width, document.height);
     const bounds = layerContentBounds(pixels, document.width, document.height);
-    const contour = traceAlphaContour(pixels, document.width, document.height);
-    if (contour.length < 3) return new THREE.Group();
+    const outlines = traceAlphaOutlines(pixels, document.width, document.height);
+    if (!outlines.length) return new THREE.Group();
     // Smoothed before it ever becomes a THREE.Shape — a raw trace only ever
     // walks whole pixel steps, so any diagonal or curved edge in the source
     // layer would otherwise extrude with a visible staircase running the
     // full depth of the side wall. See smoothContour's own doc comment.
-    const smoothed = smoothContour(contour);
-    const shape = new THREE.Shape(smoothed.map((point) => new THREE.Vector2(point.x - bounds.x - bounds.width / 2, -(point.y - bounds.y - bounds.height / 2))));
-    const geometry = new THREE.ExtrudeGeometry(shape, { depth: source.depth, bevelEnabled: false });
+    const toVectors = (loop: readonly { x: number; y: number }[]) => smoothContour(loop).map((point) => new THREE.Vector2(point.x - bounds.x - bounds.width / 2, -(point.y - bounds.y - bounds.height / 2)));
+    const shapes = outlines.map((outline) => {
+      const shape = new THREE.Shape(toVectors(outline.outer));
+      for (const hole of outline.holes) shape.holes.push(new THREE.Path(toVectors(hole)));
+      return shape;
+    });
+    const geometry = new THREE.ExtrudeGeometry(shapes, { depth: source.depth, bevelEnabled: false });
     const scale = data.size / Math.max(bounds.width, bounds.height, 1);
     const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ color: data.color, metalness: data.metalness, roughness: data.roughness }));
     mesh.scale.setScalar(scale);

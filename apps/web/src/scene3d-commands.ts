@@ -67,7 +67,7 @@ export async function importModelAsLayer(documentId: string, file: File): Promis
 /**
  * Photoshop's own "Convert to 3D": the owner's request for a text layer, generalized to any
  * layer since nothing about it is text-specific. Extrudes the layer's own opaque silhouette
- * (`createScene3DExtrudeLayer`'s own "extrude" source, reusing `traceAlphaContour` and its
+ * (`createScene3DExtrudeLayer`'s own "extrude" source, reusing `traceAlphaOutlines` and its
  * Chaikin smoothing pass rather than rebuilding `TextGeometry` from the string — deliberately:
  * `TextGeometry` only has the bundled Latin-only helvetiker typeface behind it (see
  * `scene3d-render.ts`'s own doc comment on `defaultScene3DLayer`), and this project is

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { smoothContour, traceAlphaContour } from "./scene3d-render";
+import { smoothContour, traceAlphaOutlines } from "./scene3d-render";
 
 /**
  * `smoothContour` exists to fix a real reported defect: extruding a pixel
  * layer with a diagonal or curved edge produced a visibly stepped side wall,
- * because `traceAlphaContour` only ever walks whole pixel corners. These
+ * because `traceAlphaOutlines` only ever walks whole pixel corners. These
  * tests measure the thing that actually matters — how far the traced
  * boundary strays from the true edge it approximates — not just that the
  * function runs.
@@ -23,7 +23,7 @@ function maxDeviationFromDiagonal(points: readonly { x: number; y: number }[]): 
 /** A closed polygon that is a pixel-grid staircase approximating the
  * diagonal from (0,0) to (n,n) on the way out, and the diagonal itself
  * (`smoothContour`'s own cyclic wrap from the last point back to the first)
- * on the way back — exactly the one-jagged-edge shape `traceAlphaContour`
+ * on the way back — exactly the one-jagged-edge shape `traceAlphaOutlines`
  * produces for a rasterized triangle whose hypotenuse runs at 45°. */
 function staircasePolygon(n: number): { x: number; y: number }[] {
   const points: { x: number; y: number }[] = [{ x: 0, y: 0 }];
@@ -101,26 +101,60 @@ describe("smoothContour", () => {
   });
 });
 
-describe("traceAlphaContour (sanity, not previously covered)", () => {
-  it("traces a closed loop around a solid opaque square", () => {
-    const size = 10, w = 20, h = 20;
-    const pixels = new Uint8ClampedArray(w * h * 4);
-    for (let y = 5; y < 5 + size; y += 1) for (let x = 5; x < 5 + size; x += 1) {
-      const i = (y * w + x) * 4;
-      pixels[i] = 255; pixels[i + 1] = 255; pixels[i + 2] = 255; pixels[i + 3] = 255;
-    }
-    const contour = traceAlphaContour(pixels, w, h);
-    expect(contour.length).toBeGreaterThan(0);
-    for (const point of contour) {
-      expect(point.x).toBeGreaterThanOrEqual(4);
-      expect(point.x).toBeLessThanOrEqual(15);
-      expect(point.y).toBeGreaterThanOrEqual(4);
-      expect(point.y).toBeLessThanOrEqual(15);
-    }
+/**
+ * §65.9 — a layer of separate letters extruded only its first letter, and holes were filled in.
+ */
+describe("traceAlphaOutlines", () => {
+  const W = 40, H = 30;
+  const paint = (cells: (x: number, y: number) => boolean) => {
+    const pixels = new Uint8ClampedArray(W * H * 4);
+    for (let y = 0; y < H; y += 1) for (let x = 0; x < W; x += 1) if (cells(x, y)) pixels[(y * W + x) * 4 + 3] = 255;
+    return pixels;
+  };
+  const box = (points: readonly { x: number; y: number }[]) => ({
+    x: Math.min(...points.map((p) => p.x)), y: Math.min(...points.map((p) => p.y)),
+    right: Math.max(...points.map((p) => p.x)), bottom: Math.max(...points.map((p) => p.y)),
   });
 
-  it("returns nothing for a fully transparent layer", () => {
-    const pixels = new Uint8ClampedArray(20 * 20 * 4);
-    expect(traceAlphaContour(pixels, 20, 20)).toEqual([]);
+  it("traces a solid square as one outline on its pixel corners, four corners only", () => {
+    const outlines = traceAlphaOutlines(paint((x, y) => x >= 5 && x < 15 && y >= 5 && y < 15), W, H);
+    expect(outlines).toHaveLength(1);
+    expect(outlines[0]!.outer).toHaveLength(4);
+    expect(box(outlines[0]!.outer)).toEqual({ x: 5, y: 5, right: 15, bottom: 15 });
+    expect(outlines[0]!.holes).toEqual([]);
+  });
+
+  it("keeps every separate part, not only the first one found", () => {
+    const outlines = traceAlphaOutlines(paint((x, y) => y >= 5 && y < 15 && ((x >= 2 && x < 8) || (x >= 12 && x < 18) || (x >= 25 && x < 35))), W, H);
+    expect(outlines.map((outline) => box(outline.outer).x).sort((a, b) => a - b)).toEqual([2, 12, 25]);
+  });
+
+  it("gives a ring its hole instead of filling it", () => {
+    const ring = (x: number, y: number) => x >= 5 && x < 25 && y >= 5 && y < 25 && !(x >= 10 && x < 20 && y >= 10 && y < 20);
+    const outlines = traceAlphaOutlines(paint(ring), W, H);
+    expect(outlines).toHaveLength(1);
+    expect(outlines[0]!.holes).toHaveLength(1);
+    expect(box(outlines[0]!.holes[0]!)).toEqual({ x: 10, y: 10, right: 20, bottom: 20 });
+  });
+
+  it("treats an island inside a hole as its own part, with the hole still on the ring", () => {
+    const cells = (x: number, y: number) => (x >= 2 && x < 28 && y >= 2 && y < 28 && !(x >= 6 && x < 24 && y >= 6 && y < 24)) || (x >= 12 && x < 18 && y >= 12 && y < 18);
+    const outlines = traceAlphaOutlines(paint(cells), W, H);
+    expect(outlines).toHaveLength(2);
+    const ring = outlines.find((outline) => box(outline.outer).x === 2)!;
+    const island = outlines.find((outline) => box(outline.outer).x === 12)!;
+    expect(ring.holes).toHaveLength(1);
+    expect(island.holes).toEqual([]);
+  });
+
+  it("keeps two pixels touching only at a corner as two parts", () => {
+    const outlines = traceAlphaOutlines(paint((x, y) => (x >= 4 && x < 8 && y >= 4 && y < 8) || (x >= 8 && x < 12 && y >= 8 && y < 12)), W, H);
+    expect(outlines).toHaveLength(2);
+    for (const outline of outlines) expect(outline.outer).toHaveLength(4);
+  });
+
+  it("drops specks smaller than the minimum area and returns nothing for a transparent layer", () => {
+    expect(traceAlphaOutlines(paint((x, y) => x === 3 && y === 3), W, H)).toEqual([]);
+    expect(traceAlphaOutlines(new Uint8ClampedArray(W * H * 4), W, H)).toEqual([]);
   });
 });

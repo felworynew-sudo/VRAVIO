@@ -41,7 +41,7 @@ type CropDrag =
   | { kind: "move"; pointerId: number; startRect: RasterRect; startPoint: Point }
   | { kind: "handle"; pointerId: number; handle: HandleId; startRect: RasterRect; startPoint: Point };
 
-interface CropState {
+export interface CropState {
   readonly pending: PendingCrop | null;
   readonly drag: CropDrag | null;
 }
