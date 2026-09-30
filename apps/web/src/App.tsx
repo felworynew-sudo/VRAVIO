@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { WARP_PRESETS, adjustLayerPixelsDeep, applyRasterFilter, rasterFilterCatalog, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, compositeRasterRegion, computeAlignOffsets, rasterColorSpaceById, parseIccProfile, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerOrigin, type AlignEdge, type RasterAdjustment, type RasterColorSpace, type RasterDocumentState, type RasterLayer, type RasterRect } from "@vravio/env-raster";
+import { WARP_PRESETS, INTERPOLATIONS, type Interpolation, adjustLayerPixelsDeep, applyRasterFilter, rasterFilterCatalog, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, compositeRasterRegion, computeAlignOffsets, rasterColorSpaceById, parseIccProfile, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerOrigin, type AlignEdge, type RasterAdjustment, type RasterColorSpace, type RasterDocumentState, type RasterLayer, type RasterRect } from "@vravio/env-raster";
 import { maskToRgba, rgbaToMask } from "./raster-pixel-buffers";
 import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
 import { withBusy, withBusyPainted } from "./busy";
@@ -1644,6 +1644,24 @@ function SnapControls({ language, smartGuides, snapToGrid, onToggleSmartGuides, 
  * is the real record of it; a remembered option would be a second copy of that, free to drift
  * from the mesh the moment the user drags an anchor by hand (CLAUDE.md §4).
  */
+/** Photoshop's Interpolation menu in the Free Transform bar: how the one resample at commit
+ * filters (§65.12). Stored as the Move tool's own option, which is what `move.tsx` reads. */
+const INTERPOLATION_LABELS: Record<Interpolation, { en: string; ru: string }> = {
+  nearest: { en: "Nearest Neighbor (hard edges)", ru: "По соседним (чёткие края)" },
+  bilinear: { en: "Bilinear", ru: "Билинейная" },
+  bicubic: { en: "Bicubic", ru: "Бикубическая" },
+  mitchell: { en: "Bicubic Smoother (Mitchell)", ru: "Бикубическая, плавнее (Митчелл)" },
+  lanczos3: { en: "Lanczos (sharper)", ru: "Ланцош (резче)" },
+};
+
+function InterpolationControl({ language }: { language: Language }) {
+  const value = String(useShellStore((store) => store.toolOptions["raster.move"]?.interpolation ?? "bicubic"));
+  const setToolOption = useShellStore((store) => store.setToolOption);
+  return <label>{text(language, "Interpolation", "Интерполяция")}:<select value={value} onChange={(event) => setToolOption("raster.move", "interpolation", event.target.value)}>
+    {INTERPOLATIONS.map((id) => <option key={id} value={id}>{text(language, INTERPOLATION_LABELS[id].en, INTERPOLATION_LABELS[id].ru)}</option>)}
+  </select></label>;
+}
+
 function WarpStyleControls({ language }: { language: Language }) {
   const [style, setStyle] = useState<string>("custom");
   const [bend, setBend] = useState(50);
@@ -1666,7 +1684,7 @@ function WarpStyleControls({ language }: { language: Language }) {
 }
 
 function OptionsBar({ language, tool, values, transform, scene3d, scene3dGround, pixelsPerInch, onTransformCommit, onTransformCancel, onScene3DCommit, onScene3DCancel, onScene3DGroundCommit, onScene3DGroundCancel, onChange, alignSelectionCount, onAlign, onDistribute, smartGuides, snapToGrid, onToggleSmartGuides, onToggleSnapToGrid }: { language: Language; tool: ReturnType<typeof toolById>; values: Record<string, string | number | boolean>; transform: { active: boolean; x: number; y: number; width: number; height: number; rotation: number; warp?: boolean } | null; scene3d: { active: boolean; rotationX: number; rotationY: number; rotationZ: number } | null; scene3dGround: { active: boolean; pointCount: number; ready: boolean } | null; pixelsPerInch?: number | undefined; onTransformCommit(): void; onTransformCancel(): void; onScene3DCommit(): void; onScene3DCancel(): void; onScene3DGroundCommit(): void; onScene3DGroundCancel(): void; onChange(id: string, value: string | number | boolean): void; alignSelectionCount: number; onAlign(edge: AlignEdge): void; onDistribute(edge: AlignEdge): void; smartGuides: boolean; snapToGrid: boolean; onToggleSmartGuides(value: boolean): void; onToggleSnapToGrid(value: boolean): void }) {
-  if (transform?.active) return <div className="options-bar transform-options"><strong>Free Transform (Свободная трансформация)</strong>{transform.warp && <WarpStyleControls language={language}/>}<label>X:<input value={Math.round(transform.x)} readOnly/></label><label>Y:<input value={Math.round(transform.y)} readOnly/></label><label>W:<input value={Math.round(transform.width)} readOnly/></label><label>H:<input value={Math.round(transform.height)} readOnly/></label><label>∠:<input value={`${Math.round(transform.rotation * 10) / 10}°`} readOnly/></label><button title="Cancel (Отмена)" onClick={onTransformCancel}>×</button><button className="commit" title="Commit (Подтвердить)" onClick={onTransformCommit}>✓</button></div>;
+  if (transform?.active) return <div className="options-bar transform-options"><strong>{text(language, "Free Transform", "Свободная трансформация")}</strong>{transform.warp ? <WarpStyleControls language={language}/> : <InterpolationControl language={language}/>}<label>X:<input value={Math.round(transform.x)} readOnly/></label><label>Y:<input value={Math.round(transform.y)} readOnly/></label><label>W:<input value={Math.round(transform.width)} readOnly/></label><label>H:<input value={Math.round(transform.height)} readOnly/></label><label>∠:<input value={`${Math.round(transform.rotation * 10) / 10}°`} readOnly/></label><button title="Cancel (Отмена)" onClick={onTransformCancel}>×</button><button className="commit" title="Commit (Подтвердить)" onClick={onTransformCommit}>✓</button></div>;
   // Same "Free Transform" bar shape as above, X/Y/Z rotation degrees in place of x/y/w/h/angle —
   // the owner's own request to make the 3D rotate gizmo look like this exact interface state
   // rather than inventing its own (Scene3DOrbitGizmo.tsx's own doc comment has the reasoning).

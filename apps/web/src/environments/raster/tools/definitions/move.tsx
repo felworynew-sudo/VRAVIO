@@ -3,7 +3,7 @@ import {
   cloneRasterState, compositeRasterDocument, flattenRasterLayers, layerAccepts, layerDocumentPixels, layerLockReason, layerOpaqueBounds, layerPixelsView, liftSelection, linkedLayers, meshLayerPixels, meshSelection,
   pickLayerAt, quadLayerPixels, quadSelection, regularMesh, restrictSelectionToContent,
   rotatedDestinationBounds, setLayerFramePixels, setLayerPixels, smartObjectTransform, stampFloating, stampFloatingInFrame, transformLayerInFrame, transformLayerPixels, transformSelection, transformSmartObject, translateLayerOrigin, translateLayerPixels, translateSelection, unionRect, WARP_GRID, warpPresetMesh,
-  type WarpPresetId,
+  type WarpPresetId, INTERPOLATIONS, type Interpolation,
   type FloatingPixels, type PixelSelection, type Point, type RasterDocumentState, type RasterLayer, type RasterRect, type RasterTextData, type TransformDragCache,
 } from "@vravio/env-raster";
 import { diagnostic } from "../../../../diagnostics";
@@ -501,6 +501,8 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
   // live: paint a stroke, drag it, commit, Undo — the layer stayed at its
   // moved position instead of returning to where the stroke was painted.
   const current = cloneRasterState(context.document);
+  // The Free Transform bar's Interpolation (§65.12); anything unknown falls back to bicubic.
+  const interpolation: Interpolation = (INTERPOLATIONS as readonly string[]).includes(String(context.options.interpolation)) ? context.options.interpolation as Interpolation : "bicubic";
   // The layer this transform belongs to may be gone entirely (deleted while
   // the frame was open). There is nothing to apply it to then, and re-adding
   // it would be the same resurrection by another route, so the transform is
@@ -546,7 +548,7 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
       const { width, height } = pending.before;
       const framed = sourceLayer && sourceLayer.kind === "pixel" && !smartObjectTransform(sourceLayer) && !pending.corners && !pending.mesh
         ? pending.live
-          ? transformLayerInFrame(sourceLayer, width, height, pending.live.source, pending.live.target, pending.live.rotation, pending.selection, { flipX: pending.live.flipX ?? false, flipY: pending.live.flipY ?? false })
+          ? transformLayerInFrame(sourceLayer, width, height, pending.live.source, pending.live.target, pending.live.rotation, pending.selection, { flipX: pending.live.flipX ?? false, flipY: pending.live.flipY ?? false }, interpolation)
           : pending.float ? stampFloatingInFrame(sourceLayer, width, height, pending.float, pending.dx, pending.dy) : null
         : null;
       if (framed) {
@@ -556,7 +558,7 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
         isThere = right > left && bottom > top ? { x: left, y: top, width: right - left, height: bottom - top } : null;
       } else {
         const resolved = pending.live
-          ? transformLayerPixels(pending.pixels, width, height, pending.live.source, pending.live.target, pending.live.rotation, pending.selection, true, { flipX: pending.live.flipX ?? false, flipY: pending.live.flipY ?? false })
+          ? transformLayerPixels(pending.pixels, width, height, pending.live.source, pending.live.target, pending.live.rotation, pending.selection, interpolation, { flipX: pending.live.flipX ?? false, flipY: pending.live.flipY ?? false })
           : pending.pixels;
         isThere = layerOpaqueBounds(resolved, width, height);
         setLayerPixels(layer, resolved, width, height);
@@ -587,7 +589,7 @@ export function commitPending(context: ToolContext<MoveState>, pending: PendingT
   // be carried through the same source→target and angle here, or it stays where the pixels were
   // (docs/master-plan.md §65.1). Quad/warp keep theirs current during the drag and have no `live`.
   after.selection = pending.live
-    ? transformSelection(pending.selection, after.width, after.height, pending.live.source, pending.live.target, pending.live.rotation, { flipX: pending.live.flipX ?? false, flipY: pending.live.flipY ?? false })
+    ? transformSelection(pending.selection, after.width, after.height, pending.live.source, pending.live.target, pending.live.rotation, { flipX: pending.live.flipX ?? false, flipY: pending.live.flipY ?? false }, interpolation)
     : cloneSelection(pending.selection);
   if (nextActiveLayerId) after.activeLayerId = nextActiveLayerId;
   // Undo returns to the document as it was a moment ago, not to how it looked

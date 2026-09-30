@@ -1,3 +1,4 @@
+import { resampleAffine, type Affine, type Interpolation, type Premultiplied } from "./resample";
 import { documentToFrame, layerDocumentPixels, layerFramePixels, unionRect } from "./layer-bounds";
 import { bilinearSample, sampleBilinearInto, type BilinearSample } from "./sampling";
 import { selectionBounds } from "./selection";
@@ -324,18 +325,54 @@ export interface TransformMirror {
   readonly flipY?: boolean;
 }
 
+/**
+ * The source→target rectangle, the turn about the target's centre and the mirror, as one affine
+ * from a lifted image's own pixel space (its top-left at document `originX/Y`) into document
+ * space. Mirroring is a negative scale about the source rectangle, so it goes through the same
+ * exact passes as everything else rather than a separate flip.
+ */
+function transformAffine(source: RasterRect, target: RasterRect, degrees: number, mirror: TransformMirror, originX: number, originY: number): Affine {
+  const kx = target.width / source.width, ky = target.height / source.height;
+  const ex = mirror.flipX ? -kx : kx, ey = mirror.flipY ? -ky : ky;
+  const bx = mirror.flipX ? target.x + kx * (source.x + source.width) : target.x - kx * source.x;
+  const by = mirror.flipY ? target.y + ky * (source.y + source.height) : target.y - ky * source.y;
+  const radians = degrees * Math.PI / 180, cosine = Math.cos(radians), sine = Math.sin(radians);
+  const cx = target.x + target.width / 2, cy = target.y + target.height / 2;
+  const vx = bx + ex * originX - cx, vy = by + ey * originY - cy;
+  return { a: cosine * ex, b: -sine * ey, c: sine * ex, d: cosine * ey, tx: cx + cosine * vx - sine * vy, ty: cy + sine * vx + cosine * vy };
+}
+
+/** The pixels a transform carries, lifted out of a document-sized buffer premultiplied at 16
+ * bits, each one's alpha scaled by how much of it the selection (or the source rectangle) takes. */
+function liftForTransform(pixels: Uint8ClampedArray | null, width: number, height: number, source: RasterRect, coverage: (x: number, y: number) => number): { image: Premultiplied; x: number; y: number } | null {
+  const x0 = Math.max(0, Math.floor(source.x)), y0 = Math.max(0, Math.floor(source.y));
+  const x1 = Math.min(width, Math.ceil(source.x + source.width)), y1 = Math.min(height, Math.ceil(source.y + source.height));
+  if (x1 <= x0 || y1 <= y0) return null;
+  const w = x1 - x0, h = y1 - y0, data = new Uint16Array(w * h * 4);
+  for (let y = 0; y < h; y += 1) for (let x = 0; x < w; x += 1) {
+    const taken = coverage(x0 + x, y0 + y); if (taken <= 0) continue;
+    const from = ((y0 + y) * width + x0 + x) * 4, to = (y * w + x) * 4;
+    const alpha = (pixels ? pixels[from + 3]! : 255) * taken;
+    if (alpha <= 0) continue;
+    const factor = alpha / 255 * 257;
+    if (pixels) { data[to] = Math.round(pixels[from]! * factor); data[to + 1] = Math.round(pixels[from + 1]! * factor); data[to + 2] = Math.round(pixels[from + 2]! * factor); }
+    data[to + 3] = Math.round(alpha * 257);
+  }
+  return { image: { data, width: w, height: h }, x: x0, y: y0 };
+}
+
+/**
+ * Applies a scale/turn/mirror to the pixels inside `source` (or the selection) of a document-sized
+ * buffer: the source is vacated, and the resampled content lands over what remains. One resample,
+ * at commit — through `resampleAffine` (resample.ts), which filters properly when shrinking
+ * instead of point-sampling (§65.12).
+ */
 export function transformLayerPixels(
   pixels: Uint8ClampedArray, width: number, height: number,
   source: RasterRect, target: RasterRect, degrees: number,
-  selection: PixelSelection | null = null, interpolate = true, mirror: TransformMirror = {},
+  selection: PixelSelection | null = null, interpolation: Interpolation = "bicubic", mirror: TransformMirror = {},
 ): Uint8ClampedArray {
   const output = pixels.slice();
-  const sample: BilinearSample = bilinearSample();
-  const radians = degrees * Math.PI / 180, cosine = Math.cos(radians), sine = Math.sin(radians);
-  const centerX = target.x + target.width / 2, centerY = target.y + target.height / 2;
-  const scaleX = target.width === 0 ? 0 : source.width / target.width;
-  const scaleY = target.height === 0 ? 0 : source.height / target.height;
-
   const insideSource = (x: number, y: number) => x >= source.x && x < source.x + source.width && y >= source.y && y < source.y + source.height;
   const coverage = (x: number, y: number) => x < 0 || x >= width || y < 0 || y >= height ? 0
     : selection ? selection.mask[y * width + x]! / 255
@@ -351,32 +388,24 @@ export function transformLayerPixels(
       output[pixel + 2] = Math.round(output[pixel + 2]! * remaining); output[pixel + 3] = Math.round(output[pixel + 3]! * remaining);
     }
   }
-
-  const destination = rotatedDestinationBounds(target, degrees);
-  const fromY = Math.max(0, Math.floor(destination.y) - 1), toY = Math.min(height, Math.ceil(destination.y + destination.height) + 1);
-  const fromX = Math.max(0, Math.floor(destination.x) - 1), toX = Math.min(width, Math.ceil(destination.x + destination.width) + 1);
-  for (let y = fromY; y < toY; y += 1) {
-    for (let x = fromX; x < toX; x += 1) {
-      // Undo the rotation about the target's centre, then undo the scale that carried the source
-      // rectangle onto the target — the inverse of the two steps, in the other order.
-      const dx = x + .5 - centerX, dy = y + .5 - centerY;
-      const unrotatedX = centerX + cosine * dx + sine * dy, unrotatedY = centerY - sine * dx + cosine * dy;
-      const offsetX = (unrotatedX - target.x) * scaleX, offsetY = (unrotatedY - target.y) * scaleY;
-      const sampleX = source.x + (mirror.flipX ? source.width - offsetX : offsetX);
-      const sampleY = source.y + (mirror.flipY ? source.height - offsetY : offsetY);
-      const nearestX = Math.floor(sampleX), nearestY = Math.floor(sampleY);
-      const maskAlpha = coverage(nearestX, nearestY); if (maskAlpha <= 0) continue;
-      if (interpolate) {
-        sampleBilinearInto(pixels, width, height, sampleX - .5, sampleY - .5, sample);
-      } else {
-        const at = (Math.max(0, Math.min(height - 1, nearestY)) * width + Math.max(0, Math.min(width - 1, nearestX))) * 4;
-        sample.r = pixels[at]!; sample.g = pixels[at + 1]!; sample.b = pixels[at + 2]!; sample.a = pixels[at + 3]!;
-      }
-      const to = (y * width + x) * 4, sourceAlpha = sample.a / 255 * maskAlpha, destinationAlpha = output[to + 3]! / 255;
-      const alpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha); if (alpha <= 0) continue;
-      output[to] = Math.round((sample.r * sourceAlpha + output[to]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
-      output[to + 1] = Math.round((sample.g * sourceAlpha + output[to + 1]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
-      output[to + 2] = Math.round((sample.b * sourceAlpha + output[to + 2]! * destinationAlpha * (1 - sourceAlpha)) / alpha);
+  if (source.width <= 0 || source.height <= 0 || target.width <= 0 || target.height <= 0) return output;
+  const lifted = liftForTransform(pixels, width, height, source, coverage);
+  if (!lifted) return output;
+  const result = resampleAffine(lifted.image, transformAffine(source, target, degrees, mirror, lifted.x, lifted.y), interpolation, { x: 0, y: 0, width, height });
+  if (!result) return output;
+  const { data, width: rw, height: rh } = result.image;
+  for (let y = 0; y < rh; y += 1) {
+    const dy = result.y + y; if (dy < 0 || dy >= height) continue;
+    for (let x = 0; x < rw; x += 1) {
+      const dx = result.x + x; if (dx < 0 || dx >= width) continue;
+      const from = (y * rw + x) * 4, sourceAlpha = data[from + 3]! / 65535; if (sourceAlpha <= 0) continue;
+      const to = (dy * width + dx) * 4, destinationAlpha = output[to + 3]! / 255;
+      const alpha = sourceAlpha + destinationAlpha * (1 - sourceAlpha);
+      const keep = destinationAlpha * (1 - sourceAlpha);
+      // Premultiplied source over straight destination, back to straight colour.
+      output[to] = Math.round((data[from]! / 257 + output[to]! * keep) / alpha);
+      output[to + 1] = Math.round((data[from + 1]! / 257 + output[to + 1]! * keep) / alpha);
+      output[to + 2] = Math.round((data[from + 2]! / 257 + output[to + 2]! * keep) / alpha);
       output[to + 3] = Math.round(alpha * 255);
     }
   }
@@ -462,27 +491,21 @@ export function rotateSelection(selection: PixelSelection | null, width: number,
  * them before this) needs their combined inverse mapping, not two separately-composed passes that
  * could round differently and drift the outline off the pixels it is supposed to outline.
  */
-export function transformSelection(selection: PixelSelection | null, width: number, height: number, source: RasterRect, target: RasterRect, degrees: number, mirror: TransformMirror = {}): PixelSelection | null {
-  if (!selection) return null;
+export function transformSelection(selection: PixelSelection | null, width: number, height: number, source: RasterRect, target: RasterRect, degrees: number, mirror: TransformMirror = {}, interpolation: Interpolation = "bicubic"): PixelSelection | null {
+  if (!selection || source.width <= 0 || source.height <= 0 || target.width <= 0 || target.height <= 0) return null;
+  // The mask goes through the very passes the pixels do — lifted as alpha — so outline and
+  // content share one geometry, edge pixels included.
+  const lifted = liftForTransform(null, width, height, source, (x, y) => selection.mask[y * width + x]! / 255);
+  if (!lifted) return null;
+  const result = resampleAffine(lifted.image, transformAffine(source, target, degrees, mirror, lifted.x, lifted.y), interpolation, { x: 0, y: 0, width, height });
+  if (!result) return null;
   const mask = new Uint8ClampedArray(width * height);
-  const radians = degrees * Math.PI / 180, cosine = Math.cos(radians), sine = Math.sin(radians);
-  const centerX = target.x + target.width / 2, centerY = target.y + target.height / 2;
-  const scaleX = target.width === 0 ? 0 : source.width / target.width;
-  const scaleY = target.height === 0 ? 0 : source.height / target.height;
-  const destination = rotatedDestinationBounds(target, degrees);
-  const fromY = Math.max(0, Math.floor(destination.y)), toY = Math.min(height, Math.ceil(destination.y + destination.height));
-  const fromX = Math.max(0, Math.floor(destination.x)), toX = Math.min(width, Math.ceil(destination.x + destination.width));
-  for (let y = fromY; y < toY; y += 1) {
-    for (let x = fromX; x < toX; x += 1) {
-      // Same inverse mapping as `transformLayerPixels`: undo the rotation about the target's
-      // centre, then undo the scale that carried the source rectangle onto the target.
-      const dx = x + .5 - centerX, dy = y + .5 - centerY;
-      const unrotatedX = centerX + cosine * dx + sine * dy, unrotatedY = centerY - sine * dx + cosine * dy;
-      const offsetX = (unrotatedX - target.x) * scaleX, offsetY = (unrotatedY - target.y) * scaleY;
-      const sampleX = source.x + (mirror.flipX ? source.width - offsetX : offsetX);
-      const sampleY = source.y + (mirror.flipY ? source.height - offsetY : offsetY);
-      const sourceX = Math.floor(sampleX), sourceY = Math.floor(sampleY);
-      if (sourceX >= 0 && sourceX < width && sourceY >= 0 && sourceY < height) mask[y * width + x] = selection.mask[sourceY * width + sourceX]!;
+  const { data, width: rw, height: rh } = result.image;
+  for (let y = 0; y < rh; y += 1) {
+    const dy = result.y + y; if (dy < 0 || dy >= height) continue;
+    for (let x = 0; x < rw; x += 1) {
+      const dx = result.x + x; if (dx < 0 || dx >= width) continue;
+      mask[dy * width + dx] = Math.round(data[(y * rw + x) * 4 + 3]! / 257);
     }
   }
   const bounds = selectionBounds(mask, width, height);
@@ -821,12 +844,12 @@ function selectionInFrame(selection: PixelSelection | null, documentWidth: numbe
  */
 export function transformLayerInFrame(
   layer: RasterLayer, documentWidth: number, documentHeight: number,
-  source: RasterRect, target: RasterRect, degrees: number, selection: PixelSelection | null = null, mirror: TransformMirror = {},
+  source: RasterRect, target: RasterRect, degrees: number, selection: PixelSelection | null = null, mirror: TransformMirror = {}, interpolation: Interpolation = "bicubic",
 ): { pixels: Uint8ClampedArray; frame: RasterRect } {
   const frame = transformFrame(documentWidth, documentHeight, layer.bounds, rotatedDestinationBounds(target, degrees));
   const pixels = transformLayerPixels(
     layerFramePixels(layer, frame), frame.width, frame.height,
-    shiftRect(source, frame), shiftRect(target, frame), degrees, selectionInFrame(selection, documentWidth, documentHeight, frame), true, mirror,
+    shiftRect(source, frame), shiftRect(target, frame), degrees, selectionInFrame(selection, documentWidth, documentHeight, frame), interpolation, mirror,
   );
   return { pixels, frame };
 }

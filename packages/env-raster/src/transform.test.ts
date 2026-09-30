@@ -82,8 +82,8 @@ describe("transformSelection", () => {
   ] as const)("covers exactly the pixels the same transform moved — %s", (_label, target, degrees) => {
     const { pixels, selection } = square();
     const source = { x: 10, y: 10, width: 10, height: 10 };
-    const moved = transformLayerPixels(pixels, width, height, source, target, degrees, selection, false);
-    const outline = transformSelection(selection, width, height, source, target, degrees)!;
+    const moved = transformLayerPixels(pixels, width, height, source, target, degrees, selection, "nearest");
+    const outline = transformSelection(selection, width, height, source, target, degrees, {}, "nearest")!;
     expect(outline).not.toBeNull();
     for (let index = 0; index < width * height; index += 1) expect(outline.mask[index]! > 0, `pixel ${index}`).toBe(moved[index * 4 + 3]! > 0);
   });

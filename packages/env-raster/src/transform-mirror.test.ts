@@ -16,7 +16,7 @@ describe("mirroring a transform", () => {
 
   it("flipX reads the source from the far side", () => {
     const source = stripes(width, height);
-    const flipped = transformLayerPixels(source, width, height, frame, frame, 0, null, true, { flipX: true });
+    const flipped = transformLayerPixels(source, width, height, frame, frame, 0, null, "bilinear", { flipX: true });
     for (let y = 0; y < height; y += 1) for (let x = 0; x < width; x += 1) {
       const at = (y * width + x) * 4, mirrored = (y * width + (width - 1 - x)) * 4;
       expect(Math.abs(flipped[at]! - source[mirrored]!)).toBeLessThanOrEqual(1);
@@ -26,8 +26,8 @@ describe("mirroring a transform", () => {
 
   it("flipY mirrors rows, and both together mirror twice", () => {
     const source = stripes(width, height);
-    const flippedY = transformLayerPixels(source, width, height, frame, frame, 0, null, true, { flipY: true });
-    const both = transformLayerPixels(source, width, height, frame, frame, 0, null, true, { flipX: true, flipY: true });
+    const flippedY = transformLayerPixels(source, width, height, frame, frame, 0, null, "bilinear", { flipY: true });
+    const both = transformLayerPixels(source, width, height, frame, frame, 0, null, "bilinear", { flipX: true, flipY: true });
     const at = (x: number, y: number) => (y * width + x) * 4;
     expect(flippedY[at(3, 2) + 1]).toBe(source[at(3, height - 1 - 2) + 1]);
     expect(Math.abs(both[at(3, 2)]! - source[at(width - 1 - 3, height - 1 - 2)]!)).toBeLessThanOrEqual(1);
@@ -35,8 +35,8 @@ describe("mirroring a transform", () => {
 
   it("flipping twice comes back to the original", () => {
     const source = stripes(width, height);
-    const once = transformLayerPixels(source, width, height, frame, frame, 0, null, true, { flipX: true });
-    const twice = transformLayerPixels(once, width, height, frame, frame, 0, null, true, { flipX: true });
+    const once = transformLayerPixels(source, width, height, frame, frame, 0, null, "bilinear", { flipX: true });
+    const twice = transformLayerPixels(once, width, height, frame, frame, 0, null, "bilinear", { flipX: true });
     for (let index = 0; index < source.length; index += 1) expect(Math.abs(twice[index]! - source[index]!)).toBeLessThanOrEqual(2);
   });
 
