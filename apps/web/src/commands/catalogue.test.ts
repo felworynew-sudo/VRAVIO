@@ -73,6 +73,7 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "edit.paste|Mod+V||Edit",
   "edit.redo|Mod+Shift+Z||Edit",
   "edit.undo|Mod+Z||Edit",
+  "file.closeAll|Mod+Alt+W||File", // master-plan §65.16: Photoshop's Close All
   "file.close|Mod+W||File",
   "file.export|Mod+Shift+Alt+W||File",
   "file.new.audio|||File",
@@ -142,6 +143,7 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "layer.new|Mod+Shift+N||Layer",
   "layer.openElsewhereBranch|||Layer",
   "layer.openElsewhere|||Layer",
+  "layer.placeEmbeddedSmartObject|||Layer", // master-plan §65.16: File ▸ Place Embedded
   "layer.placeLinkedSmartObject|||Layer",
   "layer.relinkSmartObject|||Layer",
   // master-plan §11: the Properties Quick Actions pair, made commands for the Contextual Task Bar.

@@ -92,6 +92,16 @@ const commands: readonly CommandDefinition[] = [
     isEnabled: hasActiveDocument,
     execute: ({ activeDocumentId }) => { if (activeDocumentId) useShellStore.getState().closeDocument(activeDocumentId); },
   },
+  {
+    // Photoshop's File ▸ Close All, Alt+Ctrl+W (§65.16).
+    id: "file.closeAll",
+    label: { en: "Close All", ru: "Закрыть все" },
+    category: CATEGORY_FILE,
+    shortcut: "Mod+Alt+W",
+    surfaces: ["menu", "palette"],
+    isEnabled: hasActiveDocument,
+    execute: () => { const store = useShellStore.getState(); for (const id of [...store.documentIds]) store.closeDocument(id); },
+  },
 ];
 
 export default commands;

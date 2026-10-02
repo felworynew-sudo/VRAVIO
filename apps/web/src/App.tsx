@@ -998,8 +998,11 @@ export function App() {
         <Menu label="File (Файл)" language={store.language} open={openMenu === "file"} onToggle={() => setOpenMenu(openMenu === "file" ? null : "file")} items={[
           active?.kind === "audio" ? ["New Audio Session… (Новая аудиосессия…)", "Ctrl+N", () => store.requestNewDocument("audio")] : ["New… (Новый…)", "Ctrl+N", () => store.requestNewDocument("raster")],
           active?.kind === "audio" ? ["Open Audio… (Открыть аудио…)", "Ctrl+O", () => audioMassCommand("File", "Load from Computer")] : ["Open… (Открыть…)", "Ctrl+O", () => openImageRef.current?.click()],
-          ...(active?.kind === "raster" || active?.kind === "vector" ? [["Import… (Импортировать…)", "", () => openImageRef.current?.click()] as MainMenuItem] : []),
-          ...(active?.kind === "vector" ? [["Import SVG as Vector… (Импортировать SVG как вектор…)", "", () => importSvgAsVectorRef.current?.click()] as MainMenuItem] : []),
+          // Photoshop's order (§65.16): Close and Close All right after Open. "Import…" is gone — it
+          // opened the very same file picker as Open; putting a picture into the current document
+          // is Photoshop's Place Embedded / Place Linked, further down.
+          ["Close (Закрыть)", "Ctrl+W", () => active && store.closeDocument(active.id), !active],
+          ["Close All (Закрыть все)", "Ctrl+Alt+W", () => void kernel.commands.execute("file.closeAll", activeCommandContext()), !active],
           ...(active?.kind === "audio" ? [
             ["Export Audio… (Экспортировать аудио…)", "Ctrl+Shift+E", () => audioMassCommand("File", "Export / Download")] as MainMenuItem,
             ["New Recording (Новая запись)", "", () => audioMassCommand("File", "New Recording")] as MainMenuItem,
@@ -1025,9 +1028,12 @@ export function App() {
           // either one changes — worth migrating to `commandsForSurface` later, not done here.
           ...(active?.kind === "raster" ? [["Export… (Экспортировать…)", "Ctrl+Shift+Alt+W", () => setExportOpen("export"), !isRasterDocumentState(active.state)] as MainMenuItem] : []),
           ...(active?.kind === "vector" ? [["Export as SVG… (Экспортировать в SVG…)", "", exportActiveVectorAsSvg, !isVectorDocumentState(active.state)] as MainMenuItem] : []),
+          ...(active?.kind === "raster" ? [
+            ["Place Embedded… (Поместить встроенные…)", "", () => void kernel.commands.execute("layer.placeEmbeddedSmartObject", activeCommandContext()), !isRasterDocumentState(active.state)] as MainMenuItem,
+            ["Place Linked… (Поместить связанные…)", "", () => void kernel.commands.execute("layer.placeLinkedSmartObject", activeCommandContext()), kernel.platform.kind !== "desktop", text(store.language, "Desktop app only: a browser cannot keep a link to a file on disk.", "Только в приложении для компьютера: браузер не может хранить связь с файлом на диске.")] as MainMenuItem,
+          ] : []),
+          ...(active?.kind === "vector" ? [["Import SVG as Vector… (Импортировать SVG как вектор…)", "", () => importSvgAsVectorRef.current?.click()] as MainMenuItem] : []),
           ...(active?.kind === "raster" ? [["Print… (Печать…)", "Ctrl+P", () => setPrintOpen(true), !isRasterDocumentState(active.state)] as MainMenuItem] : []),
-          ["Settings… (Настройки…)", "", () => store.setSettingsOpen(true)],
-          ["Close (Закрыть)", "Ctrl+W", () => active && store.closeDocument(active.id), !active],
         ]}/>
         <Menu label="Edit (Правка)" language={store.language} open={openMenu === "edit"} onToggle={() => setOpenMenu(openMenu === "edit" ? null : "edit")} items={[
           ...(active?.kind === "audio" ? [
@@ -1046,6 +1052,9 @@ export function App() {
           // transform controls (clip keyframes, the Video Inspector's x/y/scale fields) already
           // reachable in their own workspace, not through this menu at all.
           ...(active?.kind === "raster" || active?.kind === "vector" ? [["Free Transform (Свободная трансформация)", "Ctrl+T", () => window.dispatchEvent(new Event("vravio-transform-start"))] as MainMenuItem] : []),
+          // Preferences live at the bottom of Edit in Photoshop for Windows, not in File (§65.16).
+          // Photoshop's Ctrl+K for it is this app's command palette, so no shortcut is shown here.
+          ["Settings… (Настройки…)", "", () => store.setSettingsOpen(true)],
         ]}/>
         {active?.kind === "audio" && <Menu label="Effects (Эффекты)" language={store.language} open={openMenu === "audio-effects"} onToggle={() => setOpenMenu(openMenu === "audio-effects" ? null : "audio-effects")} items={[
           ["Gain… (Усиление…)", "", () => audioMassCommand("Effects", "Gain")], ["Fade In (Плавное появление)", "", () => audioMassCommand("Effects", "Fade In")], ["Fade Out (Плавное затухание)", "", () => audioMassCommand("Effects", "Fade Out")], ["Compressor… (Компрессор…)", "", () => audioMassCommand("Effects", "Compressor")], ["Normalize (Нормализация)", "", () => audioMassCommand("Effects", "Normalize")], ["Graphic EQ… (Графический эквалайзер…)", "", () => audioMassCommand("Effects", "Graphic EQ")], ["Hard Limiter… (Лимитер…)", "", () => audioMassCommand("Effects", "Hard Limiter")], ["Delay… (Задержка…)", "", () => audioMassCommand("Effects", "Delay")], ["Reverb… (Реверберация…)", "", () => audioMassCommand("Effects", "Reverb")], ["Reverse (Реверс)", "", () => audioMassCommand("Effects", "Reverse")], ["Remove Silence (Удалить тишину)", "", () => audioMassCommand("Effects", "Remove Silence")],

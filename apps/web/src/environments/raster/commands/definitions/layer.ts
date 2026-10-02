@@ -136,19 +136,20 @@ async function pickEmbeddedSmartObjectSource(): Promise<SmartObjectFileSource | 
  * persist a usable absolute path after reload, so advertising it as a linked
  * asset would be a broken promise. The asset preview still lives in the
  * document, while `linkedPath` is the authoritative source to refresh later. */
-async function placeLinkedSmartObject(documentId: string): Promise<void> {
-  if (kernel.platform.kind !== "desktop") return;
+async function placeSmartObject(documentId: string, linked: boolean): Promise<void> {
+  if (linked && kernel.platform.kind !== "desktop") return;
   const document = kernel.documents.get<RasterDocumentState>(documentId);
   if (!document || !isRasterDocumentState(document.state)) return;
   const source = await pickEmbeddedSmartObjectSource();
   const linkedPath = source?.linkedPath;
-  if (!source || !linkedPath) return;
-  await edit(documentId, "Place Linked Smart Object (Поместить связанный смарт-объект)", (state) => {
+  if (!source || (linked && !linkedPath)) return;
+  const label = linked ? "Place Linked Smart Object (Поместить связанный смарт-объект)" : "Place Embedded (Поместить встроенные)";
+  await edit(documentId, label, (state) => {
     const layer = createRasterLayer(1, 1, source.name.replace(/\.[^.]+$/, "") || source.name);
     const x = Math.round((state.width - source.width) / 2), y = Math.round((state.height - source.height) / 2);
     setLayerLocalPixels(layer, source.pixels, { x, y, width: source.width, height: source.height });
     if (!convertLayerToEmbeddedSmartObject(layer, source.assetId)) return false;
-    layer.smartSource = { ...layer.smartSource!, mode: "linked", linkedPath };
+    if (linked && linkedPath) layer.smartSource = { ...layer.smartSource!, mode: "linked", linkedPath };
     appendLayer(state, layer); state.activeLayerId = layer.id;
     return true;
   });
@@ -463,13 +464,24 @@ const commands: readonly CommandDefinition[] = [
     },
     execute: ({ activeDocumentId }) => { if (activeDocumentId) void convertActiveLayerToSmartObject(activeDocumentId); },
   },
+  // Photoshop's File ▸ Place Embedded: the picture comes in as a Smart Object in the middle of
+  // the canvas, its file copied into the document (§65.16). Place Linked below is the same with
+  // the file kept outside — desktop only, since a browser cannot keep a path.
+  {
+    id: "layer.placeEmbeddedSmartObject",
+    label: { en: "Place Embedded…", ru: "Поместить встроенные…" },
+    category: CATEGORY_LAYER,
+    surfaces: ["menu", "palette"],
+    isEnabled: isRasterActive,
+    execute: ({ activeDocumentId }) => { if (activeDocumentId) void placeSmartObject(activeDocumentId, false); },
+  },
   {
     id: "layer.placeLinkedSmartObject",
     label: { en: "Place Linked…", ru: "Поместить связанный…" },
     category: CATEGORY_LAYER,
     surfaces: ["menu", "palette"],
     isEnabled: ({ activeDocumentId }) => Boolean(activeDocumentId && kernel.platform.kind === "desktop" && isRasterActive({ activeDocumentId })),
-    execute: ({ activeDocumentId }) => { if (activeDocumentId) void placeLinkedSmartObject(activeDocumentId); },
+    execute: ({ activeDocumentId }) => { if (activeDocumentId) void placeSmartObject(activeDocumentId, true); },
   },
   {
     id: "layer.updateLinkedSmartObject",
