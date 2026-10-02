@@ -35,8 +35,8 @@ exports[`composite output is stable > matches the recorded digest for every blen
 exports[`composite output is stable > matches the recorded digest for masks, clipping and adjustments 1`] = `
 {
   "adjustment": "3773f925",
-  "clippedAdjustment": "e9a963d",
-  "clipping": "5a87b8fe",
+  "clippedAdjustment": "1beee8d8",
+  "clipping": "2c724846",
   "fillOpacity": "940b0d14",
   "hiddenLayer": "714167bb",
   "invertedMask": "d32d3108",

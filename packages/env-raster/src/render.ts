@@ -60,6 +60,43 @@ function blendChannel(code: number, source: number, destination: number): number
   }
 }
 
+/**
+ * One clipping group's isolated buffer, laid into the picture with the base layer's blend mode.
+ *
+ * `alpha` is the base's own coverage, frozen the moment the base finished compositing: the clipped
+ * members painted into `buffer` above it, but a clipped layer never widens the shape it is clipped
+ * to, so the coverage that governs here is the base's and not whatever the members left in the
+ * buffer's own alpha channel.
+ */
+function mergeClipGroup(
+  output: Uint8ClampedArray, buffer: Uint8ClampedArray, alpha: Uint8ClampedArray, code: number,
+  width: number, height: number, blendScratch: Float64Array, sourceHsl: Float64Array, destinationHsl: Float64Array,
+): void {
+  const nonSeparable = isNonSeparable(code);
+  for (let pixel = 0; pixel < width * height; pixel += 1) {
+    const sourceAlpha = alpha[pixel]! / 255;
+    if (sourceAlpha <= 0) continue;
+    const index = pixel * 4;
+    const sourceRed = buffer[index]!, sourceGreen = buffer[index + 1]!, sourceBlue = buffer[index + 2]!;
+    const destinationRed = output[index]!, destinationGreen = output[index + 1]!, destinationBlue = output[index + 2]!;
+    let blendedRed = sourceRed, blendedGreen = sourceGreen, blendedBlue = sourceBlue;
+    if (nonSeparable) {
+      blendNonSeparable(code, sourceRed, sourceGreen, sourceBlue, destinationRed, destinationGreen, destinationBlue, blendScratch, sourceHsl, destinationHsl);
+      blendedRed = blendScratch[0]!; blendedGreen = blendScratch[1]!; blendedBlue = blendScratch[2]!;
+    } else if (code !== NORMAL && code !== DISSOLVE) {
+      blendedRed = blendChannel(code, sourceRed, destinationRed);
+      blendedGreen = blendChannel(code, sourceGreen, destinationGreen);
+      blendedBlue = blendChannel(code, sourceBlue, destinationBlue);
+    }
+    const destinationAlpha = output[index + 3]! / 255;
+    const carry = destinationAlpha * (1 - sourceAlpha), merged = sourceAlpha + carry;
+    output[index] = Math.round((blendedRed * sourceAlpha + destinationRed * carry) / merged);
+    output[index + 1] = Math.round((blendedGreen * sourceAlpha + destinationGreen * carry) / merged);
+    output[index + 2] = Math.round((blendedBlue * sourceAlpha + destinationBlue * carry) / merged);
+    output[index + 3] = Math.round(merged * 255);
+  }
+}
+
 /** Writes hue, saturation and lightness of an RGB triple into `out`. */
 function rgbToHsl(r: number, g: number, b: number, out: Float64Array): void {
   const red = r / 255, green = g / 255, blue = b / 255;
@@ -627,6 +664,51 @@ export function compositeRasterRegionWithCheckpoint(
   // per layer, which most documents never read back.
   const clippedParents = new Set<string>();
   for (const layer of layers) if (layer.clipping) clippedParents.add(layer.parentId ?? "root");
+
+  /**
+   * Photoshop's clipping groups, found in the flattened order.
+   *
+   * A clipping mask is not "the layer above, with its alpha cut down to the one below". The base
+   * layer and everything clipped to it form a **group**: the clipped layers blend against the
+   * base's own colour in isolation, and the whole ensemble is then laid into the picture with the
+   * *base's* blend mode and opacity — Photoshop's "Blend Clipped Layers as Group", on by default,
+   * and the reason a Normal layer clipped to a Soft Light base still arrives through Soft Light.
+   * Adobe documents the option; Patchy implements exactly this (`IsolatedClipGroupTarget` in
+   * `src/render/layer_compositor.hpp`: the base composites in, the clip shape is frozen to its own
+   * coverage, members blend against the base's colour at full strength without growing that
+   * coverage, and `merge_into` lays the result down with the base's mode).
+   *
+   * `clipRunStart[i]` is the index of the base layer of `i`'s clipping group, or `i` itself when
+   * it is in none. Only a layer that has content of its own can host one — never a group, never
+   * an adjustment layer (Patchy's `layer_is_clip_base` is the same rule). A clipped layer whose
+   * predecessor is not eligible keeps the older, simpler behaviour below (its alpha restricted by
+   * `clippingBaseByParent`), rather than silently rendering unclipped.
+   */
+  const clipRunStart = new Int32Array(layers.length);
+  const clipGroupOpensAt = new Uint8Array(layers.length);
+  const clipGroupClosesAt = new Uint8Array(layers.length);
+  {
+    let base = -1;
+    for (let index = 0; index < layers.length; index += 1) {
+      const layer = layers[index]!;
+      clipRunStart[index] = index;
+      if (!layer.clipping) {
+        // Dissolve is left out deliberately: its per-pixel noise is decided while compositing, and
+        // a group merged afterwards has no way to reproduce it — better the older behaviour than a
+        // Dissolve base silently arriving as Normal.
+        base = layer.kind !== "group" && layer.kind !== "adjustment" && !layer.adjustment && layer.blendMode !== "dissolve" ? index : -1;
+        continue;
+      }
+      if (base >= 0 && (layers[base]!.parentId ?? "root") === (layer.parentId ?? "root")) clipRunStart[index] = base;
+    }
+    for (let index = 0; index < layers.length; index += 1) {
+      const start = clipRunStart[index]!;
+      if (start === index) continue;
+      clipGroupOpensAt[start] = 1;
+      clipGroupClosesAt[index] = 1;
+      if (index > 0 && clipRunStart[index - 1] === start) clipGroupClosesAt[index - 1] = 0;
+    }
+  }
   // Derived from the whole layer list up front, not accumulated during the loop below: a resumed
   // composite may start past an isolated group's own index, and this set has to already be
   // correct for every group at or before the resume point, or its descendants — still present as
@@ -656,7 +738,10 @@ export function compositeRasterRegionWithCheckpoint(
   if (checkpoint && checkpoint.output.length === output.length && checkpoint.signatures.length <= signatures.length) {
     divergedAt = checkpoint.signatures.length;
     for (let index = 0; index < checkpoint.signatures.length; index += 1) {
-      if (!sameSignatureAndId(checkpoint.signatures[index]!, signatures[index]!)) { divergedAt = index; break; }
+      // Snapped back to the clipping group's base: a checkpoint boundary inside a run would
+      // resume into an `output` that does not yet contain the base layer, with the group that
+      // was holding it long gone.
+      if (!sameSignatureAndId(checkpoint.signatures[index]!, signatures[index]!)) { divergedAt = clipRunStart[index]!; break; }
     }
     if (divergedAt === checkpoint.signatures.length) {
       // The checkpoint's own boundary is still exactly right: resume from it as-is, and the new
@@ -678,7 +763,22 @@ export function compositeRasterRegionWithCheckpoint(
   // is what actually distinguishes the two cases.
   let boundarySnapshot: RasterRenderCheckpoint | null = resumed && checkpoint ? checkpoint : null;
 
+  /**
+   * The clipping group currently being assembled, if any — see `clipRunStart` above.
+   *
+   * While one is open every path below composites into `clipGroup.buffer` instead of `output`,
+   * and the group is laid into `output` with the base's own blend mode when the run ends. It is
+   * opened and closed at iteration boundaries rather than inside the paths, so that none of the
+   * loop's several `continue`s can leave one half-assembled.
+   */
+  let clipGroup: { startIndex: number; buffer: Uint8ClampedArray; alpha: Uint8ClampedArray; code: number } | null = null;
+
   for (let layerIndex = resumeIndex; layerIndex < layers.length; layerIndex += 1) {
+    // Left the run the open group belongs to: lay it down before anything else touches `output`.
+    if (clipGroup && clipRunStart[layerIndex] !== clipGroup.startIndex) {
+      mergeClipGroup(output, clipGroup.buffer, clipGroup.alpha, clipGroup.code, outWidth, outHeight, blendScratch, sourceHsl, destinationHsl);
+      clipGroup = null;
+    }
     if (layerIndex === divergedAt && !boundarySnapshot) {
       boundarySnapshot = {
         signatures: signatures.slice(0, divergedAt),
@@ -691,6 +791,13 @@ export function compositeRasterRegionWithCheckpoint(
     if (consumedByIsolatedGroup.has(layer.id)) continue;
     const parentKey = layer.parentId ?? "root";
     const effectiveOpacity = effectiveLayerOpacity(layer, state.layers);
+    // This layer is the base of a clipping group: it and everything clipped to it composite into
+    // a buffer of their own, which `mergeClipGroup` then lays down with *this* layer's blend mode.
+    // The alpha plane stays zero until the base has actually painted, so a hidden or empty base
+    // takes its clipped layers with it — which is what Photoshop does too.
+    if (clipGroupOpensAt[layerIndex] && !clipGroup) {
+      clipGroup = { startIndex: layerIndex, buffer: new Uint8ClampedArray(outWidth * outHeight * 4), alpha: new Uint8ClampedArray(outWidth * outHeight), code: blendCode(layer.blendMode) };
+    }
     if (layer.kind === "group" && layer.groupMode === "isolated" && isLayerEffectivelyVisible(layer, state.layers) && effectiveOpacity > 0) {
       const descendantIds = rasterLayerDescendantIds(state.layers, layer.id);
       // Render the group's descendants against transparent black in their own
@@ -753,6 +860,9 @@ export function compositeRasterRegionWithCheckpoint(
         };
         groupPixels = renderLayerEffects(groupSurfaceLayer, groupSourceWidth, groupSourceHeight, groupOutputRegion);
       }
+      // Into the clipping group's buffer when one is open, exactly like the ordinary path below.
+      const groupTarget = clipGroup ? clipGroup.buffer : output;
+      const groupInClip = clipGroup !== null && layer.clipping;
       const groupMask = layer.mask?.enabled ? featherMask(layer.mask, state.width, state.height, layer.mask.feather) : undefined;
       const groupCode = blendCode(layer.blendMode), groupNonSeparable = isNonSeparable(groupCode);
       const groupClippingBase = layer.clipping ? clippingBaseByParent.get(parentKey) : undefined;
@@ -762,12 +872,12 @@ export function compositeRasterRegionWithCheckpoint(
         const maskAlpha = groupMask ? groupMask[(area.y + row * step) * state.width + area.x + column * step]! / 255 * (layer.mask?.density ?? 1) : 1;
         const rawAlpha = groupPixels[index + 3]! / 255 * maskAlpha;
         if (groupOwnAlpha) groupOwnAlpha[index] = Math.round(rawAlpha * 255);
-        const sourceAlpha = rawAlpha * effectiveOpacity * (groupClippingBase ? groupClippingBase[index]! / 255 : layer.clipping ? 0 : 1);
+        const sourceAlpha = rawAlpha * effectiveOpacity * (groupInClip ? 1 : groupClippingBase ? groupClippingBase[index]! / 255 : layer.clipping ? 0 : 1);
         if (sourceAlpha <= 0) continue;
-        const destinationAlpha = output[index + 3]! / 255;
+        const destinationAlpha = groupTarget[index + 3]! / 255;
         const carry = destinationAlpha * (1 - sourceAlpha), alpha = sourceAlpha + carry;
         const sourceRed = groupPixels[index]!, sourceGreen = groupPixels[index + 1]!, sourceBlue = groupPixels[index + 2]!;
-        const destinationRed = output[index]!, destinationGreen = output[index + 1]!, destinationBlue = output[index + 2]!;
+        const destinationRed = groupTarget[index]!, destinationGreen = groupTarget[index + 1]!, destinationBlue = groupTarget[index + 2]!;
         let blendedRed = sourceRed, blendedGreen = sourceGreen, blendedBlue = sourceBlue;
         if (groupNonSeparable) {
           blendNonSeparable(groupCode, sourceRed, sourceGreen, sourceBlue, destinationRed, destinationGreen, destinationBlue, blendScratch, sourceHsl, destinationHsl);
@@ -777,10 +887,10 @@ export function compositeRasterRegionWithCheckpoint(
           blendedGreen = blendChannel(groupCode, sourceGreen, destinationGreen);
           blendedBlue = blendChannel(groupCode, sourceBlue, destinationBlue);
         }
-        output[index] = Math.round((blendedRed * sourceAlpha + destinationRed * carry) / alpha);
-        output[index + 1] = Math.round((blendedGreen * sourceAlpha + destinationGreen * carry) / alpha);
-        output[index + 2] = Math.round((blendedBlue * sourceAlpha + destinationBlue * carry) / alpha);
-        output[index + 3] = Math.round(alpha * 255);
+        groupTarget[index] = Math.round((blendedRed * sourceAlpha + destinationRed * carry) / alpha);
+        groupTarget[index + 1] = Math.round((blendedGreen * sourceAlpha + destinationGreen * carry) / alpha);
+        groupTarget[index + 2] = Math.round((blendedBlue * sourceAlpha + destinationBlue * carry) / alpha);
+        groupTarget[index + 3] = Math.round(alpha * 255);
       }
       if (groupOwnAlpha) clippingBaseByParent.set(parentKey, groupOwnAlpha);
       continue;
@@ -790,18 +900,24 @@ export function compositeRasterRegionWithCheckpoint(
       continue;
     }
     if (layer.kind === "adjustment" && layer.adjustment) {
-      const clippingBase = layer.clipping ? clippingBaseByParent.get(parentKey) : undefined;
+      // An adjustment layer clipped to a layer adjusts *that layer*, not everything beneath it:
+      // inside a clipping group it rewrites the group's own buffer, which then goes down with the
+      // base's blend mode. Outside one it keeps the older behaviour — the whole picture so far,
+      // restricted to the base's coverage.
+      const inClipGroup = clipGroup !== null && layer.clipping;
+      const target = inClipGroup ? clipGroup!.buffer : output;
+      const clippingBase = layer.clipping && !inClipGroup ? clippingBaseByParent.get(parentKey) : undefined;
       const maskPixels = layer.mask?.enabled ? featherMask(layer.mask, state.width, state.height, layer.mask.feather) : null;
-      const before = maskPixels || clippingBase ? output.slice() : null;
-      applyAdjustment(output, layer.adjustment, effectiveOpacity);
+      const before = maskPixels || clippingBase ? target.slice() : null;
+      applyAdjustment(target, layer.adjustment, effectiveOpacity);
       if (before) for (let row = 0; row < outHeight; row += 1) for (let column = 0; column < outWidth; column += 1) {
         const index = (row * outWidth + column) * 4, documentIndex = (area.y + row * step) * width + (area.x + column * step);
         const sample = maskPixels ? maskPixels[documentIndex]! : 255;
         const amount = sample / 255 * (layer.mask?.density ?? 1) * (clippingBase ? clippingBase[row * outWidth + column]! / 255 : 1);
-        output[index] = Math.round(before[index]! + (output[index]! - before[index]!) * amount);
-        output[index + 1] = Math.round(before[index + 1]! + (output[index + 1]! - before[index + 1]!) * amount);
-        output[index + 2] = Math.round(before[index + 2]! + (output[index + 2]! - before[index + 2]!) * amount);
-        output[index + 3] = Math.round(before[index + 3]! + (output[index + 3]! - before[index + 3]!) * amount);
+        target[index] = Math.round(before[index]! + (target[index]! - before[index]!) * amount);
+        target[index + 1] = Math.round(before[index + 1]! + (target[index + 1]! - before[index + 1]!) * amount);
+        target[index + 2] = Math.round(before[index + 2]! + (target[index + 2]! - before[index + 2]!) * amount);
+        target[index + 3] = Math.round(before[index + 3]! + (target[index + 3]! - before[index + 3]!) * amount);
       }
       continue;
     }
@@ -845,19 +961,31 @@ export function compositeRasterRegionWithCheckpoint(
     const sourceHeight = documentSurface ? area.height : layer.bounds.height;
     const sourceOriginX = documentSurface ? area.x : layer.bounds.x;
     const sourceOriginY = documentSurface ? area.y : layer.bounds.y;
-    const clippingBase = layer.clipping ? clippingBaseByParent.get(parentKey) : undefined;
+    // Inside a clipping group everything composites into the group's own buffer, and a clipped
+    // member is *not* cut down to the base's alpha here: the group carries that shape itself and
+    // applies it once, when it is merged. Outside a group (a clipped layer whose base cannot host
+    // one) the older per-pixel restriction still applies.
+    const inClipGroup = clipGroup !== null && layer.clipping;
+    const target = clipGroup ? clipGroup.buffer : output;
+    const clippingBase = layer.clipping && !inClipGroup ? clippingBaseByParent.get(parentKey) : undefined;
     const ownAlpha = layer.clipping || !clippedParents.has(parentKey) ? null : new Uint8ClampedArray(outWidth * outHeight);
     // Everything constant for the layer is read once. Inside the loop these are
     // touched a few million times, and a property lookup there is not free.
-    const code = blendCode(layer.blendMode);
+    // The base of a clipping group paints its own colour into the empty group buffer: its blend
+    // mode is the *group's*, applied once by `mergeClipGroup`. Blending it here as well would
+    // blend it against transparent black — Multiply against nothing is black, and the base would
+    // vanish behind whatever is clipped to it.
+    const opensClipGroup = clipGroup !== null && clipGroup.startIndex === layerIndex;
+    const code = opensClipGroup ? NORMAL : blendCode(layer.blendMode);
     const nonSeparable = isNonSeparable(code);
     const mask = layer.mask?.enabled ? layer.mask : null;
     const maskPixels = mask ? featherMask(mask, state.width, state.height, mask.feather) : undefined, maskDensity = mask?.density ?? 1;
     const layerAlpha = effectiveOpacity * (layer.fillOpacity ?? 1);
     const clipping = layer.clipping === true;
+    const clippedOutsideGroup = clipping && !inClipGroup;
     const glass = layer.effects?.glass?.enabled ? layer.effects.glass : null;
-    if (glass) applyGlassBackdrop(output, outWidth, outHeight, layer, renderedLayer, area, state.width, sourceWidth, sourceOriginX, sourceOriginY, step, maskPixels, maskDensity, clippingBase, layerAlpha);
-    const opaqueNormal = (code === NORMAL || code === DISSOLVE) && !clipping && !glass;
+    if (glass) applyGlassBackdrop(target, outWidth, outHeight, layer, renderedLayer, area, state.width, sourceWidth, sourceOriginX, sourceOriginY, step, maskPixels, maskDensity, clippingBase, layerAlpha);
+    const opaqueNormal = (code === NORMAL || code === DISSOLVE) && !clippedOutsideGroup && !glass;
 
     for (let row = firstRow; row <= lastRow; row += 1) {
       const documentRow = (area.y + row * step) * width + area.x;
@@ -870,7 +998,7 @@ export function compositeRasterRegionWithCheckpoint(
         if (sourceX < 0 || sourceY < 0 || sourceX >= sourceWidth || sourceY >= sourceHeight) continue;
         const sourceIndex = (sourceY * sourceWidth + sourceX) * 4;
         const maskAlpha = maskPixels ? (maskPixels[documentIndex]! / 255) * maskDensity : 1;
-        const baseAlpha = clippingBase ? clippingBase[regionIndex]! / 255 : clipping ? 0 : 1;
+        const baseAlpha = clippingBase ? clippingBase[regionIndex]! / 255 : clippedOutsideGroup ? 0 : 1;
         const rawAlpha = (renderedLayer[sourceIndex + 3]! / 255) * maskAlpha;
         if (ownAlpha) ownAlpha[regionIndex] = Math.round(rawAlpha * 255);
         let sourceAlpha = rawAlpha * baseAlpha * layerAlpha;
@@ -888,10 +1016,10 @@ export function compositeRasterRegionWithCheckpoint(
           // Fully opaque `normal` pixels replace whatever is under them. The
           // general formula reduces to exactly this, and painting over an
           // opaque layer is the case a brush hits on almost every pixel.
-          output[index] = sourceRed; output[index + 1] = sourceGreen; output[index + 2] = sourceBlue; output[index + 3] = 255;
+          target[index] = sourceRed; target[index + 1] = sourceGreen; target[index + 2] = sourceBlue; target[index + 3] = 255;
           continue;
         }
-        const destinationRed = output[index]!, destinationGreen = output[index + 1]!, destinationBlue = output[index + 2]!;
+        const destinationRed = target[index]!, destinationGreen = target[index + 1]!, destinationBlue = target[index + 2]!;
         let blendedRed: number, blendedGreen: number, blendedBlue: number;
         if (code === NORMAL || code === DISSOLVE) {
           // The overwhelmingly common case: the source colour passes through
@@ -906,20 +1034,27 @@ export function compositeRasterRegionWithCheckpoint(
           blendedBlue = blendChannel(code, sourceBlue, destinationBlue);
         }
 
-        const destinationAlpha = output[index + 3]! / 255;
+        const destinationAlpha = target[index + 3]! / 255;
         const carry = destinationAlpha * (1 - sourceAlpha);
         const alpha = sourceAlpha + carry;
         // Uint8ClampedArray clamps on assignment, so only the rounding is
         // explicit here; it has to stay Math.round because the array itself
         // rounds halves to even and the recorded output depends on it.
-        output[index] = Math.round((blendedRed * sourceAlpha + destinationRed * carry) / alpha);
-        output[index + 1] = Math.round((blendedGreen * sourceAlpha + destinationGreen * carry) / alpha);
-        output[index + 2] = Math.round((blendedBlue * sourceAlpha + destinationBlue * carry) / alpha);
-        output[index + 3] = Math.round(alpha * 255);
+        target[index] = Math.round((blendedRed * sourceAlpha + destinationRed * carry) / alpha);
+        target[index + 1] = Math.round((blendedGreen * sourceAlpha + destinationGreen * carry) / alpha);
+        target[index + 2] = Math.round((blendedBlue * sourceAlpha + destinationBlue * carry) / alpha);
+        target[index + 3] = Math.round(alpha * 255);
       }
+    }
+    // The base of a clipping group has finished painting: freeze the shape its clipped members
+    // are confined to. Theirs is the base's coverage, never what they themselves leave in the
+    // buffer's alpha — a clipped layer cannot widen what it is clipped to.
+    if (clipGroup && clipGroup.startIndex === layerIndex) {
+      for (let pixel = 0; pixel < outWidth * outHeight; pixel += 1) clipGroup.alpha[pixel] = clipGroup.buffer[pixel * 4 + 3]!;
     }
     if (ownAlpha) clippingBaseByParent.set(parentKey, ownAlpha);
   }
+  if (clipGroup) mergeClipGroup(output, clipGroup.buffer, clipGroup.alpha, clipGroup.code, outWidth, outHeight, blendScratch, sourceHsl, destinationHsl);
   // No checkpoint was passed in at all: there is no earlier-run signal for where a future edit is
   // likely to land, so the only sound default is "everything" — the very next call, if anything
   // changed, discovers the real boundary itself and narrows to it from there.

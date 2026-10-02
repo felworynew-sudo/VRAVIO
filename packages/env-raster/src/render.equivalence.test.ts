@@ -116,6 +116,14 @@ describe("composite output is stable", () => {
       state.layers[2]!.mask = mask;
     }), whole));
 
+    // `clipping` and `clippedAdjustment` were both re-recorded when clipping groups started
+    // blending the way Photoshop's do (§65.18): the base layer and everything clipped to it
+    // composite in isolation and arrive through the *base's* blend mode and opacity, instead of
+    // each clipped layer blending with its own mode against the whole picture beneath. The
+    // intended picture changed, which is the one reason these digests are allowed to move; the
+    // other five entries here are unchanged, which is what says the change stayed where it
+    // belongs. `clipping-group-blend.test.ts` is where the new behaviour is actually specified —
+    // a digest only notices that something moved, never whether it moved to the right place.
     digests.clipping = digest(compositeRasterRegion(scene((state) => {
       state.layers[2]!.clipping = true;
       state.layers[2]!.blendMode = "multiply";
