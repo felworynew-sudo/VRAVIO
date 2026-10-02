@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { WARP_PRESETS, INTERPOLATIONS, type Interpolation, adjustLayerPixelsDeep, applyRasterFilter, rasterFilterCatalog, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, compositeRasterRegion, computeAlignOffsets, rasterColorSpaceById, parseIccProfile, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerOrigin, type AlignEdge, type RasterAdjustment, type RasterColorSpace, type RasterDocumentState, type RasterLayer, type RasterRect } from "@vravio/env-raster";
+import { WARP_PRESETS, INTERPOLATIONS, type Interpolation, applyRasterFilter, rasterFilterCatalog, confineToSelection, cropRasterDocument, decodePsd, defaultAdjustment, findSmartCrop, layerDocumentPixels, setLayerPixels, compositeRasterDocument, compositeRasterRegion, computeAlignOffsets, rasterColorSpaceById, parseIccProfile, computeDistributeOffsets, createRasterLayer, isRasterDocumentState, layerContentBounds, TileStore, translateLayerOrigin, type AlignEdge, type RasterAdjustment, type RasterColorSpace, type RasterDocumentState, type RasterLayer, type RasterRect } from "@vravio/env-raster";
 import { maskToRgba, rgbaToMask } from "./raster-pixel-buffers";
 import { BusyAnnouncement, BusyCursor } from "./BusyCursor";
 import { withBusy, withBusyPainted } from "./busy";
@@ -51,7 +51,7 @@ import { renderTextLayerPixels } from "./textRender";
 import { AdjustmentDialog } from "./raster-adjustments/AdjustmentDialog";
 import { rasterAdjustmentById, rasterAdjustments } from "./raster-adjustments/registry";
 import type { RasterAdjustmentDefinition } from "./raster-adjustments/types";
-import { adjustedPixels } from "./raster-adjustments/apply";
+import { adjustedPixels, applyAdjustmentToLayer } from "./raster-adjustments/apply";
 import { windowsFor } from "./windows/registry";
 import { windowTitle } from "./windows/types";
 import { PANEL_CHANGED_EVENT, readVisiblePanelIds, requestPanelVisibility } from "./windows/runtime";
@@ -718,36 +718,9 @@ export function App() {
 
   const applyImageAdjustment = (value: RasterAdjustment) => {
     if (!adjustmentDialog) return;
-    const document = kernel.documents.get<RasterDocumentState>(adjustmentDialog.documentId); if (!document || !isRasterDocumentState(document.state)) return;
-    const target = document.state.layers.find((layer) => layer.id === adjustmentDialog.layerId); if (!target) return;
-    const definition = rasterAdjustmentById.get(value.kind), history = kernel.historyByDocument.get(document.id);
-    if (adjustmentDialog.targetsMask) {
-      if (!target.mask) return;
-      const before = maskToRgba(target.mask.tiles.toPixels()), confined = adjustedPixels(before, value, document.state.selection);
-      const beforeMask = target.mask.tiles.toPixels(), afterMask = rgbaToMask(confined);
-      const assignMask = (pixels: Uint8ClampedArray) => { kernel.documents.update<RasterDocumentState>(document.id, (state) => { const layer = state.layers.find((item) => item.id === target.id); if (layer?.mask) { layer.mask.tiles = TileStore.fromPixels(pixels, state.width, state.height, 1); layer.mask.pixelsRevision += 1; } }); };
-      if (history) void history.execute({ label: `Mask Adjustment: ${definition?.name.en ?? value.kind}`, memoryEstimate: beforeMask.byteLength + afterMask.byteLength, redo: () => assignMask(afterMask), undo: () => assignMask(beforeMask) }); else assignMask(afterMask);
-      previewImageAdjustment(null); setAdjustmentDialog(null);
-      return;
-    }
-    if (target.kind !== "pixel") return;
-    // A deep layer is adjusted in its own format and its own frame: the canvas-sized 8-bit buffer
-    // the path below materialises is lossless at 8 bits and is the narrow part at 16 or 32
-    // (master-plan §59.2a). Undo keeps the previous tiles, since the adjustment is not reversible
-    // by re-running it.
-    if ((target.tiles?.depth ?? 8) !== 8) {
-      const deep = adjustLayerPixelsDeep(target, value, document.state.selection, document.state.width, document.state.height);
-      if (deep) {
-        const assignDeep = (pixels: typeof deep.before) => { kernel.documents.update<RasterDocumentState>(document.id, (state) => { const layer = state.layers.find((item) => item.id === target.id); if (layer?.tiles) { const tiles = layer.tiles.clone(); tiles.writeLocalRegion(deep.rect, pixels); layer.tiles = tiles; layer.pixelsRevision += 1; } }); };
-        if (history) void history.execute({ label: `Adjustment: ${definition?.name.en ?? value.kind}`, memoryEstimate: deep.before.byteLength + deep.after.byteLength, redo: () => assignDeep(deep.after), undo: () => assignDeep(deep.before) });
-        else assignDeep(deep.after);
-        previewImageAdjustment(null); setAdjustmentDialog(null);
-        return;
-      }
-    }
-    const before = layerDocumentPixels(target, document.state.width, document.state.height).slice(), confined = adjustedPixels(before, value, document.state.selection);
-    const assign = (pixels: Uint8ClampedArray) => { kernel.documents.update<RasterDocumentState>(document.id, (state) => { const layer = state.layers.find((item) => item.id === target.id); if (layer) setLayerPixels(layer, pixels, state.width, state.height, null, { keepOutsideDocument: true }); }); };
-    if (history) void history.execute({ label: `Adjustment: ${definition?.name.en ?? value.kind}`, memoryEstimate: before.byteLength + confined.byteLength, redo: () => assign(confined), undo: () => assign(before) }); else assign(confined);
+    // The writing itself lives in `raster-adjustments/apply.ts`, because the dialog is no longer its
+    // only caller: Shift+Ctrl+U (Desaturate) applies the same adjustment with no dialog at all.
+    applyAdjustmentToLayer(adjustmentDialog.documentId, adjustmentDialog.layerId, value, { targetsMask: adjustmentDialog.targetsMask });
     previewImageAdjustment(null); setAdjustmentDialog(null);
   };
   /**
@@ -1065,6 +1038,9 @@ export function App() {
         {active?.kind === "raster" && <Menu label="Image (Изображение)" language={store.language} open={openMenu === "image"} onToggle={() => setOpenMenu(openMenu === "image" ? null : "image")} items={[
           { label: "Adjustments (Коррекция)", items: [
             ...rasterAdjustments.map((definition) => [`${definition.name.en}… (${definition.name.ru}…)`, definition.shortcut ?? "", () => openImageAdjustment(definition), !activeRasterState || activeRasterState.layers.find((layer) => layer.id === activeRasterState.activeLayerId)?.kind !== "pixel"] as MainMenuItem),
+            // Photoshop's own Shift+Ctrl+U: no dialog, so it cannot join the `openImageAdjustment`
+            // list above and sits with the other one-shot entries instead (see `desaturateCommand`).
+            ["Desaturate (Обесцветить)", "Ctrl+Shift+U", () => void kernel.commands.execute("image.adjustment.desaturate", activeCommandContext()), !activeRasterState || activeRasterState.layers.find((layer) => layer.id === activeRasterState.activeLayerId)?.kind !== "pixel"] as MainMenuItem,
             // A one-shot filter, not one of the dialog-opening adjustments above — see
             // `quickHarmonizeCommand`'s own comment in `adjustments.ts` for why it applies
             // immediately instead of joining that list's `openImageAdjustment` calls.

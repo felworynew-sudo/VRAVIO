@@ -17,4 +17,26 @@ describe("raster adjustment modules", () => {
     expect([...source]).toEqual([10, 20, 30, 255, 50, 60, 70, 255]);
     expect([...result]).toEqual([245, 235, 225, 255, 50, 60, 70, 255]);
   });
+
+  /**
+   * Shift+Ctrl+U's grey is HSL lightness, (max + min) / 2, not luma — the two
+   * disagree most on saturated colour, which is exactly where someone
+   * "simplifying" this into the filter catalogue's `desaturate` (luma-weighted,
+   * `.30/.59/.11`) would change the picture without breaking anything that
+   * looks like a test. Pure red is 128 one way and 76 the other.
+   */
+  it("desaturates to HSL lightness, the way Photoshop's Shift+Ctrl+U does, not to luma", () => {
+    const red = new Uint8ClampedArray([255, 0, 0, 255]);
+    const [r, g, b] = adjustedPixels(red, { kind: "hueSaturation", hue: 0, saturation: -100, lightness: 0 }, null);
+    expect([r, g, b]).toEqual([128, 128, 128]);
+    expect(r).not.toBe(Math.round(255 * .3));
+
+    // Grey stays exactly itself, and a second pass changes nothing.
+    const grey = new Uint8ClampedArray([80, 80, 80, 255]);
+    expect([...adjustedPixels(grey, { kind: "hueSaturation", hue: 0, saturation: -100, lightness: 0 }, null)]).toEqual([80, 80, 80, 255]);
+
+    // Transparent pixels are left alone rather than painted grey.
+    const clear = new Uint8ClampedArray([255, 0, 0, 0]);
+    expect([...adjustedPixels(clear, { kind: "hueSaturation", hue: 0, saturation: -100, lightness: 0 }, null)]).toEqual([255, 0, 0, 0]);
+  });
 });

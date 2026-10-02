@@ -5,6 +5,7 @@ import { CATEGORY_IMAGE } from "../../../../commands/categories";
 import type { LocalizedText } from "../../../../i18n";
 import type { CommandDefinition } from "../../../../commands/types";
 import { changeRasterDocument } from "../document-edits";
+import { applyAdjustmentToLayer } from "../../../../raster-adjustments/apply";
 import { quickHarmonizeLayer } from "../../../../harmonize-commands";
 
 /**
@@ -128,12 +129,44 @@ const quickHarmonizeCommand: CommandDefinition = {
   },
 };
 
+/**
+ * Image ▸ Adjustments ▸ Desaturate (Shift+Ctrl+U) — Photoshop's one-key black and white.
+ *
+ * No dialog, because Photoshop's has none: it is Hue/Saturation with Saturation
+ * driven to −100 and nothing to configure, so it applies straight away as one
+ * undo step (the same reasoning `quickHarmonizeCommand` below records for
+ * itself). Expressed as that very adjustment rather than as a new grayscale
+ * formula, which is not a shortcut but the point: Photoshop's Desaturate
+ * leaves each pixel at its HSL *lightness*, (max + min) / 2 — a different
+ * grey from the luma-weighted one `grayscale`/`desaturate` use in the filter
+ * catalogue (`filters.ts`: `.30 r + .59 g + .11 b`). Saturated colours are
+ * where the two visibly disagree: pure red becomes 128 here and 76 there.
+ * Running it through `adjustRgb`'s hue/saturation path keeps that single
+ * formula in one place instead of a second copy that would be free to drift
+ * (CLAUDE.md §4).
+ */
+const desaturateCommand: CommandDefinition = {
+  id: "image.adjustment.desaturate",
+  label: { en: "Desaturate", ru: "Обесцветить" },
+  category: CATEGORY_IMAGE,
+  shortcut: "Mod+Shift+U",
+  surfaces: ["menu", "palette", "layer-context"],
+  isEnabled: adjustmentEnabled,
+  execute: ({ activeDocumentId }) => {
+    if (!activeDocumentId) return;
+    const document = kernel.documents.get<RasterDocumentState>(activeDocumentId);
+    const layerId = document && isRasterDocumentState(document.state) ? document.state.activeLayerId : null;
+    if (layerId) applyAdjustmentToLayer(activeDocumentId, layerId, { kind: "hueSaturation", hue: 0, saturation: -100, lightness: 0 });
+  },
+};
+
 const commands: readonly CommandDefinition[] = [
   adjustment("levels", { en: "Levels…", ru: "Уровни…" }, "Mod+L"),
   adjustment("curves", { en: "Curves…", ru: "Кривые…" }, "Mod+M"),
   adjustment("hueSaturation", { en: "Hue/Saturation…", ru: "Цветовой тон/Насыщенность…" }, "Mod+U"),
   adjustment("colorBalance", { en: "Color Balance…", ru: "Цветовой баланс…" }, "Mod+B"),
   invertCommand,
+  desaturateCommand,
   quickHarmonizeCommand,
 ];
 

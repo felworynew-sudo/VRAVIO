@@ -93,6 +93,7 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "filter.repeatLast|Mod+Alt+F||Filter",
   "image.adjustment.colorBalance|Mod+B||Image",
   "image.adjustment.curves|Mod+M||Image",
+  "image.adjustment.desaturate|Mod+Shift+U||Image", // master-plan §65.17: Photoshop's Shift+Ctrl+U
   "image.adjustment.hueSaturation|Mod+U||Image",
   "image.adjustment.invert|Mod+I||Image",
   "image.adjustment.levels|Mod+L||Image",
