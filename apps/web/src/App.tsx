@@ -1096,6 +1096,8 @@ export function App() {
           ] as MainMenuItem) },
         ]}/>}
         {active?.kind === "raster" && <Menu label="Layer (Слой)" language={store.language} open={openMenu === "layer"} onToggle={() => setOpenMenu(openMenu === "layer" ? null : "layer")} items={[
+          // Photoshop's Layer ▸ New ▸ Layer…, with its Alt form that skips the dialog.
+          ["New Layer… (Новый слой…)", "Ctrl+Shift+N", () => void kernel.commands.execute("layer.new", activeCommandContext()), !active || !isRasterDocumentState(active.state)],
           ["Duplicate Layer (Дублировать слой)", "Ctrl+J", () => void kernel.commands.execute("layer.duplicate", activeCommandContext()), !active || !isRasterDocumentState(active.state)],
           { label: "Smart Objects (Смарт-объекты)", items: [
             ["Place Linked… (Поместить связанный…)", "", () => void kernel.commands.execute("layer.placeLinkedSmartObject", activeCommandContext()), !activeRasterState || kernel.platform.kind !== "desktop"],

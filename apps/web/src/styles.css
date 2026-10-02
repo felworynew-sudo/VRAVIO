@@ -1203,3 +1203,17 @@ input[type="range"]:disabled{opacity:.45;cursor:default}
 .size-dialog-anchor button{width:26px;height:26px;border:1px solid var(--border);border-radius:3px;background:var(--surface3);color:var(--text);cursor:pointer;font-size:12px;line-height:1}
 .size-dialog-anchor button.active{border-color:var(--focus);background:color-mix(in srgb,var(--focus) 25%,transparent)}
 .size-dialog-note{margin:0;color:var(--muted);font-size:11px}
+/* Layer ▸ New ▸ Layer…: Photoshop's own layout — the clipping-mask checkbox tucked under the
+   name field (not aligned with the labels), Mode and Opacity sharing one row, and the
+   neutral-colour fill last. A disabled checkbox keeps its label readable, because that label is
+   what explains why it is disabled. */
+.new-layer-dialog{width:min(420px,92vw)}
+.new-layer-dialog .new-layer-name{min-width:0;height:26px;padding:0 6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface3);color:var(--text)}
+.new-layer-clip{padding-left:128px;grid-template-columns:auto minmax(0,1fr)}
+.new-layer-mode{grid-template-columns:128px minmax(0,1fr) auto;gap:8px}
+.new-layer-mode>label{display:contents}
+.new-layer-mode>label:last-child{display:grid;grid-template-columns:auto 64px auto;align-items:center;gap:6px;justify-self:end}
+.new-layer-mode input[type=number]{width:64px;height:26px;padding:0 6px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface3);color:var(--text)}
+.new-layer-neutral{align-items:start;line-height:1.4}
+.new-layer-neutral input:disabled{opacity:.45}
+.new-layer-neutral:has(input:disabled){opacity:.55}

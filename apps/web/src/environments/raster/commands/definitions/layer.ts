@@ -8,6 +8,7 @@ import type { CommandDefinition } from "../../../../commands/types";
 import { confirmModal } from "../../../../modals/runtime";
 import { text } from "../../../../i18n";
 import { changeRasterDocument } from "../document-edits";
+import { addRasterLayer, addRasterLayerWithDialog } from "../new-layer";
 import { decodeImportedImage } from "../../../../imageImport";
 
 /**
@@ -257,20 +258,24 @@ const restack = ([id, en, ru, shortcut, move]: readonly [string, string, string,
 const commands: readonly CommandDefinition[] = [
   {
     id: "layer.new",
-    label: { en: "New Layer", ru: "Новый слой" },
+    label: { en: "New Layer…", ru: "Новый слой…" },
     category: CATEGORY_LAYER,
     shortcut: "Mod+Shift+N",
     surfaces: ["menu", "palette"],
     isEnabled: isRasterActive,
-    execute: ({ activeDocumentId }) => {
-      if (!activeDocumentId) return;
-      void edit(activeDocumentId, "New Layer (Новый слой)", (state) => {
-        const layer = createRasterLayer(state.width, state.height, `Layer ${state.layers.length + 1} (Слой ${state.layers.length + 1})`);
-        state.layers.push(layer);
-        state.activeLayerId = layer.id;
-        return true;
-      });
-    },
+    // Photoshop's Shift+Ctrl+N asks first — name, blend mode, opacity, colour
+    // label, clipping mask and the neutral-colour fill — and Alt+Shift+Ctrl+N
+    // skips the asking. Both end up in `addRasterLayer`.
+    execute: ({ activeDocumentId }) => { if (activeDocumentId) void addRasterLayerWithDialog(activeDocumentId); },
+  },
+  {
+    id: "layer.newNoDialog",
+    label: { en: "New Layer (no dialog)", ru: "Новый слой (без диалога)" },
+    category: CATEGORY_LAYER,
+    shortcut: "Mod+Shift+Alt+N",
+    surfaces: ["menu", "palette"],
+    isEnabled: isRasterActive,
+    execute: ({ activeDocumentId }) => { if (activeDocumentId) void addRasterLayer(activeDocumentId); },
   },
   {
     id: "layer.duplicate",

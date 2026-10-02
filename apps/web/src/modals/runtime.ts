@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { useShellStore } from "../store";
 import type { ImageSizeAnswer } from "./definitions/image-size";
 import type { CanvasSizeAnswer } from "./definitions/canvas-size";
+import type { NewLayerAnswer } from "./definitions/new-layer";
 
 interface OpenModal {
   readonly key: number;
@@ -133,6 +134,13 @@ export function selectModifyModal(props: {
       ...props,
       onResolve: (answer: { amount: number; applyAtCanvasBounds: boolean } | null) => { close(); resolve(answer); },
     });
+  });
+}
+
+/** Layer ▸ New ▸ Layer… — resolves to the new layer's settings, or null when cancelled. */
+export function newLayerModal(props: { defaultName: string; canClip: boolean }): Promise<NewLayerAnswer | null> {
+  return new Promise((resolve) => {
+    const close = openModal("new-layer", { ...props, onResolve: (answer: NewLayerAnswer | null) => { close(); resolve(answer); } });
   });
 }
 

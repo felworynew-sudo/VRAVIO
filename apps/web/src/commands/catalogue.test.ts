@@ -140,6 +140,7 @@ const REGISTERED_BEFORE_STAGE_7: readonly string[] = [
   "layer.mergeVisible|Mod+Shift+E||Layer",
   "layer.new3DExtrude|||3D",
   "layer.new3DText|||3D",
+  "layer.newNoDialog|Mod+Shift+Alt+N||Layer", // master-plan §65.17: Photoshop's Alt+Shift+Ctrl+N, the dialog skipped
   "layer.newSmartObjectViaCopy|||Layer",
   "layer.new|Mod+Shift+N||Layer",
   "layer.openElsewhereBranch|||Layer",
