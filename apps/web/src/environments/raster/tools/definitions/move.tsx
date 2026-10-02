@@ -28,11 +28,29 @@ import { rotateCursorFor as rotateCursorForCorner, scaleCursorFor } from "../../
  * deliberately left for here.
  */
 
-/** What a transform session has accumulated so far — see `PendingTransform.live`. */
+/**
+ * What a transform session has accumulated so far — see `PendingTransform.live`.
+ *
+ * This is `PendingTransform.live`'s own type, not a second one shaped like it. It used to be a
+ * narrower copy without the mirror terms, and that was the whole of the "flip comes undone"
+ * bug: `sessionFor` hands `pending.live` straight back, but typed as this, so every rebuild of
+ * the frame below (`live: { source, target, rotation }`) dropped `flipX`/`flipY` structurally —
+ * a flip survived until the moment the layer was rotated, scaled or moved, and then silently
+ * undid itself. Two types that must agree, one of which is quietly lossy, is CLAUDE.md §4 in
+ * miniature; there is now one.
+ */
 export interface TransformSession {
+  /** The content's own rectangle in `pixels`, fixed for the session. */
   readonly source: RasterRect;
+  /** Where that rectangle has been carried to, before rotation. */
   readonly target: RasterRect;
+  /** Degrees about `target`'s centre — absolute for the session, not per gesture. */
   readonly rotation: number;
+  /** Mirrored inside the frame — Photoshop's Flip Horizontal / Vertical. Absolute for the session
+   * like `rotation` (flipping twice is not flipped), and nothing is resampled until commit
+   * (docs/master-plan.md §58.3). */
+  readonly flipX?: boolean;
+  readonly flipY?: boolean;
 }
 
 /**
@@ -77,19 +95,7 @@ export interface PendingTransform {
    * The preview is the same door the text branch of this tool has always used
    * (`text-transform-preview`), extended to pixel layers rather than a second mechanism.
    */
-  readonly live?: {
-    /** The content's own rectangle in `pixels`, fixed for the session. */
-    readonly source: RasterRect;
-    /** Where that rectangle has been carried to, before rotation. */
-    readonly target: RasterRect;
-    /** Degrees about `target`'s centre — absolute for the session, not per gesture. */
-    readonly rotation: number;
-    /** Mirrored inside the frame — Photoshop's Flip Horizontal / Vertical. Absolute for the session
-     * like `rotation` (flipping twice is not flipped), and nothing is resampled until commit
-     * (docs/master-plan.md §58.3). */
-    readonly flipX?: boolean;
-    readonly flipY?: boolean;
-  };
+  readonly live?: TransformSession;
   /**
    * Layer-local pixels for a whole-layer live Move. The document-sized
    * materialisation is transparent outside the canvas by design, so it cannot
@@ -744,7 +750,7 @@ function buildDragFrame(context: ToolContext<MoveState>, drag: MoveDrag, interpo
       width: session.target.width * (target.width / source.width),
       height: session.target.height * (target.height / source.height),
     };
-    return { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: session.rotation, live: { source: session.source, target: scaled, rotation: session.rotation } };
+    return { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: session.rotation, live: { ...session, target: scaled } };
   }
   if (drag.kind === "rotate") {
     const rawDelta = (Math.atan2(point.y - drag.center.y, point.x - drag.center.x) - drag.startAngle) * 180 / Math.PI;
@@ -752,7 +758,7 @@ function buildDragFrame(context: ToolContext<MoveState>, drag: MoveDrag, interpo
     const angle = drag.baseRotation + (drag.shiftKey ? Math.round(rawDelta / 15) * 15 : rawDelta);
     if (drag.text) return { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: angle, text: drag.text };
     // The angle is the session's, absolute — nothing about the layer's pixels changes here.
-    return { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: angle, live: { source: drag.session.source, target: drag.session.target, rotation: angle } };
+    return { before: drag.before, layerId: drag.before.activeLayerId, dx: drag.dx, dy: drag.dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: angle, live: { ...drag.session, rotation: angle } };
   }
   if (drag.kind === "quad") {
     const dx = point.x - drag.from.x, dy = point.y - drag.from.y;
@@ -799,7 +805,7 @@ function buildDragFrame(context: ToolContext<MoveState>, drag: MoveDrag, interpo
   // whatever scale/rotation was still only described, never actually applied to `basePixels`.
   if (drag.baseLive) {
     const target = { ...drag.baseLive.target, x: drag.baseLive.target.x + deltaX, y: drag.baseLive.target.y + deltaY };
-    return { before: drag.before, layerId: drag.before.activeLayerId, dx, dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: drag.rotation, live: { source: drag.baseLive.source, target, rotation: drag.baseLive.rotation }, ...(drag.livePixels ? { livePixels: drag.livePixels } : {}) };
+    return { before: drag.before, layerId: drag.before.activeLayerId, dx, dy, pixels: drag.basePixels, selection: drag.baseSelection, rotation: drag.rotation, live: { ...drag.baseLive, target }, ...(drag.livePixels ? { livePixels: drag.livePixels } : {}) };
   }
   // The same "described, not resampled" trade as scale/rotate (`PendingTransform.live`'s own doc
   // comment) — `beginMoveDrag` only sets `sourceBounds` for a fresh, unselected, non-text,

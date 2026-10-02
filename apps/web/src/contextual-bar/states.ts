@@ -142,8 +142,14 @@ export const contextualBarStates: readonly ContextualBarState[] = [
     actions: [
       sessionAction("transform.rotateCcw", { en: "Rotate 90° counter-clockwise", ru: "Повернуть на 90° против часовой" }, { icon: "ВРАЩЕНИЕ ВИДА.svg", mirror: true }, (session) => Boolean(session.rotate), (session) => session.rotate?.(-90)),
       sessionAction("transform.rotateCw", { en: "Rotate 90° clockwise", ru: "Повернуть на 90° по часовой" }, { icon: "ВРАЩЕНИЕ ВИДА.svg" }, (session) => Boolean(session.rotate), (session) => session.rotate?.(90)),
-      sessionAction("transform.flipHorizontal", { en: "Flip horizontal", ru: "Отразить по горизонтали" }, { icon: "ОТРАЗИТЬ ПО ГОР.svg" }, (session) => Boolean(session.flip), (session) => session.flip?.("x")),
-      sessionAction("transform.flipVertical", { en: "Flip vertical", ru: "Отразить по вертикали" }, { icon: "ОТРАЗИТЬ ПО ВЕРТ.svg" }, (session) => Boolean(session.flip), (session) => session.flip?.("y")),
+      // The two icon files are named after the *axis they mirror about*, while the commands are
+      // named after the direction the picture moves — the two conventions are off by one, so the
+      // pairing looks swapped and is not: "ОТРАЗИТЬ ПО ГОР.svg" draws a horizontal mirror line
+      // with a triangle above and below it, which is the picture of a *vertical* flip (and
+      // Photoshop draws its Flip Vertical button exactly so). Taking the file names at face value
+      // put the vertical-flip picture on the horizontal-flip button, which is what the owner saw.
+      sessionAction("transform.flipHorizontal", { en: "Flip horizontal", ru: "Отразить по горизонтали" }, { icon: "ОТРАЗИТЬ ПО ВЕРТ.svg" }, (session) => Boolean(session.flip), (session) => session.flip?.("x")),
+      sessionAction("transform.flipVertical", { en: "Flip vertical", ru: "Отразить по вертикали" }, { icon: "ОТРАЗИТЬ ПО ГОР.svg" }, (session) => Boolean(session.flip), (session) => session.flip?.("y")),
       cancelSession,
       commitSession,
     ],
