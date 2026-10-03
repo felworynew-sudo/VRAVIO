@@ -77,15 +77,43 @@ describe("medianBlur (fast histogram version) matches the original naive impleme
 });
 
 describe("medianBlur stays fast on a large document (the actual regression)", () => {
-  it("radius 8 on a 1200x900 noisy document finishes well under a second", () => {
+  it("radius 8 costs barely more than radius 2 — the sliding histogram's whole point", () => {
     const width = 1200, height = 900;
     const source = randomFixture(width, height, 42);
-    const started = performance.now();
-    applyRasterFilter(source, width, height, "median", { radius: 8 });
-    const elapsed = performance.now() - started;
-    // The naive implementation this replaces took tens of seconds at this size and radius —
-    // generously bounded at 1s (a loaded CI/dev machine, not a tight per-frame budget) to catch a
-    // future regression back toward that shape without being a flaky near-miss on a busy machine.
-    expect(elapsed).toBeLessThan(1000);
-  });
+    const fastestAt = (radius: number): number => {
+      let best = Infinity;
+      for (let sample = 0; sample < 2; sample += 1) {
+        const started = performance.now();
+        applyRasterFilter(source, width, height, "median", { radius });
+        best = Math.min(best, performance.now() - started);
+      }
+      return best;
+    };
+
+    const small = fastestAt(2), large = fastestAt(8);
+
+    // This replaced a wall-clock floor ("under 1000ms at radius 8"), and the reason is worth
+    // keeping: that number was calibrated on a faster machine than the one this is developed on,
+    // where the same unchanged code measures 1012ms, 958ms, 1185ms, 1060ms run after run. A test
+    // whose verdict is decided by which side of the line the scheduler happens to drop it on
+    // reports the machine, not the code — and it invited exactly the wrong conclusion once
+    // already: bisecting the "regression" it seemed to show found today's median to be the
+    // *fastest* of every commit since that bound was written.
+    //
+    // What the bound was actually protecting is a shape, not a millisecond count. The naive
+    // implementation it replaced collects and sorts the whole (2r+1)² window per pixel, so its
+    // cost grows with the square of the radius — (17/5)² ≈ 11.6 in theory, and 19.0 measured on
+    // `referenceMedianBlur` above, since a longer array also sorts slower per element. Huang's
+    // sliding histogram only slides columns in and out, so the same comparison measures 1.4-2.1
+    // here. Both ends of that are measurements, not estimates, and a ratio of two timings taken
+    // seconds apart on one machine says the same thing on a slow machine as on a fast one. 5x
+    // sits with wide margin on both sides: well clear of the noise, far below the naive shape.
+    expect(large / small).toBeLessThan(5);
+
+    // A second guard for the regression a ratio cannot see — one that makes every radius equally
+    // slower (a per-pixel allocation, say). Deliberately loose, because the ratio above is the
+    // real net: this one only has to notice a return to the tens of seconds the naive version
+    // took at this size, and anything near that trips it many times over.
+    expect(large).toBeLessThan(5000);
+  }, 60000);
 });
